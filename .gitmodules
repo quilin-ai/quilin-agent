@@ -1,0 +1,60 @@
+[submodule "upstreams/memory-mem0"]
+	path = upstreams/memory-mem0
+	url = https://github.com/mem0ai/mem0.git
+[submodule "upstreams/memory-hindsight"]
+	path = upstreams/memory-hindsight
+	url = https://github.com/vectorize-io/hindsight.git
+[submodule "upstreams/memory-letta"]
+	path = upstreams/memory-letta
+	url = https://github.com/letta-ai/letta.git
+[submodule "upstreams/memory-graphiti"]
+	path = upstreams/memory-graphiti
+	url = https://github.com/getzep/graphiti.git
+[submodule "upstreams/memory-supermemory"]
+	path = upstreams/memory-supermemory
+	url = https://github.com/supermemoryai/supermemory.git
+[submodule "upstreams/memory-langmem"]
+	path = upstreams/memory-langmem
+	url = https://github.com/langchain-ai/langmem.git
+[submodule "upstreams/memory-gbrain"]
+	path = upstreams/memory-gbrain
+	url = https://github.com/garrytan/gbrain.git
+[submodule "upstreams/memory-mempalace"]
+	path = upstreams/memory-mempalace
+	url = https://github.com/MemPalace/mempalace.git
+[submodule "upstreams/memory-agentmemory"]
+	path = upstreams/memory-agentmemory
+	url = https://github.com/elizaOS/agentmemory.git
+[submodule "upstreams/llm-vllm"]
+	path = upstreams/llm-vllm
+	url = https://github.com/vllm-project/vllm.git
+[submodule "upstreams/llm-sglang"]
+	path = upstreams/llm-sglang
+	url = https://github.com/sgl-project/sglang.git
+[submodule "upstreams/llm-ollama"]
+	path = upstreams/llm-ollama
+	url = https://github.com/ollama/ollama.git
+[submodule "upstreams/llm-llamacpp"]
+	path = upstreams/llm-llamacpp
+	url = https://github.com/ggml-org/llama.cpp.git
+[submodule "upstreams/llm-tgi"]
+	path = upstreams/llm-tgi
+	url = https://github.com/huggingface/text-generation-inference.git
+[submodule "upstreams/llm-bentoml"]
+	path = upstreams/llm-bentoml
+	url = https://github.com/bentoml/BentoML.git
+[submodule "upstreams/llm-mlx"]
+	path = upstreams/llm-mlx
+	url = https://github.com/ml-explore/mlx.git
+[submodule "upstreams/llm-outlines"]
+	path = upstreams/llm-outlines
+	url = https://github.com/dottxt-ai/outlines.git
+[submodule "upstreams/perception-qwen-vl"]
+	path = upstreams/perception-qwen-vl
+	url = https://github.com/QwenLM/Qwen2.5-VL.git
+[submodule "upstreams/perception-glm4v"]
+	path = upstreams/perception-glm4v
+	url = https://github.com/THUDM/GLM-4.git
+[submodule "upstreams/perception-llama4-scout"]
+	path = upstreams/perception-llama4-scout
+	url = https://github.com/meta-llama/llama-models.git
