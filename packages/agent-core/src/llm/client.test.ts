@@ -1,6 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { LanguageModelV1 } from "@ai-sdk/provider";
 import { generateText, streamText } from "ai";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { StreamingLLMClient, VercelLLMClient } from "./client.js";
 
 vi.mock("ai", () => ({
@@ -43,7 +43,11 @@ describe("VercelLLMClient", () => {
 		);
 
 		expect(generateText).toHaveBeenCalledWith({
-			model,
+			model: expect.objectContaining({
+				specificationVersion: "v2",
+				doGenerate: expect.any(Function),
+				doStream: expect.any(Function),
+			}),
 			messages: [
 				{ role: "system", content: "sys" },
 				{ role: "user", content: "hi" },
@@ -75,15 +79,11 @@ describe("VercelLLMClient", () => {
 
 		const client = new VercelLLMClient(model);
 
-		const result = await client.chat(
-			[{ role: "user", content: "hi" }],
-			[],
-			{
-				temperature: 0.7,
-				maxTokens: 128,
-				thinkingMode: "disabled",
-			},
-		);
+		const result = await client.chat([{ role: "user", content: "hi" }], [], {
+			temperature: 0.7,
+			maxTokens: 128,
+			thinkingMode: "disabled",
+		});
 
 		expect(result.finishReason).toBe("length");
 	});
@@ -115,18 +115,18 @@ describe("StreamingLLMClient", () => {
 
 		const client = new StreamingLLMClient(model, onChunk);
 
-		const result = await client.chat(
-			[{ role: "user", content: "hi" }],
-			[],
-			{
-				temperature: 0.2,
-				maxTokens: 64,
-				thinkingMode: "disabled",
-			},
-		);
+		const result = await client.chat([{ role: "user", content: "hi" }], [], {
+			temperature: 0.2,
+			maxTokens: 64,
+			thinkingMode: "disabled",
+		});
 
 		expect(streamText).toHaveBeenCalledWith({
-			model,
+			model: expect.objectContaining({
+				specificationVersion: "v2",
+				doGenerate: expect.any(Function),
+				doStream: expect.any(Function),
+			}),
 			messages: [{ role: "user", content: "hi" }],
 			maxTokens: 64,
 			temperature: 0.2,

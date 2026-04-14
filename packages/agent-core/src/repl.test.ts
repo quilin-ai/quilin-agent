@@ -60,8 +60,12 @@ describe("startRepl", () => {
 			"model-instance",
 			expect.any(Function),
 		);
-		expect(writeSpy).toHaveBeenCalledWith("\n🐉 Quilin Agent v0.0.1 (DeepSeek)\n");
-		expect(writeSpy).toHaveBeenCalledWith("Type your message, or /exit to quit.\n\n");
+		expect(writeSpy).toHaveBeenCalledWith(
+			"\n🐉 Quilin Agent v0.0.1 (DeepSeek)\n",
+		);
+		expect(writeSpy).toHaveBeenCalledWith(
+			"Type your message, or /exit to quit.\n\n",
+		);
 		expect(writeSpy).toHaveBeenCalledWith("\nBye! 🐉\n");
 		expect(mockClose).toHaveBeenCalled();
 	});

@@ -1,11 +1,11 @@
-import * as readline from "node:readline/promises";
 import { stdin, stdout } from "node:process";
-import { logger } from "./logger.js";
+import * as readline from "node:readline/promises";
 import { StreamingLLMClient } from "./llm/client.js";
+import type { createProvider } from "./llm/provider.js";
 import type { InferenceConfig } from "./llm/types.js";
+import { logger } from "./logger.js";
 import { runAgentLoop } from "./loop.js";
 import type { Message } from "./state/types.js";
-import type { createProvider } from "./llm/provider.js";
 
 const DEFAULT_SYSTEM_PROMPT = `You are Quilin Agent (拼布麒麟), a helpful AI assistant.
 Be concise, accurate, and friendly. Answer in the same language as the user.`;
@@ -29,7 +29,9 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 
 	const rl = readline.createInterface({ input: stdin, output: stdout });
 
-	const messages: Message[] = [{ role: "system", content: DEFAULT_SYSTEM_PROMPT }];
+	const messages: Message[] = [
+		{ role: "system", content: DEFAULT_SYSTEM_PROMPT },
+	];
 
 	const llm = new StreamingLLMClient(provider(modelId), (chunk) => {
 		stdout.write(chunk);

@@ -30,7 +30,11 @@ export async function runAgentLoop(
 
 	logger.debug({ turnMessages: messages.length }, "Agent loop: calling LLM");
 
-	const response = await llm.chat(messages, config.tools ?? [], inferenceConfig);
+	const response = await llm.chat(
+		messages,
+		config.tools ?? [],
+		inferenceConfig,
+	);
 
 	logger.debug(
 		{
