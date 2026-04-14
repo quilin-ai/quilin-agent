@@ -25,3 +25,31 @@ Thumbs.db
 .env.*
 *.pem
 *.key
+
+# === Node ===
+node_modules/
+
+# === Quilin Build ===
+dist/
+*.tsbuildinfo
+
+# === Python ===
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# === Rust ===
+target/
+
+# === Environment ===
+.env
+.env.local
+.env.*.local
+
+# === Data ===
+data/
+
+# === IDE ===
+.idea/
+*.swp

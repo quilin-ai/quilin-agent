@@ -1,0 +1,33 @@
+{
+  "name": "Quilin Agent Dev",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "features": {
+    "ghcr.io/devcontainers/features/rust:1": {
+      "version": "1.94",
+      "profile": "default"
+    },
+    "ghcr.io/devcontainers/features/python:1": {
+      "version": "3.14"
+    },
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "22"
+    }
+  },
+  "postCreateCommand": "npm install -g pnpm@10 && curl -fsSL https://bun.sh/install | bash && curl -LsSf https://astral.sh/uv/install.sh | sh && cargo install just && just init",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "biomejs.biome",
+        "charliermarsh.ruff",
+        "rust-lang.rust-analyzer",
+        "tamasfe.even-better-toml"
+      ]
+    }
+  },
+  "forwardPorts": [3000],
+  "remoteEnv": {
+    "QUILIN_ENV": "dev"
+  }
+}
