@@ -58,3 +58,6 @@
 [submodule "upstreams/perception-llama4-scout"]
 	path = upstreams/perception-llama4-scout
 	url = https://github.com/meta-llama/llama-models.git
+[submodule "upstreams/llm-vercel-ai"]
+	path = upstreams/llm-vercel-ai
+	url = https://github.com/vercel/ai.git

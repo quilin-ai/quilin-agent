@@ -2,7 +2,9 @@
 
 > 标注每个功能的来源项目、commit、相关代码路径，便于上游更新时同步跟进。
 >
-> 最近更新：2026-04-13
+> 最近更新：2026-04-14
+>
+> **注意**：ADR-001 已决策核心语言为 TypeScript（详见 [ADR-001](../adr/adr-001-core-loop-and-language.md)）。本文档中的参考代码路径指向上游项目源码，不是 Quilin 的实现路径。
 
 ## 索引说明
 
@@ -25,7 +27,8 @@
 | 08 可观测性 | 5 | 5 | 14 | 0 | 9 |
 | 09 部署运行时 | 5 | 5 | 15 | 0 | 10 |
 | 10 自进化 | 5 | 5 | 16 | 0 | 11 |
-| **合计** | **50** | **50** | **150** | **0** | **100** |
+| 11 Agent Mesh | 5 | 6 | 15 | 0 | 9 |
+| **合计** | **55** | **56** | **165** | **0** | **109** |
 
 > 说明：功能点总数 = 深入功能点数 + 观察项目数（每个观察项目计 1 行）。规划中仅含深入功能点；观察项目均为 👀 观察中（不计入规划中）。
 
@@ -251,6 +254,28 @@
 
 ---
 
+## 11 — Agent Mesh
+
+| 功能点 | 来源项目 | 版本/Commit | 参考代码路径 | 状态 | 深度 |
+|--------|---------|-------------|-------------|------|------|
+| Agent Card 规范（能力声明 + 发现端点） | Google A2A Protocol | latest (2026-04) | `github.com/google/A2A` → `specification/` | 📋 | 深入 |
+| Task 生命周期状态机（submitted → working → completed）+ SSE 推送 | Google A2A Protocol | latest (2026-04) | `github.com/google/A2A` → `samples/python/` | 📋 | 深入 |
+| CLI Agent 标准连接握手（session/new → session/prompt → stream） | ACP Protocol (Zed) | latest (2026-04) | `github.com/ACP-Foundation/acp-spec` → `specification/` | 📋 | 深入 |
+| 控制面/数据面分离 + AgentPod 生命周期 + Channel 广播 | AgentsMesh | latest (2026-04) | `github.com/AgentsMesh/AgentsMesh` → `control-plane/` | 📋 | 深入 |
+| daemon 持久化进程 + MCP adapter 双向桥接 + 消息缓冲队列 | AgentBridge | latest (2026-04) | `github.com/nicobailey/AgentBridge` → `src/` | 📋 | 深入 |
+| SOP 驱动角色分工 + 共享消息池 + Agent 角色 system prompt 设计 | MetaGPT | latest (2026-04) | `github.com/geekan/MetaGPT` → `metagpt/roles/` | 📋 | 深入 |
+| GroupChat Manager 动态发言权 + 发言者选择策略 | AutoGen | latest (2026-04) | `github.com/microsoft/autogen` → `autogen/agentchat/` | 📋 | 深入 |
+| WireGuard mesh 零配置 NAT 穿透 + MagicDNS | Tailscale | latest (2026-04) | `github.com/tailscale/tailscale` → `wgengine/` | 📋 | 深入 |
+| 多 agent 编排（handoff + 并行/路由/辩论）+ MCP 多协议通信（stdio/WS/SSE/HTTP） | PraisonAI | latest (2026-04) | `github.com/MervinPraison/PraisonAI` → `praisonai/` | 📋 | 深入 |
+| 整体观察（IDE 内实时协作桥、WebSocket 双向协议） | Bridge IDE | latest (2026-04) | `bridge.dev` | 👀 | 观察 |
+| 整体观察（SaaS Agent 编排、Webhook 集成） | Composio | latest (2026-04) | `github.com/composio/composio` | 👀 | 观察 |
+| 整体观察（Headscale 开源 Tailscale 控制面） | Headscale | latest (2026-04) | `github.com/juanfont/headscale` | 👀 | 观察 |
+| 整体观察（多 Agent 角色+任务模板协作） | CrewAI | latest (2026-04) | `github.com/crewAIInc/crewAI` | 👀 | 观察 |
+| 整体观察（多机 agent 实时监控 TUI、HTTP+WS 跨网订阅、provider adapter） | Agent Cow | latest (2026-04) | `github.com/h0ngcha0/agent-cow` | 👀 | 观察 |
+| 整体观察（daemon 事件路由器、异构 CLI agent hook 协调、Discord/Slack 投递） | clawhip | latest (2026-04) | `github.com/Yeachan-Heo/clawhip` | 👀 | 观察 |
+
+---
+
 ## 附录：上游监控优先级
 
 | 领域 | 高优先级监控 | 中优先级监控 |
@@ -265,5 +290,6 @@
 | 08 可观测性 | Langfuse（Generation 模型变更）、OpenLLMetry（新 instrumentation） | AgentOps、Arize Phoenix |
 | 09 部署运行时 | E2B（Sandbox API 变更）、Docker SDK（安全参数更新） | Modal、Daytona |
 | 10 自进化 | DSPy（Optimizer 更新）、OpenHands（轨迹格式变更） | Voyager、SWE-agent、ADAS |
+| 11 Agent Mesh | Google A2A（协议规范更新）、ACP（CLI 连接标准更新）、AgentsMesh（编排模式）、PraisonAI（多协议通信更新） | AgentBridge、Tailscale、MetaGPT、Agent Cow、clawhip |
 
 > **与脚本集成**：`sync-upstreams.py` 扫描本文件中的来源项目，优先对"深入"状态项目的上游变更触发 `merge-with-claude.sh` 进行智能 diff 分析与融合补丁生成。观察项目的上游变更仅记录，不自动触发融合。

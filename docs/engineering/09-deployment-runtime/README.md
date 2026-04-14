@@ -1,6 +1,10 @@
 # 部署运行时工程（Deployment & Runtime Engineering）
 
-> 本文档是 Quilin Agent 工程规格系列的第 9 篇，定义部署运行时层（`quilin/plugins/deploy/`）的设计方案、参考来源与验证标准。
+> 本文档是 Quilin Agent 工程规格系列的第 9 篇，定义部署运行时层的设计方案、参考来源与验证标准。
+>
+> **ADR-001 对齐说明**：旧路径 `quilin/plugins/deploy/` 已删除。本文档中的 Python 代码示例仅表达设计意图，实施时将以 TS 重写。`quilin/` 路径为规划参考。详见 [ADR-001](../../adr/adr-001-core-loop-and-language.md)。
+>
+> **热更新需求**：Agent 必须支持热更新 + 更新后主动告知用户变更内容，解决 OpenClaw/Hermes 更新断连痛点。详见记忆记录。
 
 ---
 
@@ -352,6 +356,15 @@ session:
   db_path: "~/.quilin/sessions.db"
   max_history_tokens: 32000
   auto_save_interval: 30    # 秒
+
+# 空闲自进化配置（详细定义见 10-self-evolution 2.12 + config.yaml）
+idle_evolution:
+  enabled: true
+  mode: "api"                    # "subscription" | "api"
+  min_idle_minutes: 30           # 用户至少空闲 N 分钟才触发
+  allowed_hours: "08:00-23:00"   # 允许运行的时间窗口
+  api:
+    daily_budget_tokens: 100000  # 每日自进化 token 上限
 ```
 
 **配置加载优先级**（从高到低）：
@@ -377,6 +390,8 @@ CLI 参数（--model gpt-4o）
 - `log_level`：通过 `PUT /admin/config` API 动态修改
 - `tools.enabled/disabled`：会话级别可临时调整
 - `llm.temperature`：每轮调用可单独覆盖
+- `idle_evolution.enabled/mode/daily_budget_tokens`：空闲自进化开关和预算可实时调整
+- `progress_reporting.*`：进度汇报配置（心跳间隔、IM 推送开关）可实时调整
 
 ### 2.6 会话管理设计
 

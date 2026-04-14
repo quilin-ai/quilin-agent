@@ -1,6 +1,8 @@
 # 安全护栏工程（Safety & Guardrails Engineering）
 
 > 本文档是 Quilin Agent 工程规格系列的第 7 篇，定义安全护栏层的设计方案、参考来源与验证标准。安全护栏是系统的横切关注点，贯穿输入、推理、输出、元验证的全流程。
+>
+> **ADR-001 对齐说明**：安全护栏实现为 Guardrails middleware（pre/post hooks），在 TS 核心层实现。本文档中的 Python 代码示例仅表达设计意图，实施时将以 TS 重写。`quilin/` 路径为规划参考。详见 [ADR-001](../../adr/adr-001-core-loop-and-language.md)。
 
 ---
 
@@ -432,9 +434,19 @@ class MetaVerificationTrigger:
 
 | 模式 | 只读工具 | 写入工具 | 危险操作 | 适用场景 |
 |------|---------|---------|---------|---------|
-| **AUTO** | 自动执行 | 自动执行 | 自动执行 | 可信内部环境、批处理任务 |
-| **DEFAULT** | 自动执行 | 需确认 | 阻止 | 标准生产环境（默认） |
-| **STRICT** | 需确认 | 需确认 | 阻止 + 告警 | 高安全要求环境、审计模式 |
+| **AUTO** | 自动执行 | 自动执行 | 自动执行 | **默认模式** — 最大信任，最小打断 |
+| **DEFAULT** | 自动执行 | 需确认 | 阻止 | 需要更多控制时手动切换（`--default`） |
+| **STRICT** | 需确认 | 需确认 | 阻止 + 告警 | 高安全要求环境、审计模式（`--strict`） |
+
+> **设计哲学：默认最大信任**
+>
+> Quilin 默认使用 AUTO 模式——只有 CRITICAL 级操作（drop_table、rm -rf、payment.transfer 等不可逆操作）才需要人工确认。这参考了 Claude Code `--enable-auto-mode` 的设计理念：
+>
+> - **频繁请求权限会打断工作流**，降低 Agent 的 agentic 体验
+> - **90%+ 的工具调用是安全的**（读取文件、搜索、查询等），无需人工干预
+> - 通过 2-stage Classifier（快速路径 + LLM 深度审查）替代人工确认，实现安全与效率的平衡
+> - **连续被拒降级机制**：当 Classifier 连续拒绝 N 次（默认 3），自动降级回 DEFAULT 模式（交互式确认），防止 Agent 锁死
+> - 用户可通过 `--default` 或 `--strict` flag 手动切换到更保守的模式
 
 #### 2.6.2 权限决策树
 
@@ -1387,7 +1399,7 @@ class Quilin:
 ```yaml
 # quilin/config.yaml（安全护栏相关配置）
 guardrails:
-  permission_level: "default"  # auto | default | strict
+  permission_level: "auto"  # auto | default | strict（默认 auto：最大信任，CRITICAL 仍强制确认）
   
   input_validation:
     injection_threshold: 0.5

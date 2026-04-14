@@ -1,0 +1,192 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 960 700" width="960" height="700">
+  <defs>
+    <style>
+      text { font-family: 'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif; }
+    </style>
+    <marker id="arrowGreenSolid" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#059669"/>
+    </marker>
+    <marker id="arrowGreenDash" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#059669"/>
+    </marker>
+    <marker id="arrowOrange" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#d97706"/>
+    </marker>
+    <marker id="arrowPurple" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#7c3aed"/>
+    </marker>
+    <marker id="arrowGrey" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#6b7280"/>
+    </marker>
+  </defs>
+  <rect width="960" height="700" fill="#ffffff"/>
+  <text x="480" y="30" text-anchor="middle" font-size="20" font-weight="bold" fill="#111827">OmniMem 4-Tier Memory Architecture</text>
+  <text x="480" y="50" text-anchor="middle" font-size="13" fill="#4b5563">Quilin Agent — Layered Memory System</text>
+  <rect x="49" y="71" width="370" height="90" rx="10" fill="#e5e7eb"/>
+  <rect x="46" y="68" width="370" height="90" rx="10" fill="#ecfdf5" stroke="#10b981" stroke-width="2"/>
+  <rect x="46" y="68" width="370" height="36" rx="10" fill="#10b981" opacity="0.15"/>
+  <rect x="46" y="84" width="370" height="20" fill="#10b981" opacity="0.15"/>
+  <text x="231" y="90" text-anchor="middle" font-size="12.5" font-weight="bold" fill="#1f2937">Layer 1 — Working Memory (工作记忆)</text>
+  <text x="231" y="110" text-anchor="middle" font-size="10" fill="#374151">最近 k=5 轮 · FIFO淘汰 · 零压缩 · 直接注入上下文</text>
+  <rect x="58" y="117" width="55.4" height="18" rx="9" fill="#10b981" opacity="0.20"/>
+  <text x="85.7" y="130" text-anchor="middle" font-size="9.5" fill="#1e40af" font-weight="600">store()</text>
+  <rect x="120.4" y="117" width="74.0" height="18" rx="9" fill="#10b981" opacity="0.20"/>
+  <text x="157.4" y="130" text-anchor="middle" font-size="9.5" fill="#1e40af" font-weight="600">retrieve()</text>
+  <rect x="201.4" y="117" width="61.6" height="18" rx="9" fill="#10b981" opacity="0.20"/>
+  <text x="232.20000000000002" y="130" text-anchor="middle" font-size="9.5" fill="#1e40af" font-weight="600">forget()</text>
+  <rect x="310" y="76" width="98" height="20" rx="10" fill="#059669"/>
+  <text x="359.0" y="90" text-anchor="middle" font-size="10" font-weight="bold" fill="#ffffff">Priority 1.0</text>
+  <rect x="49" y="185" width="370" height="90" rx="10" fill="#e5e7eb"/>
+  <rect x="46" y="182" width="370" height="90" rx="10" fill="#eff6ff" stroke="#3b82f6" stroke-width="2"/>
+  <rect x="46" y="182" width="370" height="36" rx="10" fill="#3b82f6" opacity="0.15"/>
+  <rect x="46" y="198" width="370" height="20" fill="#3b82f6" opacity="0.15"/>
+  <text x="231" y="204" text-anchor="middle" font-size="12.5" font-weight="bold" fill="#1f2937">Layer 2 — Episodic Memory (情景记忆)</text>
+  <text x="231" y="224" text-anchor="middle" font-size="10" fill="#374151">LLM摘要压缩 · 关键决策点 · Discard-all at T=32K</text>
+  <rect x="58" y="231" width="55.4" height="18" rx="9" fill="#3b82f6" opacity="0.20"/>
+  <text x="85.7" y="244" text-anchor="middle" font-size="9.5" fill="#1e40af" font-weight="600">store()</text>
+  <rect x="120.4" y="231" width="74.0" height="18" rx="9" fill="#3b82f6" opacity="0.20"/>
+  <text x="157.4" y="244" text-anchor="middle" font-size="9.5" fill="#1e40af" font-weight="600">retrieve()</text>
+  <rect x="201.4" y="231" width="92.60000000000001" height="18" rx="9" fill="#3b82f6" opacity="0.20"/>
+  <text x="247.70000000000002" y="244" text-anchor="middle" font-size="9.5" fill="#1e40af" font-weight="600">consolidate()</text>
+  <rect x="310" y="190" width="98" height="20" rx="10" fill="#2563eb"/>
+  <text x="359.0" y="204" text-anchor="middle" font-size="10" font-weight="bold" fill="#ffffff">Priority 0.7</text>
+  <rect x="49" y="299" width="370" height="90" rx="10" fill="#e5e7eb"/>
+  <rect x="46" y="296" width="370" height="90" rx="10" fill="#faf5ff" stroke="#8b5cf6" stroke-width="2"/>
+  <rect x="46" y="296" width="370" height="36" rx="10" fill="#8b5cf6" opacity="0.15"/>
+  <rect x="46" y="312" width="370" height="20" fill="#8b5cf6" opacity="0.15"/>
+  <text x="231" y="318" text-anchor="middle" font-size="12.5" font-weight="bold" fill="#1f2937">Layer 3 — Semantic Memory (语义记忆)</text>
+  <text x="231" y="338" text-anchor="middle" font-size="10" fill="#374151">向量索引(ChromaDB) + KG三元组(NetworkX) · 跨会话持久化</text>
+  <rect x="58" y="345" width="55.4" height="18" rx="9" fill="#8b5cf6" opacity="0.20"/>
+  <text x="85.7" y="358" text-anchor="middle" font-size="9.5" fill="#1e40af" font-weight="600">store()</text>
+  <rect x="120.4" y="345" width="74.0" height="18" rx="9" fill="#8b5cf6" opacity="0.20"/>
+  <text x="157.4" y="358" text-anchor="middle" font-size="9.5" fill="#1e40af" font-weight="600">retrieve()</text>
+  <rect x="201.4" y="345" width="61.6" height="18" rx="9" fill="#8b5cf6" opacity="0.20"/>
+  <text x="232.20000000000002" y="358" text-anchor="middle" font-size="9.5" fill="#1e40af" font-weight="600">forget()</text>
+  <rect x="270.0" y="345" width="92.60000000000001" height="18" rx="9" fill="#8b5cf6" opacity="0.20"/>
+  <text x="316.3" y="358" text-anchor="middle" font-size="9.5" fill="#1e40af" font-weight="600">consolidate()</text>
+  <rect x="310" y="304" width="98" height="20" rx="10" fill="#7c3aed"/>
+  <text x="359.0" y="318" text-anchor="middle" font-size="10" font-weight="bold" fill="#ffffff">Priority 0.5</text>
+  <rect x="49" y="413" width="370" height="90" rx="10" fill="#e5e7eb"/>
+  <rect x="46" y="410" width="370" height="90" rx="10" fill="#fffbeb" stroke="#f59e0b" stroke-width="2"/>
+  <rect x="46" y="410" width="370" height="36" rx="10" fill="#f59e0b" opacity="0.15"/>
+  <rect x="46" y="426" width="370" height="20" fill="#f59e0b" opacity="0.15"/>
+  <text x="231" y="432" text-anchor="middle" font-size="12.5" font-weight="bold" fill="#1f2937">Layer 4 — Skill Memory (技能记忆)</text>
+  <text x="231" y="452" text-anchor="middle" font-size="10" fill="#374151">Agent自创技能模板 · gbrain ultra-long · 成功率评分淘汰</text>
+  <rect x="58" y="459" width="55.4" height="18" rx="9" fill="#f59e0b" opacity="0.20"/>
+  <text x="85.7" y="472" text-anchor="middle" font-size="9.5" fill="#1e40af" font-weight="600">store()</text>
+  <rect x="120.4" y="459" width="74.0" height="18" rx="9" fill="#f59e0b" opacity="0.20"/>
+  <text x="157.4" y="472" text-anchor="middle" font-size="9.5" fill="#1e40af" font-weight="600">retrieve()</text>
+  <rect x="201.4" y="459" width="61.6" height="18" rx="9" fill="#f59e0b" opacity="0.20"/>
+  <text x="232.20000000000002" y="472" text-anchor="middle" font-size="9.5" fill="#1e40af" font-weight="600">forget()</text>
+  <rect x="310" y="418" width="98" height="20" rx="10" fill="#d97706"/>
+  <text x="359.0" y="432" text-anchor="middle" font-size="10" font-weight="bold" fill="#ffffff">Priority 0.6</text>
+  <rect x="62" y="14" width="204" height="26" rx="13" fill="#1f2937"/>
+  <text x="164" y="31" text-anchor="middle" font-size="11" font-weight="bold" fill="#f9fafb">New Experience / User Turn</text>
+  <line x1="164" y1="40" x2="164" y2="68" stroke="#059669" stroke-width="2" stroke-dasharray="6,4" marker-end="url(#arrowGreenDash)"/>
+  <rect x="143.0" y="44" width="42" height="16" rx="4" fill="#ffffff" stroke="#059669" stroke-width="1"/>
+  <text x="164" y="55" text-anchor="middle" font-size="9.5" fill="#059669" font-weight="600">write</text>
+  <line x1="80" y1="158" x2="80" y2="182" stroke="#059669" stroke-width="2" stroke-dasharray="6,4" marker-end="url(#arrowGreenDash)"/>
+  <rect x="44.0" y="160" width="72" height="16" rx="4" fill="#ffffff" stroke="#059669" stroke-width="1"/>
+  <text x="80" y="171" text-anchor="middle" font-size="9.5" fill="#059669" font-weight="600">FIFO evict</text>
+  <line x1="80" y1="272" x2="80" y2="296" stroke="#059669" stroke-width="2" stroke-dasharray="6,4" marker-end="url(#arrowGreenDash)"/>
+  <rect x="53.0" y="274" width="54" height="16" rx="4" fill="#ffffff" stroke="#059669" stroke-width="1"/>
+  <text x="80" y="285" text-anchor="middle" font-size="9.5" fill="#059669" font-weight="600">reflect</text>
+  <line x1="80" y1="386" x2="80" y2="410" stroke="#059669" stroke-width="2" stroke-dasharray="6,4" marker-end="url(#arrowGreenDash)"/>
+  <rect x="44.0" y="388" width="72" height="16" rx="4" fill="#ffffff" stroke="#059669" stroke-width="1"/>
+  <text x="80" y="399" text-anchor="middle" font-size="9.5" fill="#059669" font-weight="600">templatize</text>
+  <text x="24" y="290" text-anchor="middle" font-size="10" fill="#059669" font-weight="bold" transform="rotate(-90,24,290)">WRITE PATH</text>
+  <rect x="440" y="66" width="510" height="148" rx="10" fill="#f0fdf4" stroke="#059669" stroke-width="1.5"/>
+  <rect x="440" y="66" width="510" height="26" rx="10" fill="#059669" opacity="0.18"/>
+  <rect x="440" y="82" width="510" height="10" fill="#059669" opacity="0.18"/>
+  <text x="695" y="83" text-anchor="middle" font-size="12" font-weight="bold" fill="#065f46">Context Injection Order — Read Path</text>
+  <rect x="450" y="94" width="17" height="15" rx="4" fill="#6b7280"/>
+  <text x="458" y="105" text-anchor="middle" font-size="8.5" fill="#ffffff" font-weight="bold">1</text>
+  <text x="472" y="106" font-size="10" fill="#111827">[System Prompt]</text>
+  <rect x="450" y="111" width="17" height="15" rx="4" fill="#6b7280"/>
+  <text x="458" y="122" text-anchor="middle" font-size="8.5" fill="#ffffff" font-weight="bold">2</text>
+  <text x="472" y="123" font-size="10" fill="#111827">[Project Memory: MEMORY.md]</text>
+  <rect x="450" y="128" width="17" height="15" rx="4" fill="#7c3aed"/>
+  <text x="458" y="139" text-anchor="middle" font-size="8.5" fill="#ffffff" font-weight="bold">3</text>
+  <text x="472" y="140" font-size="10" fill="#111827">[Semantic Memory: top-5 recall]</text>
+  <rect x="450" y="145" width="17" height="15" rx="4" fill="#2563eb"/>
+  <text x="458" y="156" text-anchor="middle" font-size="8.5" fill="#ffffff" font-weight="bold">4</text>
+  <text x="472" y="157" font-size="10" fill="#111827">[Episodic Memory: 3-5 summaries]</text>
+  <rect x="450" y="162" width="17" height="15" rx="4" fill="#059669"/>
+  <text x="458" y="173" text-anchor="middle" font-size="8.5" fill="#ffffff" font-weight="bold">5</text>
+  <text x="472" y="174" font-size="10" fill="#111827">[Working Memory: last k=5 turns]</text>
+  <rect x="450" y="179" width="17" height="15" rx="4" fill="#1f2937"/>
+  <text x="458" y="190" text-anchor="middle" font-size="8.5" fill="#ffffff" font-weight="bold">6</text>
+  <text x="472" y="191" font-size="10" fill="#111827">[Current Task — highest weight]</text>
+  <text x="942" y="103" text-anchor="end" font-size="8.5" fill="#059669">← low</text>
+  <text x="942" y="209" text-anchor="end" font-size="8.5" fill="#059669">← high</text>
+  <rect x="460" y="230" width="130" height="24" rx="12" fill="#1f2937"/>
+  <text x="525" y="246" text-anchor="middle" font-size="10.5" fill="#f9fafb" font-weight="bold">Query / Task input</text>
+  <rect x="450" y="278" width="190" height="54" rx="8" fill="#faf5ff" stroke="#8b5cf6" stroke-width="1.5"/>
+  <text x="545" y="294" text-anchor="middle" font-size="11" font-weight="bold" fill="#6d28d9">Hybrid Search</text>
+  <text x="545" y="308" text-anchor="middle" font-size="9.5" fill="#4b5563">Vector cosine + KG subgraph</text>
+  <text x="545" y="323" text-anchor="middle" font-size="8.5" fill="#6b7280">α=0.4 · β=0.2 · γ=0.2 · δ=0.2</text>
+  <line x1="525" y1="254" x2="545" y2="278" stroke="#059669" stroke-width="2" marker-end="url(#arrowGreenSolid)"/>
+  <rect x="508.0" y="256" width="54" height="16" rx="4" fill="#ffffff" stroke="#059669" stroke-width="1"/>
+  <text x="535" y="267" text-anchor="middle" font-size="9.5" fill="#059669" font-weight="600">embed()</text>
+  <rect x="450" y="354" width="190" height="36" rx="8" fill="#ecfdf5" stroke="#059669" stroke-width="1.5"/>
+  <text x="545" y="370" text-anchor="middle" font-size="11" font-weight="bold" fill="#065f46">Ranked Recall</text>
+  <text x="545" y="384" text-anchor="middle" font-size="9.5" fill="#374151">top-K · score · budget ≤ 30% ctx</text>
+  <line x1="545" y1="332" x2="545" y2="354" stroke="#059669" stroke-width="2" marker-end="url(#arrowGreenSolid)"/>
+  <rect x="521.0" y="333" width="48" height="16" rx="4" fill="#ffffff" stroke="#059669" stroke-width="1"/>
+  <text x="545" y="344" text-anchor="middle" font-size="9.5" fill="#059669" font-weight="600">rank()</text>
+  <line x1="545" y1="390" x2="545" y2="412" stroke="#059669" stroke-width="2" marker-end="url(#arrowGreenSolid)"/>
+  <rect x="509.0" y="391" width="72" height="16" rx="4" fill="#ffffff" stroke="#059669" stroke-width="1"/>
+  <text x="545" y="402" text-anchor="middle" font-size="9.5" fill="#059669" font-weight="600">inject→ctx</text>
+  <rect x="654" y="230" width="130" height="70" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="2"/>
+  <text x="719" y="247" text-anchor="middle" font-size="12" font-weight="bold" fill="#92400e">Reflector</text>
+  <text x="719" y="263" text-anchor="middle" font-size="9.5" fill="#78350f">Episodic→pattern</text>
+  <text x="719" y="277" text-anchor="middle" font-size="9.5" fill="#78350f">→Semantic+Skill</text>
+  <text x="719" y="292" text-anchor="middle" font-size="8.5" fill="#9ca3af">Sonnet 4.6 LLM</text>
+  <rect x="654" y="314" width="130" height="90" rx="8" fill="#fdf2f8" stroke="#a855f7" stroke-width="1.5"/>
+  <text x="719" y="330" text-anchor="middle" font-size="11" font-weight="bold" fill="#7e22ce">Dream Cycles</text>
+  <text x="719" y="344" text-anchor="middle" font-size="9" fill="#6b21a8">3-Phase Sleep</text>
+  <text x="661" y="360" font-size="9" fill="#374151">① Light: Ingestion</text>
+  <text x="661" y="374" font-size="9" fill="#374151">② REM: Pattern Recog.</text>
+  <text x="661" y="388" font-size="9" fill="#374151">③ Deep: Mem Promotion</text>
+  <path d="M 416,227 L 630,227 L 630,265 L 654,265" fill="none" stroke="#d97706" stroke-width="2" stroke-dasharray="6,4" marker-end="url(#arrowOrange)"/>
+  <rect x="543.0" y="207" width="66" height="16" rx="4" fill="#ffffff" stroke="#d97706" stroke-width="1"/>
+  <text x="576" y="218" text-anchor="middle" font-size="9.5" fill="#d97706" font-weight="600">reflect()</text>
+  <path d="M 719,300 L 719,341 L 418,341" fill="none" stroke="#d97706" stroke-width="2" stroke-dasharray="6,4" marker-end="url(#arrowOrange)"/>
+  <rect x="664.0" y="321" width="54" height="16" rx="4" fill="#ffffff" stroke="#d97706" stroke-width="1"/>
+  <text x="691" y="332" text-anchor="middle" font-size="9.5" fill="#d97706" font-weight="600">→KG+Vec</text>
+  <path d="M 416,455 L 648,455 L 648,358 L 654,358" fill="none" stroke="#a855f7" stroke-width="2" stroke-dasharray="6,4" marker-end="url(#arrowPurple)"/>
+  <rect x="431.0" y="435" width="42" height="16" rx="4" fill="#ffffff" stroke="#a855f7" stroke-width="1"/>
+  <text x="452" y="446" text-anchor="middle" font-size="9.5" fill="#a855f7" font-weight="600">Dream</text>
+  <path d="M 719,404 L 719,518 L 231,518 L 231,500" fill="none" stroke="#a855f7" stroke-width="2" stroke-dasharray="6,4" marker-end="url(#arrowPurple)"/>
+  <rect x="250.0" y="500" width="54" height="16" rx="4" fill="#ffffff" stroke="#a855f7" stroke-width="1"/>
+  <text x="277" y="511" text-anchor="middle" font-size="9.5" fill="#a855f7" font-weight="600">promote</text>
+  <path d="M 416,90 L 420,90 L 420,174 L 440,174" fill="none" stroke="#059669" stroke-width="2" marker-end="url(#arrowGreenSolid)"/>
+  <path d="M 416,204 L 426,204 L 426,157 L 440,157" fill="none" stroke="#059669" stroke-width="2" marker-end="url(#arrowGreenSolid)"/>
+  <path d="M 416,318 L 432,318 L 432,140 L 440,140" fill="none" stroke="#059669" stroke-width="2" marker-end="url(#arrowGreenSolid)"/>
+  <path d="M 416,432 L 598,432 L 598,242" fill="none" stroke="#059669" stroke-width="2" marker-end="url(#arrowGreenSolid)"/>
+  <rect x="611.0" y="412" width="54" height="16" rx="4" fill="#ffffff" stroke="#059669" stroke-width="1"/>
+  <text x="638" y="423" text-anchor="middle" font-size="9.5" fill="#059669" font-weight="600">match()</text>
+  <text x="430" y="290" text-anchor="middle" font-size="10" fill="#059669" font-weight="bold" transform="rotate(-90,430,290)">READ PATH</text>
+  <rect x="46" y="530" width="200" height="72" rx="8" fill="#f9fafb" stroke="#d1d5db" stroke-width="1"/>
+  <text x="56" y="546" font-size="11" font-weight="bold" fill="#374151">Legend</text>
+  <line x1="56" y1="562" x2="92" y2="562" stroke="#059669" stroke-width="2" stroke-dasharray="6,4" marker-end="url(#arrowGreenDash)"/>
+  <text x="98" y="566" font-size="10" fill="#374151">Write / Eviction path</text>
+  <line x1="56" y1="582" x2="92" y2="582" stroke="#059669" stroke-width="2" marker-end="url(#arrowGreenSolid)"/>
+  <text x="98" y="586" font-size="10" fill="#374151">Read / Recall path</text>
+  <rect x="46" y="648" width="868" height="40" rx="8" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="1"/>
+  <text x="480" y="661" text-anchor="middle" font-size="11" font-weight="bold" fill="#1e293b">Memory Operations</text>
+  <rect x="90" y="668" width="65" height="16" rx="8" fill="#059669" opacity="0.15" stroke="#059669" stroke-width="1"/>
+  <text x="122" y="680" text-anchor="middle" font-size="10" fill="#059669" font-weight="600">store()</text>
+  <rect x="179" y="668" width="86" height="16" rx="8" fill="#059669" opacity="0.15" stroke="#059669" stroke-width="1"/>
+  <text x="222" y="680" text-anchor="middle" font-size="10" fill="#059669" font-weight="600">retrieve()</text>
+  <rect x="289" y="668" width="72" height="16" rx="8" fill="#ef4444" opacity="0.15" stroke="#ef4444" stroke-width="1"/>
+  <text x="325" y="680" text-anchor="middle" font-size="10" fill="#ef4444" font-weight="600">forget()</text>
+  <rect x="385" y="668" width="107" height="16" rx="8" fill="#3b82f6" opacity="0.15" stroke="#3b82f6" stroke-width="1"/>
+  <text x="438" y="680" text-anchor="middle" font-size="10" fill="#3b82f6" font-weight="600">consolidate()</text>
+  <rect x="516" y="668" width="79" height="16" rx="8" fill="#d97706" opacity="0.15" stroke="#d97706" stroke-width="1"/>
+  <text x="555" y="680" text-anchor="middle" font-size="10" fill="#d97706" font-weight="600">reflect()</text>
+  <rect x="619" y="668" width="65" height="16" rx="8" fill="#8b5cf6" opacity="0.15" stroke="#8b5cf6" stroke-width="1"/>
+  <text x="651" y="680" text-anchor="middle" font-size="10" fill="#8b5cf6" font-weight="600">embed()</text>
+</svg>

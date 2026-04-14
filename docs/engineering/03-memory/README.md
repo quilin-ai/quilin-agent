@@ -1,6 +1,8 @@
 # 记忆工程（Memory Engineering）
 
-> Phase 3 核心文档 — OmniMem 4 层分级记忆系统详细规格
+> OmniMem 4 层分级记忆系统详细规格
+>
+> **ADR-001 对齐说明**：核心语言已决策为 TypeScript，OmniMem 将封装为 Python MCP Server（ML 依赖），TS 核心通过 MCP stdio 调用。本文档中的 Python 代码示例仅表达设计意图。`quilin/` 路径为规划参考。详见 [ADR-001](../../adr/adr-001-core-loop-and-language.md)。
 
 ---
 
@@ -182,6 +184,79 @@ class SkillTemplate:
 - 调用次数 >= 5 且成功率 < 0.3 的技能标记为 deprecated
 - 定期（每 24 小时）清理 deprecated 技能
 
+### User Profile Store（用户画像存储）
+
+**定位**：专门为用户建模的持久化存储，贯穿 Agent 完整生命周期，是实现 Agentic 人味和 Aha Moment 的数据基础。
+
+**核心理念**：好的 Agent 不是被动等待使用的工具，而是能理解人、有人味、有主动性的伙伴。Agent 应该主动收集和学习用户背景，帮用户记得且觉察到用户自己都注意不到的事情。
+
+#### 首次启动引导式收集（Onboarding）
+
+Quilin 首次启动时主动向用户发起引导式问卷，而非等待用户自行告知：
+
+```
+[首次启动引导]
+"你好！为了更好地帮助你，我想了解一些背景信息：
+1. 你的角色是什么？（工程师/产品经理/研究员/...）
+2. 你主要使用什么技术栈？
+3. 你目前在做什么项目/任务？
+4. 你有什么工作习惯偏好？（比如喜欢简洁还是详细的回答）
+当然，你可以跳过任何问题，我会在后续使用中慢慢了解。"
+```
+
+收集到的信息存入 User Profile：
+
+```python
+@dataclass
+class UserProfile:
+    user_id: str
+    role: str | None                    # 用户角色
+    tech_stack: list[str]               # 技术栈
+    current_projects: list[str]         # 当前项目
+    work_style: dict                    # 工作风格偏好
+    active_hours: list[tuple[int,int]]  # 活跃时段（从使用模式中学习）
+    communication_preference: str       # 沟通偏好（简洁/详细/技术深度）
+    known_expertise: list[str]          # 已知专长领域
+    known_gaps: list[str]               # 已知薄弱领域（用于调整解释深度）
+    interaction_count: int = 0          # 总交互次数
+    last_seen: datetime | None = None   # 最后一次活跃时间
+    created_at: datetime                # 首次使用时间
+```
+
+#### 持续静默更新
+
+不靠用户主动告知，Agent 在每次交互中自动推断并更新画像：
+
+| 信号 | 推断 | 更新字段 |
+|------|------|---------|
+| 用户使用了大量 Go 专业术语 | 用户熟悉 Go | `known_expertise += ["Go"]` |
+| 用户在凌晨 1-3 点活跃 | 夜猫子工作模式 | `active_hours` 更新 |
+| 用户总是要求更简洁的回答 | 偏好简洁 | `communication_preference = "concise"` |
+| 用户对 React 概念频繁提问 | React 相对薄弱 | `known_gaps += ["React"]` |
+| 用户切换了项目上下文 | 项目变更 | `current_projects` 更新 |
+
+更新策略：**增量 + 阈值确认**。连续 3 次在同一方向上观察到信号后才更新，避免单次误判。
+
+#### Departure Context（离开上下文）
+
+当检测到用户长时间未响应（> 30 分钟），OmniMem 自动记录当前上下文状态：
+
+```python
+@dataclass
+class DepartureContext:
+    session_id: str
+    departed_at: datetime               # 离开时间
+    last_topic: str                     # 最后讨论话题摘要
+    pending_user_actions: list[str]     # 用户承诺要做但未报告结果的事
+    pending_agent_suggestions: list[str] # Agent 建议了但用户未确认的事
+    emotional_state: str | None         # 用户离开时的情绪线索（如有）
+    context_summary: str                # 整体上下文摘要
+```
+
+- **写入时机**：用户消息间隔 > 30 分钟时自动生成
+- **读取时机**：用户新消息到达时，02-Context 的 `build_context()` 优先检索最近的 DepartureContext
+- **与 02-Context 时间感知联动**：DepartureContext 提供"未完成动作"列表，02-Context 的时间感知层据此决定如何衔接对话
+
 ### 混合检索策略
 
 每次 `ContextManager.build_context()` 调用时，按以下策略从各层检索相关记忆：
@@ -254,6 +329,12 @@ Reflector 是连接 Episodic Memory 和 Semantic Memory 的桥梁，负责从具
 - 任务失败后（`AgentState.current_node == "error"`），优先反思失败原因
 - Episodic Memory 触发 Discard-all 前（强制反思）
 - 固定间隔：每 50 次 Working Memory 更新触发一次
+- **空闲期主动维护**：用户空闲且 idle_evolution 预算充足时（见 [10-self-evolution 2.12](../10-self-evolution/README.md)），自动触发以下记忆维护操作：
+  - Working → Episodic 批量归档（清理积压的短期记忆）
+  - Episodic → Semantic 批量反思（提炼跨会话知识）
+  - Semantic Memory 去重（合并高相似度条目）
+  - KG 补充（为孤立节点补充关系边）
+  - 重要性评分刷新（重新计算 access_count 衰减）
 
 **反思流程**：
 ```

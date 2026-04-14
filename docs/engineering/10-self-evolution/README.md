@@ -1,6 +1,8 @@
 # 自进化工程（Self-Evolution Engineering）
 
 > 本文档是 Quilin Agent 工程规格系列的第 10 篇，也是最具野心的一篇。自进化是让 Agent 能够从失败中学习、自动改进自身 scaffold（提示词/工具配置/工作流）的能力——这是我们区别于绝大多数竞品的核心竞争力。核心设计受 MiniMax M2.7 的自进化闭环启发，系统化地融合了 DSPy、Voyager、ADAS 等最前沿的自动优化研究成果。
+>
+> **ADR-001 对齐说明**：自进化系统作为异步后台子系统运行，不阻塞主 Loop。DSPy 优化器等 ML 依赖封装为 Python MCP Server。本文档中的 Python 代码示例仅表达设计意图。`quilin/` 路径为规划参考。详见 [ADR-001](../../adr/adr-001-core-loop-and-language.md)。
 
 ---
 
@@ -516,7 +518,75 @@ Claude 分析 diff：
 }
 ```
 
-### 2.9 核心接口定义
+### 2.9 User Insight Engine（用户洞察引擎）
+
+User Insight Engine 是自进化系统的一个子系统，专注于从用户行为数据中挖掘模式、产生洞察、实现 Aha Moment。
+
+**核心理念**：好的 Agent 能帮用户觉察到自己都注意不到的事情。不是被动等待使用，而是主动理解用户、持续学习、在恰当时机给出让人惊喜的洞察。
+
+**数据来源**：
+- OmniMem Layer 3（Semantic Memory）中的用户相关知识
+- OmniMem Layer 4（Skill Memory）中用户常用技能模式
+- User Profile Store 中的用户画像
+- TrajectoryStore 中的用户交互轨迹
+- 02-Context 的时间感知数据（活跃时段、工作节奏）
+
+**洞察类型**：
+
+| 类型 | 示例 | 触发条件 |
+|------|------|---------|
+| **行为模式发现** | "你最近 3 天每次都在凌晨 2 点问 debug 问题，要不要设个提醒早点处理？" | 时间模式重复 >= 3 次 |
+| **效率瓶颈识别** | "你在 CSS 布局问题上平均花费的时间是其他任务的 3 倍，要不要看一下 Flexbox 速查？" | 某类任务耗时显著高于均值 |
+| **知识缺口提醒** | "你最近连续问了 5 个 TypeScript 泛型问题，要不要系统学习一下？" | 同一知识点反复提问 |
+| **工作节奏洞察** | "你连续工作 6 小时了，上次这么长时间后你犯了几个低级错误" | 连续工作时长超过历史舒适区 |
+| **项目进展感知** | "你已经 3 天没碰 Project X 了，上次说要这周完成的" | 项目活跃度下降 |
+| **工具使用建议** | "你经常手动做 X，其实可以用 Y 工具自动化" | 重复人工操作模式 |
+
+**运行机制**：
+
+```
+TrajectoryStore + User Profile + OmniMem
+         │
+         ▼
+  InsightMiner（后台异步运行，不阻塞主 Loop）
+  │
+  ├── 时间模式分析：检测重复的时间行为模式
+  ├── 效率分析：对比不同任务类型的耗时分布
+  ├── 知识图谱分析：从 KG 中发现知识缺口
+  └── 行为序列分析：识别可自动化的重复操作
+         │
+         ▼
+  InsightQueue（洞察队列，按紧急度排序）
+         │
+         ▼
+  InsightDelivery（时机选择 + 表达策略）
+  │
+  ├── 紧急洞察：立即在当前对话中提出
+  ├── 一般洞察：在下次对话开始时自然引入
+  └── 低优先级：存入 Dashboard 供用户自行查看
+```
+
+**关键接口**：
+
+```python
+class InsightEngine(Protocol):
+    async def mine_insights(self, user_id: str) -> list[Insight]: ...
+    async def should_deliver(self, insight: Insight, context: ConversationContext) -> bool: ...
+    async def format_delivery(self, insight: Insight) -> str: ...
+
+@dataclass
+class Insight:
+    insight_type: str       # "behavior_pattern" | "efficiency" | "knowledge_gap" | "rhythm" | "progress" | "tool_suggestion"
+    confidence: float       # 0.0 ~ 1.0，低于 0.7 不推送
+    evidence: list[str]     # 支撑这个洞察的具体证据
+    message: str            # 面向用户的自然语言表达
+    urgency: str            # "immediate" | "next_session" | "dashboard_only"
+    actionable: bool        # 是否包含可执行的建议
+```
+
+**与时间感知的协作**：InsightEngine 利用 02-Context 的时间感知数据构建用户时间画像（何时高效、何时疲劳、何时容易犯错），并在合适的时机推送相关洞察。
+
+### 2.10 核心接口定义
 
 ```python
 from typing import Protocol, runtime_checkable
@@ -683,6 +753,210 @@ class SelfEvolutionEngineProtocol(Protocol):
 
     def get_evolution_history(self) -> list[dict]: ...
     """返回历史自进化记录"""
+```
+
+### 2.11 用户自助吸收（User Self-Evolution）
+
+> **核心理念**：用户不是被动接收官方更新的消费者，而是 Agent 能力生态的共建者。
+
+自进化不仅是官方单向推送——用户可以自己发现并吸收 GitHub 上的仓库来升级自己的 Agent 实例，形成 **Agent 能力的 git 生态**。
+
+**运作模型（类 git fork/merge）：**
+
+```
+用户："吸收 https://github.com/xxx/yyy"
+    │
+    ▼
+Quilin 运行标准化深度调研（6 步流程，见 deep-code-research-methodology.md）
+    │
+    ▼
+生成调研报告 + 吸收计划（展示给用户："发现 3 个可吸收功能"）
+    │
+    ▼
+用户确认选择（"吸收第 1、3 项"）
+    │
+    ▼
+生成 Scaffold 补丁（仅修改 scaffold：提示词 / 工具配置 / 工作流定义）
+    │
+    ▼
+本地验证（运行标准测试集，确认吸收后表现不退化）
+    │
+    ▼
+应用补丁 + 创建回滚点
+    │
+    ▼
+变更上报官方（可选）
+    │
+    ├── 官方接受 → 合入主线，所有用户受益
+    │
+    └── 官方不接受 → 用户保留本地版本
+         │
+         └── 未来官方更新时，本地需要冲突检测与解决
+```
+
+**设计约束：**
+
+| 约束 | 说明 |
+|------|------|
+| 仅修改 scaffold | 用户自助吸收不触碰核心代码，只修改提示词、工具配置、工作流定义 |
+| 一键回滚 | 每次吸收自动创建回滚点，吸收后表现变差可立即回退 |
+| 完全透明 | 用户能看到"改了什么、为什么改、预期效果是什么" |
+| 共享基础设施 | 与官方自进化（2.4 Scaffold 自修改）共享同一套补丁系统 |
+
+**冲突检测与解决：**
+
+当用户本地有自助吸收的补丁，同时官方发布新版本时：
+
+```
+官方新版本到达
+    │
+    ▼
+检测本地补丁与官方更新是否冲突
+    │
+    ├── 无冲突 → 自动合并（官方更新 + 本地补丁共存）
+    │
+    ├── 有冲突但可自动解决 → 生成合并建议，用户确认
+    │
+    └── 有冲突且需人工决策 → 展示冲突详情，用户选择：
+         ├── 保留本地版本（跳过此官方更新）
+         ├── 采用官方版本（丢弃本地补丁）
+         └── 手动合并（交互式解决）
+```
+
+**与上游监控（2.8）的关系**：
+- 2.8 是**官方**对 ~100 个上游项目的自动监控缝合
+- 2.11 是**用户**对任意 GitHub 仓库的自助吸收
+- 两者共享同一套调研流程（[deep-code-research-methodology.md](../research/deep-code-research-methodology.md)）
+- 两者产出的补丁格式相同，通过同一套 Scaffold 修改系统应用
+
+### 2.12 空闲自进化经济学（Idle Evolution Budget）
+
+> **核心理念**：用户不在时 ≠ Agent 停工。空闲资源应被自动用于自我提升，而不是白白浪费。
+
+大多数 Agent 在用户离开后完全闲置。Quilin 的设计哲学是：**用户离开的时间恰好是 Agent 自我进化的最佳窗口**——不抢用户资源、不阻塞交互、不产生意外副作用。
+
+#### 两种计费模式
+
+| 模式 | 适用场景 | 预算来源 | 触发条件 |
+|------|---------|---------|---------|
+| **订阅套餐模式** | 用户按月/年订阅 | 闲置配额（不用白不用） | 用户空闲 + 配额有剩余 |
+| **API 接入模式** | 用户按量付费 | 用户设置的每日自进化预算上限 | 用户空闲 + 当日预算未耗尽 |
+
+#### 空闲检测机制
+
+复用 02-Context 时间感知的 **gap 检测**（`DepartureContext`）：
+
+```python
+@dataclass
+class IdleEvolutionTrigger:
+    """空闲自进化触发条件"""
+    min_idle_minutes: int = 30          # 用户至少空闲 N 分钟才触发
+    no_pending_tasks: bool = True       # 无未完成的 Sub-Agent 任务
+    budget_remaining: bool = True       # 当日预算仍有余额
+    within_allowed_hours: bool = True   # 在允许的时间窗口内（避免半夜消耗）
+
+    def should_trigger(self, ctx: DepartureContext, budget: BudgetState) -> bool:
+        return (
+            ctx.gap_minutes >= self.min_idle_minutes
+            and not budget.exhausted
+            and self._within_time_window()
+            and not self._has_pending_subtasks()
+        )
+```
+
+#### 空闲时活动类型
+
+按优先级排序（预算有限时优先执行高价值活动）：
+
+| 优先级 | 活动类型 | 消耗 | 产出 | 频率 |
+|--------|---------|------|------|------|
+| P0 | **记忆整合** | 低（本地计算为主） | Working → Episodic 归档、去重、KG 补充 | 每次空闲 |
+| P1 | **Scaffold 自改进** | 中（需 LLM 调用） | 基于积累轨迹的 Level 1-2 修改 | 每日最多 1 轮 |
+| P2 | **技能库扩充** | 中 | 从成功轨迹提取新技能、验证已有技能 | 每日最多 1 轮 |
+| P3 | **浏览用户相关内容** | 高（浏览器 + LLM） | 用户关注领域的新动态、趋势摘要 | 每周 2-3 次 |
+| P4 | **上游监控加速** | 高 | 主动分析上游项目更新的融合价值 | 有新上游更新时 |
+
+#### 预算核算协议
+
+```python
+@dataclass
+class IdleBudgetState:
+    """空闲自进化预算状态"""
+    mode: str                           # "subscription" | "api"
+    
+    # 订阅模式
+    monthly_quota_total: int = 0        # 月总配额（token）
+    monthly_quota_used: int = 0         # 已使用
+    idle_allocation_pct: float = 0.2    # 最多用剩余配额的 20% 做自进化
+    
+    # API 模式
+    daily_budget_tokens: int = 0        # 每日自进化 token 上限
+    daily_used_tokens: int = 0          # 今日已消耗
+    
+    def remaining(self) -> int:
+        if self.mode == "subscription":
+            idle_cap = int((self.monthly_quota_total - self.monthly_quota_used) * self.idle_allocation_pct)
+            return max(0, idle_cap - self.daily_used_tokens)
+        else:  # api
+            return max(0, self.daily_budget_tokens - self.daily_used_tokens)
+    
+    @property
+    def exhausted(self) -> bool:
+        return self.remaining() <= 0
+```
+
+#### 透明汇报（Report-Back）
+
+用户下次上线时，Agent 主动汇总空闲期间的活动：
+
+```
+🔄 空闲自进化报告（过去 8 小时）
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📊 记忆整合：归档 23 条 Working 记忆 → Episodic，去重 5 条
+🛠️ Scaffold 优化：系统提示微调 1 处（代码审查指令更清晰）
+   → A/B 评估：成功率 +3.2%，已保留
+📰 浏览摘要：发现 2 篇与你项目相关的新文章
+   → [文章标题1] — 摘要...
+   → [文章标题2] — 摘要...
+💰 消耗：12,340 tokens（日预算剩余 87,660）
+```
+
+**汇报时机**：
+- 用户首次发送消息时（非侵入式，可折叠）
+- WebUI Dashboard 实时展示空闲活动日志
+- 重大发现（如 scaffold 修改带来显著提升）可通过 IM 主动推送
+
+#### 安全约束
+
+| 约束 | 说明 |
+|------|------|
+| 仅执行 Level 1-2 修改 | 空闲期间不触发需人类审批的 Level 3-4 修改 |
+| 预算硬上限 | 超出预算立即停止，不借用下一日额度 |
+| 活动白名单 | 仅允许上述 5 种活动类型，不执行任何用户任务 |
+| 沙箱隔离 | 所有 scaffold 修改在沙箱中验证，不影响生产环境 |
+| 可完全关闭 | 用户可在 config.yaml 中 `idle_evolution.enabled: false` |
+
+#### 与其他组件的协作
+
+```
+02-Context（时间感知）
+    └── DepartureContext.gap_minutes → 判断用户是否空闲
+    └── AbsoluteTimeAwareness → 判断当前是否在允许时间窗口
+
+03-Memory（OmniMem）
+    └── 空闲时执行 Working → Episodic 归档、去重、KG 补充
+
+05-Tool（浏览器）
+    └── 空闲时浏览用户关注领域的网页内容
+
+06-Multi-Agent（Sub-Agent）
+    └── 确认无 pending Sub-Agent 任务后才触发空闲进化
+
+08-Observability
+    └── 记录空闲活动日志，供 Dashboard 展示
+
+10-Self-Evolution（2.4 Scaffold 自修改）
+    └── 空闲时运行 run_cycle() 的 Level 1-2 部分
 ```
 
 ---
@@ -919,6 +1193,23 @@ self_evolution:
     enabled: true
     sync_interval_minutes: 5       # 同步间隔（与 sync-upstreams.py 一致）
     relevance_threshold: "medium"  # 最低相关性阈值才触发缝合
+  idle_evolution:
+    enabled: true
+    mode: "api"                    # "subscription" | "api"
+    min_idle_minutes: 30           # 用户至少空闲 N 分钟才触发
+    allowed_hours: "08:00-23:00"   # 允许运行的时间窗口
+    subscription:
+      idle_allocation_pct: 0.20    # 最多用剩余配额的 20%
+    api:
+      daily_budget_tokens: 100000  # 每日自进化 token 上限
+    activities:                    # 各活动类型开关
+      memory_consolidation: true
+      scaffold_improvement: true
+      skill_expansion: true
+      web_browsing: true
+      upstream_analysis: true
+    max_scaffold_level: 2          # 空闲期间最高修改级别（不超过 2）
+    report_back: true              # 用户上线时汇报空闲活动
 ```
 
 ---

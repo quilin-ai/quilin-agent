@@ -1,6 +1,8 @@
 # 可观测性工程（Observability Engineering）
 
-> 本文档是 Quilin Agent 工程规格系列的第 8 篇，定义可观测性层（`quilin/layers/observability/`）的设计方案、参考来源与验证标准。可观测性是横切所有层的基础能力，为追踪、指标和日志提供统一基础设施。
+> 本文档是 Quilin Agent 工程规格系列的第 8 篇，定义可观测性层的设计方案、参考来源与验证标准。可观测性是横切所有层的基础能力，为追踪、指标和日志提供统一基础设施。
+>
+> **ADR-001 对齐说明**：可观测性通过 OpenTelemetry hooks 无侵入注入 TS 核心层。旧路径 `quilin/layers/observability/` 已删除。本文档中的 Python 代码示例仅表达设计意图。`quilin/` 路径为规划参考。详见 [ADR-001](../../adr/adr-001-core-loop-and-language.md)。
 
 ---
 
@@ -129,7 +131,38 @@ Logs（日志）        →  结构化 JSON 日志（携带 trace_id/span_id 关
                                        │
                             Local JSON Exporter
                            (零配置本地开发调试)
+
+          ┌────────────────────────────────────────────────────────┐
+          │              Quilin WebUI Dashboard                     │
+          │                                                        │
+          │  数据源：OTel Metrics/Traces + OmniMem + TaskState     │
+          │                                                        │
+          │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ │
+          │  │ 任务面板  │ │ 记忆面板  │ │ 工具面板  │ │ 指标面板  │ │
+          │  │ 状态一览  │ │ 4 层浏览  │ │ 使用统计  │ │ Token/   │ │
+          │  │ 进行/完成 │ │ 内容管理  │ │ 调用历史  │ │ 成本追踪 │ │
+          │  └──────────┘ └──────────┘ └──────────┘ └──────────┘ │
+          │  ┌──────────┐ ┌──────────┐                           │
+          │  │ 拓扑面板  │ │ 用户面板  │                           │
+          │  │ Agent     │ │ 画像展示  │                           │
+          │  │ Mesh 可视 │ │ 洞察历史  │                           │
+          │  └──────────┘ └──────────┘                           │
+          └────────────────────────────────────────────────────────┘
 ```
+
+> **Dashboard vs Chat UI**：Dashboard 是独立的全局可视化应用，不是 Streaming Chat UI 的附属。Chat UI 是单线程对话交互；Dashboard 提供全局视角——任务全景、记忆内容、工具统计、Agent 拓扑、token 指标。两者并行存在，数据共享但功能互补。
+
+### 2.1.1 WebUI Dashboard 面板定义
+
+| 面板 | 数据源 | 核心指标 | 刷新策略 |
+|------|--------|---------|---------|
+| **任务面板** | TaskState + OTel Session Spans | 任务状态分布（进行中/完成/失败）、任务耗时分布、步骤效率 | 实时（WebSocket） |
+| **记忆面板** | OmniMem 4 层存储 | 各层记忆条数、存储大小、最近访问时间、检索命中率 | 按需刷新 |
+| **工具面板** | OTel Tool Spans | 工具调用频率 Top 10、成功率、平均延迟、成本分摊 | 5s 轮询 |
+| **指标面板** | OTel Metrics + Prometheus | Token 消耗趋势（input/output/thinking）、成本累计、Prompt Cache 命中率 | 5s 轮询 |
+| **Sub-Agent 进度面板** | ProgressAggregator (06-multi-agent) | 各 Sub-Agent 实时状态、进度百分比、当前步骤、预估剩余时间；整体任务进度总览 | 实时（WebSocket） |
+| **拓扑面板** | Agent Mesh SDK | 在线 Agent 列表、连接拓扑图、消息流量热力图 | 10s 轮询 |
+| **用户面板** | User Profile Store + Insight Engine | 用户画像摘要、洞察历史、时间模式可视化 | 按需刷新 |
 
 ### 2.2 Span 层级设计
 
@@ -221,6 +254,16 @@ omni_turn_replanning_count{session_id}                  Counter
 omni_turn_tokens_per_step                               Gauge (派生)
 omni_session_success_rate                               Gauge (派生)
 omni_session_task_completion_rate                       Gauge
+```
+
+#### Sub-Agent 进度指标
+```
+omni_subagent_active_count{supervisor_id}               Gauge
+omni_subagent_progress_pct{agent_id, task_id}           Gauge
+omni_subagent_duration_ms{agent_id, status}             Histogram
+omni_subagent_heartbeat_lag_ms{agent_id}                Gauge
+omni_im_progress_push_total{channel, trigger}           Counter
+omni_im_progress_push_suppressed_total{channel}         Counter  # 被防刷屏限制的推送
 ```
 
 #### 成本指标
@@ -759,8 +802,71 @@ class Quilin:
 | **Planning** | `plan` 节点执行后 | 记录规划质量评分（StepEvaluator）|
 | **Tools** | `ToolRouter.execute()` 前后 | 记录 Tool Span：工具名/参数/耗时/成功率 |
 | **Orchestration** | MCPBus 消息发送/接收 | 记录跨 Agent 通信延迟 |
+| **Sub-Agent 进度** | ProgressAggregator 接收报告时 | 记录进度 Gauge + WebSocket 推送 Dashboard + IM 推送（含防刷屏限制） |
 | **Guardrails** | 拦截动作触发时 | 记录 WARN 日志 + guardrail_trigger 指标 |
 | **Deployment** | 容器健康检查 | 暴露 `/metrics` 端点供 Prometheus 拉取 |
+
+### 5.3 IM 进度汇报机制
+
+当用户通过 IM 工具（Telegram/Slack/微信等）与 Quilin 交互时，无法查看 WebUI Dashboard。可观测性层需要提供 **IM 通道的主动进度推送**能力：
+
+```python
+class IMProgressPusher:
+    """
+    IM 场景下的 Sub-Agent 进度推送器。
+    数据源：ProgressAggregator（06-multi-agent）
+    推送通道：IM adapter（09-deployment-runtime）
+    """
+    
+    def __init__(
+        self,
+        im_adapter,
+        min_push_interval_s: float = 15.0,   # 防刷屏：最短推送间隔
+        push_on_checkpoint: bool = True,       # 检查点时推送
+        push_on_heartbeat: bool = False,       # 心跳时推送（默认关闭）
+    ):
+        self._adapter = im_adapter
+        self._min_interval = min_push_interval_s
+        self._last_push_time: float = 0
+    
+    async def on_progress(self, report: "ProgressReport") -> None:
+        """接收进度报告，决定是否推送到 IM"""
+        now = time.time()
+        
+        # 强制推送条件：任务开始、完成、失败、需要用户决策
+        force_push = report.status in (
+            AgentStatus.SUCCESS, AgentStatus.FAILED
+        ) or report.error_hint is not None
+        
+        # 普通推送条件：满足最短间隔 + 配置允许
+        should_push = force_push or (
+            now - self._last_push_time >= self._min_interval
+            and (
+                (self._push_on_checkpoint and report.trigger == "checkpoint")
+                or (self._push_on_heartbeat and report.trigger == "heartbeat")
+            )
+        )
+        
+        if should_push:
+            await self._adapter.send(self._format_message(report))
+            self._last_push_time = now
+            self._metrics.counter("omni_im_progress_push_total", 
+                                  labels={"trigger": report.trigger})
+        else:
+            self._metrics.counter("omni_im_progress_push_suppressed_total")
+```
+
+**IM 推送消息格式示例**：
+
+```
+📌 任务进度 [2/5]
+━━━━━━━━━━━━━━━
+🔧 Sub-Agent: code-reviewer
+📋 当前步骤：分析依赖关系
+⏱️ 已运行 45s，预计还需 30s
+━━━━━━━━━━━━━━━
+整体进度：████████░░ 40%
+```
 
 ---
 
@@ -845,4 +951,4 @@ async def test_exporter_failure_does_not_block_agent():
 
 > **文档版本**：v1.0 | **最后更新**：2026-04-13
 > 
-> 关联文档：[01-llm-integration.md](./01-llm-integration.md) | [03-memory.md](./03-memory.md) | [05-tool.md](./05-tool.md) | [06-multi-agent.md](./06-multi-agent.md)
+> 关联文档：[01-llm-integration](../01-llm-integration/README.md) | [03-memory](../03-memory/README.md) | [05-tool](../05-tool/README.md) | [06-multi-agent](../06-multi-agent/README.md)

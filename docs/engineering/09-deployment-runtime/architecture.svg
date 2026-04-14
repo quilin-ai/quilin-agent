@@ -1,0 +1,159 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 600" width="960" height="600">
+<defs>
+<marker id="arr" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#3b82f6"/></marker>
+<marker id="arrg" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#64748b"/></marker>
+<marker id="arra" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#f59e0b"/></marker>
+<marker id="arrG" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#16a34a"/></marker>
+<marker id="arrc" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#0ea5e9"/></marker>
+<style>text{font-family:"Helvetica Neue",Helvetica,Arial,"PingFang SC","Microsoft YaHei",sans-serif;}</style>
+</defs>
+<rect width="960" height="600" fill="#ffffff"/>
+<rect x="0" y="0" width="960" height="110" fill="#f8fafc" stroke="none"/>
+<rect x="0" y="390" width="960" height="210" fill="#f0f9ff" stroke="none"/>
+<text x="480" y="18" font-size="14" fill="#0f172a" text-anchor="middle" font-weight="bold">Quilin Agent — Deployment &amp; Runtime Architecture</text>
+<text x="480" y="32" font-size="9.5" fill="#64748b" text-anchor="middle" font-weight="normal">Entry Points</text>
+<rect x="29" y="36" width="218" height="68" rx="8" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+<text x="138.0" y="55" font-size="10.5" fill="#1d4ed8" text-anchor="middle" font-weight="bold">CLI: Single-shot</text>
+<text x="138.0" y="70" font-size="9" fill="#3b82f6" text-anchor="middle" font-weight="normal">python -m quilin &quot;...&quot;</text>
+<text x="138.0" y="84" font-size="8.5" fill="#64748b" text-anchor="middle" font-weight="normal">Headless · exit 0/1</text>
+<rect x="257" y="36" width="218" height="68" rx="8" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+<text x="366.0" y="55" font-size="10.5" fill="#1d4ed8" text-anchor="middle" font-weight="bold">CLI: Interactive REPL</text>
+<text x="366.0" y="70" font-size="9" fill="#3b82f6" text-anchor="middle" font-weight="normal">python -m quilin -i</text>
+<text x="366.0" y="84" font-size="8.5" fill="#64748b" text-anchor="middle" font-weight="normal">History · multi-turn ctx</text>
+<rect x="485" y="36" width="218" height="68" rx="8" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+<text x="594.0" y="55" font-size="10.5" fill="#1d4ed8" text-anchor="middle" font-weight="bold">Daemon / API Server</text>
+<text x="594.0" y="70" font-size="9" fill="#3b82f6" text-anchor="middle" font-weight="normal">--daemon --port 8080</text>
+<text x="594.0" y="84" font-size="8.5" fill="#64748b" text-anchor="middle" font-weight="normal">FastAPI /v1/chat /health</text>
+<rect x="713" y="36" width="218" height="68" rx="8" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5"/>
+<text x="822.0" y="55" font-size="10.5" fill="#15803d" text-anchor="middle" font-weight="bold">Docker Container</text>
+<text x="822.0" y="70" font-size="9" fill="#16a34a" text-anchor="middle" font-weight="normal">docker run quilin-agent</text>
+<text x="822.0" y="84" font-size="8.5" fill="#64748b" text-anchor="middle" font-weight="normal">ANTHROPIC_API_KEY env</text>
+<rect x="345" y="122" width="270" height="46" rx="10" fill="#1e293b" stroke="#0f172a" stroke-width="2"/>
+<text x="480.0" y="138" font-size="12.5" fill="#f8fafc" text-anchor="middle" font-weight="bold">Quilin Core (Harness)</text>
+<text x="480.0" y="154" font-size="9" fill="#94a3b8" text-anchor="middle" font-weight="normal">LangGraph · Agent Loop · MCPBus</text>
+<line x1="138.0" y1="104" x2="385.5" y2="122" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arr)"/>
+<line x1="366.0" y1="104" x2="447.6" y2="122" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arr)"/>
+<line x1="594.0" y1="104" x2="509.7" y2="122" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arr)"/>
+<line x1="822.0" y1="104" x2="571.8" y2="122" stroke="#16a34a" stroke-width="1.5" marker-end="url(#arrG)"/>
+<text x="265" y="178" font-size="9.5" fill="#64748b" text-anchor="middle" font-weight="normal">Sandbox Execution</text>
+<line x1="480.0" y1="168" x2="265" y2="200" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrg)"/>
+<rect x="303.2" y="186.0" width="73.5" height="14.0" rx="2" fill="#ffffff" stroke="none"/>
+<text x="340" y="195" font-size="8" fill="#64748b" text-anchor="middle">execute(code)</text>
+<rect x="90" y="202" width="340" height="40" rx="8" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5"/>
+<text x="260.0" y="216" font-size="11" fill="#334155" text-anchor="middle" font-weight="bold">SandboxRouter</text>
+<text x="260.0" y="232" font-size="8.5" fill="#64748b" text-anchor="middle" font-weight="normal">Detects Docker daemon · reads sandbox.type config</text>
+<line x1="140" y1="242" x2="45" y2="270" stroke="#16a34a" stroke-width="1.5" marker-end="url(#arrG)"/>
+<rect x="10.8" y="253.0" width="68.5" height="14.0" rx="2" fill="#ffffff" stroke="none"/>
+<text x="45" y="262" font-size="8" fill="#16a34a" text-anchor="middle">docker avail</text>
+<text x="85.0" y="264" font-size="9" fill="#15803d" text-anchor="middle" font-weight="bold">DockerSandbox (Prod)</text>
+<rect x="4" y="270" width="162" height="18" rx="2" fill="#dcfce7" stroke="#16a34a" stroke-width="0.8"/>
+<text x="85.0" y="283" font-size="7.5" fill="#14532d" text-anchor="middle" font-weight="normal">python:3.11-slim</text>
+<rect x="4" y="288" width="162" height="18" rx="2" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.8"/>
+<text x="85.0" y="301" font-size="7.5" fill="#14532d" text-anchor="middle" font-weight="normal">Code /tmp · rootfs RO</text>
+<rect x="4" y="306" width="162" height="18" rx="2" fill="#86efac" stroke="#16a34a" stroke-width="0.8"/>
+<text x="85.0" y="319" font-size="7.5" fill="#14532d" text-anchor="middle" font-weight="normal">512MB · 1CPU · PID256</text>
+<rect x="4" y="324" width="162" height="18" rx="2" fill="#4ade80" stroke="#16a34a" stroke-width="0.8"/>
+<text x="85.0" y="337" font-size="7.5" fill="#14532d" text-anchor="middle" font-weight="normal">Network: none</text>
+<rect x="4" y="342" width="162" height="18" rx="2" fill="#22c55e" stroke="#16a34a" stroke-width="0.8"/>
+<text x="85.0" y="355" font-size="7.5" fill="#14532d" text-anchor="middle" font-weight="normal">cap_drop ALL · no-priv</text>
+<line x1="260" y1="242" x2="235" y2="270" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrg)"/>
+<rect x="178.3" y="253.0" width="53.4" height="14.0" rx="2" fill="#ffffff" stroke="none"/>
+<text x="205" y="262" font-size="8" fill="#64748b" text-anchor="middle">no docker</text>
+<rect x="180" y="270" width="126" height="104" rx="6" fill="#fafafa" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="5,3"/>
+<text x="243.0" y="283" font-size="9" fill="#475569" text-anchor="middle" font-weight="bold">LocalSandbox</text>
+<text x="243.0" y="294" font-size="8" fill="#94a3b8" text-anchor="middle" font-weight="normal">(Fallback)</text>
+<text x="243.0" y="308" font-size="8" fill="#64748b" text-anchor="middle" font-weight="normal">asyncio subprocess</text>
+<text x="243.0" y="321" font-size="8" fill="#64748b" text-anchor="middle" font-weight="normal">tempfile.mkdtemp()</text>
+<text x="243.0" y="334" font-size="8" fill="#64748b" text-anchor="middle" font-weight="normal">Scrub sensitive ENV</text>
+<text x="243.0" y="347" font-size="8" fill="#64748b" text-anchor="middle" font-weight="normal">asyncio timeout</text>
+<text x="243.0" y="360" font-size="8" fill="#ef4444" text-anchor="middle" font-weight="normal">⚠ No real isolation</text>
+<line x1="380" y1="242" x2="370" y2="270" stroke="#0ea5e9" stroke-width="1.5" marker-end="url(#arrc)"/>
+<rect x="328.3" y="253.0" width="53.4" height="14.0" rx="2" fill="#ffffff" stroke="none"/>
+<text x="355" y="262" font-size="8" fill="#0ea5e9" text-anchor="middle">cloud+key</text>
+<rect x="325" y="270" width="130" height="104" rx="7" fill="#f0f9ff" stroke="#0ea5e9" stroke-width="1.5"/>
+<text x="390.0" y="283" font-size="9" fill="#0369a1" text-anchor="middle" font-weight="bold">☁  CloudSandbox</text>
+<text x="390.0" y="294" font-size="8" fill="#7dd3fc" text-anchor="middle" font-weight="normal">(Optional Extension)</text>
+<text x="390.0" y="308" font-size="8" fill="#0369a1" text-anchor="middle" font-weight="normal">E2B Sandbox API</text>
+<text x="390.0" y="321" font-size="8" fill="#0369a1" text-anchor="middle" font-weight="normal">Modal Function</text>
+<text x="390.0" y="334" font-size="8" fill="#0369a1" text-anchor="middle" font-weight="normal">Daytona Workspace</text>
+<text x="390.0" y="347" font-size="8" fill="#64748b" text-anchor="middle" font-weight="normal">Per-request isolation</text>
+<text x="390.0" y="360" font-size="8" fill="#94a3b8" text-anchor="middle" font-weight="normal">Requires API key</text>
+<text x="662.5" y="178" font-size="9.5" fill="#64748b" text-anchor="middle" font-weight="normal">Config Flow</text>
+<rect x="580" y="185" width="165" height="46" rx="5" fill="#fefce8" stroke="#ca8a04" stroke-width="1.5"/>
+<text x="662.5" y="202" font-size="10.5" fill="#92400e" text-anchor="middle" font-weight="bold">config.yaml</text>
+<text x="662.5" y="218" font-size="8.5" fill="#ca8a04" text-anchor="middle" font-weight="normal">llm · sandbox · obs</text>
+<rect x="580" y="242" width="165" height="46" rx="5" fill="#fff7ed" stroke="#ea580c" stroke-width="1.5"/>
+<text x="662.5" y="259" font-size="10.5" fill="#9a3412" text-anchor="middle" font-weight="bold">ENV Variables</text>
+<text x="662.5" y="275" font-size="8.5" fill="#ea580c" text-anchor="middle" font-weight="normal">API keys · model name</text>
+<rect x="580" y="299" width="165" height="46" rx="5" fill="#fef3c7" stroke="#d97706" stroke-width="1.5"/>
+<text x="662.5" y="316" font-size="10.5" fill="#92400e" text-anchor="middle" font-weight="bold">Runtime Injection</text>
+<text x="662.5" y="332" font-size="8.5" fill="#d97706" text-anchor="middle" font-weight="normal">CLI args · hot-reload</text>
+<line x1="662.5" y1="231" x2="662.5" y2="240" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arra)"/>
+<rect x="635.8" y="229.0" width="53.4" height="14.0" rx="2" fill="#ffffff" stroke="none"/>
+<text x="662.5" y="238" font-size="8" fill="#d97706" text-anchor="middle">overrides</text>
+<line x1="662.5" y1="288" x2="662.5" y2="297" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arra)"/>
+<rect x="643.4" y="286.0" width="38.2" height="14.0" rx="2" fill="#ffffff" stroke="none"/>
+<text x="662.5" y="295" font-size="8" fill="#d97706" text-anchor="middle">inject</text>
+<line x1="662.5" y1="299" x2="561.0" y2="168" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arra)"/>
+<rect x="561.8" y="256.0" width="68.5" height="14.0" rx="2" fill="#ffffff" stroke="none"/>
+<text x="596" y="265" font-size="8" fill="#d97706" text-anchor="middle">feeds config</text>
+<rect x="770" y="185" width="178" height="108" rx="6" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
+<text x="859" y="199" font-size="9.5" fill="#334155" text-anchor="middle" font-weight="bold">Legend</text>
+<rect x="778" y="205" width="11" height="9" rx="2" fill="#3b82f6"/>
+<text x="796" y="213" font-size="8" fill="#475569" text-anchor="start" font-weight="normal">Entry / data flow</text>
+<rect x="778" y="219" width="11" height="9" rx="2" fill="#f59e0b"/>
+<text x="796" y="227" font-size="8" fill="#475569" text-anchor="start" font-weight="normal">Config pipeline</text>
+<rect x="778" y="233" width="11" height="9" rx="2" fill="#16a34a"/>
+<text x="796" y="241" font-size="8" fill="#475569" text-anchor="start" font-weight="normal">Docker sandbox layer</text>
+<rect x="778" y="247" width="11" height="9" rx="2" fill="#0ea5e9"/>
+<text x="796" y="255" font-size="8" fill="#475569" text-anchor="start" font-weight="normal">Cloud service</text>
+<rect x="778" y="261" width="11" height="9" rx="2" fill="#64748b"/>
+<text x="796" y="269" font-size="8" fill="#475569" text-anchor="start" font-weight="normal">Infrastructure / fallback</text>
+<rect x="778" y="275" width="11" height="9" rx="2" fill="#7c3aed"/>
+<text x="796" y="283" font-size="8" fill="#475569" text-anchor="start" font-weight="normal">Auto-sync daemon</text>
+<text x="480" y="402" font-size="9.5" fill="#64748b" text-anchor="middle" font-weight="normal">Runtime Lifecycle</text>
+<rect x="103" y="409" width="118" height="42" rx="6" fill="#7c3aed" stroke="#7c3aed" stroke-width="1"/>
+<text x="162.0" y="424" font-size="9.5" fill="#ffffff" text-anchor="middle" font-weight="bold">startup</text>
+<text x="162.0" y="439" font-size="7.5" fill="#e2e8f0" text-anchor="middle" font-weight="normal">parse args</text>
+<line x1="221" y1="430.0" x2="230" y2="430.0" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrg)"/>
+<rect x="230" y="409" width="118" height="42" rx="6" fill="#2563eb" stroke="#2563eb" stroke-width="1"/>
+<text x="289.0" y="424" font-size="9.5" fill="#ffffff" text-anchor="middle" font-weight="bold">load_config</text>
+<text x="289.0" y="439" font-size="7.5" fill="#e2e8f0" text-anchor="middle" font-weight="normal">yaml+env+cli</text>
+<line x1="348" y1="430.0" x2="357" y2="430.0" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrg)"/>
+<rect x="357" y="409" width="118" height="42" rx="6" fill="#0891b2" stroke="#0891b2" stroke-width="1"/>
+<text x="416.0" y="424" font-size="9.5" fill="#ffffff" text-anchor="middle" font-weight="bold">init_providers</text>
+<text x="416.0" y="439" font-size="7.5" fill="#e2e8f0" text-anchor="middle" font-weight="normal">LayerProvider×10</text>
+<line x1="475" y1="430.0" x2="484" y2="430.0" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrg)"/>
+<rect x="484" y="409" width="118" height="42" rx="6" fill="#059669" stroke="#059669" stroke-width="1"/>
+<text x="543.0" y="424" font-size="9.5" fill="#ffffff" text-anchor="middle" font-weight="bold">agent_loop</text>
+<text x="543.0" y="439" font-size="7.5" fill="#e2e8f0" text-anchor="middle" font-weight="normal">verify→plan→exec</text>
+<line x1="602" y1="430.0" x2="611" y2="430.0" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrg)"/>
+<rect x="611" y="409" width="118" height="42" rx="6" fill="#d97706" stroke="#d97706" stroke-width="1"/>
+<text x="670.0" y="424" font-size="9.5" fill="#ffffff" text-anchor="middle" font-weight="bold">reflect</text>
+<text x="670.0" y="439" font-size="7.5" fill="#e2e8f0" text-anchor="middle" font-weight="normal">Hindsight/Mem</text>
+<line x1="729" y1="430.0" x2="738" y2="430.0" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrg)"/>
+<rect x="738" y="409" width="118" height="42" rx="6" fill="#dc2626" stroke="#dc2626" stroke-width="1"/>
+<text x="797.0" y="424" font-size="9.5" fill="#ffffff" text-anchor="middle" font-weight="bold">decide</text>
+<text x="797.0" y="439" font-size="7.5" fill="#e2e8f0" text-anchor="middle" font-weight="normal">next step</text>
+<line x1="480.0" y1="168" x2="480.0" y2="407" stroke="#64748b" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrg)"/>
+<rect x="478.3" y="366.0" width="63.4" height="14.0" rx="2" fill="#ffffff" stroke="none"/>
+<text x="510.0" y="375" font-size="8" fill="#64748b" text-anchor="middle">drives loop</text>
+<text x="480" y="465" font-size="9.5" fill="#64748b" text-anchor="middle" font-weight="normal">Operational Scripts &amp; Automation</text>
+<rect x="69" y="473" width="157" height="56" rx="6" fill="#f8fafc" stroke="#7c3aed" stroke-width="2" stroke-dasharray="5,3"/>
+<text x="147.5" y="489" font-size="8.5" fill="#7c3aed" text-anchor="middle" font-weight="bold">sync-upstreams.py</text>
+<text x="147.5" y="504" font-size="8" fill="#64748b" text-anchor="middle" font-weight="normal">Polls 90 repos/5 min</text>
+<text x="147.5" y="519" font-size="7.5" fill="#7c3aed" text-anchor="middle" font-weight="normal">daemon mode: --daemon</text>
+<rect x="235" y="473" width="157" height="56" rx="6" fill="#f8fafc" stroke="#2563eb" stroke-width="1.5"/>
+<text x="313.5" y="489" font-size="8.5" fill="#2563eb" text-anchor="middle" font-weight="bold">merge-with-claude.sh</text>
+<text x="313.5" y="504" font-size="8" fill="#64748b" text-anchor="middle" font-weight="normal">Claude diff analysis</text>
+<rect x="401" y="473" width="157" height="56" rx="6" fill="#f8fafc" stroke="#0891b2" stroke-width="1.5"/>
+<text x="479.5" y="489" font-size="8.5" fill="#0891b2" text-anchor="middle" font-weight="bold">release.sh</text>
+<text x="479.5" y="504" font-size="8" fill="#64748b" text-anchor="middle" font-weight="normal">Tag · commit · push</text>
+<rect x="567" y="473" width="157" height="56" rx="6" fill="#f8fafc" stroke="#059669" stroke-width="1.5"/>
+<text x="645.5" y="489" font-size="8.5" fill="#059669" text-anchor="middle" font-weight="bold">setup-cron.sh</text>
+<text x="645.5" y="504" font-size="8" fill="#64748b" text-anchor="middle" font-weight="normal">Install/rm crontab</text>
+<rect x="733" y="473" width="157" height="56" rx="6" fill="#f8fafc" stroke="#9333ea" stroke-width="1.5"/>
+<text x="811.5" y="489" font-size="8.5" fill="#9333ea" text-anchor="middle" font-weight="bold">init-submodules.sh</text>
+<text x="811.5" y="504" font-size="8" fill="#64748b" text-anchor="middle" font-weight="normal">First-time init</text>
+</svg>

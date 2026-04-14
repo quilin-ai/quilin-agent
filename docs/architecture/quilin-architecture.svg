@@ -1,0 +1,237 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 760" width="1200" height="760">
+  <style>
+    text { font-family: 'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif; }
+  </style>
+  <defs>
+    <marker id="arrow-blue" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#2563eb"/></marker>
+    <marker id="arrow-green" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#059669"/></marker>
+    <marker id="arrow-purple" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#7c3aed"/></marker>
+    <marker id="arrow-orange" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#ea580c"/></marker>
+    <marker id="arrow-gray" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#6b7280"/></marker>
+  </defs>
+  <rect width="1200" height="760" fill="#ffffff"/>
+  <rect x="8" y="8" width="1184" height="744" rx="12" fill="none" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="8,4"/>
+  <rect x="10" y="10" width="246" height="20" rx="4" fill="#f1f5f9"/>
+  <text x="18" y="24" font-size="11" fill="#64748b" font-weight="600">09 · Deployment · Docker / CLI / 配置管理</text>
+  <text x="600" y="42" font-size="17" font-weight="700" fill="#0f172a" text-anchor="middle">Quilin Agent — 自进化 Agent 架构全景</text>
+  <rect x="20" y="50" width="1160" height="32" rx="6" fill="#fff7ed" stroke="#f97316" stroke-width="1.2"/>
+  <text x="600" y="70" font-size="11" fill="#c2410c" text-anchor="middle" font-weight="600">07 · Safety  安全护栏 · 4 层 Guardrails · 输入/输出双向验证 · 权限分级 · Hooks · 横切所有领域</text>
+  <ellipse cx="600" cy="100" rx="82" ry="20" fill="#f1f5f9" stroke="#475569" stroke-width="1.5"/>
+  <text x="600" y="105" font-size="13" fill="#1e293b" text-anchor="middle" font-weight="600">👤  用户输入</text>
+  <rect x="20" y="130" width="278" height="178" rx="8" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.5"/>
+  <text x="30" y="150" font-size="13" fill="#1d4ed8" font-weight="700">01 · LLM 接入</text>
+  <text x="30" y="167" font-size="10" fill="#3b82f6">litellm 统一接口 · 不绑定任何供应商</text>
+  <rect x="30" y="175" width="66" height="20" rx="4" fill="#dbeafe" stroke="#93c5fd" stroke-width="1"/>
+  <text x="63" y="189" font-size="10" fill="#1e40af" text-anchor="middle">GPT-4o</text>
+  <rect x="103" y="175" width="66" height="20" rx="4" fill="#dbeafe" stroke="#93c5fd" stroke-width="1"/>
+  <text x="136" y="189" font-size="10" fill="#1e40af" text-anchor="middle">Claude</text>
+  <rect x="176" y="175" width="66" height="20" rx="4" fill="#dbeafe" stroke="#93c5fd" stroke-width="1"/>
+  <text x="209" y="189" font-size="10" fill="#1e40af" text-anchor="middle">Gemini</text>
+  <rect x="30" y="201" width="66" height="20" rx="4" fill="#dbeafe" stroke="#93c5fd" stroke-width="1"/>
+  <text x="63" y="215" font-size="10" fill="#1e40af" text-anchor="middle">Ollama</text>
+  <rect x="103" y="201" width="66" height="20" rx="4" fill="#dbeafe" stroke="#93c5fd" stroke-width="1"/>
+  <text x="136" y="215" font-size="10" fill="#1e40af" text-anchor="middle">vLLM</text>
+  <rect x="176" y="201" width="66" height="20" rx="4" fill="#dbeafe" stroke="#93c5fd" stroke-width="1"/>
+  <text x="209" y="215" font-size="10" fill="#1e40af" text-anchor="middle">SGLang</text>
+  <text x="30" y="237" font-size="10" fill="#475569">▸ ThinkingMode · 成本感知调用 · 退避重试</text>
+  <text x="30" y="252" font-size="10" fill="#475569">▸ InferenceConfig · RadixAttention KV 缓存</text>
+  <text x="30" y="267" font-size="10" fill="#475569">▸ 7 设计模式内化（6 前沿模型提炼）</text>
+  <text x="30" y="282" font-size="10" fill="#6b7280" font-style="italic">GLM-5.1 / DeepSeek / MAI-UI / UI-TARS-2</text>
+  <text x="30" y="298" font-size="10" fill="#6b7280" font-style="italic">MiniMax M2.7 / Qwen3-VL</text>
+  <rect x="20" y="320" width="278" height="158" rx="8" fill="#f0fdf4" stroke="#6ee7b7" stroke-width="1.5"/>
+  <text x="30" y="340" font-size="13" fill="#15803d" font-weight="700">02 · 上下文工程</text>
+  <text x="30" y="357" font-size="10" fill="#16a34a">ContextManager · Prompt Assembly · Token Budget</text>
+  <text x="30" y="373" font-size="10" fill="#475569">▸ DSPy 签名式声明 + Teleprompter 自动优化</text>
+  <text x="30" y="389" font-size="10" fill="#475569">▸ LlamaIndex 分块 + Refine 多片段合并</text>
+  <text x="30" y="405" font-size="10" fill="#475569">▸ Instructor Pydantic 结构化输出 + 重试</text>
+  <text x="30" y="421" font-size="10" fill="#475569">▸ Semantic Kernel 双占位符模板</text>
+  <text x="30" y="437" font-size="10" fill="#475569">▸ Memory 召回片段 + 环境信息注入上下文</text>
+  <text x="30" y="453" font-size="10" fill="#475569">▸ MessagesPlaceholder 运行时/模板解耦</text>
+  <text x="30" y="469" font-size="10" fill="#6b7280" font-style="italic">← build_context 节点从此层读取</text>
+  <rect x="308" y="128" width="440" height="352" rx="10" fill="#f8fafc" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="528" y="150" font-size="14" fill="#0f172a" font-weight="700" text-anchor="middle">E-T-C-S-L-V  Core Harness</text>
+  <text x="528" y="166" font-size="11" fill="#64748b" text-anchor="middle">LangGraph 状态图 · 最大 50 轮迭代 · MCPBus 内部消息总线</text>
+  <rect x="316" y="174" width="128" height="46" rx="6" fill="#fef3c7" stroke="#b45309" stroke-width="1.2"/>
+  <text x="380" y="193" font-size="11" fill="#b45309" font-weight="700" text-anchor="middle">E · Execution</text>
+  <text x="380" y="211" font-size="10" fill="#6b7280" text-anchor="middle">执行上下文</text>
+  <rect x="450" y="174" width="128" height="46" rx="6" fill="#fce7f3" stroke="#be185d" stroke-width="1.2"/>
+  <text x="514" y="193" font-size="11" fill="#be185d" font-weight="700" text-anchor="middle">T · Tools</text>
+  <text x="514" y="211" font-size="10" fill="#6b7280" text-anchor="middle">工具路由</text>
+  <rect x="584" y="174" width="128" height="46" rx="6" fill="#ede9fe" stroke="#6d28d9" stroke-width="1.2"/>
+  <text x="648" y="193" font-size="11" fill="#6d28d9" font-weight="700" text-anchor="middle">C · Context</text>
+  <text x="648" y="211" font-size="10" fill="#6b7280" text-anchor="middle">上下文层</text>
+  <rect x="316" y="226" width="128" height="46" rx="6" fill="#dcfce7" stroke="#15803d" stroke-width="1.2"/>
+  <text x="380" y="245" font-size="11" fill="#15803d" font-weight="700" text-anchor="middle">S · State</text>
+  <text x="380" y="263" font-size="10" fill="#6b7280" text-anchor="middle">状态机</text>
+  <rect x="450" y="226" width="128" height="46" rx="6" fill="#f0f9ff" stroke="#0369a1" stroke-width="1.2"/>
+  <text x="514" y="245" font-size="11" fill="#0369a1" font-weight="700" text-anchor="middle">L · Lifecycle</text>
+  <text x="514" y="263" font-size="10" fill="#6b7280" text-anchor="middle">生命周期</text>
+  <rect x="584" y="226" width="128" height="46" rx="6" fill="#fff1f2" stroke="#be123c" stroke-width="1.2"/>
+  <text x="648" y="245" font-size="11" fill="#be123c" font-weight="700" text-anchor="middle">V · Verifier</text>
+  <text x="648" y="263" font-size="10" fill="#6b7280" text-anchor="middle">双向验证</text>
+  <line x1="316" y1="280" x2="740" y2="280" stroke="#e2e8f0" stroke-width="1"/>
+  <rect x="318" y="292" width="138" height="22" rx="4" fill="#fff1f2" stroke="#fda4af" stroke-width="1"/>
+  <text x="387" y="307" font-size="10" fill="#be123c" text-anchor="middle">verify_input</text>
+  <rect x="318" y="318" width="138" height="22" rx="4" fill="#ffffff" stroke="#cbd5e1" stroke-width="1"/>
+  <text x="387" y="333" font-size="10" fill="#374151" text-anchor="middle">build_context</text>
+  <rect x="318" y="344" width="138" height="22" rx="4" fill="#eff6ff" stroke="#93c5fd" stroke-width="1"/>
+  <text x="387" y="359" font-size="10" fill="#1d4ed8" text-anchor="middle">plan</text>
+  <rect x="318" y="370" width="138" height="22" rx="4" fill="#ffffff" stroke="#cbd5e1" stroke-width="1"/>
+  <text x="387" y="385" font-size="10" fill="#374151" text-anchor="middle">execute_tools</text>
+  <rect x="318" y="396" width="138" height="22" rx="4" fill="#fff1f2" stroke="#fda4af" stroke-width="1"/>
+  <text x="387" y="411" font-size="10" fill="#be123c" text-anchor="middle">verify_output</text>
+  <rect x="318" y="422" width="138" height="22" rx="4" fill="#f0fdf4" stroke="#6ee7b7" stroke-width="1"/>
+  <text x="387" y="437" font-size="10" fill="#15803d" text-anchor="middle">reflect</text>
+  <rect x="318" y="448" width="138" height="22" rx="4" fill="#ffffff" stroke="#cbd5e1" stroke-width="1"/>
+  <text x="387" y="463" font-size="10" fill="#374151" text-anchor="middle">decide</text>
+  <line x1="387" y1="314" x2="387" y2="318" stroke="#94a3b8" stroke-width="1" marker-end="url(#arrow-blue)"/>
+  <line x1="387" y1="340" x2="387" y2="344" stroke="#94a3b8" stroke-width="1" marker-end="url(#arrow-blue)"/>
+  <line x1="387" y1="366" x2="387" y2="370" stroke="#94a3b8" stroke-width="1" marker-end="url(#arrow-blue)"/>
+  <line x1="387" y1="392" x2="387" y2="396" stroke="#94a3b8" stroke-width="1" marker-end="url(#arrow-blue)"/>
+  <line x1="387" y1="418" x2="387" y2="422" stroke="#94a3b8" stroke-width="1" marker-end="url(#arrow-blue)"/>
+  <line x1="387" y1="444" x2="387" y2="448" stroke="#94a3b8" stroke-width="1" marker-end="url(#arrow-blue)"/>
+  <path d="M 318 459 L 298 459 L 298 355 L 318 355" stroke="#7c3aed" stroke-width="1.2" fill="none" stroke-dasharray="5,3" marker-end="url(#arrow-purple)"/>
+  <rect x="264" y="399" width="32" height="15" rx="3" fill="#ffffff" opacity="0.95"/>
+  <text x="280" y="411" font-size="9" fill="#7c3aed" text-anchor="middle">cont.</text>
+  <rect x="470" y="290" width="268" height="46" rx="6" fill="#fefce8" stroke="#ca8a04" stroke-width="1.2"/>
+  <text x="604" y="308" font-size="12" fill="#92400e" font-weight="700" text-anchor="middle">MCPBus</text>
+  <text x="604" y="327" font-size="10" fill="#78350f" text-anchor="middle">内部组件消息总线 · 结构化传递</text>
+  <text x="470" y="350" font-size="10" fill="#475569">▸ 内部组件直调，MCP 仅对接外部 Server</text>
+  <text x="470" y="366" font-size="10" fill="#475569">▸ OmniMem 4 层记忆注入上下文</text>
+  <text x="470" y="382" font-size="10" fill="#475569">▸ 混合动作空间 (Code/UI/Shell/MCP)</text>
+  <text x="470" y="398" font-size="10" fill="#475569">▸ 两段式浏览器定位 (MAI-UI 模式)</text>
+  <text x="470" y="414" font-size="10" fill="#475569">▸ V 组件双向 Guardrails 拦截</text>
+  <text x="470" y="430" font-size="10" fill="#475569">▸ reflect 节点触发 SelfEvolution 回流</text>
+  <line x1="387" y1="470" x2="387" y2="478" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+  <text x="395" y="475" font-size="9" fill="#2563eb">done</text>
+  <rect x="758" y="130" width="240" height="178" rx="8" fill="#fdf4ff" stroke="#d8b4fe" stroke-width="1.5"/>
+  <text x="768" y="150" font-size="13" fill="#7e22ce" font-weight="700">05 · 工具系统</text>
+  <text x="768" y="167" font-size="10" fill="#9333ea">4 类混合动作空间 · MCP 动态发现</text>
+  <rect x="768" y="176" width="115" height="22" rx="4" fill="#f3e8ff" stroke="#c4b5fd" stroke-width="1"/>
+  <text x="825" y="191" font-size="10" fill="#6d28d9" text-anchor="middle">💻 Code Exec</text>
+  <rect x="768" y="204" width="115" height="22" rx="4" fill="#f3e8ff" stroke="#c4b5fd" stroke-width="1"/>
+  <text x="825" y="219" font-size="10" fill="#6d28d9" text-anchor="middle">🌐 Browser</text>
+  <rect x="768" y="232" width="115" height="22" rx="4" fill="#f3e8ff" stroke="#c4b5fd" stroke-width="1"/>
+  <text x="825" y="247" font-size="10" fill="#6d28d9" text-anchor="middle">🐚 Shell</text>
+  <rect x="768" y="260" width="115" height="22" rx="4" fill="#f3e8ff" stroke="#c4b5fd" stroke-width="1"/>
+  <text x="825" y="275" font-size="10" fill="#6d28d9" text-anchor="middle">🔌 MCP Client</text>
+  <text x="768" y="297" font-size="10" fill="#475569">▸ 30+ MCP 工具 · 两段式 Zoom-In 定位</text>
+  <rect x="758" y="320" width="240" height="158" rx="8" fill="#fff1f2" stroke="#fda4af" stroke-width="1.5"/>
+  <text x="768" y="340" font-size="13" fill="#be123c" font-weight="700">06 · 多 Agent（同构）</text>
+  <text x="768" y="357" font-size="10" fill="#e11d48">Supervisor / Worker / 辩论模式</text>
+  <text x="768" y="373" font-size="10" fill="#475569">▸ A2A 协议 · SubAgent 并行分发</text>
+  <text x="768" y="389" font-size="10" fill="#475569">▸ LangGraph / CrewAI / AutoGen</text>
+  <text x="768" y="405" font-size="10" fill="#475569">▸ OpenAI Agents · Google ADK · Agno</text>
+  <text x="768" y="421" font-size="10" fill="#475569">▸ 协作结果 → Memory 存储</text>
+  <text x="768" y="437" font-size="10" fill="#475569">▸ 同构内部编排（内网 Agent）</text>
+  <text x="768" y="453" font-size="10" fill="#6b7280" font-style="italic">→ 11-AgentMesh 异构外部互联</text>
+  <text x="768" y="469" font-size="10" fill="#6b7280" font-style="italic">← Core Harness 直接调度</text>
+  <rect x="1008" y="128" width="176" height="352" rx="8" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="6,3"/>
+  <text x="1096" y="150" font-size="12" fill="#334155" font-weight="700" text-anchor="middle">⟳ Upstream Monitor</text>
+  <text x="1096" y="166" font-size="10" fill="#64748b" text-anchor="middle">90 开源项目 · 9 大领域</text>
+  <text x="1096" y="182" font-size="10" fill="#64748b" text-anchor="middle">Auto-sync · Claude diff 分析</text>
+  <text x="1096" y="198" font-size="10" fill="#64748b" text-anchor="middle">融合补丁自动生成</text>
+  <rect x="1020" y="210" width="152" height="20" rx="3" fill="#faf5ff" stroke="#c4b5fd" stroke-width="0.8"/>
+  <text x="1096" y="224" font-size="10" fill="#475569" text-anchor="middle">Memory×10</text>
+  <rect x="1020" y="236" width="152" height="20" rx="3" fill="#eff6ff" stroke="#93c5fd" stroke-width="0.8"/>
+  <text x="1096" y="250" font-size="10" fill="#475569" text-anchor="middle">LLM×10</text>
+  <rect x="1020" y="262" width="152" height="20" rx="3" fill="#f0fdf4" stroke="#6ee7b7" stroke-width="0.8"/>
+  <text x="1096" y="276" font-size="10" fill="#475569" text-anchor="middle">Perception×10</text>
+  <rect x="1020" y="288" width="152" height="20" rx="3" fill="#fef3c7" stroke="#fcd34d" stroke-width="0.8"/>
+  <text x="1096" y="302" font-size="10" fill="#475569" text-anchor="middle">Planning×10</text>
+  <rect x="1020" y="314" width="152" height="20" rx="3" fill="#fdf4ff" stroke="#d8b4fe" stroke-width="0.8"/>
+  <text x="1096" y="328" font-size="10" fill="#475569" text-anchor="middle">Tools×10</text>
+  <rect x="1020" y="340" width="152" height="20" rx="3" fill="#fff1f2" stroke="#fda4af" stroke-width="0.8"/>
+  <text x="1096" y="354" font-size="10" fill="#475569" text-anchor="middle">Orch×10</text>
+  <rect x="1020" y="366" width="152" height="20" rx="3" fill="#f0fdfa" stroke="#5eead4" stroke-width="0.8"/>
+  <text x="1096" y="380" font-size="10" fill="#475569" text-anchor="middle">Observ×10</text>
+  <rect x="1020" y="392" width="152" height="20" rx="3" fill="#fff7ed" stroke="#fed7aa" stroke-width="0.8"/>
+  <text x="1096" y="406" font-size="10" fill="#475569" text-anchor="middle">Guards×10</text>
+  <rect x="1020" y="418" width="152" height="20" rx="3" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="0.8"/>
+  <text x="1096" y="432" font-size="10" fill="#475569" text-anchor="middle">Deploy×10</text>
+  <text x="1096" y="458" font-size="10" fill="#64748b" text-anchor="middle">scripts/sync-upstreams.py</text>
+  <text x="1096" y="472" font-size="10" fill="#64748b" text-anchor="middle">Phase 0-9 同步演进</text>
+  <path d="M 600 120 L 528 128" stroke="#2563eb" stroke-width="2" fill="none" marker-end="url(#arrow-blue)"/>
+  <rect x="549" y="115" width="32" height="13" rx="3" fill="#ffffff" opacity="0.9"/>
+  <text x="565" y="125" font-size="9" fill="#2563eb" text-anchor="middle">input</text>
+  <line x1="298" y1="215" x2="308" y2="290" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+  <rect x="286" y="245" width="28" height="13" rx="3" fill="#ffffff" opacity="0.9"/>
+  <text x="300" y="255" font-size="9" fill="#2563eb" text-anchor="middle">LLM</text>
+  <path d="M 308 340 L 298 360" stroke="#059669" stroke-width="1.2" fill="none" marker-end="url(#arrow-green)"/>
+  <path d="M 298 340 L 308 360" stroke="#059669" stroke-width="1.2" fill="none" stroke-dasharray="4,2" marker-end="url(#arrow-green)"/>
+  <line x1="748" y1="230" x2="758" y2="230" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+  <rect x="740" y="222" width="24" height="13" rx="3" fill="#ffffff" opacity="0.9"/>
+  <text x="752" y="232" font-size="9" fill="#2563eb" text-anchor="middle">use</text>
+  <line x1="878" y1="308" x2="878" y2="320" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+  <line x1="400" y1="480" x2="400" y2="492" stroke="#059669" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+  <rect x="372" y="474" width="56" height="13" rx="3" fill="#ffffff" opacity="0.9"/>
+  <text x="400" y="484" font-size="9" fill="#059669" text-anchor="middle">reflect 写入</text>
+  <line x1="456" y1="492" x2="456" y2="480" stroke="#059669" stroke-width="1.2" fill="none" stroke-dasharray="4,2" marker-end="url(#arrow-green)"/>
+  <rect x="428" y="474" width="56" height="13" rx="3" fill="#ffffff" opacity="0.9"/>
+  <text x="456" y="484" font-size="9" fill="#059669" text-anchor="middle">context 召回</text>
+  <path d="M 340 480 L 340 656" stroke="#7c3aed" stroke-width="1.2" fill="none" stroke-dasharray="5,3" marker-end="url(#arrow-purple)"/>
+  <rect x="312" y="562" width="56" height="13" rx="3" fill="#ffffff" opacity="0.9"/>
+  <text x="340" y="572" font-size="9" fill="#7c3aed" text-anchor="middle">轨迹回流</text>
+  <path d="M 878 478 L 878 550 L 760 550 L 760 656" stroke="#2563eb" stroke-width="1.2" fill="none" stroke-dasharray="5,3" marker-end="url(#arrow-blue)"/>
+  <rect x="788" y="542" width="62" height="13" rx="3" fill="#ffffff" opacity="0.9"/>
+  <text x="819" y="552" font-size="9" fill="#2563eb" text-anchor="middle">异构互联升级</text>
+  <line x1="1008" y1="310" x2="748" y2="310" stroke="#ea580c" stroke-width="1.2" stroke-dasharray="5,3" marker-end="url(#arrow-orange)"/>
+  <rect x="840" y="302" width="60" height="13" rx="3" fill="#ffffff" opacity="0.9"/>
+  <text x="870" y="312" font-size="9" fill="#ea580c" text-anchor="middle">融合补丁同步</text>
+  <rect x="20" y="492" width="980" height="110" rx="8" fill="#faf5ff" stroke="#c4b5fd" stroke-width="1.5"/>
+  <text x="510" y="512" font-size="12" fill="#7c3aed" font-weight="700" text-anchor="middle">03 · 记忆工程 · OmniMem 4 层分级存储 · 向量+KG 混合检索 · Dream Cycles 自动反思 · gbrain ultra-long</text>
+  <rect x="30" y="520" width="232" height="74" rx="6" fill="#fef3c7" stroke="#b45309" stroke-width="1.2"/>
+  <text x="40" y="537" font-size="10" fill="#b45309" font-weight="600">Layer 1</text>
+  <text x="40" y="553" font-size="12" fill="#b45309" font-weight="700">Working Memory</text>
+  <text x="40" y="569" font-size="10" fill="#6b7280">最近 k=5 轮 · 零压缩</text>
+  <text x="40" y="586" font-size="10" fill="#94a3b8">FIFO promotion →</text>
+  <rect x="270" y="520" width="232" height="74" rx="6" fill="#fce7f3" stroke="#be185d" stroke-width="1.2"/>
+  <text x="280" y="537" font-size="10" fill="#be185d" font-weight="600">Layer 2</text>
+  <text x="280" y="553" font-size="12" fill="#be185d" font-weight="700">Episodic Memory</text>
+  <text x="280" y="569" font-size="10" fill="#6b7280">LLM 摘要 · 关键决策</text>
+  <text x="280" y="586" font-size="10" fill="#94a3b8">FIFO promotion →</text>
+  <rect x="510" y="520" width="232" height="74" rx="6" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.2"/>
+  <text x="520" y="537" font-size="10" fill="#7c3aed" font-weight="600">Layer 3</text>
+  <text x="520" y="553" font-size="12" fill="#7c3aed" font-weight="700">Semantic Memory</text>
+  <text x="520" y="569" font-size="10" fill="#6b7280">向量+KG · 跨会话持久</text>
+  <text x="520" y="586" font-size="10" fill="#94a3b8">FIFO promotion →</text>
+  <rect x="750" y="520" width="232" height="74" rx="6" fill="#dcfce7" stroke="#15803d" stroke-width="1.2"/>
+  <text x="760" y="537" font-size="10" fill="#15803d" font-weight="600">Layer 4</text>
+  <text x="760" y="553" font-size="12" fill="#15803d" font-weight="700">Skill / gbrain</text>
+  <text x="760" y="569" font-size="10" fill="#6b7280">技能模板 · Dream Cycles</text>
+  <text x="760" y="586" font-size="10" fill="#94a3b8">FIFO promotion →</text>
+  <line x1="264" y1="557" x2="298" y2="557" stroke="#7c3aed" stroke-width="1.2" marker-end="url(#arrow-purple)"/>
+  <line x1="504" y1="557" x2="538" y2="557" stroke="#7c3aed" stroke-width="1.2" marker-end="url(#arrow-purple)"/>
+  <line x1="744" y1="557" x2="778" y2="557" stroke="#7c3aed" stroke-width="1.2" marker-end="url(#arrow-purple)"/>
+  <rect x="20" y="612" width="980" height="34" rx="6" fill="#f0fdfa" stroke="#5eead4" stroke-width="1.2"/>
+  <text x="510" y="633" font-size="11" fill="#0f766e" font-weight="600" text-anchor="middle">08 · 可观测性 · OTel 追踪+指标 · Langfuse / Phoenix / MLflow / Braintrust · 结构化日志 · 横切所有领域</text>
+  <rect x="20" y="656" width="480" height="84" rx="8" fill="#fef2f2" stroke="#fca5a5" stroke-width="1.5"/>
+  <text x="30" y="676" font-size="13" fill="#dc2626" font-weight="700">10 · 自进化</text>
+  <text x="30" y="692" font-size="10" fill="#ef4444">轨迹分析 · Scaffold 自修改 · 技能自创 · 自动 Prompt 优化</text>
+  <text x="30" y="708" font-size="10" fill="#475569">▸ DSPy GEPA · 成功率评分 · MiniMax M2.7 闭环（内化）</text>
+  <text x="30" y="724" font-size="10" fill="#475569">▸ 依赖 Phase 0-6 全部能力 · Phase 7 启动</text>
+  <text x="30" y="732" font-size="10" fill="#6b7280" font-style="italic">← reflect 轨迹回流 / → Skill Memory 技能注册</text>
+  <rect x="510" y="656" width="490" height="84" rx="8" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.5"/>
+  <text x="520" y="676" font-size="13" fill="#1d4ed8" font-weight="700">11 · Agent Mesh</text>
+  <text x="520" y="692" font-size="10" fill="#3b82f6">异构 Agent 互联 · 发现 / 连接 / 编排 · 协作自意识</text>
+  <text x="520" y="708" font-size="10" fill="#475569">▸ A2A 协议 · 跨网穿透 · 异构发现广播</text>
+  <text x="520" y="724" font-size="10" fill="#475569">▸ Agent 自我描述 · 能力发现 · 合作意图</text>
+  <text x="520" y="732" font-size="10" fill="#6b7280" font-style="italic">Phase 9 · 与 06 (同构内部) 分离 · 最高层外部互联</text>
+  <rect x="1012" y="492" width="172" height="248" rx="6" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="1098" y="512" font-size="11" fill="#374151" font-weight="700" text-anchor="middle">图例</text>
+  <line x1="1022" y1="530" x2="1065" y2="530" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+  <text x="1072" y="534" font-size="10" fill="#6b7280">主数据流</text>
+  <line x1="1022" y1="556" x2="1065" y2="556" stroke="#059669" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+  <text x="1072" y="560" font-size="10" fill="#6b7280">记忆写入</text>
+  <line x1="1022" y1="582" x2="1065" y2="582" stroke="#059669" stroke-width="1.5" stroke-dasharray="4,2" marker-end="url(#arrow-green)"/>
+  <text x="1072" y="586" font-size="10" fill="#6b7280">记忆召回</text>
+  <line x1="1022" y1="608" x2="1065" y2="608" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrow-purple)"/>
+  <text x="1072" y="612" font-size="10" fill="#6b7280">反馈/进化</text>
+  <line x1="1022" y1="634" x2="1065" y2="634" stroke="#ea580c" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrow-orange)"/>
+  <text x="1072" y="638" font-size="10" fill="#6b7280">上游同步</text>
+  <line x1="1022" y1="668" x2="1180" y2="668" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="1098" y="684" font-size="10" fill="#64748b" text-anchor="middle">实施路线</text>
+  <text x="1098" y="700" font-size="10" fill="#64748b" text-anchor="middle">Phase 0→1→2→3→7→8</text>
+  <text x="1098" y="716" font-size="10" fill="#64748b" text-anchor="middle">并行: 4, 5, 6</text>
+  <text x="1098" y="732" font-size="10" fill="#64748b" text-anchor="middle">最终: Phase 9 AgentMesh</text>
+</svg>

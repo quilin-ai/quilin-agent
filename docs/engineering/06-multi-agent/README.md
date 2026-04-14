@@ -1,5 +1,7 @@
 # 多 Agent 工程（Multi-Agent Engineering）
 
+> **ADR-001 对齐说明**：同构 Agent 在 TS 进程内 spawn；异构 Agent 通过 Agent Mesh 通信（见 [11-agent-mesh](../11-agent-mesh/README.md)）。mesh 上怎么做事情由用户决定，Quilin 不设计编排策略。本文档中的 Python 代码示例仅表达设计意图。`quilin/` 路径为规划参考。详见 [ADR-001](../../adr/adr-001-core-loop-and-language.md)。
+
 ## 一、问题定义
 
 ### 为什么单 Agent 不够？
@@ -50,6 +52,68 @@
 | **辩论** | 需要多角度验证 | 多 Agent 对同一问题各自推理，再投票/综合 |
 | **流水线** | 数据逐级处理 | 每个 Agent 处理一个阶段，传递中间结果 |
 | **动态** | 任务结构不确定 | 运行时根据需要创建/销毁 Agent |
+
+### 核心设计哲学：非阻塞 Supervisor（默认架构）
+
+> **设计原则**：主 Agent = 永远可用的 Supervisor，只负责用户 I/O + 任务分发 + 结果汇总。所有具体任务执行委派给 Sub-Agent。**主 Agent 永远不被阻塞。**
+
+在所有编排模式中，**Supervisor-Worker 是 Quilin 的默认架构**，而非可选项。这源于一个关键用户痛点：
+
+```
+❌ 现有 Agent（OpenClaw / Hermes / Claude Code / Codex）的问题：
+   用户："做任务 A"
+   Agent 主线程开始执行任务 A...（占用中）
+   用户："做任务 B" / "任务 A 什么进度了？" / "取消任务 A"
+   Agent：（无响应，主线程被阻塞）
+
+✅ Quilin 的设计：
+   用户："做任务 A"
+   Supervisor：收到，已派给 Sub-Agent-1 执行 → 即刻空闲
+   用户："做任务 B"
+   Supervisor：收到，已派给 Sub-Agent-2 执行 → 即刻空闲
+   用户："任务 A 什么进度了？"
+   Supervisor：查询 Sub-Agent-1 状态 → 立即返回进度报告
+   用户："取消任务 A"
+   Supervisor：终止 Sub-Agent-1 → 即刻确认
+```
+
+**任务分发策略**：
+
+| 任务类型 | 分发方式 | 说明 |
+|---------|---------|------|
+| 简单问答 | Supervisor 直接回答 | 不需要 spawn Sub-Agent（如闲聊、短问答） |
+| 单一任务 | 单个 Sub-Agent | 如"写一个函数"、"修复某个 bug" |
+| 可拆分复杂任务 | Multi-Sub-Agent 并行 | 如"重构这个模块"→ 拆分为代码分析 + 重构 + 测试 |
+| 多独立任务 | Multi-Sub-Agent 并行 | 用户一次下达多个不相关任务 |
+
+**Supervisor 职责边界**：
+
+```python
+class SupervisorResponsibilities:
+    """Supervisor 只做这些事，绝不做具体任务执行"""
+    
+    ALLOWED = [
+        "接收用户输入",
+        "意图识别与任务分解",
+        "选择/创建 Sub-Agent",
+        "分配任务给 Sub-Agent",
+        "监控 Sub-Agent 状态",
+        "收集/聚合 Sub-Agent 结果",
+        "向用户返回结果",
+        "响应用户的进度查询",
+        "处理任务取消/重试请求",
+        "空闲时触发自进化（见 10-self-evolution 2.12）",
+    ]
+    
+    FORBIDDEN = [
+        "直接执行代码修改/文件操作",
+        "直接调用外部 API/浏览器",
+        "长时间 LLM 推理（超过 ~5s 的推理交给 Sub-Agent）",
+        "任何可能阻塞用户交互的操作",
+    ]
+```
+
+**与空闲自进化的联动**：当 Supervisor 处于真正空闲状态（无用户输入 AND 无 pending Sub-Agent 任务）时，自动进入空闲自进化模式（详见 [10-self-evolution 2.12](../10-self-evolution/README.md)）。
 
 ### Supervisor-Worker 完整流程
 
@@ -137,6 +201,134 @@ class SubAgent(Protocol):
     async def terminate(self, agent_id: str) -> None:
         """强制终止 Agent（超时/取消时调用）"""
         ...
+```
+
+### Sub-Agent 进度汇报协议（Progress Reporting Protocol）
+
+> **核心问题**：用户把任务交给 Sub-Agent 后，如果几分钟没有反馈，不知道是在正常执行还是卡住了。必须有主动的进度汇报机制。
+
+进度汇报通过两种触发方式协同工作：
+
+| 触发方式 | 适用场景 | 说明 |
+|---------|---------|------|
+| **Checkpoint-based**（检查点触发） | 任务有明确步骤 | 每完成一个关键步骤主动汇报 |
+| **Heartbeat-based**（心跳触发） | 长时间无检查点 | 定时发送"我还活着"的状态报告 |
+
+```python
+from dataclasses import dataclass, field
+from enum import Enum
+
+class ProgressLevel(Enum):
+    """进度报告的详细程度"""
+    MINIMAL   = "minimal"     # 仅状态（running/done/failed）
+    SUMMARY   = "summary"     # 状态 + 一句话描述
+    DETAILED  = "detailed"    # 状态 + 描述 + 步骤列表 + 中间产物
+
+@dataclass
+class ProgressReport:
+    """Sub-Agent 进度报告"""
+    agent_id: str
+    task_id: str
+    timestamp: float
+    
+    # 进度信息
+    status: AgentStatus                     # PENDING / RUNNING / SUCCESS / FAILED
+    progress_pct: float = 0.0               # 0.0 ~ 1.0，粗略估计
+    current_step: str = ""                  # 当前正在做什么
+    steps_completed: int = 0                # 已完成步骤数
+    steps_total: int = 0                    # 预估总步骤数（0 = 未知）
+    
+    # 触发类型
+    trigger: str = "checkpoint"             # "checkpoint" | "heartbeat"
+    
+    # 可选详情
+    intermediate_output: str | None = None  # 中间产物（如部分代码）
+    error_hint: str | None = None           # 遇到问题时的提示
+    estimated_remaining_s: int | None = None  # 预估剩余时间（秒）
+
+class ProgressReporter(Protocol):
+    """Sub-Agent 必须实现的进度汇报接口"""
+    
+    async def report_checkpoint(
+        self,
+        step_name: str,
+        progress_pct: float,
+        intermediate_output: str | None = None,
+    ) -> None:
+        """关键步骤完成时调用"""
+        ...
+    
+    async def start_heartbeat(
+        self,
+        interval_s: float = 30.0,
+    ) -> None:
+        """启动心跳，每 interval_s 秒自动发送状态"""
+        ...
+    
+    async def stop_heartbeat(self) -> None:
+        """任务完成时停止心跳"""
+        ...
+```
+
+**Supervisor 端的进度聚合**：
+
+```python
+class SupervisorProgressAggregator:
+    """Supervisor 聚合所有 Sub-Agent 的进度报告"""
+    
+    def __init__(self):
+        self._reports: dict[str, ProgressReport] = {}  # agent_id -> latest report
+        self._subscribers: list[Callable] = []          # 进度变更订阅者
+    
+    def on_progress(self, report: ProgressReport) -> None:
+        """接收 Sub-Agent 进度报告"""
+        self._reports[report.agent_id] = report
+        for subscriber in self._subscribers:
+            subscriber(report)
+    
+    def get_summary(self) -> dict:
+        """获取所有 Sub-Agent 的进度摘要（供 WebUI 或 IM 展示）"""
+        return {
+            "total_agents": len(self._reports),
+            "running": sum(1 for r in self._reports.values() if r.status == AgentStatus.RUNNING),
+            "completed": sum(1 for r in self._reports.values() if r.status == AgentStatus.SUCCESS),
+            "failed": sum(1 for r in self._reports.values() if r.status == AgentStatus.FAILED),
+            "overall_progress": self._calc_overall_progress(),
+            "agents": {
+                aid: {
+                    "status": r.status.value,
+                    "progress": r.progress_pct,
+                    "current_step": r.current_step,
+                    "estimated_remaining_s": r.estimated_remaining_s,
+                }
+                for aid, r in self._reports.items()
+            },
+        }
+```
+
+**IM 场景下的主动推送策略**：
+
+在 IM 工具（Telegram/Slack/微信）中，用户无法看到 WebUI Dashboard，因此 Supervisor 需要主动推送进度：
+
+| 推送条件 | 内容 | 示例 |
+|---------|------|------|
+| Sub-Agent 开始执行 | 任务确认 + 预估时间 | "✅ 已开始执行，预计 2 分钟完成" |
+| 完成关键检查点 | 步骤进度 | "📌 步骤 2/5 完成：代码分析已完成，开始重构..." |
+| 超过 60s 无检查点 | 心跳状态 | "⏳ 仍在执行中（已运行 90s），当前：运行测试..." |
+| 遇到问题需决策 | 问题描述 + 选项 | "⚠️ 发现 2 种修复方案，需要你选择：A)... B)..." |
+| 任务完成 | 结果摘要 | "✅ 任务完成！修复了 3 个文件，通过全部测试" |
+| 任务失败 | 错误摘要 + 建议 | "❌ 任务失败：测试超时。建议：检查网络连接" |
+
+**配置项**（用户可调）：
+
+```yaml
+progress_reporting:
+  heartbeat_interval_s: 30         # 心跳间隔
+  im_push_min_interval_s: 15      # IM 推送最短间隔（防刷屏）
+  im_push_on_checkpoint: true      # 检查点时推送 IM
+  im_push_on_heartbeat: false      # 心跳时推送 IM（默认关闭，避免太吵）
+  webui_realtime: true             # WebUI 实时展示
+  detail_level: "summary"          # minimal | summary | detailed
 ```
 
 ### 结果聚合策略
@@ -679,6 +871,7 @@ class SOPWorkflow:
 | **MCPBus** | `quilin/core/mcp_bus.py` | 三级通信统一消息总线 |
 | **DeadlockDetector** | `quilin/orchestration/deadlock.py` | 等待图 + 循环检测 |
 | **StateManager** | `quilin/orchestration/state.py` | `HarnessState` 并发安全读写 |
+| **ProgressAggregator** | `quilin/orchestration/progress.py` | Sub-Agent 进度聚合 + WebUI/IM 推送 |
 
 ### 能力实现状态
 
@@ -697,6 +890,8 @@ class SOPWorkflow:
 | 内网通信 | 未实现 | `mcp_bus.py` + gRPC | — |
 | 网络通信 | 未实现 | `mcp_bus.py` + HTTPS/WebSocket | — |
 | A2A 协议 | 未实现 | `a2a.py` Agent Card + 消息路由 | Google A2A |
+| 非阻塞 Supervisor | 未实现 | Supervisor 默认架构 + 任务分发策略 | Quilin 原创 |
+| 进度汇报协议 | 未实现 | `progress.py` Checkpoint + Heartbeat + IM 推送 | Quilin 原创 |
 
 ### 核心接口完整伪代码
 

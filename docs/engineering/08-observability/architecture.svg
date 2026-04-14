@@ -1,0 +1,222 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 580" width="960" height="580">
+  <defs>
+    <marker id="arrowBlue" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#2563eb"/>
+    </marker>
+    <marker id="arrowTeal" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#0d9488"/>
+    </marker>
+    <marker id="arrowGray" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/>
+    </marker>
+    <filter id="shadow" x="-5%" y="-5%" width="110%" height="110%">
+      <feDropShadow dx="1" dy="2" stdDeviation="2" flood-color="#00000020"/>
+    </filter>
+  </defs>
+  <!-- Background -->
+  <rect width="960" height="580" fill="#ffffff"/>
+  <!-- Title -->
+  <text x="480" y="32" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="18" font-weight="700" fill="#0f172a" text-anchor="middle">Quilin Agent — Observability Pipeline Architecture</text>
+  <text x="480" y="52" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="11" fill="#64748b" text-anchor="middle">OTel SDK Instrumentation · 5-Layer Span Tree · Metrics · Structured Logs · Multi-Backend Export</text>
+  <!-- Column Headers -->
+  <rect x="20" y="65" width="220" height="22" rx="4" fill="#f1f5f9"/>
+  <text x="130" y="80" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="11" font-weight="700" fill="#475569" text-anchor="middle">AGENT COMPONENTS (ETCSLV)</text>
+  <rect x="270" y="65" width="420" height="22" rx="4" fill="#f0fdfa"/>
+  <text x="480" y="80" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="11" font-weight="700" fill="#0d9488" text-anchor="middle">OTel INSTRUMENTATION + SPAN TREE</text>
+  <rect x="720" y="65" width="220" height="22" rx="4" fill="#eff6ff"/>
+  <text x="830" y="80" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="11" font-weight="700" fill="#1d4ed8" text-anchor="middle">OBSERVABILITY BACKENDS</text>
+  <!-- Left Column: ETCSLV Agent Components -->
+  <rect x="20" y="100" width="220" height="68" rx="6" fill="#dc262618" stroke="#dc2626" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="20" y="100" width="30" height="68" rx="6" fill="#dc2626"/>
+  <rect x="38" y="100" width="2" height="68" fill="#dc2626"/>
+  <text x="35" y="139" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="14" font-weight="900" fill="#ffffff" text-anchor="middle">E</text>
+  <text x="140" y="122" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="12" font-weight="700" fill="#dc2626" text-anchor="middle">Execution</text>
+  <text x="140" y="138" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="10" fill="#475569" text-anchor="middle">verify_input</text>
+  <text x="140" y="153" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="10" fill="#475569" text-anchor="middle">verify_output</text>
+  <rect x="20" y="176" width="220" height="68" rx="6" fill="#d9770618" stroke="#d97706" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="20" y="176" width="30" height="68" rx="6" fill="#d97706"/>
+  <rect x="38" y="176" width="2" height="68" fill="#d97706"/>
+  <text x="35" y="215" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="14" font-weight="900" fill="#ffffff" text-anchor="middle">T</text>
+  <text x="140" y="198" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="12" font-weight="700" fill="#d97706" text-anchor="middle">Tools</text>
+  <text x="140" y="214" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="10" fill="#475569" text-anchor="middle">execute_tools</text>
+  <text x="140" y="229" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="10" fill="#475569" text-anchor="middle">ToolRouter</text>
+  <rect x="20" y="252" width="220" height="68" rx="6" fill="#7c3aed18" stroke="#7c3aed" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="20" y="252" width="30" height="68" rx="6" fill="#7c3aed"/>
+  <rect x="38" y="252" width="2" height="68" fill="#7c3aed"/>
+  <text x="35" y="291" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="14" font-weight="900" fill="#ffffff" text-anchor="middle">C</text>
+  <text x="140" y="274" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="12" font-weight="700" fill="#7c3aed" text-anchor="middle">Context</text>
+  <text x="140" y="290" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="10" fill="#475569" text-anchor="middle">build_context</text>
+  <text x="140" y="305" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="10" fill="#475569" text-anchor="middle">Memory Retrieve</text>
+  <rect x="20" y="328" width="220" height="68" rx="6" fill="#0891b218" stroke="#0891b2" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="20" y="328" width="30" height="68" rx="6" fill="#0891b2"/>
+  <rect x="38" y="328" width="2" height="68" fill="#0891b2"/>
+  <text x="35" y="367" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="14" font-weight="900" fill="#ffffff" text-anchor="middle">S</text>
+  <text x="140" y="350" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="12" font-weight="700" fill="#0891b2" text-anchor="middle">State</text>
+  <text x="140" y="366" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="10" fill="#475569" text-anchor="middle">LangGraph State</text>
+  <text x="140" y="381" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="10" fill="#475569" text-anchor="middle">run_id / turn_id</text>
+  <rect x="20" y="404" width="220" height="68" rx="6" fill="#16a34a18" stroke="#16a34a" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="20" y="404" width="30" height="68" rx="6" fill="#16a34a"/>
+  <rect x="38" y="404" width="2" height="68" fill="#16a34a"/>
+  <text x="35" y="443" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="14" font-weight="900" fill="#ffffff" text-anchor="middle">L</text>
+  <text x="140" y="426" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="12" font-weight="700" fill="#16a34a" text-anchor="middle">Lifecycle</text>
+  <text x="140" y="442" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="10" fill="#475569" text-anchor="middle">LifecycleManager</text>
+  <text x="140" y="457" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="10" fill="#475569" text-anchor="middle">Event Publisher</text>
+  <rect x="20" y="480" width="220" height="68" rx="6" fill="#be185d18" stroke="#be185d" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="20" y="480" width="30" height="68" rx="6" fill="#be185d"/>
+  <rect x="38" y="480" width="2" height="68" fill="#be185d"/>
+  <text x="35" y="519" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="14" font-weight="900" fill="#ffffff" text-anchor="middle">V</text>
+  <text x="140" y="502" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="12" font-weight="700" fill="#be185d" text-anchor="middle">Verification</text>
+  <text x="140" y="518" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="10" fill="#475569" text-anchor="middle">reflect / plan</text>
+  <text x="140" y="533" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="10" fill="#475569" text-anchor="middle">Quality Checks</text>
+  <!-- Center Column: OTel SDK + Span Tree -->
+  <rect x="270" y="100" width="420" height="36" rx="6" fill="#0d9488" filter="url(#shadow)"/>
+  <text x="480" y="113" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="12" font-weight="700" fill="#ffffff" text-anchor="middle">OpenTelemetry SDK</text>
+  <text x="480" y="128" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="10" fill="#ccfbf1" text-anchor="middle">Wraps all 6 ETCSLV components · Auto-instrumentation</text>
+  <!-- Span Tree -->
+  <rect x="278" y="148" width="404" height="28" rx="5" fill="#134e4a" stroke="#0d9488" stroke-width="1.5"/>
+  <text x="480" y="162" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="11" font-weight="700" fill="#ffffff" text-anchor="middle">Session Span  [session_id · user_id · task · total_cost · total_tokens]</text>
+  <text x="282" y="170" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="9" fill="#5eead4" text-anchor="start">run_id</text>
+  <rect x="286" y="188" width="388" height="24" rx="4" fill="#0f766e" stroke="#0d9488" stroke-width="1"/>
+  <text x="480" y="204" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="middle">Turn Span  [turn_id · turn_index · user_input · replanning_count · cost]</text>
+  <rect x="295" y="224" width="90" height="36" rx="4" fill="#0d948820" stroke="#0d9488" stroke-width="1"/>
+  <text x="340" y="238" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="9.5" font-weight="700" fill="#0d9488" text-anchor="middle">Node Span</text>
+  <text x="340" y="251" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="9" fill="#134e4a" font-weight="600" text-anchor="middle">verify_input</text>
+  <rect x="393" y="224" width="90" height="36" rx="4" fill="#0d948820" stroke="#0d9488" stroke-width="1"/>
+  <text x="438" y="238" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="9.5" font-weight="700" fill="#0d9488" text-anchor="middle">Node Span</text>
+  <text x="438" y="251" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="9" fill="#134e4a" font-weight="600" text-anchor="middle">build_context</text>
+  <rect x="491" y="224" width="90" height="36" rx="4" fill="#0d948820" stroke="#0d9488" stroke-width="1"/>
+  <text x="536" y="238" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="9.5" font-weight="700" fill="#0d9488" text-anchor="middle">Node Span</text>
+  <text x="536" y="251" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="9" fill="#134e4a" font-weight="600" text-anchor="middle">plan</text>
+  <rect x="295" y="272" width="90" height="36" rx="4" fill="#0d948820" stroke="#0d9488" stroke-width="1"/>
+  <text x="340" y="286" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="9.5" font-weight="700" fill="#0d9488" text-anchor="middle">Node Span</text>
+  <text x="340" y="299" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="9" fill="#134e4a" font-weight="600" text-anchor="middle">execute_tools</text>
+  <rect x="393" y="272" width="90" height="36" rx="4" fill="#0d948820" stroke="#0d9488" stroke-width="1"/>
+  <text x="438" y="286" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="9.5" font-weight="700" fill="#0d9488" text-anchor="middle">Node Span</text>
+  <text x="438" y="299" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="9" fill="#134e4a" font-weight="600" text-anchor="middle">verify_output</text>
+  <rect x="491" y="272" width="90" height="36" rx="4" fill="#0d948820" stroke="#0d9488" stroke-width="1"/>
+  <text x="536" y="286" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="9.5" font-weight="700" fill="#0d9488" text-anchor="middle">Node Span</text>
+  <text x="536" y="299" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="9" fill="#134e4a" font-weight="600" text-anchor="middle">reflect</text>
+  <rect x="591" y="224" width="90" height="36" rx="4" fill="#0d948820" stroke="#0d9488" stroke-width="1"/>
+  <text x="636" y="238" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="9.5" font-weight="700" fill="#0d9488" text-anchor="middle">Node Span</text>
+  <text x="636" y="251" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="9" fill="#134e4a" font-weight="600" text-anchor="middle">decide</text>
+  <!-- LLM and Tool Child Spans -->
+  <rect x="295" y="320" width="90" height="42" rx="4" fill="#2563eb18" stroke="#2563eb" stroke-width="1"/>
+  <text x="340" y="333" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="9.5" font-weight="700" fill="#2563eb" text-anchor="middle">LLM Span</text>
+  <text x="340" y="346" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="8.5" fill="#475569" text-anchor="middle">model·tokens_in/out</text>
+  <text x="340" y="358" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="8.5" fill="#475569" text-anchor="middle">thinking·cost·latency</text>
+  <rect x="393" y="320" width="90" height="42" rx="4" fill="#2563eb18" stroke="#2563eb" stroke-width="1"/>
+  <text x="438" y="333" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="9.5" font-weight="700" fill="#2563eb" text-anchor="middle">LLM Span</text>
+  <text x="438" y="346" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="8.5" fill="#475569" text-anchor="middle">plan·thinking_mode</text>
+  <text x="438" y="358" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="8.5" fill="#475569" text-anchor="middle">cost·time_to_first_token</text>
+  <rect x="491" y="320" width="90" height="42" rx="4" fill="#7c3aed18" stroke="#7c3aed" stroke-width="1"/>
+  <text x="536" y="333" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="9.5" font-weight="700" fill="#7c3aed" text-anchor="middle">Tool Span</text>
+  <text x="536" y="346" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="8.5" fill="#475569" text-anchor="middle">web_search·code_exec</text>
+  <text x="536" y="358" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="8.5" fill="#475569" text-anchor="middle">params·duration·success</text>
+  <rect x="591" y="320" width="90" height="42" rx="4" fill="#2563eb18" stroke="#2563eb" stroke-width="1"/>
+  <text x="636" y="333" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="9.5" font-weight="700" fill="#2563eb" text-anchor="middle">LLM Span</text>
+  <text x="636" y="346" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="8.5" fill="#475569" text-anchor="middle">verify·reflect</text>
+  <text x="636" y="358" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="8.5" fill="#475569" text-anchor="middle">token_count·cost</text>
+  <!-- Metrics and Logs -->
+  <rect x="278" y="376" width="195" height="80" rx="6" fill="#fef9c3" stroke="#ca8a04" stroke-width="1.5"/>
+  <text x="375" y="391" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="10.5" font-weight="700" fill="#92400e" text-anchor="middle">Metrics (Prometheus)</text>
+  <text x="375" y="406" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="9" fill="#78350f" text-anchor="middle">token_usage · latency_p99</text>
+  <text x="375" y="419" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="9" fill="#78350f" text-anchor="middle">success_rate · tool_call_count</text>
+  <text x="375" y="432" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="9" fill="#78350f" text-anchor="middle">cost_per_turn · replanning_count</text>
+  <text x="375" y="448" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="9" fill="#78350f" text-anchor="middle">session_task_completion_rate</text>
+  <rect x="487" y="376" width="195" height="80" rx="6" fill="#f0f9ff" stroke="#0284c7" stroke-width="1.5"/>
+  <text x="584" y="391" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="10.5" font-weight="700" fill="#0c4a6e" text-anchor="middle">Structured Logs (JSON)</text>
+  <text x="584" y="406" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="9" fill="#075985" text-anchor="middle">trace_id · span_id correlation</text>
+  <text x="584" y="419" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="9" fill="#075985" text-anchor="middle">session_id · turn_id context</text>
+  <text x="584" y="432" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="9" fill="#075985" text-anchor="middle">tool params · result snapshot</text>
+  <text x="584" y="448" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="9" fill="#075985" text-anchor="middle">LifecycleManager events</text>
+  <!-- OTel Exporter -->
+  <rect x="303" y="470" width="354" height="30" rx="6" fill="#0d9488" />
+  <text x="480" y="485" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="11" font-weight="700" fill="#ffffff" text-anchor="middle">OTel Exporter Layer  (OTLP / gRPC / HTTP)</text>
+  <text x="480" y="497" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="9" fill="#ccfbf1" text-anchor="middle">Batch processor · Retry · Sampling</text>
+  <!-- Dashboard -->
+  <rect x="278" y="515" width="404" height="40" rx="6" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+  <text x="480" y="530" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="10.5" font-weight="700" fill="#f8fafc" text-anchor="middle">Dashboard: Latency Heatmap · Token Burn Rate · Error Rate</text>
+  <text x="480" y="547" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="9.5" fill="#94a3b8" text-anchor="middle">Grafana / Langfuse · Cost per turn · P99 trace · Replanning alerts</text>
+  <!-- Right Column: Backends -->
+  <rect x="720" y="100" width="220" height="70" rx="6" fill="#f59e0b18" stroke="#f59e0b" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="720" y="100" width="220" height="22" rx="6" fill="#f59e0b"/>
+  <rect x="720" y="116" width="220" height="6" fill="#f59e0b"/>
+  <text x="830" y="115" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="11" font-weight="700" fill="#ffffff" text-anchor="middle">Langfuse</text>
+  <text x="830" y="136" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="10" fill="#78350f" text-anchor="middle">Trace · Gen · Score</text>
+  <text x="830" y="150" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="10" fill="#78350f" text-anchor="middle">Cost tracking · Evals</text>
+  <rect x="720" y="178" width="220" height="70" rx="6" fill="#8b5cf618" stroke="#8b5cf6" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="720" y="178" width="220" height="22" rx="6" fill="#8b5cf6"/>
+  <rect x="720" y="194" width="220" height="6" fill="#8b5cf6"/>
+  <text x="830" y="193" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="11" font-weight="700" fill="#ffffff" text-anchor="middle">Phoenix (Arize)</text>
+  <text x="830" y="214" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="10" fill="#4c1d95" text-anchor="middle">OTel Native</text>
+  <text x="830" y="228" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="10" fill="#4c1d95" text-anchor="middle">LLM observability</text>
+  <rect x="720" y="256" width="220" height="70" rx="6" fill="#10b98118" stroke="#10b981" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="720" y="256" width="220" height="22" rx="6" fill="#10b981"/>
+  <rect x="720" y="272" width="220" height="6" fill="#10b981"/>
+  <text x="830" y="271" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="11" font-weight="700" fill="#ffffff" text-anchor="middle">MLflow</text>
+  <text x="830" y="292" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="10" fill="#064e3b" text-anchor="middle">Experiment tracking</text>
+  <text x="830" y="306" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="10" fill="#064e3b" text-anchor="middle">Model versioning</text>
+  <rect x="720" y="334" width="220" height="70" rx="6" fill="#ef444418" stroke="#ef4444" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="720" y="334" width="220" height="22" rx="6" fill="#ef4444"/>
+  <rect x="720" y="350" width="220" height="6" fill="#ef4444"/>
+  <text x="830" y="349" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="11" font-weight="700" fill="#ffffff" text-anchor="middle">Braintrust</text>
+  <text x="830" y="370" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="10" fill="#7f1d1d" text-anchor="middle">Eval · Scoring</text>
+  <text x="830" y="384" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="10" fill="#7f1d1d" text-anchor="middle">Dataset mgmt</text>
+  <rect x="720" y="412" width="220" height="70" rx="6" fill="#3b82f618" stroke="#3b82f6" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="720" y="412" width="220" height="22" rx="6" fill="#3b82f6"/>
+  <rect x="720" y="428" width="220" height="6" fill="#3b82f6"/>
+  <text x="830" y="427" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="11" font-weight="700" fill="#ffffff" text-anchor="middle">Helicone</text>
+  <text x="830" y="448" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="10" fill="#1e3a8a" text-anchor="middle">Cost tracking</text>
+  <text x="830" y="462" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="10" fill="#1e3a8a" text-anchor="middle">Rate limit · Cache</text>
+  <!-- Arrows Left to Center -->
+  <line x1="240" y1="134" x2="268" y2="118" stroke="#0d9488" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#arrowTeal)"/>
+  <line x1="240" y1="210" x2="268" y2="118" stroke="#0d9488" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#arrowTeal)"/>
+  <line x1="240" y1="286" x2="268" y2="118" stroke="#0d9488" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#arrowTeal)"/>
+  <line x1="240" y1="362" x2="268" y2="118" stroke="#0d9488" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#arrowTeal)"/>
+  <line x1="240" y1="438" x2="268" y2="118" stroke="#0d9488" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#arrowTeal)"/>
+  <line x1="240" y1="514" x2="268" y2="118" stroke="#0d9488" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#arrowTeal)"/>
+  <rect x="240" y="256" width="60" height="16" rx="3" fill="#f0fdfa"/>
+  <text x="270" y="268" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="9" fill="#0d9488" text-anchor="middle" font-weight="600">OTel wraps</text>
+  <!-- Arrows: Span hierarchy connectors -->
+  <line x1="480" y1="176" x2="480" y2="186" stroke="#0d9488" stroke-width="1.5" marker-end="url(#arrowTeal)"/>
+  <line x1="340" y1="212" x2="340" y2="224" stroke="#0d9488" stroke-width="1" stroke-dasharray="3,2" marker-end="url(#arrowTeal)"/>
+  <line x1="438" y1="212" x2="438" y2="224" stroke="#0d9488" stroke-width="1" stroke-dasharray="3,2" marker-end="url(#arrowTeal)"/>
+  <line x1="536" y1="212" x2="536" y2="224" stroke="#0d9488" stroke-width="1" stroke-dasharray="3,2" marker-end="url(#arrowTeal)"/>
+  <line x1="636" y1="212" x2="636" y2="224" stroke="#0d9488" stroke-width="1" stroke-dasharray="3,2" marker-end="url(#arrowTeal)"/>
+  <line x1="340" y1="212" x2="340" y2="272" stroke="#0d9488" stroke-width="1" stroke-dasharray="3,2" marker-end="url(#arrowTeal)"/>
+  <line x1="438" y1="212" x2="438" y2="272" stroke="#0d9488" stroke-width="1" stroke-dasharray="3,2" marker-end="url(#arrowTeal)"/>
+  <line x1="536" y1="212" x2="536" y2="272" stroke="#0d9488" stroke-width="1" stroke-dasharray="3,2" marker-end="url(#arrowTeal)"/>
+  <line x1="340" y1="308" x2="340" y2="320" stroke="#2563eb" stroke-width="1" stroke-dasharray="3,2" marker-end="url(#arrowBlue)"/>
+  <line x1="438" y1="308" x2="438" y2="320" stroke="#2563eb" stroke-width="1" stroke-dasharray="3,2" marker-end="url(#arrowBlue)"/>
+  <line x1="536" y1="308" x2="536" y2="320" stroke="#2563eb" stroke-width="1" stroke-dasharray="3,2" marker-end="url(#arrowBlue)"/>
+  <line x1="636" y1="308" x2="636" y2="320" stroke="#2563eb" stroke-width="1" stroke-dasharray="3,2" marker-end="url(#arrowBlue)"/>
+  <line x1="385" y1="242" x2="393" y2="242" stroke="#0d9488" stroke-width="1.2" marker-end="url(#arrowTeal)"/>
+  <line x1="483" y1="242" x2="491" y2="242" stroke="#0d9488" stroke-width="1.2" marker-end="url(#arrowTeal)"/>
+  <line x1="581" y1="242" x2="591" y2="242" stroke="#0d9488" stroke-width="1.2" marker-end="url(#arrowTeal)"/>
+  <!-- Arrows: Metrics + Logs → Exporter -->
+  <line x1="375" y1="456" x2="375" y2="468" stroke="#0d9488" stroke-width="1.5" marker-end="url(#arrowTeal)"/>
+  <line x1="584" y1="456" x2="584" y2="468" stroke="#0284c7" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+  <line x1="480" y1="500" x2="480" y2="513" stroke="#0d9488" stroke-width="1.5" marker-end="url(#arrowTeal)"/>
+  <!-- Arrows: OTel Exporter → Backends -->
+  <line x1="658" y1="485" x2="718" y2="135" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+  <line x1="658" y1="485" x2="718" y2="213" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+  <line x1="658" y1="485" x2="718" y2="291" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+  <line x1="658" y1="485" x2="718" y2="369" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+  <line x1="658" y1="485" x2="718" y2="447" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+  <rect x="660" y="456" width="58" height="16" rx="3" fill="#eff6ff"/>
+  <text x="689" y="468" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="9" fill="#1d4ed8" text-anchor="middle" font-weight="600">OTLP export</text>
+  <rect x="292" y="368" width="58" height="14" rx="3" fill="#f0fdfa"/>
+  <text x="321" y="379" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="8.5" fill="#0d9488" text-anchor="middle">span attrs</text>
+  <!-- Arrows: Span Tree → Metrics and Logs panels -->
+  <line x1="375" y1="362" x2="375" y2="374" stroke="#ca8a04" stroke-width="1.5" marker-end="url(#arrowGray)"/>
+  <line x1="584" y1="362" x2="584" y2="374" stroke="#0284c7" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+  <rect x="334" y="363" width="66" height="14" rx="3" fill="#fef9c3"/>
+  <text x="367" y="374" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="8.5" fill="#92400e" text-anchor="middle">emit metrics</text>
+  <rect x="546" y="363" width="72" height="14" rx="3" fill="#f0f9ff"/>
+  <text x="582" y="374" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="8.5" fill="#0c4a6e" text-anchor="middle">structured log</text>
+  <!-- LifecycleManager annotation -->
+  <line x1="240" y1="446" x2="278" y2="446" stroke="#16a34a" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrowGray)"/>
+  <rect x="237" y="450" width="50" height="14" rx="3" fill="#dcfce7"/>
+  <text x="262" y="461" font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="8" fill="#166534" text-anchor="middle">pub events</text>
+</svg>

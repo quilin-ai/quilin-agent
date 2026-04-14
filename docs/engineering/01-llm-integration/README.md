@@ -1,6 +1,8 @@
 # LLM 接入工程（LLM Integration Engineering）
 
-> 本文档是 Quilin Agent 工程规格系列的第 1 篇，定义 LLM 接入层（`quilin/core/llm.py`）的设计方案、参考来源与验证标准。
+> 本文档是 Quilin Agent 工程规格系列的第 1 篇，定义 LLM 接入层的设计方案、参考来源与验证标准。
+>
+> **ADR-001 对齐说明**：核心语言已决策为 TypeScript（见 [ADR-001](../../adr/adr-001-core-loop-and-language.md)），旧 Python 代码（`quilin/core/llm.py`）已删除。本文档中的 Python 代码示例仅表达设计意图，实施时将以 TS 重写。`quilin/` 路径为规划参考，最终目录结构以实施时为准。
 
 ---
 

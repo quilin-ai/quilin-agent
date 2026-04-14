@@ -1,5 +1,7 @@
 # 工具工程（Tool Engineering）
 
+> **ADR-001 对齐说明**：工具系统用 TS 实现（MCP Client Manager），Python ML 工具封装为独立 MCP Server。本文档中的 Python 代码示例仅表达设计意图，实施时将以 TS 重写。`quilin/` 路径为规划参考。详见 [ADR-001](../../adr/adr-001-core-loop-and-language.md)。
+
 工具使用是 Agent 区别于普通 LLM 的核心能力。上下文工程让 LLM 想得好，工具工程让 Agent 做得到。
 
 ---
@@ -213,7 +215,32 @@ for t in tools:
     registry.register(MCPToolAdapter(client, t))  # 注册为本地 Tool
 ```
 
-### 2.5 工具自创（Agent-Generated Tools）
+### 2.5 CLI-Anything 集成（GUI 工具 → CLI Wrapper）
+
+**问题**：大量桌面软件（GIMP、Blender、LibreOffice 等）仅有 GUI 界面，Agent 无法直接调用。工具能力不应受限于工具本身是否提供 CLI 接口。
+
+**方案**：集成 [CLI-Anything](https://github.com/HKUDS/CLI-Anything)（HKUDS），为 GUI-only 软件自动生成 Python Click CLI wrapper。
+
+**工作机制**：
+1. 分析目标软件源码，映射 GUI 操作到底层 API/函数调用
+2. 生成 Python Click CLI wrapper（支持 `--json` 机器输出 + `--help` 自描述）
+3. 每个 CLI 附带 `SKILL.md` 元数据文件，可自动注册进 Quilin ToolRegistry
+
+**双模式集成**：
+
+| 模式 | 触发时机 | 机制 | 适用场景 |
+|------|---------|------|---------|
+| **Build-time 预生成** | 构建阶段 | 为已知常用工具（ffmpeg、ImageMagick、LibreOffice 等）预先生成 CLI wrapper，打包进 Quilin | 高频工具，零延迟调用 |
+| **Runtime 按需生成** | Agent 遇到无 CLI 的工具时 | 动态调用 CLI-Anything SOP 生成 wrapper，缓存供后续复用 | 长尾工具，首次使用有生成延迟 |
+
+**与 Quilin 工具系统的对接**：
+- 生成的 CLI 通过 `subprocess.run()` + JSON 解析调用，注册为 `ToolCategory.PROGRAMMATIC` 类型
+- `SKILL.md` 中的命令元数据用于自动构建 Tool schema（name、description、parameters）
+- 与 Deferred Tools 设计天然匹配：首次调用时按需生成 + 注册
+
+**设计原则**：CLI-first，所有工具都必须可通过命令行调用。GUI 操作（browser_click 等）仅作为最后兜底。
+
+### 2.6 工具自创（Agent-Generated Tools）
 
 沙箱方式让 Agent 能力无上限：
 
