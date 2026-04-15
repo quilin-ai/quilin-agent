@@ -1,0 +1,84 @@
+/* ============================================================
+   Quilin Agent — Landing Page Styles
+   Aesthetic: terminal × lacquer × manuscript
+   ============================================================ */
+
+:root {
+  /* — Palette — */
+  --bg-primary: #0a0a0a;
+  --bg-card: #1a1a2e;
+  --bg-nav: rgba(10, 10, 10, 0.85);
+  --gold: #c9a84c;
+  --gold-bright: #f0d68a;
+  --gold-dim: rgba(201, 168, 76, 0.15);
+  --gold-border: rgba(201, 168, 76, 0.3);
+  --text-primary: #e8e6e3;
+  --text-secondary: #999;
+  --gray-muted: #666;
+
+  /* — Typography — */
+  --font-body: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+
+  /* — Spacing — */
+  --section-padding: 6rem 2rem;
+  --content-max-width: 1100px;
+}
+
+*, *::before, *::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+  font-size: 16px;
+}
+
+body {
+  font-family: var(--font-body);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  line-height: 1.7;
+  overflow-x: hidden;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(
+    ellipse 60% 50% at 50% 30%,
+    rgba(201, 168, 76, 0.03) 0%,
+    transparent 70%
+  );
+  pointer-events: none;
+  z-index: 0;
+}
+
+::selection {
+  background: var(--gold-dim);
+  color: var(--gold-bright);
+}
+
+a {
+  color: var(--gold);
+  text-decoration: none;
+  transition: color 0.2s;
+}
+
+a:hover {
+  color: var(--gold-bright);
+}
+
+.reveal {
+  opacity: 0;
+  transform: translateY(24px);
+  transition: opacity 0.6s ease, transform 0.6s ease;
+}
+
+.reveal.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
