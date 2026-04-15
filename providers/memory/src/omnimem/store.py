@@ -14,7 +14,10 @@ class OmniMemStore:
             if os.environ.get("QUILIN_ENV") == "test":
                 db_path = ":memory:"
             else:
-                db_path = os.environ.get("OMNIMEM_DB_PATH", "./data/omnimem.db")
+                db_path = os.environ.get(
+                    "OMNIMEM_DB_PATH",
+                    str(Path.home() / ".quilin" / "memory.db"),
+                )
 
         if db_path != ":memory:":
             Path(db_path).parent.mkdir(parents=True, exist_ok=True)

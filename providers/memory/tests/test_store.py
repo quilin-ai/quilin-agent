@@ -129,3 +129,17 @@ async def test_store_persists_records_across_instances(tmp_path: Path) -> None:
             if record.content == "remember me"
         )
     ]
+
+
+async def test_store_defaults_to_quilin_home_db(
+    monkeypatch: object,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))  # type: ignore[attr-defined]
+    monkeypatch.setenv("QUILIN_ENV", "dev")  # type: ignore[attr-defined]
+    monkeypatch.delenv("OMNIMEM_DB_PATH", raising=False)  # type: ignore[attr-defined]
+
+    store = OmniMemStore()
+    await store.store("home default path")
+
+    assert (tmp_path / ".quilin" / "memory.db").exists()

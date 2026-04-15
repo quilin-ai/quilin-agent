@@ -16,7 +16,9 @@ import type { Tool } from "./tools/types.js";
 
 const DEFAULT_SYSTEM_PROMPT_SOURCE = createSystemContextSource(
 	`You are Quilin Agent (麒麟), a helpful AI assistant.
-Be concise, accurate, and friendly. Answer in the same language as the user.`,
+Be concise, accurate, and friendly. Answer in the same language as the user.
+When the user shares stable identity details, preferences, or long-lived facts, store them with memory_store.
+When the user asks what you remember about them, or asks about past identity/preferences, call memory_recall before answering if helpful.`,
 );
 
 const DEFAULT_INFERENCE_CONFIG: InferenceConfig = {
@@ -51,18 +53,24 @@ function createState(
 export async function startRepl(options: ReplOptions): Promise<void> {
 	const { provider, modelId, sessionId, tools = [] } = options;
 	const context = new BasicContextManager();
+	const resolvedSessionId = sessionId ?? crypto.randomUUID();
 	const systemPrompt = await context.buildContext(
 		[DEFAULT_SYSTEM_PROMPT_SOURCE],
 		DEFAULT_CONTEXT_BUDGET,
 	);
-	const checkpoint =
-		sessionId == null
-			? new SQLiteCheckpoint()
-			: new SQLiteCheckpoint({ sessionId });
+	const checkpoint = new SQLiteCheckpoint({ sessionId: resolvedSessionId });
 	const restoredState =
-		sessionId == null ? null : await checkpoint.load(sessionId);
+		sessionId == null ? null : await checkpoint.load(resolvedSessionId);
 
 	stderr.write("\n🐉 Quilin Agent v0.0.1 (DeepSeek)\n");
+	stderr.write(
+		`Session: ${resolvedSessionId} (${restoredState == null ? "new" : "restored"})\n`,
+	);
+	if (restoredState != null) {
+		stderr.write(
+			`Messages: ${restoredState.messages.length} | Last active: ${restoredState.lastActiveAt}\n`,
+		);
+	}
 	stderr.write("Type your message, or /exit to quit.\n\n");
 
 	const rl = readline.createInterface({ input: stdin, output: stderr });

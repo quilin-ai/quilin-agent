@@ -57,11 +57,13 @@ vi.mock("./state/checkpoint.js", () => ({
 describe("startRepl", () => {
 	const stdoutWriteSpy = vi.spyOn(process.stdout, "write");
 	const stderrWriteSpy = vi.spyOn(process.stderr, "write");
+	const randomUUIDSpy = vi.spyOn(crypto, "randomUUID");
 	const capturedMessages: unknown[] = [];
 
 	beforeEach(() => {
 		vi.clearAllMocks();
 		capturedMessages.length = 0;
+		randomUUIDSpy.mockReturnValue("generated-session-id");
 		mockCheckpointLoad.mockResolvedValue(null);
 		mockCheckpointSave.mockResolvedValue(undefined);
 		stdoutWriteSpy.mockImplementation(() => true);
@@ -69,6 +71,7 @@ describe("startRepl", () => {
 	});
 
 	afterEach(() => {
+		randomUUIDSpy.mockReset();
 		stdoutWriteSpy.mockReset();
 		stderrWriteSpy.mockReset();
 	});
@@ -97,16 +100,24 @@ describe("startRepl", () => {
 			"\n🐉 Quilin Agent v0.0.1 (DeepSeek)\n",
 		);
 		expect(stderrWriteSpy).toHaveBeenCalledWith(
+			"Session: generated-session-id (new)\n",
+		);
+		expect(stderrWriteSpy).toHaveBeenCalledWith(
 			"Type your message, or /exit to quit.\n\n",
 		);
 		expect(stderrWriteSpy).toHaveBeenCalledWith("\nBye! 🐉\n");
 		expect(stdoutWriteSpy).not.toHaveBeenCalled();
 		expect(mockClose).toHaveBeenCalled();
+		expect(mockCheckpointConstructor).toHaveBeenCalledWith({
+			sessionId: "generated-session-id",
+		});
 		expect(mockCheckpointSave).toHaveBeenCalledWith({
 			messages: [
 				expect.objectContaining({
 					role: "system",
-					content: expect.stringContaining("You are Quilin Agent"),
+					content: expect.stringMatching(
+						/You are Quilin Agent[\s\S]*memory_store[\s\S]*memory_recall/,
+					),
 				}),
 			],
 			isTerminal: true,
@@ -229,6 +240,12 @@ describe("startRepl", () => {
 			sessionId: "resume-session",
 		});
 		expect(mockCheckpointLoad).toHaveBeenCalledWith("resume-session");
+		expect(stderrWriteSpy).toHaveBeenCalledWith(
+			"Session: resume-session (restored)\n",
+		);
+		expect(stderrWriteSpy).toHaveBeenCalledWith(
+			"Messages: 3 | Last active: 2026-04-15T00:01:00.000Z\n",
+		);
 		expect(capturedMessages[0]).toEqual([
 			{ role: "system", content: "restored system prompt" },
 			{ role: "user", content: "before" },
