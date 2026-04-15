@@ -481,7 +481,7 @@ context:
 
 > **核心观点**：提示词工程是上下文工程的一个特化维度。上下文工程管理送入 LLM 的全部 token 序列（记忆、工具结果、对话历史、系统提示……），提示词工程专注其中"系统提示"这一块的设计、组装、优化与防护。二者不是并列关系，而是包含关系。
 
-Agent 发展到今天，单靠手写一段 system prompt 已远远不够。Claude Code、Codex、OpenClaw、Hermes 四大主流 Agent 的源码显示：系统提示本身已经变成一个**工程系统**——有模块化组装、有缓存分层、有安全扫描、有模型适配。以下 6 个设计模式从它们的实践中提炼而来，每个模式对应前述 7 项上下文职责中的一项或多项。
+Agent 发展到今天，单靠手写一段 system prompt 已远远不够。Claude Code、Codex、OpenClaw、Hermes 四大主流 Agent 的源码显示：系统提示本身已经变成一个**工程系统**——有模块化组装、有缓存分层、有安全扫描、有模型适配。以下 7 个设计模式从它们的实践中提炼而来，每个模式对应前述 7 项上下文职责中的一项或多项。
 
 #### 模式 1：静态/动态缓存边界（对应职责 7-缓存）
 
@@ -494,7 +494,7 @@ Agent 发展到今天，单靠手写一段 system prompt 已远远不够。Claud
 | **Claude Code** | `SYSTEM_PROMPT_DYNAMIC_BOUNDARY = '__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__'`，将 prompt 数组拆成静态前缀和动态后缀两段。静态段（身份、规则、工具）被 Anthropic prompt cache 命中，动态段（env、memory、MCP）每轮重算 | `src/constants/prompts.ts:114-115` |
 | **OpenClaw** | `SYSTEM_PROMPT_CACHE_BOUNDARY = "\n<!-- OPENCLAW_CACHE_BOUNDARY -->\n"`，`splitSystemPromptCacheBoundary()` 将 prompt 一分为二，动态文件（如 `heartbeat.md`）显式归入 `DYNAMIC_CONTEXT_FILE_BASENAMES` | `src/agents/system-prompt-cache-boundary.ts` |
 | **Hermes** | `apply_anthropic_cache_control()` 实现 `system_and_3` 策略：缓存 system prompt + 最近 3 条非 system 消息（共 4 个 breakpoint），减少 ~75% 成本 | `agent/prompt_caching.py` |
-| **Codex** | 模型指令模板存为静态 markdown 文件（`gpt-5.2-codex_prompt.md`），动态设置（`personality`、workspace 状态）通过模板变量注入；差分更新——只发送 turn 间变化的 settings | `codex-rs/core/templates/` |
+| **Codex** | 基础 instructions 在连续请求间保持稳定一致（`prompt_caching.rs` 测试验证），turn 间的变化通过 developer/user delta message 注入而非改写 base prompt。不是显式 cache boundary，但效果等价：基础 prompt 天然可缓存 | `codex-rs/core/tests/suite/prompt_caching.rs`, `codex-rs/core/src/context_manager/updates.rs` |
 
 **为什么这样做**：Anthropic/OpenAI 的 prompt cache 机制要求前缀 token 完全一致才能命中。任何中间的微小变化都会导致缓存失效。因此**把不变的放前面、变化的放后面**是硬约束，不是优化建议。命中后：输入成本降低 90%（Anthropic cached token 0.1x 价格）、首 token 延迟降低 50%+。
 
@@ -509,8 +509,8 @@ export const PROMPT_CACHE_BOUNDARY = '__QUILIN_CACHE_BOUNDARY__';
 interface SystemPromptSection {
   name: string;
   compute: () => string;
-  /** true = 此 section 每轮可能变化，放在 boundary 之后 */
-  volatile: boolean;
+  /** 更新频率：static = 永不变，per_session = session 内冻结，per_turn = 每轮重算 */
+  updateFrequency: 'static' | 'per_session' | 'per_turn';
 }
 
 // 静态 sections（identity, rules, tool-guidance）→ boundary 之前
@@ -528,7 +528,7 @@ interface SystemPromptSection {
 | Agent | 实现 | 源码位置 |
 |-------|------|---------|
 | **Claude Code** | `systemPromptSection(name, computeFn)` 工厂函数注册命名段。静态段：`getSimpleIntroSection()`、`getSimpleDoingTasksSection()`、`getUsingYourToolsSection()` 等 7 个。动态段通过 `resolveSystemPromptSections()` 按名称注册，`DANGEROUS_uncachedSystemPromptSection()` 标记必须每轮重算的段 | `src/constants/systemPromptSections.ts`, `src/constants/prompts.ts` |
-| **OpenClaw** | 25+ 段，每段有 `order` 数值（`agents.md=10, soul.md=20, identity.md=30 ...`），支持 3 种 PromptMode（`full/minimal/none`）控制子 Agent 场景下段的取舍 | `src/agents/system-prompt.ts` |
+| **OpenClaw** | 上下文文件按 `CONTEXT_FILE_ORDER` 排序（`agents.md=10, soul.md=20, identity.md=30 ...`），3 种 PromptMode（`full/minimal/none`）控制子 Agent 场景下段的取舍，`ProviderSystemPromptContribution` 允许 LLM provider 覆盖任意段 | `src/agents/system-prompt.ts`, `src/agents/system-prompt-contribution.ts` |
 | **Hermes** | `_build_system_prompt()` 严格 11 层顺序：Identity → Tool guidance → Subscription → Tool-use enforcement → Memory snapshot → User profile → Skills → Context files → Timestamp → Env hints → Platform hints | `run_agent.py:3121-3286` |
 | **Codex** | 模板文件分段标题（General, Editing constraints, Plan tool, Special requests, Frontend, Presenting work, Final formatting），运行时通过 `{{ personality }}` 占位符注入模型定制内容 | `codex-rs/core/gpt-5.2-codex_prompt.md` |
 
@@ -551,8 +551,8 @@ interface PromptSection {
   order: number;
   /** 计算段内容 */
   compute: (ctx: BuildContext) => string | null;
-  /** 此段是否每轮可能变化 */
-  volatile: boolean;
+  /** 更新频率：static = 不变可缓存，per_session = session 内冻结，per_turn = 每轮重算 */
+  updateFrequency: 'static' | 'per_session' | 'per_turn';
   /** 可选的 token 上限（超过则截断） */
   maxTokens?: number;
 }
@@ -562,8 +562,8 @@ interface SystemPromptBuilder {
   register(section: PromptSection): void;
   /** 移除一个段 */
   unregister(name: string): void;
-  /** 组装全部段，返回 [staticPrefix, dynamicSuffix] */
-  build(ctx: BuildContext): [string, string];
+  /** 组装全部段，返回 { staticPrefix, dynamicSuffix, sectionTokens, totalTokens } */
+  build(ctx: BuildContext): AssembledPrompt;
   /** 估算总 token */
   estimateTokens(): number;
 }
@@ -611,7 +611,9 @@ interface ModelPromptAdapter {
 | Agent | 实现 | 源码位置 |
 |-------|------|---------|
 | **Hermes** | `_scan_context_content()` 扫描 10+ 威胁模式：不可见 Unicode 字符（零宽空格）、"ignore previous instructions" 类指令覆盖、凭据外泄提示、隐藏 HTML div、编码混淆。检测到威胁后标记警告但不静默丢弃（用户可见） | `agent/prompt_builder.py` |
-| **OpenClaw** | `sanitizeContextFileContentForPrompt()` 对上下文文件内容做消毒处理后再注入；`CONTEXT_FILE_ORDER` 控制文件加载顺序，确保高信任文件先加载 | `src/agents/system-prompt.ts` |
+| **OpenClaw** | `CONTEXT_FILE_ORDER` 控制文件加载顺序，确保高信任文件先加载；`sanitizeContextFileContentForPrompt()` 做轻量清理（去除 heartbeat 块、压空行），但不做威胁模式扫描 | `src/agents/system-prompt.ts` |
+
+> **注**：真正的威胁模式扫描目前只有 Hermes 实现了完整方案。OpenClaw 的 sanitize 是清理而非安全扫描。Quilin 应参考 Hermes 的 threat scanner 设计，同时参考 OpenClaw 的信任分级加载顺序。
 
 **为什么这样做**：Agent 对 system prompt 中的指令高度信任——如果攻击者能往 system prompt 里注入内容，等于获得了对 Agent 的控制权。随着 Agent 权限越来越大（文件系统、代码执行、网络访问），注入攻击的危害也越来越大。扫描不是"nice to have"，是**安全基线**。
 
@@ -669,8 +671,11 @@ function normalizeSection(content: string): string {
   // 1. 合并连续空白为单空格
   // 2. 统一换行符为 \n
   // 3. 去除尾部空白
-  // 4. 列表项按字母序排序（工具列表、能力列表等）
+  // 注意：不对自然语言内容排序，只对结构化列表排序
 }
+
+/** 对结构化标识符列表去重并排序（仅限 capability IDs、tool names 等） */
+function normalizeSortedList(items: string[]): string[];
 
 /** 比较两个 section 是否语义等价（用于判断是否需要更新缓存） */
 function sectionSemanticEqual(a: string, b: string): boolean;
@@ -702,6 +707,42 @@ function sectionSemanticEqual(a: string, b: string): boolean;
 - 工具行为指导作为 `PromptSection { name: "tool-guidance", order: 50, volatile: false }` 注入静态 system prompt
 - 模型特异的工具使用强化指令由 `ModelPromptAdapter.getModelSections()` 提供
 
+#### 模式 7：运行时增量侧信道（Delta Channel）（对应职责 6-时序 + 7-缓存）
+
+**问题**：不是所有运行时变化都应该塞回 system prompt。如果每轮都把最新的会话状态、用户偏好变化、工具结果全部重写进 base prompt，缓存永远命不中。但如果完全不更新，Agent 的行为就与当前上下文脱节。需要一个机制区分"什么进 base prompt"和"什么走侧信道"。
+
+**业界实践**：
+
+| Agent | 实现 | 源码位置 |
+|-------|------|---------|
+| **Codex** | 基础 instructions 保持稳定，turn 间的设置变化通过 developer/user delta message 注入——只发送变化的部分，不重写整个 prompt。恢复（resume）和压缩（compaction）时也依赖这种分离 | `codex-rs/core/src/context_manager/updates.rs`, `codex-rs/core/src/codex.rs` |
+| **OpenClaw** | 3 种 PromptMode（`full/minimal/none`）——主 Agent 用 full，子 Agent 用 minimal 或 none，大幅减少子 Agent 的 base prompt 体积。`DYNAMIC_CONTEXT_FILE_BASENAMES`（如 `heartbeat.md`）显式标记为"不进 base prompt，走动态通道" | `src/agents/system-prompt.ts` |
+| **Hermes** | 会话开始时冻结 memory snapshot 到 system prompt，整个 session 内新增的记忆不突变 base prompt，而是在需要时通过 tool call 按需查询 | `run_agent.py` |
+
+**为什么这样做**：
+
+1. **缓存命中率**——base prompt 越稳定，cache 命中率越高。Hermes 的冻结策略宁可牺牲实时性也要保缓存
+2. **Resume/Compaction**——Codex 的 delta channel 让会话恢复和上下文压缩成为可能：base prompt 不变，只需重放 delta
+3. **子 Agent 效率**——OpenClaw 的 PromptMode 让子 Agent 不需要携带主 Agent 的完整 prompt，大幅节省 token
+
+**Quilin 采纳方案**：
+
+`PromptSection` 的 `updateFrequency` 字段直接支持这个模式：
+
+- `static` → 进 base prompt，被缓存
+- `per_session` → session 开始时冻结到 base prompt，session 内不更新
+- `per_turn` → 走动态后缀，每轮重算
+
+此外，为子 Agent 场景定义 `PromptProfile`：
+
+```typescript
+type PromptProfile = 'full' | 'minimal' | 'none';
+
+// full: 主 Agent，所有段都加载
+// minimal: 子 Agent，只加载 identity + rules + task-specific 段
+// none: 纯工具调用 Agent，不注入 system prompt
+```
+
 ### 2.6 提示词工程模式总览与上下文职责映射
 
 | 模式 | 解决的问题 | 对应上下文职责 | 取长于 |
@@ -709,9 +750,10 @@ function sectionSemanticEqual(a: string, b: string): boolean;
 | 静态/动态缓存边界 | 系统提示重复发送的成本 | 7-缓存 | Claude Code, OpenClaw, Hermes |
 | 分段式模块化组装 | 单体 prompt 的可维护性 | 4-排布 + 5-预算 | Claude Code, OpenClaw, Hermes, Codex |
 | 模型特异性适配 | 不同 LLM 的行为差异 | 1-收集 + 4-排布 | Hermes, Codex, OpenClaw |
-| 注入安全扫描 | 外部文件的 prompt injection | 2-筛选 | Hermes, OpenClaw |
+| 注入安全扫描 | 外部文件的 prompt injection | 2-筛选 | Hermes（主）, OpenClaw（信任分级） |
 | 缓存稳定性保障 | 无意义变化导致缓存失效 | 7-缓存 | OpenClaw, Hermes |
 | 工具指导/Schema 分离 | Tool 信息的组织与缓存 | 1-收集 + 4-排布 | Claude Code, Hermes, OpenClaw |
+| 运行时增量侧信道 | 运行时变化破坏缓存 | 6-时序 + 7-缓存 | Codex, OpenClaw, Hermes |
 
 ---
 
