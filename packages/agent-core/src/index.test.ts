@@ -1,4 +1,4 @@
-import type { LanguageModelV1 } from "@ai-sdk/provider";
+import type { LanguageModel } from "ai";
 import { generateText } from "ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createProvider, getDefaultModel } from "./llm/provider.js";
@@ -33,37 +33,15 @@ describe("main", () => {
 	});
 
 	it("verifies the llm connection before starting the repl", async () => {
-		const model: LanguageModelV1 = {
-			specificationVersion: "v1",
-			provider: "deepseek",
-			modelId: "deepseek-chat",
-			defaultObjectGenerationMode: undefined,
-			async doGenerate() {
-				return {
-					text: "Quilin Agent online.",
-					finishReason: "stop",
-					usage: {
-						promptTokens: 18,
-						completionTokens: 5,
-					},
-					rawCall: {
-						rawPrompt: null,
-						rawSettings: {},
-					},
-				};
-			},
-			async doStream() {
-				throw new Error("not used");
-			},
-		};
+		const model = {} as LanguageModel;
 		const provider = vi.fn().mockReturnValue(model);
 		vi.mocked(createProvider).mockReturnValue(provider);
 		vi.mocked(getDefaultModel).mockReturnValue("deepseek-chat");
 		vi.mocked(generateText).mockResolvedValue({
 			text: "Quilin Agent online.",
 			usage: {
-				inputTokens: 18,
-				outputTokens: 5,
+				promptTokens: 18,
+				completionTokens: 5,
 			},
 		} as Awaited<ReturnType<typeof generateText>>);
 
@@ -86,13 +64,7 @@ describe("main", () => {
 			"Verifying LLM connection...",
 		);
 		expect(generateText).toHaveBeenCalledWith({
-			model: expect.objectContaining({
-				specificationVersion: "v2",
-				provider: "deepseek",
-				modelId: "deepseek-chat",
-				doGenerate: expect.any(Function),
-				doStream: expect.any(Function),
-			}),
+			model,
 			prompt: 'Reply with exactly: "Quilin Agent online." Nothing else.',
 			maxTokens: 20,
 		});

@@ -1,4 +1,4 @@
-import type { LanguageModelV1 } from "@ai-sdk/provider";
+import type { LanguageModel } from "ai";
 import { generateText, streamText } from "ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { StreamingLLMClient, VercelLLMClient } from "./client.js";
@@ -9,7 +9,7 @@ vi.mock("ai", () => ({
 }));
 
 describe("VercelLLMClient", () => {
-	const model = {} as LanguageModelV1;
+	const model = {} as LanguageModel;
 
 	beforeEach(() => {
 		vi.clearAllMocks();
@@ -43,11 +43,7 @@ describe("VercelLLMClient", () => {
 		);
 
 		expect(generateText).toHaveBeenCalledWith({
-			model: expect.objectContaining({
-				specificationVersion: "v2",
-				doGenerate: expect.any(Function),
-				doStream: expect.any(Function),
-			}),
+			model,
 			messages: [
 				{ role: "system", content: "sys" },
 				{ role: "user", content: "hi" },
@@ -90,7 +86,7 @@ describe("VercelLLMClient", () => {
 });
 
 describe("StreamingLLMClient", () => {
-	const model = {} as LanguageModelV1;
+	const model = {} as LanguageModel;
 
 	beforeEach(() => {
 		vi.clearAllMocks();
@@ -122,11 +118,7 @@ describe("StreamingLLMClient", () => {
 		});
 
 		expect(streamText).toHaveBeenCalledWith({
-			model: expect.objectContaining({
-				specificationVersion: "v2",
-				doGenerate: expect.any(Function),
-				doStream: expect.any(Function),
-			}),
+			model,
 			messages: [{ role: "user", content: "hi" }],
 			maxTokens: 64,
 			temperature: 0.2,

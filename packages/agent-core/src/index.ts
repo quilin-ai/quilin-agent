@@ -1,6 +1,5 @@
 import "dotenv/config";
 import { generateText } from "ai";
-import { adaptLanguageModel } from "./llm/client.js";
 import { createProvider, getDefaultModel } from "./llm/provider.js";
 import { logger } from "./logger.js";
 import { startRepl } from "./repl.js";
@@ -13,24 +12,6 @@ export * from "./tools/router.js";
 export * from "./tools/mcp-client.js";
 export * from "./state/checkpoint.js";
 export * from "./repl.js";
-
-function getTokenCount(
-	usage:
-		| {
-				promptTokens?: number;
-				completionTokens?: number;
-				inputTokens?: number;
-				outputTokens?: number;
-		  }
-		| undefined,
-	key: "input" | "output",
-) {
-	if (key === "input") {
-		return usage?.promptTokens ?? usage?.inputTokens ?? 0;
-	}
-
-	return usage?.completionTokens ?? usage?.outputTokens ?? 0;
-}
 
 export async function main(): Promise<void> {
 	logger.info({ version: "0.0.1" }, "Quilin Agent starting");
@@ -47,7 +28,7 @@ export async function main(): Promise<void> {
 
 	try {
 		const { text, usage } = await generateText({
-			model: adaptLanguageModel(provider(modelId)),
+			model: provider(modelId),
 			prompt: 'Reply with exactly: "Quilin Agent online." Nothing else.',
 			maxTokens: 20,
 		});
@@ -55,8 +36,8 @@ export async function main(): Promise<void> {
 		logger.info(
 			{
 				response: text.trim(),
-				inputTokens: getTokenCount(usage, "input"),
-				outputTokens: getTokenCount(usage, "output"),
+				inputTokens: usage.promptTokens,
+				outputTokens: usage.completionTokens,
 			},
 			"LLM connection verified",
 		);
