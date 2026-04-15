@@ -1,6 +1,6 @@
 import type { ContextManager } from "./context/types.js";
 import type { InferenceConfig, LLMClient } from "./llm/types.js";
-import { logger } from "./logger.js";
+import { getLoggerRuntimeMode, logger } from "./logger.js";
 import type { Checkpoint, Message } from "./state/types.js";
 import type { Tool } from "./tools/types.js";
 
@@ -27,8 +27,11 @@ export async function runAgentLoop(
 	messages: readonly Message[],
 ): Promise<string> {
 	const { llm, inferenceConfig } = config;
+	const shouldLogDebug = getLoggerRuntimeMode() !== "repl";
 
-	logger.debug({ turnMessages: messages.length }, "Agent loop: calling LLM");
+	if (shouldLogDebug) {
+		logger.debug({ turnMessages: messages.length }, "Agent loop: calling LLM");
+	}
 
 	const response = await llm.chat(
 		messages,
@@ -36,14 +39,16 @@ export async function runAgentLoop(
 		inferenceConfig,
 	);
 
-	logger.debug(
-		{
-			finishReason: response.finishReason,
-			inputTokens: response.usage.inputTokens,
-			outputTokens: response.usage.outputTokens,
-		},
-		"Agent loop: LLM responded",
-	);
+	if (shouldLogDebug) {
+		logger.debug(
+			{
+				finishReason: response.finishReason,
+				inputTokens: response.usage.inputTokens,
+				outputTokens: response.usage.outputTokens,
+			},
+			"Agent loop: LLM responded",
+		);
+	}
 
 	return response.content;
 }

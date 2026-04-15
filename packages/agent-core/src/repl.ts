@@ -7,7 +7,7 @@ import { logger } from "./logger.js";
 import { runAgentLoop } from "./loop.js";
 import type { Message } from "./state/types.js";
 
-const DEFAULT_SYSTEM_PROMPT = `You are Quilin Agent (拼布麒麟), a helpful AI assistant.
+const DEFAULT_SYSTEM_PROMPT = `You are Quilin Agent (麒麟), a helpful AI assistant.
 Be concise, accurate, and friendly. Answer in the same language as the user.`;
 
 const DEFAULT_INFERENCE_CONFIG: InferenceConfig = {

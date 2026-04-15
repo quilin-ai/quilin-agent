@@ -53,3 +53,9 @@ data/
 # === IDE ===
 .idea/
 *.swp
+# === Local agent config ===
+.agentbridge/
+.claude/settings.local.json
+
+# Added by code-review-graph
+.code-review-graph/

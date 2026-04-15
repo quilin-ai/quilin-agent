@@ -2,16 +2,15 @@ import type { LanguageModel } from "ai";
 import { generateText } from "ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createProvider, getDefaultModel } from "./llm/provider.js";
-import { logger } from "./logger.js";
+import { configureLogger, logger } from "./logger.js";
 import { startRepl } from "./repl.js";
-
-vi.mock("dotenv/config", () => ({}));
 
 vi.mock("ai", () => ({
 	generateText: vi.fn(),
 }));
 
 vi.mock("./logger.js", () => ({
+	configureLogger: vi.fn(),
 	logger: {
 		info: vi.fn(),
 		fatal: vi.fn(),
@@ -28,6 +27,10 @@ vi.mock("./repl.js", () => ({
 }));
 
 describe("main", () => {
+	const exitSpy = vi
+		.spyOn(process, "exit")
+		.mockImplementation(() => undefined as never);
+
 	beforeEach(() => {
 		vi.clearAllMocks();
 	});
@@ -49,6 +52,7 @@ describe("main", () => {
 
 		await main({ runtimeMode: "repl" });
 
+		expect(configureLogger).toHaveBeenCalledWith("repl");
 		expect(logger.info).toHaveBeenNthCalledWith(
 			1,
 			{ version: "0.0.1" },
@@ -86,6 +90,7 @@ describe("main", () => {
 			provider,
 			modelId: "deepseek-chat",
 		});
+		expect(exitSpy).toHaveBeenCalledWith(0);
 	});
 
 	it("stays in service mode without entering the repl", async () => {
@@ -106,6 +111,7 @@ describe("main", () => {
 
 		await main({ runtimeMode: "service", serviceRunner });
 
+		expect(configureLogger).toHaveBeenCalledWith("service");
 		expect(logger.info).toHaveBeenNthCalledWith(
 			4,
 			{

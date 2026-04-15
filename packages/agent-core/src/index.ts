@@ -1,17 +1,16 @@
-import "dotenv/config";
 import { generateText } from "ai";
 import { createProvider, getDefaultModel } from "./llm/provider.js";
-import { logger } from "./logger.js";
+import { configureLogger, logger } from "./logger.js";
 import { startRepl } from "./repl.js";
 
-export * from "./types/index.js";
+export * from "./context/manager.js";
 export * from "./llm/client.js";
 export * from "./llm/provider.js";
-export * from "./context/manager.js";
-export * from "./tools/router.js";
-export * from "./tools/mcp-client.js";
-export * from "./state/checkpoint.js";
 export * from "./repl.js";
+export * from "./state/checkpoint.js";
+export * from "./tools/mcp-client.js";
+export * from "./tools/router.js";
+export * from "./types/index.js";
 
 const HEARTBEAT_INTERVAL_MS = 60_000;
 
@@ -62,11 +61,13 @@ async function runServiceLoop(): Promise<void> {
 }
 
 export async function main(options: MainOptions = {}): Promise<void> {
+	const runtimeMode = resolveRuntimeMode(options.runtimeMode);
+	configureLogger(runtimeMode);
+
 	logger.info({ version: "0.0.1" }, "Quilin Agent starting");
 
 	const provider = createProvider();
 	const modelId = getDefaultModel();
-	const runtimeMode = resolveRuntimeMode(options.runtimeMode);
 
 	logger.info(
 		{ provider: "deepseek", model: modelId },
@@ -98,6 +99,7 @@ export async function main(options: MainOptions = {}): Promise<void> {
 	if (runtimeMode === "repl") {
 		logger.info({ mode: "repl" }, "Starting CLI REPL...");
 		await startRepl({ provider, modelId });
+		process.exit(0);
 		return;
 	}
 

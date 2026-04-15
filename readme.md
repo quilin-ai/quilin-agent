@@ -1,4 +1,4 @@
-# Quilin Agent — 拼布麒麟
+# Quilin Agent — 麒麟
 
 > **Quilin** = Quilt（拼布/缝合）+ Qilin（麒麟，中华神话最早的缝合神兽）
 >

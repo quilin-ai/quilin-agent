@@ -761,7 +761,7 @@ import { runAgentLoop } from './loop.js';
 import type { Message } from './state/types.js';
 import type { InferenceConfig } from './llm/types.js';
 
-const DEFAULT_SYSTEM_PROMPT = `You are Quilin Agent (拼布麒麟), a helpful AI assistant.
+const DEFAULT_SYSTEM_PROMPT = `You are Quilin Agent (麒麟), a helpful AI assistant.
 Be concise, accurate, and friendly. Answer in the same language as the user.`;
 
 const DEFAULT_INFERENCE_CONFIG: InferenceConfig = {
@@ -849,7 +849,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 Type your message, or /exit to quit.
 
 quilin> 你好，介绍一下你自己
-你好！我是 Quilin Agent（拼布麒麟），一个 AI 助手。我可以回答问题、
+你好！我是 Quilin Agent（麒麟），一个 AI 助手。我可以回答问题、
 帮助编程、分析问题等。有什么可以帮你的吗？
 
 quilin> 用 TypeScript 写一个 hello world

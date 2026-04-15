@@ -47,7 +47,7 @@ clean:
 
 # 开发模式（前台，直接看日志）
 dev:
-    cd packages/agent-core && LOG_LEVEL=debug QUILIN_ENV=dev QUILIN_RUNTIME_MODE=repl bun run --watch src/index.ts
+    LOG_LEVEL=debug QUILIN_ENV=dev QUILIN_RUNTIME_MODE=repl bun --env-file=.env --watch packages/agent-core/src/index.ts
 
 # 测试
 test:

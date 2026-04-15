@@ -10,6 +10,14 @@ const mockRunAgentLoop = vi.fn();
 const mockLoggerError = vi.fn();
 const mockStreamingClient = vi.fn();
 
+class MockStreamingLLMClient {
+	chat = vi.fn();
+
+	constructor(...args: unknown[]) {
+		mockStreamingClient(...args);
+	}
+}
+
 vi.mock("node:readline/promises", () => ({
 	createInterface: mockCreateInterface,
 }));
@@ -25,10 +33,7 @@ vi.mock("./logger.js", () => ({
 }));
 
 vi.mock("./llm/client.js", () => ({
-	StreamingLLMClient: vi.fn().mockImplementation((...args) => {
-		mockStreamingClient(...args);
-		return { chat: vi.fn() };
-	}),
+	StreamingLLMClient: MockStreamingLLMClient,
 }));
 
 describe("startRepl", () => {

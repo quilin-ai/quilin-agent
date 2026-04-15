@@ -3,6 +3,7 @@
   "private": true,
   "packageManager": "pnpm@10.8.1",
   "scripts": {
+    "dev": "LOG_LEVEL=debug QUILIN_ENV=dev QUILIN_RUNTIME_MODE=repl bun --env-file=.env --watch packages/agent-core/src/index.ts",
     "build": "pnpm -r build",
     "test": "pnpm -r test",
     "lint": "pnpm -r lint",

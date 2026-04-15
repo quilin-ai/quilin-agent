@@ -4,7 +4,7 @@
 
 ## Project Overview
 
-Quilin Agent（拼布麒麟）is a dynamic, self-evolving Agent framework that monitors 12 capability domains x Top 10 open-source projects each (~100 total upstreams). It auto-syncs upstream changes, uses AI agents to intelligently analyze diffs, generates fusion patches, and publishes new versions.
+Quilin Agent（麒麟）is a dynamic, self-evolving Agent framework that monitors 12 capability domains x Top 10 open-source projects each (~100 total upstreams). It auto-syncs upstream changes, uses AI agents to intelligently analyze diffs, generates fusion patches, and publishes new versions.
 
 ## Architecture
 
@@ -146,6 +146,9 @@ quilin-agent/
 ## Agent Collaboration
 
 - **Claude Code** (Reviewer / Planner) 和 **Codex** (Implementer / Executor) 通过 AgentBridge 协作
+- **Claude Code 只做规划，不写代码**：架构设计、代码审查、任务分解、决策判断由 Claude Code 负责；所有代码编写、修改、重构由 Codex 执行
+- **协作请求必须回复**：收到对方的协作消息（review 结果、修改建议、任务完成通知等）后，必须通过 AgentBridge 回复对方，不能单方面沉默
+- **协作语言使用中文**：Agent 之间通过 AgentBridge 的所有对话使用中文，方便用户同步查看协作内容
 - 在核心实现落地前，默认先改文档 / 计划 / 脚本，不凭空扩展未批准的运行时代码结构
 - 新增 `packages/` / `providers/` / `crates/` 下的代码，必须先对齐 `docs/adr/adr-002-project-skeleton.md` 与对应工程 spec
 - 所有日志输出 JSON 到 stdout，确保 Claude Code Monitor 可在 dev / test / prod 三种环境实时监控
@@ -156,3 +159,71 @@ quilin-agent/
 - Never execute SQL scripts directly
 - Submodules use `--depth 1` (shallow clone) to save disk space
 - Target languages: TypeScript (core), Python (ML providers), Rust (infra)
+
+<!-- code-review-graph MCP tools -->
+## MCP Tools: code-review-graph
+
+**IMPORTANT: This project has a knowledge graph. ALWAYS use the
+code-review-graph MCP tools BEFORE using Grep/Glob/Read to explore
+the codebase.** The graph is faster, cheaper (fewer tokens), and gives
+you structural context (callers, dependents, test coverage) that file
+scanning cannot.
+
+### When to use graph tools FIRST
+
+- **Exploring code**: `semantic_search_nodes` or `query_graph` instead of Grep
+- **Understanding impact**: `get_impact_radius` instead of manually tracing imports
+- **Code review**: `detect_changes` + `get_review_context` instead of reading entire files
+- **Finding relationships**: `query_graph` with callers_of/callees_of/imports_of/tests_for
+- **Architecture questions**: `get_architecture_overview` + `list_communities`
+
+Fall back to Grep/Glob/Read **only** when the graph doesn't cover what you need.
+
+### Key Tools
+
+| Tool | Use when |
+|------|----------|
+| `detect_changes` | Reviewing code changes — gives risk-scored analysis |
+| `get_review_context` | Need source snippets for review — token-efficient |
+| `get_impact_radius` | Understanding blast radius of a change |
+| `get_affected_flows` | Finding which execution paths are impacted |
+| `query_graph` | Tracing callers, callees, imports, tests, dependencies |
+| `semantic_search_nodes` | Finding functions/classes by name or keyword |
+| `get_architecture_overview` | Understanding high-level codebase structure |
+| `refactor_tool` | Planning renames, finding dead code |
+
+### Workflow
+
+1. The graph auto-updates on file changes (via hooks).
+2. Use `detect_changes` for code review.
+3. Use `get_affected_flows` to understand impact.
+4. Use `query_graph` pattern="tests_for" to check coverage.
+
+<!-- AgentBridge:start -->
+## AgentBridge — Multi-Agent Collaboration
+
+You are working in a **multi-agent environment** powered by AgentBridge.
+Another AI agent (Claude, by Anthropic) is available in a parallel session on this machine.
+Communication happens via AgentBridge MCP tools — Claude has `reply` and `get_messages` tools.
+
+### When to collaborate vs. work solo
+- **Collaborate** when the task benefits from a second perspective, parallel execution, or capabilities the other agent has.
+- **Work solo** for simple, self-contained tasks where the coordination overhead isn't worth it.
+- When in doubt, **propose a task split** to Claude rather than doing everything yourself.
+
+### Capability comparison
+| Capability | Codex (you) | Claude |
+|---|---|---|
+| Sandboxed code execution | Yes | No |
+| Reproduce & verify bugs | Strong | Limited |
+| Architecture & planning | Moderate | Strong |
+| Code review & analysis | Strong | Strong |
+| Web search & docs | Limited | Yes |
+| File editing & refactoring | Yes (via sandbox) | Yes (via tools) |
+
+### How to start collaborating
+1. When you receive a complex task, **proactively propose a division of labor**.
+2. State what you'll handle and what you'd like Claude to take on.
+3. Ask for Claude's agreement or counter-proposal before proceeding.
+4. After task completion, **cross-review** each other's work.
+<!-- AgentBridge:end -->
