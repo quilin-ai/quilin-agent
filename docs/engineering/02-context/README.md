@@ -517,7 +517,7 @@ interface SystemPromptSection {
 // 动态 sections（memory, env, temporal, mcp）→ boundary 之后
 ```
 
-在 `AssembledContext` 中增加 `cacheBreakIndex`，标识 system prompt token 序列中的缓存分界位置，送入 LLM API 时自动在该位置添加 `cache_control: { type: "ephemeral" }`。
+`PromptBuilder.build()` 返回 `AssembledPrompt { staticPrefix, dynamicSuffix }`，`static` + `per_session` 段归入 `staticPrefix`，`per_turn` 段归入 `dynamicSuffix`。Iter A 只维护此 metadata 分界，不改 `Message.content` 或 `LLMClient` 接口；真正的 `cache_control: { type: "ephemeral" }` API 标记延后到 LLM transport 小迭代。
 
 #### 模式 2：分段式模块化组装（对应职责 4-排布 + 5-预算）
 
@@ -536,7 +536,7 @@ interface SystemPromptSection {
 
 1. **可组合**——每个段独立注册，增删段不影响其他段。Claude Code 的 MCP 段随 MCP server 连接/断开动态出现/消失，不需要改主流程
 2. **可预算**——每个段可以独立做 token 预算控制。25 个工具的 schema 可能占 3000 token，通过段级预算限制可以动态决定放多少
-3. **可缓存**——段按 volatile 属性排序后，静态段自然聚集在前缀，最大化缓存命中
+3. **可缓存**——段按 `updateFrequency` 自动分组（`static`/`per_session` → 前缀，`per_turn` → 后缀），最大化缓存命中
 4. **可测试**——每个段独立函数，单测容易写
 
 **Quilin 采纳方案**（超越 2.2 的原始 `SystemPromptBuilder`）：
@@ -632,8 +632,12 @@ interface ScanResult {
   sanitizedContent: string;  // 消毒后的内容
 }
 
-/** 在注入 system prompt 前扫描所有外部来源内容 */
-function scanContextContent(
+/**
+ * 扫描外部来源内容，检测 prompt injection 威胁。
+ * 纯函数，不嵌入 builder，由 source collector 调用。
+ * 只扫描 isExternal=true 的来源，不扫描内置静态段。
+ */
+function scanExternalContext(
   content: string,
   source: string,
 ): ScanResult;
@@ -681,7 +685,7 @@ function normalizeSortedList(items: string[]): string[];
 function sectionSemanticEqual(a: string, b: string): boolean;
 ```
 
-与 Hermes 的冻结策略结合：每个 volatile section 在 session 级别设置 `updateFrequency`（`per_turn` / `per_session` / `on_change`），`per_session` 的 section（如 memory snapshot）在 session 内冻结，最大化缓存稳定性。
+与 Hermes 的冻结策略结合：每个 section 通过 `updateFrequency`（`static` / `per_session` / `per_turn`）声明更新频率。`per_session` 的 section（如 memory snapshot、environment）在 session 内冻结（`PromptBuilder.sessionCache`），不突变缓存前缀，最大化缓存稳定性。
 
 #### 模式 6：工具行为指导与 Tool Schema 分离（对应职责 1-收集 + 4-排布）
 
@@ -704,7 +708,7 @@ function sectionSemanticEqual(a: string, b: string): boolean;
 **Quilin 采纳方案**：
 
 - Tool JSON schema 通过 Vercel AI SDK v6 的 `tools` 参数注册，不进入 system prompt
-- 工具行为指导作为 `PromptSection { name: "tool-guidance", order: 50, volatile: false }` 注入静态 system prompt
+- 工具行为指导作为 `PromptSection { name: "tool-guidance", order: 40, updateFrequency: 'static' }` 注入静态 system prompt
 - 模型特异的工具使用强化指令由 `ModelPromptAdapter.getModelSections()` 提供
 
 #### 模式 7：运行时增量侧信道（Delta Channel）（对应职责 6-时序 + 7-缓存）

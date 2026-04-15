@@ -80,7 +80,7 @@ System prompt 之外的上下文原料，拆为多个 `ContextSource`，每个�
 
 > 本迭代只做"消费 recall 结果"，不做"拥有 memory transport"。
 
-- `ContextManager.assembleContext()` 接收外部注入的 `memorySources: ContextSource[]`
+- 新建 `ContextAssembler.assembleContext()` 接收外部注入的 `memorySources: ContextSource[]`（不修改冻结的 `ContextManager` 接口）
 - 上层（Agent Loop 或 Memory Bridge 模块）负责调用 OmniMem MCP recall，转换为 `ContextSource` 后传入
 - 传入的 userInput 直接作为 recall query（不做 extractKeywords），让 OmniMem 自己做 query expansion
 - recall 结果按 relevanceScore 排序后截断到 budget 内
