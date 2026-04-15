@@ -532,7 +532,11 @@ async function main() {
       maxTokens: 20,
     });
     logger.info(
-      { response: text.trim(), inputTokens: usage.promptTokens, outputTokens: usage.completionTokens },
+      {
+        response: text.trim(),
+        inputTokens: usage.inputTokens ?? usage.promptTokens,
+        outputTokens: usage.outputTokens ?? usage.completionTokens,
+      },
       'LLM connection verified',
     );
   } catch (err) {
@@ -662,7 +666,7 @@ export async function runAgentLoop(
 
 ```typescript
 import { generateText, streamText } from 'ai';
-import type { LanguageModelV1 } from 'ai';
+import type { LanguageModel } from 'ai';
 import type { Message } from '../state/types.js';
 import type { Tool } from '../tools/types.js';
 import type { InferenceConfig, LLMClient, LLMResponse } from './types.js';
@@ -674,7 +678,7 @@ import type { InferenceConfig, LLMClient, LLMResponse } from './types.js';
  * Phase 1: 加入 streamText() + tool_calls 支持
  */
 export class VercelLLMClient implements LLMClient {
-  constructor(private readonly model: LanguageModelV1) {}
+  constructor(private readonly model: LanguageModel) {}
 
   async chat(
     messages: readonly Message[],
@@ -695,8 +699,8 @@ export class VercelLLMClient implements LLMClient {
     return {
       content: result.text,
       usage: {
-        inputTokens: result.usage.promptTokens,
-        outputTokens: result.usage.completionTokens,
+        inputTokens: result.usage.inputTokens ?? result.usage.promptTokens,
+        outputTokens: result.usage.outputTokens ?? result.usage.completionTokens,
       },
       finishReason: result.finishReason === 'stop' ? 'stop' : 'length',
     };
@@ -706,7 +710,7 @@ export class VercelLLMClient implements LLMClient {
 /** 基于 streamText 的流式 LLMClient — Phase 0 用于 REPL 逐字输出 */
 export class StreamingLLMClient implements LLMClient {
   constructor(
-    private readonly model: LanguageModelV1,
+    private readonly model: LanguageModel,
     private readonly onChunk?: (chunk: string) => void,
   ) {}
 
@@ -737,8 +741,8 @@ export class StreamingLLMClient implements LLMClient {
     return {
       content: fullText,
       usage: {
-        inputTokens: usage.promptTokens,
-        outputTokens: usage.completionTokens,
+        inputTokens: usage.inputTokens ?? usage.promptTokens,
+        outputTokens: usage.outputTokens ?? usage.completionTokens,
       },
       finishReason: 'stop',
     };
