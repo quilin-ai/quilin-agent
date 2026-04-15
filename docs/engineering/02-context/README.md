@@ -321,7 +321,11 @@ class ContextManager(Protocol):
 
 @runtime_checkable
 class SystemPromptBuilder(Protocol):
-    """系统提示构建器——动态组装 system prompt 各个模块"""
+    """系统提示构建器——动态组装 system prompt 各个模块
+    
+    注意：此接口为早期简化设计，正式实现方案见 2.5 节的分段式
+    SystemPromptBuilder（register/build 模式）。保留此处作为概念参考。
+    """
 
     def build(
         self,
@@ -472,6 +476,242 @@ context:
     cache_tool_schemas: true
     min_cacheable_tokens: 1024        # 低于此 token 数不缓存
 ```
+
+### 2.5 提示词工程（Prompt Engineering）——上下文工程的子集
+
+> **核心观点**：提示词工程是上下文工程的一个特化维度。上下文工程管理送入 LLM 的全部 token 序列（记忆、工具结果、对话历史、系统提示……），提示词工程专注其中"系统提示"这一块的设计、组装、优化与防护。二者不是并列关系，而是包含关系。
+
+Agent 发展到今天，单靠手写一段 system prompt 已远远不够。Claude Code、Codex、OpenClaw、Hermes 四大主流 Agent 的源码显示：系统提示本身已经变成一个**工程系统**——有模块化组装、有缓存分层、有安全扫描、有模型适配。以下 6 个设计模式从它们的实践中提炼而来，每个模式对应前述 7 项上下文职责中的一项或多项。
+
+#### 模式 1：静态/动态缓存边界（对应职责 7-缓存）
+
+**问题**：系统提示每次 LLM 调用都完整发送。一个 5000 token 的 system prompt，100 次调用就是 50 万 token 的输入成本，其中 90% 的内容（身份、规则、工具描述）根本没变过。
+
+**业界实践**：
+
+| Agent | 实现 | 源码位置 |
+|-------|------|---------|
+| **Claude Code** | `SYSTEM_PROMPT_DYNAMIC_BOUNDARY = '__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__'`，将 prompt 数组拆成静态前缀和动态后缀两段。静态段（身份、规则、工具）被 Anthropic prompt cache 命中，动态段（env、memory、MCP）每轮重算 | `src/constants/prompts.ts:114-115` |
+| **OpenClaw** | `SYSTEM_PROMPT_CACHE_BOUNDARY = "\n<!-- OPENCLAW_CACHE_BOUNDARY -->\n"`，`splitSystemPromptCacheBoundary()` 将 prompt 一分为二，动态文件（如 `heartbeat.md`）显式归入 `DYNAMIC_CONTEXT_FILE_BASENAMES` | `src/agents/system-prompt-cache-boundary.ts` |
+| **Hermes** | `apply_anthropic_cache_control()` 实现 `system_and_3` 策略：缓存 system prompt + 最近 3 条非 system 消息（共 4 个 breakpoint），减少 ~75% 成本 | `agent/prompt_caching.py` |
+| **Codex** | 模型指令模板存为静态 markdown 文件（`gpt-5.2-codex_prompt.md`），动态设置（`personality`、workspace 状态）通过模板变量注入；差分更新——只发送 turn 间变化的 settings | `codex-rs/core/templates/` |
+
+**为什么这样做**：Anthropic/OpenAI 的 prompt cache 机制要求前缀 token 完全一致才能命中。任何中间的微小变化都会导致缓存失效。因此**把不变的放前面、变化的放后面**是硬约束，不是优化建议。命中后：输入成本降低 90%（Anthropic cached token 0.1x 价格）、首 token 延迟降低 50%+。
+
+**Quilin 采纳方案**：
+
+```typescript
+// packages/agent-core/src/context/prompt-sections.ts
+
+/** 标记静态/动态分界点 */
+export const PROMPT_CACHE_BOUNDARY = '__QUILIN_CACHE_BOUNDARY__';
+
+interface SystemPromptSection {
+  name: string;
+  compute: () => string;
+  /** true = 此 section 每轮可能变化，放在 boundary 之后 */
+  volatile: boolean;
+}
+
+// 静态 sections（identity, rules, tool-guidance）→ boundary 之前
+// 动态 sections（memory, env, temporal, mcp）→ boundary 之后
+```
+
+在 `AssembledContext` 中增加 `cacheBreakIndex`，标识 system prompt token 序列中的缓存分界位置，送入 LLM API 时自动在该位置添加 `cache_control: { type: "ephemeral" }`。
+
+#### 模式 2：分段式模块化组装（对应职责 4-排布 + 5-预算）
+
+**问题**：一个单体 `build()` 方法把身份、工具、记忆、规则全部拼成一个字符串——增删改任何一段都要改这个巨函数，而且无法对单个段做 token 预算控制。
+
+**业界实践**：
+
+| Agent | 实现 | 源码位置 |
+|-------|------|---------|
+| **Claude Code** | `systemPromptSection(name, computeFn)` 工厂函数注册命名段。静态段：`getSimpleIntroSection()`、`getSimpleDoingTasksSection()`、`getUsingYourToolsSection()` 等 7 个。动态段通过 `resolveSystemPromptSections()` 按名称注册，`DANGEROUS_uncachedSystemPromptSection()` 标记必须每轮重算的段 | `src/constants/systemPromptSections.ts`, `src/constants/prompts.ts` |
+| **OpenClaw** | 25+ 段，每段有 `order` 数值（`agents.md=10, soul.md=20, identity.md=30 ...`），支持 3 种 PromptMode（`full/minimal/none`）控制子 Agent 场景下段的取舍 | `src/agents/system-prompt.ts` |
+| **Hermes** | `_build_system_prompt()` 严格 11 层顺序：Identity → Tool guidance → Subscription → Tool-use enforcement → Memory snapshot → User profile → Skills → Context files → Timestamp → Env hints → Platform hints | `run_agent.py:3121-3286` |
+| **Codex** | 模板文件分段标题（General, Editing constraints, Plan tool, Special requests, Frontend, Presenting work, Final formatting），运行时通过 `{{ personality }}` 占位符注入模型定制内容 | `codex-rs/core/gpt-5.2-codex_prompt.md` |
+
+**为什么这样做**：
+
+1. **可组合**——每个段独立注册，增删段不影响其他段。Claude Code 的 MCP 段随 MCP server 连接/断开动态出现/消失，不需要改主流程
+2. **可预算**——每个段可以独立做 token 预算控制。25 个工具的 schema 可能占 3000 token，通过段级预算限制可以动态决定放多少
+3. **可缓存**——段按 volatile 属性排序后，静态段自然聚集在前缀，最大化缓存命中
+4. **可测试**——每个段独立函数，单测容易写
+
+**Quilin 采纳方案**（超越 2.2 的原始 `SystemPromptBuilder`）：
+
+```typescript
+// packages/agent-core/src/context/prompt-builder.ts
+
+interface PromptSection {
+  /** 段名，用于调试和日志 */
+  name: string;
+  /** 排序权重，数值越小越靠前 */
+  order: number;
+  /** 计算段内容 */
+  compute: (ctx: BuildContext) => string | null;
+  /** 此段是否每轮可能变化 */
+  volatile: boolean;
+  /** 可选的 token 上限（超过则截断） */
+  maxTokens?: number;
+}
+
+interface SystemPromptBuilder {
+  /** 注册一个段 */
+  register(section: PromptSection): void;
+  /** 移除一个段 */
+  unregister(name: string): void;
+  /** 组装全部段，返回 [staticPrefix, dynamicSuffix] */
+  build(ctx: BuildContext): [string, string];
+  /** 估算总 token */
+  estimateTokens(): number;
+}
+```
+
+> **与 2.2 的关系**：2.2 定义的 `SystemPromptBuilder.build(role_persona, tool_descriptions, memory_summary, constraint_rules)` 是早期简化设计。本节的分段式 `register/build` 模式取代它成为正式实现方案。2.2 的接口保留为概念参考。
+
+#### 模式 3：模型特异性提示适配（对应职责 1-收集 + 4-排布）
+
+**问题**：不同 LLM 对指令的敏感度、tool use 格式、role 名称各不相同。一套 system prompt 喂给所有模型会导致行为不一致——有的模型需要强调"你必须调用工具"，有的会忽略中间段落。
+
+**业界实践**：
+
+| Agent | 实现 | 源码位置 |
+|-------|------|---------|
+| **Hermes** | 为不同模型族注入不同的行为指导：`OPENAI_MODEL_EXECUTION_GUIDANCE`（GPT 专用：`<tool_persistence>`, `<mandatory_tool_use>`, `<act_dont_ask>`）、`GOOGLE_MODEL_OPERATIONAL_GUIDANCE`（Gemini 专用：绝对路径、先验证后操作、并行 tool call）；通过 `DEVELOPER_ROLE_MODELS` 对 GPT-5/Codex 使用 `developer` role 而非 `system` | `agent/prompt_builder.py` |
+| **Codex** | 按模型版本维护独立的 prompt 模板文件（`gpt-5.2-codex_prompt.md`, `gpt-5.2-codex_instructions_template.md`），模板中有 `{{ personality }}` 占位符注入模型级定制 | `codex-rs/core/templates/model_instructions/` |
+| **OpenClaw** | `ProviderSystemPromptContribution { stablePrefix?, dynamicSuffix?, sectionOverrides? }` 允许每个 LLM provider 覆盖默认 prompt 的任意段 | `src/agents/system-prompt-contribution.ts` |
+
+**为什么这样做**：LLM 的 instruction following 能力差异巨大。GPT 系列需要 XML tag 强调重点才不会跳过工具调用；Gemini 对路径格式敏感，必须用绝对路径。用统一 prompt 喂不同模型，产出质量可差 20-40%。
+
+**Quilin 采纳方案**：
+
+```typescript
+// packages/agent-core/src/context/model-adapter.ts
+
+interface ModelPromptAdapter {
+  /** 模型族标识符（如 "anthropic", "openai", "google"） */
+  modelFamily: string;
+  /** 返回该模型族专用的额外 prompt sections */
+  getModelSections(): PromptSection[];
+  /** 返回该模型 API 的 role 名称映射 */
+  getRoleMapping(): { system: string; user: string; assistant: string };
+}
+```
+
+在 `SystemPromptBuilder.build()` 时根据当前 model 注入对应 adapter 的 sections。Quilin 使用 Vercel AI SDK v6，SDK 层面已统一了多 provider 接口，model adapter 仅处理**行为差异**（prompt 内容），不处理 API 格式差异（SDK 已解决）。
+
+#### 模式 4：上下文文件注入安全扫描（对应职责 2-筛选）
+
+**问题**：用户项目中的 `.claude.md`、`AGENTS.md`、`SOUL.md` 等文件会被注入 system prompt。攻击者可以在这些文件中植入恶意指令（prompt injection），让 Agent 泄露密钥、执行破坏性操作。
+
+**业界实践**：
+
+| Agent | 实现 | 源码位置 |
+|-------|------|---------|
+| **Hermes** | `_scan_context_content()` 扫描 10+ 威胁模式：不可见 Unicode 字符（零宽空格）、"ignore previous instructions" 类指令覆盖、凭据外泄提示、隐藏 HTML div、编码混淆。检测到威胁后标记警告但不静默丢弃（用户可见） | `agent/prompt_builder.py` |
+| **OpenClaw** | `sanitizeContextFileContentForPrompt()` 对上下文文件内容做消毒处理后再注入；`CONTEXT_FILE_ORDER` 控制文件加载顺序，确保高信任文件先加载 | `src/agents/system-prompt.ts` |
+
+**为什么这样做**：Agent 对 system prompt 中的指令高度信任——如果攻击者能往 system prompt 里注入内容，等于获得了对 Agent 的控制权。随着 Agent 权限越来越大（文件系统、代码执行、网络访问），注入攻击的危害也越来越大。扫描不是"nice to have"，是**安全基线**。
+
+**Quilin 采纳方案**：
+
+```typescript
+// packages/agent-core/src/context/injection-scanner.ts
+
+interface ScanResult {
+  safe: boolean;
+  threats: Array<{
+    pattern: string;      // 匹配的威胁模式名
+    location: string;     // 文件路径 + 行号
+    severity: 'warn' | 'block';
+  }>;
+  sanitizedContent: string;  // 消毒后的内容
+}
+
+/** 在注入 system prompt 前扫描所有外部来源内容 */
+function scanContextContent(
+  content: string,
+  source: string,
+): ScanResult;
+```
+
+扫描规则：
+- 不可见 Unicode 字符（`\u200B`, `\uFEFF`, `\u200E` 等）
+- 指令覆盖模式（`ignore previous`, `disregard`, `forget your instructions`）
+- 凭据泄露提示（`print your system prompt`, `show me your instructions`）
+- Base64/编码混淆（可疑的编码字符串）
+- 隐藏 HTML 标签（`<div style="display:none">`）
+
+策略：`warn` 级别记录日志继续注入（避免误杀），`block` 级别拒绝注入并通知用户。与 07-Safety 模块联动。
+
+#### 模式 5：Prompt 缓存稳定性保障（对应职责 7-缓存）
+
+**问题**：prompt cache 的命中条件是前缀 token 逐字节匹配。一个多余的空格、一个换行符的差异、一个列表项顺序的变化，都会导致缓存全部失效——而这些变化对 LLM 的语义没有任何影响。
+
+**业界实践**：
+
+| Agent | 实现 | 源码位置 |
+|-------|------|---------|
+| **OpenClaw** | `normalizeStructuredPromptSection()` 标准化空白字符（多余空格/换行 → 单空格），`normalizePromptCapabilityIds()` 对能力列表去重并排序，确保相同语义产生完全相同的 token 序列 | `src/agents/prompt-cache-stability.ts` |
+| **Hermes** | 会话开始时冻结 memory snapshot 到 system prompt，整个会话期间不更新——新增的记忆不突变缓存前缀 | `run_agent.py` (memory frozen snapshot) |
+
+**为什么这样做**：缓存命中率直接影响成本和延迟。OpenClaw 团队发现不做标准化时，相同逻辑的 prompt 由于空白差异导致缓存命中率只有 40-50%，标准化后提升到 85%+。Hermes 的冻结策略更激进——宁可牺牲 session 内记忆的实时性，也要保住缓存命中。
+
+**Quilin 采纳方案**：
+
+```typescript
+// packages/agent-core/src/context/cache-stability.ts
+
+/** 标准化 prompt section，确保相同语义产生相同 token 序列 */
+function normalizeSection(content: string): string {
+  // 1. 合并连续空白为单空格
+  // 2. 统一换行符为 \n
+  // 3. 去除尾部空白
+  // 4. 列表项按字母序排序（工具列表、能力列表等）
+}
+
+/** 比较两个 section 是否语义等价（用于判断是否需要更新缓存） */
+function sectionSemanticEqual(a: string, b: string): boolean;
+```
+
+与 Hermes 的冻结策略结合：每个 volatile section 在 session 级别设置 `updateFrequency`（`per_turn` / `per_session` / `on_change`），`per_session` 的 section（如 memory snapshot）在 session 内冻结，最大化缓存稳定性。
+
+#### 模式 6：工具行为指导与 Tool Schema 分离（对应职责 1-收集 + 4-排布）
+
+**问题**：LLM 的 tool use 有两层信息——JSON schema（告诉模型工具的参数格式）和行为指导（告诉模型什么时候该用、怎么用好）。混在一起会导致 schema 膨胀，而且行为指导频繁变化会破坏 schema 的缓存。
+
+**业界实践**：
+
+| Agent | 实现 | 源码位置 |
+|-------|------|---------|
+| **Claude Code** | Tool JSON schema 通过 API `tools` 参数传入（由 Vercel AI SDK 处理），行为指导（何时用、注意事项）写在 system prompt 的静态段 `getUsingYourToolsSection()` 中 | `src/constants/prompts.ts` |
+| **Hermes** | `TOOL_USE_ENFORCEMENT_GUIDANCE`（强制模型调用工具而非口头描述）、`SKILLS_GUIDANCE`（技能使用最佳实践）、`SESSION_SEARCH_GUIDANCE`（搜索策略）分别作为独立段注入 system prompt；Tool schema 走 API 的 `tools` 字段 | `agent/prompt_builder.py` |
+| **OpenClaw** | `tools.md` 作为 order=50 的上下文文件注入，内容是工具使用策略；实际的 tool definition 通过 `@modelcontextprotocol/sdk` 的 tool API 注册 | `src/agents/system-prompt.ts` |
+
+**为什么这样做**：
+
+1. **缓存友好**——tool schema 通过 API 参数传入，走独立的缓存通道；行为指导写在静态 system prompt 段里，也能被缓存。二者解耦后各自稳定
+2. **Token 效率**——schema 本身只是结构化描述，行为指导才是影响模型决策的关键。分开后可以对行为指导做更精细的 token 预算控制
+3. **模型适配**——不同模型对 tool use 的遵从度不同（如 Hermes 发现 GPT 系列需要额外的 `<mandatory_tool_use>` 标签），行为指导段可以按模型定制而不影响 schema
+
+**Quilin 采纳方案**：
+
+- Tool JSON schema 通过 Vercel AI SDK v6 的 `tools` 参数注册，不进入 system prompt
+- 工具行为指导作为 `PromptSection { name: "tool-guidance", order: 50, volatile: false }` 注入静态 system prompt
+- 模型特异的工具使用强化指令由 `ModelPromptAdapter.getModelSections()` 提供
+
+### 2.6 提示词工程模式总览与上下文职责映射
+
+| 模式 | 解决的问题 | 对应上下文职责 | 取长于 |
+|------|-----------|---------------|--------|
+| 静态/动态缓存边界 | 系统提示重复发送的成本 | 7-缓存 | Claude Code, OpenClaw, Hermes |
+| 分段式模块化组装 | 单体 prompt 的可维护性 | 4-排布 + 5-预算 | Claude Code, OpenClaw, Hermes, Codex |
+| 模型特异性适配 | 不同 LLM 的行为差异 | 1-收集 + 4-排布 | Hermes, Codex, OpenClaw |
+| 注入安全扫描 | 外部文件的 prompt injection | 2-筛选 | Hermes, OpenClaw |
+| 缓存稳定性保障 | 无意义变化导致缓存失效 | 7-缓存 | OpenClaw, Hermes |
+| 工具指导/Schema 分离 | Tool 信息的组织与缓存 | 1-收集 + 4-排布 | Claude Code, Hermes, OpenClaw |
 
 ---
 
