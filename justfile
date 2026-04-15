@@ -49,6 +49,14 @@ clean:
 dev:
     LOG_LEVEL=debug QUILIN_ENV=dev QUILIN_RUNTIME_MODE=repl bun --env-file=.env --watch packages/agent-core/src/index.ts
 
+# 恢复最近会话（前台，带 watch）
+dev-resume:
+    LOG_LEVEL=debug QUILIN_ENV=dev QUILIN_RUNTIME_MODE=repl bun --env-file=.env --watch packages/agent-core/src/index.ts --resume-latest
+
+# 恢复最近会话（前台）
+resume:
+    LOG_LEVEL=debug QUILIN_ENV=dev QUILIN_RUNTIME_MODE=repl bun --env-file=.env packages/agent-core/src/index.ts --resume-latest
+
 # 测试
 test:
     cd packages/agent-core && QUILIN_ENV=test bun run vitest run
