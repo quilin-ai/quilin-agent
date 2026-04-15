@@ -19,7 +19,7 @@ start:
     @echo '{"ts":"'"$(date -Iseconds)"'","level":"info","service":"quilin","msg":"Starting all services..."}'
     @nohup sh -c 'cd providers/memory && LOG_LEVEL=debug QUILIN_ENV=dev uv run python -m omnimem' > .logs/omnimem.log 2>&1 &
     @sleep 2
-    @nohup env LOG_LEVEL=debug QUILIN_ENV=dev bun run packages/agent-core/src/index.ts > .logs/agent-core.log 2>&1 &
+    @nohup env LOG_LEVEL=debug QUILIN_ENV=dev QUILIN_RUNTIME_MODE=service bun run packages/agent-core/src/index.ts > .logs/agent-core.log 2>&1 &
     @echo '{"ts":"'"$(date -Iseconds)"'","level":"info","service":"quilin","msg":"All services started. Use Monitor to watch."}'
 
 # 一键停止全部
@@ -47,7 +47,7 @@ clean:
 
 # 开发模式（前台，直接看日志）
 dev:
-    cd packages/agent-core && LOG_LEVEL=debug QUILIN_ENV=dev bun run --watch src/index.ts
+    cd packages/agent-core && LOG_LEVEL=debug QUILIN_ENV=dev QUILIN_RUNTIME_MODE=repl bun run --watch src/index.ts
 
 # 测试
 test:
@@ -92,12 +92,12 @@ fmt-rs:
 # ============ 生产 ============
 
 prod:
-    LOG_LEVEL=info QUILIN_ENV=prod bun run packages/agent-core/dist/index.js
+    LOG_LEVEL=info QUILIN_ENV=prod QUILIN_RUNTIME_MODE=service bun run packages/agent-core/dist/index.js
 
 # ============ 内部 ============
 
 _start-core:
-    LOG_LEVEL=debug QUILIN_ENV=dev bun run packages/agent-core/src/index.ts
+    LOG_LEVEL=debug QUILIN_ENV=dev QUILIN_RUNTIME_MODE=service bun run packages/agent-core/src/index.ts
 
 _start-memory:
     cd providers/memory && LOG_LEVEL=debug QUILIN_ENV=dev uv run python -m omnimem

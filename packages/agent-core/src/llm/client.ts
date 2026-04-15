@@ -57,8 +57,7 @@ function mapUsage(
 /**
  * 基于 Vercel AI SDK 的 LLMClient 实现（非流式）
  *
- * 直接传 LanguageModelV1 给 generateText()，
- * AI SDK 内置 V1→V2 compat shim 自动处理适配。
+ * 直接传 LanguageModel 给 generateText()。
  */
 export class VercelLLMClient implements LLMClient {
 	constructor(private readonly model: LanguageModel) {}
@@ -91,7 +90,7 @@ export class VercelLLMClient implements LLMClient {
  */
 export class StreamingLLMClient implements LLMClient {
 	constructor(
-		private readonly model: LanguageModelV1,
+		private readonly model: LanguageModel,
 		private readonly onChunk?: (chunk: string) => void,
 	) {}
 

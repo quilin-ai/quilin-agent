@@ -1,4 +1,4 @@
-import { stdin, stdout } from "node:process";
+import { stderr, stdin } from "node:process";
 import * as readline from "node:readline/promises";
 import { StreamingLLMClient } from "./llm/client.js";
 import type { createProvider } from "./llm/provider.js";
@@ -24,17 +24,17 @@ interface ReplOptions {
 export async function startRepl(options: ReplOptions): Promise<void> {
 	const { provider, modelId } = options;
 
-	stdout.write("\n🐉 Quilin Agent v0.0.1 (DeepSeek)\n");
-	stdout.write("Type your message, or /exit to quit.\n\n");
+	stderr.write("\n🐉 Quilin Agent v0.0.1 (DeepSeek)\n");
+	stderr.write("Type your message, or /exit to quit.\n\n");
 
-	const rl = readline.createInterface({ input: stdin, output: stdout });
+	const rl = readline.createInterface({ input: stdin, output: stderr });
 
 	const messages: Message[] = [
 		{ role: "system", content: DEFAULT_SYSTEM_PROMPT },
 	];
 
 	const llm = new StreamingLLMClient(provider(modelId), (chunk) => {
-		stdout.write(chunk);
+		stderr.write(chunk);
 	});
 
 	while (true) {
@@ -46,19 +46,19 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 		}
 
 		if (trimmed === "/exit" || trimmed === "/quit") {
-			stdout.write("\nBye! 🐉\n");
+			stderr.write("\nBye! 🐉\n");
 			rl.close();
 			return;
 		}
 
 		if (trimmed === "/clear") {
 			messages.length = 1;
-			stdout.write("Conversation cleared.\n\n");
+			stderr.write("Conversation cleared.\n\n");
 			continue;
 		}
 
 		messages.push({ role: "user", content: trimmed });
-		stdout.write("\n");
+		stderr.write("\n");
 
 		try {
 			const response = await runAgentLoop(
@@ -70,10 +70,10 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 			);
 
 			messages.push({ role: "assistant", content: response });
-			stdout.write("\n\n");
+			stderr.write("\n\n");
 		} catch (err) {
 			logger.error({ err }, "REPL: LLM call failed");
-			stdout.write("\n[Error: LLM call failed. Check logs for details.]\n\n");
+			stderr.write("\n[Error: LLM call failed. Check logs for details.]\n\n");
 			messages.pop();
 		}
 	}

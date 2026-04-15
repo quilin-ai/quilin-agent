@@ -32,7 +32,7 @@ describe("main", () => {
 		vi.clearAllMocks();
 	});
 
-	it("verifies the llm connection before starting the repl", async () => {
+	it("starts the repl only in repl mode", async () => {
 		const model = {} as LanguageModel;
 		const provider = vi.fn().mockReturnValue(model);
 		vi.mocked(createProvider).mockReturnValue(provider);
@@ -47,7 +47,7 @@ describe("main", () => {
 
 		const { main } = await import("./index.js");
 
-		await main();
+		await main({ runtimeMode: "repl" });
 
 		expect(logger.info).toHaveBeenNthCalledWith(
 			1,
@@ -77,10 +77,50 @@ describe("main", () => {
 			},
 			"LLM connection verified",
 		);
-		expect(logger.info).toHaveBeenNthCalledWith(5, "Starting CLI REPL...");
+		expect(logger.info).toHaveBeenNthCalledWith(
+			5,
+			{ mode: "repl" },
+			"Starting CLI REPL...",
+		);
 		expect(startRepl).toHaveBeenCalledWith({
 			provider,
 			modelId: "deepseek-chat",
 		});
+	});
+
+	it("stays in service mode without entering the repl", async () => {
+		const model = {} as LanguageModel;
+		const provider = vi.fn().mockReturnValue(model);
+		const serviceRunner = vi.fn().mockResolvedValue(undefined);
+		vi.mocked(createProvider).mockReturnValue(provider);
+		vi.mocked(getDefaultModel).mockReturnValue("deepseek-chat");
+		vi.mocked(generateText).mockResolvedValue({
+			text: "Quilin Agent online.",
+			usage: {
+				inputTokens: 21,
+				outputTokens: 6,
+			},
+		} as Awaited<ReturnType<typeof generateText>>);
+
+		const { main } = await import("./index.js");
+
+		await main({ runtimeMode: "service", serviceRunner });
+
+		expect(logger.info).toHaveBeenNthCalledWith(
+			4,
+			{
+				response: "Quilin Agent online.",
+				inputTokens: 21,
+				outputTokens: 6,
+			},
+			"LLM connection verified",
+		);
+		expect(logger.info).toHaveBeenNthCalledWith(
+			5,
+			{ mode: "service" },
+			"Starting agent-core service loop...",
+		);
+		expect(serviceRunner).toHaveBeenCalledOnce();
+		expect(startRepl).not.toHaveBeenCalled();
 	});
 });

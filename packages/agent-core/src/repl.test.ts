@@ -32,17 +32,20 @@ vi.mock("./llm/client.js", () => ({
 }));
 
 describe("startRepl", () => {
-	const writeSpy = vi.spyOn(process.stdout, "write");
+	const stdoutWriteSpy = vi.spyOn(process.stdout, "write");
+	const stderrWriteSpy = vi.spyOn(process.stderr, "write");
 	const capturedMessages: unknown[] = [];
 
 	beforeEach(() => {
 		vi.clearAllMocks();
 		capturedMessages.length = 0;
-		writeSpy.mockImplementation(() => true);
+		stdoutWriteSpy.mockImplementation(() => true);
+		stderrWriteSpy.mockImplementation(() => true);
 	});
 
 	afterEach(() => {
-		writeSpy.mockReset();
+		stdoutWriteSpy.mockReset();
+		stderrWriteSpy.mockReset();
 	});
 
 	it("shows welcome text and exits on /exit", async () => {
@@ -55,18 +58,22 @@ describe("startRepl", () => {
 			modelId: "deepseek-chat",
 		});
 
-		expect(mockCreateInterface).toHaveBeenCalled();
+		expect(mockCreateInterface).toHaveBeenCalledWith({
+			input: process.stdin,
+			output: process.stderr,
+		});
 		expect(mockStreamingClient).toHaveBeenCalledWith(
 			"model-instance",
 			expect.any(Function),
 		);
-		expect(writeSpy).toHaveBeenCalledWith(
+		expect(stderrWriteSpy).toHaveBeenCalledWith(
 			"\n🐉 Quilin Agent v0.0.1 (DeepSeek)\n",
 		);
-		expect(writeSpy).toHaveBeenCalledWith(
+		expect(stderrWriteSpy).toHaveBeenCalledWith(
 			"Type your message, or /exit to quit.\n\n",
 		);
-		expect(writeSpy).toHaveBeenCalledWith("\nBye! 🐉\n");
+		expect(stderrWriteSpy).toHaveBeenCalledWith("\nBye! 🐉\n");
+		expect(stdoutWriteSpy).not.toHaveBeenCalled();
 		expect(mockClose).toHaveBeenCalled();
 	});
 
@@ -97,7 +104,7 @@ describe("startRepl", () => {
 			expect.objectContaining({ role: "system" }),
 			{ role: "user", content: "after clear" },
 		]);
-		expect(writeSpy).toHaveBeenCalledWith("Conversation cleared.\n\n");
+		expect(stderrWriteSpy).toHaveBeenCalledWith("Conversation cleared.\n\n");
 	});
 
 	it("rolls back the failed user message", async () => {
@@ -128,7 +135,7 @@ describe("startRepl", () => {
 			{ role: "user", content: "second" },
 		]);
 		expect(mockLoggerError).toHaveBeenCalled();
-		expect(writeSpy).toHaveBeenCalledWith(
+		expect(stderrWriteSpy).toHaveBeenCalledWith(
 			"\n[Error: LLM call failed. Check logs for details.]\n\n",
 		);
 	});

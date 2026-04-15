@@ -13,11 +13,60 @@ export * from "./tools/mcp-client.js";
 export * from "./state/checkpoint.js";
 export * from "./repl.js";
 
-export async function main(): Promise<void> {
+const HEARTBEAT_INTERVAL_MS = 60_000;
+
+export type RuntimeMode = "repl" | "service";
+
+export interface MainOptions {
+	readonly runtimeMode?: RuntimeMode;
+	readonly serviceRunner?: () => Promise<void>;
+}
+
+function getTokenCount(
+	usage:
+		| {
+				promptTokens?: number;
+				completionTokens?: number;
+				inputTokens?: number;
+				outputTokens?: number;
+		  }
+		| undefined,
+	key: "input" | "output",
+) {
+	if (key === "input") {
+		return usage?.promptTokens ?? usage?.inputTokens ?? 0;
+	}
+
+	return usage?.completionTokens ?? usage?.outputTokens ?? 0;
+}
+
+function resolveRuntimeMode(runtimeMode?: RuntimeMode): RuntimeMode {
+	if (runtimeMode) {
+		return runtimeMode;
+	}
+
+	const modeFromEnv = process.env.QUILIN_RUNTIME_MODE;
+	if (modeFromEnv === "repl" || modeFromEnv === "service") {
+		return modeFromEnv;
+	}
+
+	return process.stdin.isTTY && process.stderr.isTTY ? "repl" : "service";
+}
+
+async function runServiceLoop(): Promise<void> {
+	await new Promise<void>(() => {
+		setInterval(() => {
+			logger.debug("agent-core heartbeat");
+		}, HEARTBEAT_INTERVAL_MS);
+	});
+}
+
+export async function main(options: MainOptions = {}): Promise<void> {
 	logger.info({ version: "0.0.1" }, "Quilin Agent starting");
 
 	const provider = createProvider();
 	const modelId = getDefaultModel();
+	const runtimeMode = resolveRuntimeMode(options.runtimeMode);
 
 	logger.info(
 		{ provider: "deepseek", model: modelId },
@@ -36,8 +85,8 @@ export async function main(): Promise<void> {
 		logger.info(
 			{
 				response: text.trim(),
-				inputTokens: usage.promptTokens,
-				outputTokens: usage.completionTokens,
+				inputTokens: getTokenCount(usage, "input"),
+				outputTokens: getTokenCount(usage, "output"),
 			},
 			"LLM connection verified",
 		);
@@ -46,8 +95,14 @@ export async function main(): Promise<void> {
 		process.exit(1);
 	}
 
-	logger.info("Starting CLI REPL...");
-	await startRepl({ provider, modelId });
+	if (runtimeMode === "repl") {
+		logger.info({ mode: "repl" }, "Starting CLI REPL...");
+		await startRepl({ provider, modelId });
+		return;
+	}
+
+	logger.info({ mode: "service" }, "Starting agent-core service loop...");
+	await (options.serviceRunner ?? runServiceLoop)();
 }
 
 if (import.meta.main) {
