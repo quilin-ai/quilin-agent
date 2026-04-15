@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import { BasicContextManager } from "./context/manager.js";
+import type { ToolWithMetadata } from "./tools/tool-metadata.js";
 
 const mockQuestion = vi.fn();
 const mockClose = vi.fn();
@@ -13,6 +15,32 @@ const mockStreamingClient = vi.fn();
 const mockCheckpointLoad = vi.fn();
 const mockCheckpointSave = vi.fn();
 const mockCheckpointConstructor = vi.fn();
+const mockCreateBuiltinTools = vi.fn();
+const mockRegistryRegisterBuiltin = vi.fn();
+const mockRegistryRegisterImplementation = vi.fn();
+const mockRegistryRegister = vi.fn();
+const mockRegistryGetAllTools = vi.fn();
+const mockRegistryGetToolDescriptors = vi.fn();
+const mockRegistryDisconnectAll = vi.fn();
+const mockRegistryConstructor = vi.fn();
+
+const registryBuiltinTools: ToolWithMetadata[] = [];
+const registryServerTools: ToolWithMetadata[] = [];
+
+function createToolWithMetadata(
+	name: string,
+	description: string,
+	riskLevel: ToolWithMetadata["riskLevel"] = "read",
+): ToolWithMetadata {
+	return {
+		name,
+		description,
+		parameters: z.object({}),
+		execute: vi.fn(),
+		category: "programmatic",
+		riskLevel,
+	};
+}
 
 class MockStreamingLLMClient {
 	chat = vi.fn();
@@ -29,6 +57,18 @@ class MockSQLiteCheckpoint {
 
 	constructor(...args: unknown[]) {
 		mockCheckpointConstructor(...args);
+	}
+}
+
+class MockMCPRegistry {
+	registerBuiltin = mockRegistryRegisterBuiltin;
+	register = mockRegistryRegister;
+	getAllTools = mockRegistryGetAllTools;
+	getToolDescriptors = mockRegistryGetToolDescriptors;
+	disconnectAll = mockRegistryDisconnectAll;
+
+	constructor(...args: unknown[]) {
+		mockRegistryConstructor(...args);
 	}
 }
 
@@ -54,6 +94,14 @@ vi.mock("./state/checkpoint.js", () => ({
 	SQLiteCheckpoint: MockSQLiteCheckpoint,
 }));
 
+vi.mock("./tools/builtin/index.js", () => ({
+	createBuiltinTools: mockCreateBuiltinTools,
+}));
+
+vi.mock("./tools/registry.js", () => ({
+	MCPRegistry: MockMCPRegistry,
+}));
+
 describe("startRepl", () => {
 	const stdoutWriteSpy = vi.spyOn(process.stdout, "write");
 	const stderrWriteSpy = vi.spyOn(process.stderr, "write");
@@ -63,11 +111,43 @@ describe("startRepl", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		capturedMessages.length = 0;
+		registryBuiltinTools.length = 0;
+		registryServerTools.length = 0;
 		randomUUIDSpy.mockReturnValue("generated-session-id");
 		mockCheckpointLoad.mockResolvedValue(null);
 		mockCheckpointSave.mockResolvedValue(undefined);
 		stdoutWriteSpy.mockImplementation(() => true);
 		stderrWriteSpy.mockImplementation(() => true);
+		mockCreateBuiltinTools.mockReturnValue([
+			createToolWithMetadata("file_read", "Read a file with numbered lines."),
+			createToolWithMetadata("shell_exec", "Execute a shell command.", "exec"),
+		]);
+		mockRegistryRegisterBuiltin.mockImplementation(
+			(tools: readonly ToolWithMetadata[]) => {
+				registryBuiltinTools.push(...tools);
+			},
+		);
+		mockRegistryRegister.mockImplementation(async (entry: unknown) => {
+			const tools = await mockRegistryRegisterImplementation(entry);
+			registryServerTools.push(...tools);
+			return tools;
+		});
+		mockRegistryRegisterImplementation.mockResolvedValue([]);
+		mockRegistryGetAllTools.mockImplementation(() => [
+			...registryBuiltinTools,
+			...registryServerTools,
+		]);
+		mockRegistryGetToolDescriptors.mockImplementation(() =>
+			[...registryBuiltinTools, ...registryServerTools]
+				.map((tool) => ({
+					name: tool.name,
+					description: tool.description,
+					category: tool.category,
+					riskLevel: tool.riskLevel,
+				}))
+				.sort((left, right) => left.name.localeCompare(right.name)),
+		);
+		mockRegistryDisconnectAll.mockResolvedValue(undefined);
 	});
 
 	afterEach(() => {
@@ -78,7 +158,7 @@ describe("startRepl", () => {
 
 	it("shows welcome text and exits on /exit", async () => {
 		mockQuestion.mockResolvedValueOnce("/exit");
-		const tools = [{ name: "memory_recall" }];
+		const tools = [{ name: "memory_recall", description: "Recall memory" }];
 
 		const { startRepl } = await import("./repl.js");
 
@@ -111,12 +191,31 @@ describe("startRepl", () => {
 		expect(mockCheckpointConstructor).toHaveBeenCalledWith({
 			sessionId: "generated-session-id",
 		});
+		expect(mockCreateBuiltinTools).toHaveBeenCalledTimes(1);
+		expect(mockRegistryRegisterBuiltin).toHaveBeenNthCalledWith(
+			1,
+			expect.arrayContaining([
+				expect.objectContaining({ name: "file_read" }),
+				expect.objectContaining({ name: "shell_exec", riskLevel: "exec" }),
+			]),
+		);
+		expect(mockRegistryRegisterBuiltin).toHaveBeenNthCalledWith(
+			2,
+			expect.arrayContaining([
+				expect.objectContaining({
+					name: "memory_recall",
+					category: "programmatic",
+					riskLevel: "read",
+				}),
+			]),
+		);
+		expect(mockRegistryDisconnectAll).toHaveBeenCalledTimes(1);
 		expect(mockCheckpointSave).toHaveBeenCalledWith({
 			messages: [
 				expect.objectContaining({
 					role: "system",
 					content: expect.stringMatching(
-						/You are Quilin Agent[\s\S]*memory_store[\s\S]*memory_recall/,
+						/You are Quilin Agent[\s\S]*## Programmatic Tools[\s\S]*file_read[\s\S]*memory_recall/,
 					),
 				}),
 			],
@@ -143,7 +242,7 @@ describe("startRepl", () => {
 		await startRepl({
 			provider: vi.fn().mockReturnValue("model-instance"),
 			modelId: "deepseek-chat",
-			tools: [{ name: "memory_recall" }] as never,
+			tools: [{ name: "memory_recall", description: "Recall memory" }] as never,
 		});
 
 		expect(mockRunAgentLoop).toHaveBeenCalledTimes(2);
@@ -151,7 +250,15 @@ describe("startRepl", () => {
 			1,
 			expect.objectContaining({
 				context: expect.any(BasicContextManager),
-				tools: [{ name: "memory_recall" }],
+				tools: expect.arrayContaining([
+					expect.objectContaining({ name: "file_read" }),
+					expect.objectContaining({ name: "shell_exec" }),
+					expect.objectContaining({
+						name: "memory_recall",
+						category: "programmatic",
+						riskLevel: "read",
+					}),
+				]),
 			}),
 			expect.any(Array),
 		);
@@ -191,7 +298,7 @@ describe("startRepl", () => {
 		await startRepl({
 			provider: vi.fn().mockReturnValue("model-instance"),
 			modelId: "deepseek-chat",
-			tools: [{ name: "memory_recall" }] as never,
+			tools: [{ name: "memory_recall", description: "Recall memory" }] as never,
 		});
 
 		expect(capturedMessages[1]).toEqual([
@@ -207,6 +314,7 @@ describe("startRepl", () => {
 		expect(stderrWriteSpy).toHaveBeenCalledWith(
 			"\n[Error: LLM call failed. Check logs for details.]\n\n",
 		);
+		expect(mockRegistryDisconnectAll).toHaveBeenCalledTimes(1);
 	});
 
 	it("restores a saved session when sessionId is provided", async () => {
@@ -233,7 +341,7 @@ describe("startRepl", () => {
 			provider: vi.fn().mockReturnValue("model-instance"),
 			modelId: "deepseek-chat",
 			sessionId: "resume-session",
-			tools: [{ name: "memory_recall" }] as never,
+			tools: [{ name: "memory_recall", description: "Recall memory" }] as never,
 		});
 
 		expect(mockCheckpointConstructor).toHaveBeenCalledWith({
@@ -252,5 +360,54 @@ describe("startRepl", () => {
 			{ role: "assistant", content: "after" },
 			{ role: "user", content: "next" },
 		]);
+		expect(mockRegistryDisconnectAll).toHaveBeenCalledTimes(1);
+	});
+
+	it("registers configured MCP servers before starting the REPL", async () => {
+		mockQuestion.mockResolvedValueOnce("/exit");
+		mockRegistryRegisterImplementation.mockResolvedValueOnce([
+			createToolWithMetadata(
+				"omnimem/memory_store",
+				"Store memory in the MCP server.",
+			),
+		]);
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: vi.fn().mockReturnValue("model-instance"),
+			modelId: "deepseek-chat",
+			mcpServers: [
+				{
+					id: "omnimem",
+					namespace: "omnimem",
+					config: {
+						command: "uv",
+						args: ["run", "python", "-m", "omnimem"],
+					},
+				},
+			],
+		});
+
+		expect(mockRegistryRegister).toHaveBeenCalledWith({
+			id: "omnimem",
+			namespace: "omnimem",
+			config: {
+				command: "uv",
+				args: ["run", "python", "-m", "omnimem"],
+			},
+		});
+		expect(mockCheckpointSave).toHaveBeenCalledWith({
+			messages: [
+				expect.objectContaining({
+					role: "system",
+					content: expect.stringContaining("omnimem/memory_store"),
+				}),
+			],
+			isTerminal: true,
+			turnCount: 0,
+			createdAt: expect.any(String),
+			lastActiveAt: expect.any(String),
+		});
 	});
 });
