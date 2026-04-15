@@ -97,7 +97,7 @@ describe("startRepl", () => {
 			expect.any(Function),
 		);
 		expect(stderrWriteSpy).toHaveBeenCalledWith(
-			"\n🐉 Quilin Agent v0.0.1 (DeepSeek)\n",
+			"\n🐉 Quilin Agent v0.0.3 (DeepSeek)\n",
 		);
 		expect(stderrWriteSpy).toHaveBeenCalledWith(
 			"Session: generated-session-id (new)\n",

@@ -17,8 +17,12 @@ import type { Tool } from "./tools/types.js";
 const DEFAULT_SYSTEM_PROMPT_SOURCE = createSystemContextSource(
 	`You are Quilin Agent (麒麟), a helpful AI assistant.
 Be concise, accurate, and friendly. Answer in the same language as the user.
-When the user shares stable identity details, preferences, or long-lived facts, store them with memory_store.
-When the user asks what you remember about them, or asks about past identity/preferences, call memory_recall before answering if helpful.`,
+
+Memory guidelines:
+- STORE: When the user shares identity details, preferences, or long-lived facts, call memory_store immediately. Examples: name, role, language preferences, project context.
+- RECALL: At the start of a new conversation or when the user greets you, call memory_recall with a broad query like "用户" or "user" to check if you know this person.
+- RECALL: When the user asks what you remember, or references past context, call memory_recall with relevant keywords before answering.
+- Recall queries can be short Chinese phrases (e.g. "名字", "偏好") — the search supports fuzzy matching.`,
 );
 
 const DEFAULT_INFERENCE_CONFIG: InferenceConfig = {
@@ -62,7 +66,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 	const restoredState =
 		sessionId == null ? null : await checkpoint.load(resolvedSessionId);
 
-	stderr.write("\n🐉 Quilin Agent v0.0.1 (DeepSeek)\n");
+	stderr.write("\n🐉 Quilin Agent v0.0.3 (DeepSeek)\n");
 	stderr.write(
 		`Session: ${resolvedSessionId} (${restoredState == null ? "new" : "restored"})\n`,
 	);
