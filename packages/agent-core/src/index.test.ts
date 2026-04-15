@@ -13,6 +13,7 @@ vi.mock("./logger.js", () => ({
 	configureLogger: vi.fn(),
 	logger: {
 		info: vi.fn(),
+		warn: vi.fn(),
 		fatal: vi.fn(),
 	},
 }));
@@ -24,6 +25,16 @@ vi.mock("./llm/provider.js", () => ({
 
 vi.mock("./repl.js", () => ({
 	startRepl: vi.fn(),
+}));
+
+const { mockCheckpointList } = vi.hoisted(() => ({
+	mockCheckpointList: vi.fn(),
+}));
+
+vi.mock("./state/checkpoint.js", () => ({
+	SQLiteCheckpoint: class MockSQLiteCheckpoint {
+		list = mockCheckpointList;
+	},
 }));
 
 const { mockConnect, mockDisconnect } = vi.hoisted(() => ({
@@ -47,6 +58,8 @@ describe("main", () => {
 		vi.clearAllMocks();
 		mockConnect.mockReset();
 		mockDisconnect.mockReset();
+		mockCheckpointList.mockReset();
+		process.argv = ["bun", "packages/agent-core/src/index.ts"];
 	});
 
 	it("starts the repl only in repl mode", async () => {
@@ -149,5 +162,73 @@ describe("main", () => {
 		expect(serviceRunner).toHaveBeenCalledOnce();
 		expect(startRepl).not.toHaveBeenCalled();
 		expect(mockConnect).not.toHaveBeenCalled();
+	});
+
+	it("passes the explicit sessionId to the repl when --resume is provided", async () => {
+		const model = {} as LanguageModel;
+		const provider = vi.fn().mockReturnValue(model);
+		vi.mocked(createProvider).mockReturnValue(provider);
+		vi.mocked(getDefaultModel).mockReturnValue("deepseek-chat");
+		vi.mocked(generateText).mockResolvedValue({
+			text: "Quilin Agent online.",
+			usage: {
+				promptTokens: 18,
+				completionTokens: 5,
+			},
+		} as Awaited<ReturnType<typeof generateText>>);
+		mockConnect.mockResolvedValue([{ name: "memory_recall" }]);
+		mockDisconnect.mockResolvedValue(undefined);
+		process.argv = [
+			"bun",
+			"packages/agent-core/src/index.ts",
+			"--resume",
+			"session-123",
+		];
+
+		const { main } = await import("./index.js");
+
+		await main({ runtimeMode: "repl" });
+
+		expect(startRepl).toHaveBeenCalledWith({
+			provider,
+			modelId: "deepseek-chat",
+			sessionId: "session-123",
+			tools: [{ name: "memory_recall" }],
+		});
+		expect(mockCheckpointList).not.toHaveBeenCalled();
+	});
+
+	it("loads the newest session when --resume-latest is provided", async () => {
+		const model = {} as LanguageModel;
+		const provider = vi.fn().mockReturnValue(model);
+		vi.mocked(createProvider).mockReturnValue(provider);
+		vi.mocked(getDefaultModel).mockReturnValue("deepseek-chat");
+		vi.mocked(generateText).mockResolvedValue({
+			text: "Quilin Agent online.",
+			usage: {
+				promptTokens: 18,
+				completionTokens: 5,
+			},
+		} as Awaited<ReturnType<typeof generateText>>);
+		mockConnect.mockResolvedValue([{ name: "memory_recall" }]);
+		mockDisconnect.mockResolvedValue(undefined);
+		mockCheckpointList.mockResolvedValue(["latest-session", "older-session"]);
+		process.argv = [
+			"bun",
+			"packages/agent-core/src/index.ts",
+			"--resume-latest",
+		];
+
+		const { main } = await import("./index.js");
+
+		await main({ runtimeMode: "repl" });
+
+		expect(mockCheckpointList).toHaveBeenCalledTimes(1);
+		expect(startRepl).toHaveBeenCalledWith({
+			provider,
+			modelId: "deepseek-chat",
+			sessionId: "latest-session",
+			tools: [{ name: "memory_recall" }],
+		});
 	});
 });

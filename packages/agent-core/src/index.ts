@@ -5,6 +5,7 @@ import { generateText } from "ai";
 import { createProvider, getDefaultModel } from "./llm/provider.js";
 import { configureLogger, logger } from "./logger.js";
 import { startRepl } from "./repl.js";
+import { SQLiteCheckpoint } from "./state/checkpoint.js";
 import { MCPClientManager } from "./tools/mcp-client.js";
 
 export * from "./context/manager.js";
@@ -23,6 +24,11 @@ export type RuntimeMode = "repl" | "service";
 export interface MainOptions {
 	readonly runtimeMode?: RuntimeMode;
 	readonly serviceRunner?: () => Promise<void>;
+}
+
+interface ReplCliOptions {
+	readonly sessionId?: string;
+	readonly resumeLatest: boolean;
 }
 
 function findWorkspaceRoot(startDir: string): string {
@@ -71,6 +77,52 @@ function resolveRuntimeMode(runtimeMode?: RuntimeMode): RuntimeMode {
 	}
 
 	return process.stdin.isTTY && process.stderr.isTTY ? "repl" : "service";
+}
+
+function parseReplCliOptions(argv: readonly string[]): ReplCliOptions {
+	let sessionId: string | undefined;
+	let resumeLatest = false;
+
+	for (let index = 0; index < argv.length; index += 1) {
+		const arg = argv[index];
+		if (arg === "--resume") {
+			const nextArg = argv[index + 1];
+			if (nextArg == null || nextArg.startsWith("--")) {
+				throw new Error("--resume requires a sessionId");
+			}
+
+			sessionId = nextArg;
+			index += 1;
+			continue;
+		}
+
+		if (arg === "--resume-latest") {
+			resumeLatest = true;
+		}
+	}
+
+	return { sessionId, resumeLatest };
+}
+
+async function resolveReplSessionId(
+	argv: readonly string[] = process.argv.slice(2),
+): Promise<string | undefined> {
+	const cliOptions = parseReplCliOptions(argv);
+	if (cliOptions.sessionId != null) {
+		return cliOptions.sessionId;
+	}
+
+	if (!cliOptions.resumeLatest) {
+		return undefined;
+	}
+
+	const sessionId = (await new SQLiteCheckpoint().list())[0];
+	if (sessionId == null) {
+		logger.warn("No saved sessions found — starting a new session");
+		return undefined;
+	}
+
+	return sessionId;
 }
 
 async function runServiceLoop(): Promise<void> {
@@ -122,6 +174,7 @@ export async function main(options: MainOptions = {}): Promise<void> {
 		const workspaceRoot = findWorkspaceRoot(
 			dirname(fileURLToPath(import.meta.url)),
 		);
+		const sessionId = await resolveReplSessionId();
 		let shouldExit = false;
 
 		logger.info({ mode: "repl" }, "Starting CLI REPL...");
@@ -135,7 +188,12 @@ export async function main(options: MainOptions = {}): Promise<void> {
 			});
 			logger.info({ toolCount: tools.length }, "OmniMem MCP connected");
 
-			await startRepl({ provider, modelId, tools });
+			await startRepl({
+				provider,
+				modelId,
+				...(sessionId == null ? {} : { sessionId }),
+				tools,
+			});
 			shouldExit = true;
 		} finally {
 			await mcpClient.disconnect().catch((err) => {
