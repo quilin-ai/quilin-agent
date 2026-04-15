@@ -156,57 +156,20 @@ a:hover {
 .hero-inner {
   max-width: var(--content-max-width);
   width: 100%;
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 4rem;
+  display: flex;
+  justify-content: center;
   align-items: center;
 }
 
-.hero-ascii {
-  font-family: var(--font-mono);
-  font-size: 0.7rem;
-  line-height: 1.3;
-  color: var(--gold);
-  white-space: pre;
-  opacity: 0;
-  animation: ascii-fade-in 1.5s ease forwards 0.3s;
-  user-select: none;
-  position: relative;
-}
-
-@keyframes ascii-fade-in {
-  from { opacity: 0; transform: translateY(12px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-/* Shimmer effect */
-.hero-ascii::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    rgba(240, 214, 138, 0.08) 50%,
-    transparent 100%
-  );
-  animation: shimmer 4s ease-in-out infinite;
-  pointer-events: none;
-}
-
-@keyframes shimmer {
-  0%, 100% { transform: translateX(-100%); }
-  50% { transform: translateX(100%); }
-}
-
 .hero-content {
+  text-align: center;
   animation: hero-content-in 1s ease forwards 0.5s;
   opacity: 0;
 }
 
 @keyframes hero-content-in {
-  from { opacity: 0; transform: translateX(20px); }
-  to { opacity: 1; transform: translateX(0); }
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .hero-title {
@@ -230,7 +193,7 @@ a:hover {
   font-size: 1.2rem;
   color: var(--text-secondary);
   max-width: 480px;
-  margin-bottom: 2rem;
+  margin: 0 auto 2rem;
   line-height: 1.8;
 }
 
@@ -242,6 +205,7 @@ a:hover {
 .hero-cta {
   display: flex;
   gap: 1rem;
+  justify-content: center;
 }
 
 .btn {
@@ -577,26 +541,6 @@ a:hover {
    ============================================================ */
 
 @media (max-width: 1024px) {
-  .hero-inner {
-    grid-template-columns: 1fr;
-    text-align: center;
-    gap: 2rem;
-  }
-
-  .hero-ascii {
-    font-size: 0.5rem;
-    margin: 0 auto;
-  }
-
-  .hero-subtitle {
-    margin-left: auto;
-    margin-right: auto;
-  }
-
-  .hero-cta {
-    justify-content: center;
-  }
-
   .arch-grid {
     flex-direction: column;
     align-items: center;
@@ -619,10 +563,6 @@ a:hover {
 
   .hero-title-cn {
     font-size: 2.5rem;
-  }
-
-  .hero-ascii {
-    display: none;
   }
 
   .proof-inner {
