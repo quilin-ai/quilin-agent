@@ -3,7 +3,7 @@ import { Client } from "@modelcontextprotocol/sdk/client";
 import {
 	StdioClientTransport,
 	type StdioServerParameters,
-} from "@modelcontextprotocol/sdk/client/stdio";
+} from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { logger } from "../logger.js";
