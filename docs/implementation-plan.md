@@ -1,6 +1,6 @@
 # Quilin Agent 实现规划
 
-> **状态**：规划中（ADR-001 已定稿，等待全部工程文档对齐后进入实施）
+> **状态**：Phase 0 已完成（v0.0.3），准备进入模块专项优化
 >
 > **语言架构**：TS (核心) + Python (ML Provider) + Rust (基础设施)，详见 [ADR-001](./adr/adr-001-core-loop-and-language.md)
 
@@ -79,22 +79,35 @@
 
 > 对应 [ADR-001 迁移路径](./adr/adr-001-core-loop-and-language.md#5-迁移路径)
 
-### Phase 0: 概念验证 (PoC)
+### Phase 0: 概念验证 (PoC) ✅ 已完成
 
 **目标**：TS Agent Loop + 1 个 Python MCP Provider，跑通端到端。
 
-**范围**：
-- TS 项目骨架（pnpm + tsconfig）
-- 极简 Agent Loop（< 200 行 TS while-loop）
+**完成标记**：v0.0.3（2026-04-15）
+
+**已交付**：
+- TS 项目骨架（pnpm + tsconfig） ✅
+- 极简 Agent Loop（< 200 行 TS while-loop） ✅
   - LLM 调用 + tool dispatch + streaming (ReadableStream) + checkpoint (SQLite)
-- 将 OmniMem recall/store 封装为 Python MCP Server
-- TS Loop 通过 MCP stdio 调用 Python OmniMem
+- OmniMem Python MCP Server（store + recall + reset） ✅
+- TS Loop 通过 MCP stdio 调用 Python OmniMem ✅
+- OmniMem SQLite 持久化 + FTS5 中文模糊检索 ✅
+- REPL 交互界面 + session restore（`just dev` / `just resume`） ✅
+- BasicContextManager 多源组装 + 优先级 + 截断 ✅
+- ToolRouter + MCP Client Bridge ✅
+- 47 TS tests + 31 Python tests 全绿 ✅
 
 **涉及工程领域**：01-LLM 接入、02-上下文、05-工具（基础）
 
 **验证**：
-- 基础验证：一个完整的 ask → recall memory → LLM → respond 流程跑通
-- **Benchmark-ready 里程碑**：能提交 SWE-bench Verified 并获得有竞争力的分数
+- 基础验证：一个完整的 ask → recall memory → LLM → respond 流程跑通 ✅
+- Benchmark harness：推迟到后续阶段
+
+**推迟到模块专项的内容**：
+- Context 动态组装 → 02-context 专项
+- InferenceConfig 动态调整 → 01-llm 专项
+- CI/CD → 工程保障任务
+- Dev Container → 有多人协作需求时再做
 
 > **为什么 Phase 0 就要 benchmark-ready？**
 >
