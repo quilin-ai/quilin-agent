@@ -1,6 +1,6 @@
 # Quilin Agent 实现规划
 
-> **状态**：Phase 0 已完成（v0.0.3），准备进入模块专项优化
+> **状态**：Iter A 已完成（v0.1.0-iter-a），准备进入 Iter B（工具系统）
 >
 > **语言架构**：TS (核心) + Python (ML Provider) + Rust (基础设施)，详见 [ADR-001](./adr/adr-001-core-loop-and-language.md)
 
@@ -12,6 +12,7 @@
 - ~100 个上游子模块已配置
 - 核心架构决策已定稿（ADR-001）
 - Phase 0 已完成（v0.0.3）：Agent Loop + OmniMem MCP + REPL + 78 tests
+- Iter A 已完成（v0.1.0-iter-a）：上下文工程 + 提示词工程（PromptBuilder, ContextAssembler, InjectionScanner, TemporalAwareness, MemoryBridge）+ 91 tests
 
 ---
 
