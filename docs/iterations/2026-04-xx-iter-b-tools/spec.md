@@ -73,7 +73,7 @@ packages/agent-core/src/context/
 - `tools/types.ts` 的 `Tool` 接口未被修改
 - `loop.ts` 的 `AgentLoopConfig` 未被修改
 - `mcp-client.ts` 的公共 API 未被修改
-- 现有测试全部通过（91/91，mcp-client 的 2 个 flaky 除外）
+- 现有测试通过：89/91（mcp-client 的 2 个已知 flaky 测试因 OmniMem 残留数据偶发失败，非回归）
 
 ### Step 1: JSON Schema → Zod 增强
 

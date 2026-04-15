@@ -5,12 +5,12 @@ import {
 	type StdioServerParameters,
 } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { z } from "zod";
 import {
 	getLoggerRuntimeMode,
 	type LoggerRuntimeMode,
 	logger,
 } from "../logger.js";
+import { jsonSchemaToZod } from "./schema-converter.js";
 import type { Tool } from "./types.js";
 
 const CONNECT_TIMEOUT_MS = 5_000;
@@ -111,28 +111,6 @@ function formatCallToolResult(result: CallToolResult): MCPToolCallResult {
 	};
 }
 
-function jsonSchemaToZodObject(schema: {
-	type: "object";
-	properties?: Record<string, { type?: string }>;
-	required?: string[];
-}) {
-	const required = new Set(schema.required ?? []);
-	const shape = Object.fromEntries(
-		Object.entries(schema.properties ?? {}).map(([name, propertySchema]) => {
-			if (propertySchema.type !== "string") {
-				throw new Error(
-					`Unsupported MCP schema type for "${name}": ${propertySchema.type ?? "unknown"}`,
-				);
-			}
-
-			const zodSchema = required.has(name) ? z.string() : z.string().optional();
-			return [name, zodSchema];
-		}),
-	);
-
-	return z.object(shape);
-}
-
 export class MCPClientManager {
 	private client?: Client;
 	private transport?: StdioClientTransport;
@@ -192,7 +170,7 @@ export class MCPClientManager {
 			return tools.map((tool) => ({
 				name: tool.name,
 				description: tool.description ?? "",
-				parameters: jsonSchemaToZodObject(tool.inputSchema),
+				parameters: jsonSchemaToZod(tool.inputSchema),
 				execute: async (args) => {
 					const result = await this.callToolWithMetadata(
 						tool.name,
