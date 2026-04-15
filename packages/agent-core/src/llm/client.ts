@@ -1,24 +1,126 @@
-import { generateText, type LanguageModel, streamText } from "ai";
+import {
+	generateText,
+	type LanguageModel,
+	type ModelMessage,
+	tool as sdkTool,
+	streamText,
+} from "ai";
 import type { Message } from "../state/types.js";
 import type { Tool } from "../tools/types.js";
 import type { InferenceConfig, LLMClient, LLMResponse } from "./types.js";
 
-function toSdkMessages(messages: readonly Message[]) {
-	return messages
-		.filter(
-			(
-				message,
-			): message is Message & {
-				role: "system" | "user" | "assistant";
-			} =>
-				message.role === "system" ||
-				message.role === "user" ||
-				message.role === "assistant",
-		)
-		.map((message) => ({
-			role: message.role,
-			content: message.content,
-		}));
+function parseToolOutput(content: string) {
+	try {
+		return {
+			type: "json" as const,
+			value: JSON.parse(content) as unknown,
+		};
+	} catch {
+		return {
+			type: "text" as const,
+			value: content,
+		};
+	}
+}
+
+function toSdkMessages(messages: readonly Message[]): ModelMessage[] {
+	return messages.flatMap((message) => {
+		switch (message.role) {
+			case "system":
+			case "user":
+				return [
+					{
+						role: message.role,
+						content: message.content,
+					} satisfies ModelMessage,
+				];
+			case "assistant": {
+				if (message.toolCalls == null || message.toolCalls.length === 0) {
+					return [
+						{
+							role: "assistant",
+							content: message.content,
+						} satisfies ModelMessage,
+					];
+				}
+
+				const content = [
+					...(message.content === ""
+						? []
+						: [{ type: "text" as const, text: message.content }]),
+					...message.toolCalls.map((toolCall) => ({
+						type: "tool-call" as const,
+						toolCallId: toolCall.id,
+						toolName: toolCall.name,
+						input: toolCall.arguments,
+					})),
+				];
+
+				return [
+					{
+						role: "assistant",
+						content,
+					} satisfies ModelMessage,
+				];
+			}
+			case "tool": {
+				if (message.toolCallId == null || message.name == null) {
+					return [];
+				}
+
+				return [
+					{
+						role: "tool",
+						content: [
+							{
+								type: "tool-result",
+								toolCallId: message.toolCallId,
+								toolName: message.name,
+								output: parseToolOutput(message.content),
+							},
+						],
+					} satisfies ModelMessage,
+				];
+			}
+			default:
+				return [];
+		}
+	});
+}
+
+function toSdkTools(tools: readonly Tool[]) {
+	if (tools.length === 0) {
+		return undefined;
+	}
+
+	return Object.fromEntries(
+		tools.map((tool) => [
+			tool.name,
+			sdkTool({
+				description: tool.description,
+				inputSchema: tool.parameters,
+			}),
+		]),
+	);
+}
+
+function mapToolCalls(
+	toolCalls:
+		| readonly {
+				toolCallId: string;
+				toolName: string;
+				input: unknown;
+		  }[]
+		| undefined,
+) {
+	return toolCalls?.map((toolCall) => ({
+		id: toolCall.toolCallId,
+		name: toolCall.toolName,
+		arguments:
+			toolCall.input != null && typeof toolCall.input === "object"
+				? (toolCall.input as Record<string, unknown>)
+				: {},
+	}));
 }
 
 function mapFinishReason(
@@ -64,12 +166,13 @@ export class VercelLLMClient implements LLMClient {
 
 	async chat(
 		messages: readonly Message[],
-		_tools: readonly Tool[],
+		tools: readonly Tool[],
 		config: InferenceConfig,
 	): Promise<LLMResponse> {
 		const result = await generateText({
 			model: this.model,
 			messages: toSdkMessages(messages),
+			tools: toSdkTools(tools),
 			maxTokens: config.maxTokens,
 			temperature: config.temperature,
 			topP: config.topP,
@@ -77,6 +180,7 @@ export class VercelLLMClient implements LLMClient {
 
 		return {
 			content: result.text,
+			toolCalls: mapToolCalls(result.toolCalls),
 			usage: mapUsage(result.usage),
 			finishReason: mapFinishReason(result.finishReason),
 		};
@@ -96,12 +200,13 @@ export class StreamingLLMClient implements LLMClient {
 
 	async chat(
 		messages: readonly Message[],
-		_tools: readonly Tool[],
+		tools: readonly Tool[],
 		config: InferenceConfig,
 	): Promise<LLMResponse> {
 		const result = streamText({
 			model: this.model,
 			messages: toSdkMessages(messages),
+			tools: toSdkTools(tools),
 			maxTokens: config.maxTokens,
 			temperature: config.temperature,
 			topP: config.topP,
@@ -115,9 +220,11 @@ export class StreamingLLMClient implements LLMClient {
 
 		const usage = await result.usage;
 		const finishReason = await result.finishReason;
+		const toolCalls = await Promise.resolve(result.toolCalls);
 
 		return {
 			content: fullText,
+			toolCalls: mapToolCalls(toolCalls),
 			usage: mapUsage(usage),
 			finishReason: mapFinishReason(finishReason),
 		};

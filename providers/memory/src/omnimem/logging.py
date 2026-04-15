@@ -1,4 +1,5 @@
 import os
+import sys
 
 import structlog
 
@@ -10,6 +11,7 @@ structlog.configure(
     ],
     context_class=dict,
     wrapper_class=structlog.BoundLogger,
+    logger_factory=structlog.PrintLoggerFactory(file=sys.stderr),
 )
 
 logger = structlog.get_logger(

@@ -2,6 +2,7 @@ import type { ContextManager } from "./context/types.js";
 import type { InferenceConfig, LLMClient } from "./llm/types.js";
 import { getLoggerRuntimeMode, logger } from "./logger.js";
 import type { Checkpoint, Message } from "./state/types.js";
+import { ToolRouter } from "./tools/router.js";
 import type { Tool } from "./tools/types.js";
 
 /**
@@ -28,29 +29,73 @@ export async function runAgentLoop(
 ): Promise<string> {
 	const { llm, inferenceConfig } = config;
 	const shouldLogDebug = getLoggerRuntimeMode() !== "repl";
+	const router = new ToolRouter(config.tools ?? []);
+	const workingMessages: Message[] = [...messages];
+	const maxTurns = config.maxTurns ?? Number.POSITIVE_INFINITY;
+	let turnCount = 0;
 
-	if (shouldLogDebug) {
-		logger.debug({ turnMessages: messages.length }, "Agent loop: calling LLM");
-	}
+	while (true) {
+		if (turnCount >= maxTurns) {
+			throw new Error(`Agent loop exceeded maxTurns=${maxTurns}`);
+		}
 
-	const response = await llm.chat(
-		messages,
-		config.tools ?? [],
-		inferenceConfig,
-	);
+		turnCount += 1;
 
-	if (shouldLogDebug) {
-		logger.debug(
-			{
-				finishReason: response.finishReason,
-				inputTokens: response.usage.inputTokens,
-				outputTokens: response.usage.outputTokens,
-			},
-			"Agent loop: LLM responded",
+		if (shouldLogDebug) {
+			logger.debug(
+				{ turnMessages: workingMessages.length, turnCount, maxTurns },
+				"Agent loop: calling LLM",
+			);
+		}
+
+		const response = await llm.chat(
+			workingMessages,
+			config.tools ?? [],
+			inferenceConfig,
 		);
-	}
 
-	return response.content;
+		if (shouldLogDebug) {
+			logger.debug(
+				{
+					finishReason: response.finishReason,
+					inputTokens: response.usage.inputTokens,
+					outputTokens: response.usage.outputTokens,
+				},
+				"Agent loop: LLM responded",
+			);
+		}
+
+		if (response.finishReason !== "tool_calls") {
+			return response.content;
+		}
+
+		if (response.toolCalls == null || response.toolCalls.length === 0) {
+			throw new Error("LLM returned finishReason=tool_calls without toolCalls");
+		}
+
+		if (turnCount >= maxTurns) {
+			throw new Error(
+				`Agent loop exceeded maxTurns=${maxTurns} while awaiting final response`,
+			);
+		}
+
+		workingMessages.push({
+			role: "assistant",
+			content: response.content,
+			toolCalls: response.toolCalls,
+		});
+
+		// TODO: 在明确工具副作用/顺序语义后，将独立 tool calls 改为并行执行。
+		for (const toolCall of response.toolCalls) {
+			const toolResult = await router.execute(toolCall);
+			workingMessages.push({
+				role: "tool",
+				toolCallId: toolResult.toolCallId,
+				name: toolCall.name,
+				content: toolResult.content,
+			});
+		}
+	}
 }
 
 export interface AgentLoopConfig {
