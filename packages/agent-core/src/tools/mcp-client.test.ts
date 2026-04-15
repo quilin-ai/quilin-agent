@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runAgentLoop } from "../loop.js";
 import {
 	MCPClientManager,
@@ -21,8 +21,13 @@ function createMemoryServerConfig() {
 }
 
 describe.sequential("MCPClientManager", () => {
+	beforeEach(() => {
+		vi.stubEnv("QUILIN_ENV", "test");
+	});
+
 	afterEach(() => {
 		vi.restoreAllMocks();
+		vi.unstubAllEnvs();
 	});
 
 	it("writes a newline before MCP stderr logs in repl mode", () => {
@@ -102,6 +107,46 @@ describe.sequential("MCPClientManager", () => {
 		expect(JSON.parse(result)).toEqual({
 			error: expect.stringContaining("disconnected"),
 		});
+	});
+
+	it("does not leak OmniMem state across fresh test connections", async () => {
+		const uniqueContent = `隔离测试-${crypto.randomUUID()}`;
+		const firstManager = new MCPClientManager();
+
+		try {
+			const firstTools = await firstManager.connect(createMemoryServerConfig());
+			const memoryStore = firstTools.find(
+				(tool) => tool.name === "memory_store",
+			);
+
+			await memoryStore?.execute({
+				content: uniqueContent,
+				tier: "short",
+			});
+		} finally {
+			await firstManager.disconnect();
+		}
+
+		const secondManager = new MCPClientManager();
+
+		try {
+			const secondTools = await secondManager.connect(
+				createMemoryServerConfig(),
+			);
+			const memoryRecall = secondTools.find(
+				(tool) => tool.name === "memory_recall",
+			);
+			const recallResult = await memoryRecall?.execute({
+				query: uniqueContent,
+			});
+
+			expect(recallResult?.isError).toBe(false);
+			expect(JSON.parse(recallResult?.content ?? "{}")).toEqual({
+				records: [],
+			});
+		} finally {
+			await secondManager.disconnect();
+		}
 	});
 
 	it("runs a thin e2e loop with fake LLM and real OmniMem bridge", async () => {
