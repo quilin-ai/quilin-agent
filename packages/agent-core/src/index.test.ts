@@ -26,6 +26,18 @@ vi.mock("./repl.js", () => ({
 	startRepl: vi.fn(),
 }));
 
+const { mockConnect, mockDisconnect } = vi.hoisted(() => ({
+	mockConnect: vi.fn(),
+	mockDisconnect: vi.fn(),
+}));
+
+vi.mock("./tools/mcp-client.js", () => ({
+	MCPClientManager: class MockMCPClientManager {
+		connect = mockConnect;
+		disconnect = mockDisconnect;
+	},
+}));
+
 describe("main", () => {
 	const exitSpy = vi
 		.spyOn(process, "exit")
@@ -33,6 +45,8 @@ describe("main", () => {
 
 	beforeEach(() => {
 		vi.clearAllMocks();
+		mockConnect.mockReset();
+		mockDisconnect.mockReset();
 	});
 
 	it("starts the repl only in repl mode", async () => {
@@ -47,6 +61,8 @@ describe("main", () => {
 				completionTokens: 5,
 			},
 		} as Awaited<ReturnType<typeof generateText>>);
+		mockConnect.mockResolvedValue([{ name: "memory_recall" }]);
+		mockDisconnect.mockResolvedValue(undefined);
 
 		const { main } = await import("./index.js");
 
@@ -89,7 +105,10 @@ describe("main", () => {
 		expect(startRepl).toHaveBeenCalledWith({
 			provider,
 			modelId: "deepseek-chat",
+			tools: [{ name: "memory_recall" }],
 		});
+		expect(mockConnect).toHaveBeenCalledTimes(1);
+		expect(mockDisconnect).toHaveBeenCalledTimes(1);
 		expect(exitSpy).toHaveBeenCalledWith(0);
 	});
 
@@ -106,6 +125,7 @@ describe("main", () => {
 				outputTokens: 6,
 			},
 		} as Awaited<ReturnType<typeof generateText>>);
+		mockConnect.mockResolvedValue([{ name: "memory_recall" }]);
 
 		const { main } = await import("./index.js");
 
@@ -128,5 +148,6 @@ describe("main", () => {
 		);
 		expect(serviceRunner).toHaveBeenCalledOnce();
 		expect(startRepl).not.toHaveBeenCalled();
+		expect(mockConnect).not.toHaveBeenCalled();
 	});
 });

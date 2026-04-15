@@ -16,7 +16,11 @@ jobs:
       - uses: pnpm/action-setup@v4
         with:
           version: 10
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.14"
       - run: pnpm install --frozen-lockfile
+      - run: cd providers/memory && uv sync --extra dev
       - run: cd packages/agent-core && bun run biome check src/
       - run: cd packages/agent-core && bun run vitest run
 

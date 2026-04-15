@@ -6,6 +6,7 @@ import type { InferenceConfig } from "./llm/types.js";
 import { logger } from "./logger.js";
 import { runAgentLoop } from "./loop.js";
 import type { Message } from "./state/types.js";
+import type { Tool } from "./tools/types.js";
 
 const DEFAULT_SYSTEM_PROMPT = `You are Quilin Agent (麒麟), a helpful AI assistant.
 Be concise, accurate, and friendly. Answer in the same language as the user.`;
@@ -19,10 +20,11 @@ const DEFAULT_INFERENCE_CONFIG: InferenceConfig = {
 interface ReplOptions {
 	provider: ReturnType<typeof createProvider>;
 	modelId: string;
+	tools?: readonly Tool[];
 }
 
 export async function startRepl(options: ReplOptions): Promise<void> {
-	const { provider, modelId } = options;
+	const { provider, modelId, tools = [] } = options;
 
 	stderr.write("\n🐉 Quilin Agent v0.0.1 (DeepSeek)\n");
 	stderr.write("Type your message, or /exit to quit.\n\n");
@@ -64,6 +66,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 			const response = await runAgentLoop(
 				{
 					llm,
+					tools,
 					inferenceConfig: DEFAULT_INFERENCE_CONFIG,
 				},
 				messages,

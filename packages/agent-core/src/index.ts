@@ -1,7 +1,11 @@
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { generateText } from "ai";
 import { createProvider, getDefaultModel } from "./llm/provider.js";
 import { configureLogger, logger } from "./logger.js";
 import { startRepl } from "./repl.js";
+import { MCPClientManager } from "./tools/mcp-client.js";
 
 export * from "./context/manager.js";
 export * from "./llm/client.js";
@@ -19,6 +23,23 @@ export type RuntimeMode = "repl" | "service";
 export interface MainOptions {
 	readonly runtimeMode?: RuntimeMode;
 	readonly serviceRunner?: () => Promise<void>;
+}
+
+function findWorkspaceRoot(startDir: string): string {
+	let currentDir = startDir;
+
+	while (true) {
+		if (existsSync(join(currentDir, "pnpm-workspace.yaml"))) {
+			return currentDir;
+		}
+
+		const parentDir = dirname(currentDir);
+		if (parentDir === currentDir) {
+			throw new Error("Could not find workspace root");
+		}
+
+		currentDir = parentDir;
+	}
 }
 
 function getTokenCount(
@@ -97,10 +118,35 @@ export async function main(options: MainOptions = {}): Promise<void> {
 	}
 
 	if (runtimeMode === "repl") {
+		const mcpClient = new MCPClientManager();
+		const workspaceRoot = findWorkspaceRoot(
+			dirname(fileURLToPath(import.meta.url)),
+		);
+		let shouldExit = false;
+
 		logger.info({ mode: "repl" }, "Starting CLI REPL...");
-		await startRepl({ provider, modelId });
-		process.exit(0);
-		return;
+
+		try {
+			logger.info("Connecting OmniMem MCP server...");
+			const tools = await mcpClient.connect({
+				command: "uv",
+				args: ["run", "python", "-m", "omnimem"],
+				cwd: join(workspaceRoot, "providers", "memory"),
+			});
+			logger.info({ toolCount: tools.length }, "OmniMem MCP connected");
+
+			await startRepl({ provider, modelId, tools });
+			shouldExit = true;
+		} finally {
+			await mcpClient.disconnect().catch((err) => {
+				logger.warn({ err }, "OmniMem MCP disconnect failed");
+			});
+		}
+
+		if (shouldExit) {
+			process.exit(0);
+			return;
+		}
 	}
 
 	logger.info({ mode: "service" }, "Starting agent-core service loop...");

@@ -55,12 +55,14 @@ describe("startRepl", () => {
 
 	it("shows welcome text and exits on /exit", async () => {
 		mockQuestion.mockResolvedValueOnce("/exit");
+		const tools = [{ name: "memory_recall" }];
 
 		const { startRepl } = await import("./repl.js");
 
 		await startRepl({
 			provider: vi.fn().mockReturnValue("model-instance"),
 			modelId: "deepseek-chat",
+			tools: tools as never,
 		});
 
 		expect(mockCreateInterface).toHaveBeenCalledWith({
@@ -98,9 +100,17 @@ describe("startRepl", () => {
 		await startRepl({
 			provider: vi.fn().mockReturnValue("model-instance"),
 			modelId: "deepseek-chat",
+			tools: [{ name: "memory_recall" }] as never,
 		});
 
 		expect(mockRunAgentLoop).toHaveBeenCalledTimes(2);
+		expect(mockRunAgentLoop).toHaveBeenNthCalledWith(
+			1,
+			expect.objectContaining({
+				tools: [{ name: "memory_recall" }],
+			}),
+			expect.any(Array),
+		);
 		expect(capturedMessages[0]).toEqual([
 			expect.objectContaining({ role: "system" }),
 			{ role: "user", content: "hello" },
@@ -131,6 +141,7 @@ describe("startRepl", () => {
 		await startRepl({
 			provider: vi.fn().mockReturnValue("model-instance"),
 			modelId: "deepseek-chat",
+			tools: [{ name: "memory_recall" }] as never,
 		});
 
 		expect(capturedMessages[1]).toEqual([
