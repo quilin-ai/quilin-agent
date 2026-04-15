@@ -46,11 +46,12 @@ quilin-agent/
 │       ├── tsconfig.json               # → §4.4
 │       ├── vitest.config.ts            # → §4.5
 │       └── src/
-│           ├── index.ts                # 公共 API 导出
+│           ├── index.ts                # 主入口：启动 → 验证 → REPL → §6.5
+│           ├── repl.ts                 # CLI REPL 交互循环 → §6.8
 │           ├── logger.ts               # 结构化日志 (pino) → §7
-│           ├── loop.ts                 # Agent Loop (< 200 行 while-loop)
+│           ├── loop.ts                 # Agent Loop (< 200 行 while-loop) → §6.6
 │           ├── llm/                    # 01-LLM Integration
-│           │   ├── client.ts           # LLMClient (封装 Vercel AI SDK)
+│           │   ├── client.ts           # LLMClient (封装 Vercel AI SDK) → §6.7
 │           │   ├── provider.ts         # DeepSeek / OpenAI / Anthropic provider 配置
 │           │   └── types.ts            # ThinkingMode, InferenceConfig, LLMResponse
 │           ├── context/                # 02-Context
@@ -475,15 +476,16 @@ export interface Checkpoint {
 }
 ```
 
-### 6.5 入口文件 (`packages/agent-core/src/index.ts`) — 骨架可运行入口
+### 6.5 入口文件 (`packages/agent-core/src/index.ts`) — 启动 → 验证 → REPL
 
-骨架阶段的 `index.ts` 不只是类型导出，还是一个**最小可运行程序**。`just start` 后应能看到启动日志 + DeepSeek 连通性验证 + 一次完整的 LLM 问答。
+`index.ts` 是主入口。`just dev` 后经历三个阶段：初始化 → DeepSeek 连通性验证 → 进入 CLI REPL 交互循环。
 
 ```typescript
 import 'dotenv/config';
 import { logger } from './logger.js';
 import { createProvider, getDefaultModel } from './llm/provider.js';
 import { generateText } from 'ai';
+import { startRepl } from './repl.js';
 
 // re-export all public types
 export * from './llm/types.js';
@@ -516,9 +518,9 @@ async function main() {
     process.exit(1);
   }
 
-  // 3. 就绪
-  logger.info('Quilin Agent ready. Skeleton phase — no Agent Loop yet.');
-  logger.info('Next step: implement runAgentLoop() in loop.ts');
+  // 3. 启动 CLI REPL
+  logger.info('Starting CLI REPL...');
+  await startRepl({ provider, modelId });
 }
 
 main().catch((err) => {
@@ -527,15 +529,19 @@ main().catch((err) => {
 });
 ```
 
-**`just start` 后你会看到**：
+**`just dev` 后你会看到**：
 
-```json
-{"ts":"2026-04-15T12:00:00.000Z","level":"info","service":"agent-core","env":"dev","msg":"Quilin Agent starting","version":"0.0.1"}
-{"ts":"2026-04-15T12:00:00.001Z","level":"info","service":"agent-core","env":"dev","msg":"LLM provider initialized","provider":"deepseek","model":"deepseek-chat"}
-{"ts":"2026-04-15T12:00:00.002Z","level":"info","service":"agent-core","env":"dev","msg":"Verifying LLM connection..."}
-{"ts":"2026-04-15T12:00:01.234Z","level":"info","service":"agent-core","env":"dev","msg":"LLM connection verified","response":"Quilin Agent online.","inputTokens":18,"outputTokens":5}
-{"ts":"2026-04-15T12:00:01.235Z","level":"info","service":"agent-core","env":"dev","msg":"Quilin Agent ready. Skeleton phase — no Agent Loop yet."}
-{"ts":"2026-04-15T12:00:01.236Z","level":"info","service":"agent-core","env":"dev","msg":"Next step: implement runAgentLoop() in loop.ts"}
+```
+[12:00:00 INFO] Quilin Agent starting                    version=0.0.1
+[12:00:00 INFO] LLM provider initialized                 provider=deepseek model=deepseek-chat
+[12:00:00 INFO] Verifying LLM connection...
+[12:00:01 INFO] LLM connection verified                  response="Quilin Agent online." inputTokens=18 outputTokens=5
+[12:00:01 INFO] Starting CLI REPL...
+
+🐉 Quilin Agent v0.0.1 (DeepSeek)
+Type your message, or /exit to quit.
+
+quilin> _
 ```
 
 如果 DeepSeek key 无效或网络不通，会看到：
@@ -544,9 +550,15 @@ main().catch((err) => {
 {"ts":"...","level":"fatal","service":"agent-core","env":"dev","msg":"LLM connection failed","err":{"message":"401 Unauthorized"}}
 ```
 
-### 6.6 Agent Loop (`packages/agent-core/src/loop.ts`) — 伪代码
+### 6.6 Agent Loop (`packages/agent-core/src/loop.ts`) — 核心循环实现
 
 ```typescript
+import type { ContextManager } from './context/types.js';
+import type { InferenceConfig, LLMClient } from './llm/types.js';
+import type { AgentState, Checkpoint, Message } from './state/types.js';
+import type { Tool } from './tools/types.js';
+import { logger } from './logger.js';
+
 /**
  * Quilin Agent 核心循环
  *
@@ -554,26 +566,274 @@ main().catch((err) => {
  * 参考: Claude Code ~88 行, Codex async queue, OpenClaw Pi agent
  *
  * 数据流:
- *   用户输入 → ContextManager.buildContext()
- *            → LLMClient.chat()
+ *   用户输入 → LLMClient.chat()
  *            → if tool_calls → ToolRouter.execute() → 结果追加 messages
- *            → if assistant   → 检查是否终止
- *            → Checkpoint.save()
+ *            → if assistant   → 返回文本
  *            → loop
+ *
+ * Phase 0 简化:
+ *   - 无 ContextManager（直接传 messages）
+ *   - 无 ToolRouter（无工具）
+ *   - 无 Checkpoint（不持久化）
+ *   - 纯文本对话，不处理 tool_calls
  */
-export async function runAgentLoop(config: AgentLoopConfig): Promise<AgentState> {
-  // Phase 0 实现
-}
 
 export interface AgentLoopConfig {
   readonly llm: LLMClient;
-  readonly context: ContextManager;
-  readonly tools: readonly Tool[];
-  readonly checkpoint: Checkpoint;
-  readonly maxTurns: number;
+  readonly context?: ContextManager;
+  readonly tools?: readonly Tool[];
+  readonly checkpoint?: Checkpoint;
+  readonly maxTurns?: number;
   readonly inferenceConfig: InferenceConfig;
 }
+
+/**
+ * 单轮对话：接收 messages，调用 LLM，返回 assistant 回复
+ *
+ * Phase 0 只做最简单的事：把 messages 发给 LLM，拿回回复。
+ * 没有 tool_calls 处理，没有多轮 inner loop，没有 checkpoint。
+ */
+export async function runAgentLoop(
+  config: AgentLoopConfig,
+  messages: readonly Message[],
+): Promise<string> {
+  const { llm, inferenceConfig } = config;
+
+  logger.debug({ turnMessages: messages.length }, 'Agent loop: calling LLM');
+
+  const response = await llm.chat(messages, config.tools ?? [], inferenceConfig);
+
+  logger.debug(
+    {
+      finishReason: response.finishReason,
+      inputTokens: response.usage.inputTokens,
+      outputTokens: response.usage.outputTokens,
+    },
+    'Agent loop: LLM responded',
+  );
+
+  return response.content;
+}
 ```
+
+> **Phase 0 到 Phase 1 的演进路径**：
+> - Phase 0: `runAgentLoop()` 只是单轮 LLM 调用的封装，REPL 负责会话循环
+> - Phase 1: 加入 tool_calls 内循环（LLM 返回 tool_calls → execute → 追加结果 → 再调 LLM → 直到 stop）
+> - Phase 1+: 加入 ContextManager（prompt 组装）、Checkpoint（状态持久化）
+
+### 6.7 LLM Client 实现 (`packages/agent-core/src/llm/client.ts`)
+
+```typescript
+import { generateText, streamText } from 'ai';
+import type { LanguageModelV1 } from 'ai';
+import type { Message } from '../state/types.js';
+import type { Tool } from '../tools/types.js';
+import type { InferenceConfig, LLMClient, LLMResponse } from './types.js';
+
+/**
+ * 基于 Vercel AI SDK 的 LLMClient 实现
+ *
+ * Phase 0: 只用 generateText()，不处理 tool_calls
+ * Phase 1: 加入 streamText() + tool_calls 支持
+ */
+export class VercelLLMClient implements LLMClient {
+  constructor(private readonly model: LanguageModelV1) {}
+
+  async chat(
+    messages: readonly Message[],
+    _tools: readonly Tool[],
+    config: InferenceConfig,
+  ): Promise<LLMResponse> {
+    const result = await generateText({
+      model: this.model,
+      messages: messages.map((m) => ({
+        role: m.role as 'system' | 'user' | 'assistant',
+        content: m.content,
+      })),
+      maxTokens: config.maxTokens,
+      temperature: config.temperature,
+      topP: config.topP,
+    });
+
+    return {
+      content: result.text,
+      usage: {
+        inputTokens: result.usage.promptTokens,
+        outputTokens: result.usage.completionTokens,
+      },
+      finishReason: result.finishReason === 'stop' ? 'stop' : 'length',
+    };
+  }
+}
+
+/** 基于 streamText 的流式 LLMClient — Phase 0 用于 REPL 逐字输出 */
+export class StreamingLLMClient implements LLMClient {
+  constructor(
+    private readonly model: LanguageModelV1,
+    private readonly onChunk?: (chunk: string) => void,
+  ) {}
+
+  async chat(
+    messages: readonly Message[],
+    _tools: readonly Tool[],
+    config: InferenceConfig,
+  ): Promise<LLMResponse> {
+    const result = streamText({
+      model: this.model,
+      messages: messages.map((m) => ({
+        role: m.role as 'system' | 'user' | 'assistant',
+        content: m.content,
+      })),
+      maxTokens: config.maxTokens,
+      temperature: config.temperature,
+      topP: config.topP,
+    });
+
+    let fullText = '';
+    for await (const chunk of result.textStream) {
+      fullText += chunk;
+      this.onChunk?.(chunk);
+    }
+
+    const usage = await result.usage;
+
+    return {
+      content: fullText,
+      usage: {
+        inputTokens: usage.promptTokens,
+        outputTokens: usage.completionTokens,
+      },
+      finishReason: 'stop',
+    };
+  }
+}
+```
+
+### 6.8 CLI REPL (`packages/agent-core/src/repl.ts`)
+
+```typescript
+import * as readline from 'node:readline/promises';
+import { stdin, stdout } from 'node:process';
+import { logger } from './logger.js';
+import { StreamingLLMClient } from './llm/client.js';
+import { runAgentLoop } from './loop.js';
+import type { Message } from './state/types.js';
+import type { InferenceConfig } from './llm/types.js';
+
+const DEFAULT_SYSTEM_PROMPT = `You are Quilin Agent (拼布麒麟), a helpful AI assistant.
+Be concise, accurate, and friendly. Answer in the same language as the user.`;
+
+const DEFAULT_INFERENCE_CONFIG: InferenceConfig = {
+  temperature: 0.7,
+  maxTokens: 4096,
+  thinkingMode: 'disabled',
+};
+
+interface ReplOptions {
+  provider: ReturnType<typeof import('./llm/provider.js').createProvider>;
+  modelId: string;
+}
+
+export async function startRepl(options: ReplOptions): Promise<void> {
+  const { provider, modelId } = options;
+
+  // 显示欢迎信息（直接写 stdout，不走 logger）
+  stdout.write('\n🐉 Quilin Agent v0.0.1 (DeepSeek)\n');
+  stdout.write('Type your message, or /exit to quit.\n\n');
+
+  // 初始化 readline
+  const rl = readline.createInterface({ input: stdin, output: stdout });
+
+  // 会话历史 — 整个 REPL 生命周期内累积
+  const messages: Message[] = [
+    { role: 'system', content: DEFAULT_SYSTEM_PROMPT },
+  ];
+
+  // 创建流式 LLM client（逐字输出到 stdout）
+  const llm = new StreamingLLMClient(
+    provider(modelId),
+    (chunk) => stdout.write(chunk),
+  );
+
+  // 主循环
+  while (true) {
+    const input = await rl.question('quilin> ');
+    const trimmed = input.trim();
+
+    // 空输入跳过
+    if (!trimmed) continue;
+
+    // 退出命令
+    if (trimmed === '/exit' || trimmed === '/quit') {
+      stdout.write('\nBye! 🐉\n');
+      rl.close();
+      return;
+    }
+
+    // 清除历史
+    if (trimmed === '/clear') {
+      messages.length = 1; // 保留 system prompt
+      stdout.write('Conversation cleared.\n\n');
+      continue;
+    }
+
+    // 追加用户消息
+    messages.push({ role: 'user', content: trimmed });
+
+    // 调用 Agent Loop
+    stdout.write('\n');
+    try {
+      const response = await runAgentLoop(
+        { llm, inferenceConfig: DEFAULT_INFERENCE_CONFIG },
+        messages,
+      );
+
+      // 追加 assistant 消息到历史
+      messages.push({ role: 'assistant', content: response });
+      stdout.write('\n\n');
+    } catch (err) {
+      logger.error({ err }, 'REPL: LLM call failed');
+      stdout.write('\n[Error: LLM call failed. Check logs for details.]\n\n');
+      // 移除失败的 user 消息，避免污染历史
+      messages.pop();
+    }
+  }
+}
+```
+
+**REPL 交互效果**：
+
+```
+🐉 Quilin Agent v0.0.1 (DeepSeek)
+Type your message, or /exit to quit.
+
+quilin> 你好，介绍一下你自己
+你好！我是 Quilin Agent（拼布麒麟），一个 AI 助手。我可以回答问题、
+帮助编程、分析问题等。有什么可以帮你的吗？
+
+quilin> 用 TypeScript 写一个 hello world
+这是一个简单的 TypeScript Hello World：
+
+```typescript
+console.log("Hello, World!");
+```
+
+quilin> /clear
+Conversation cleared.
+
+quilin> /exit
+Bye! 🐉
+```
+
+**REPL 命令一览**：
+
+| 命令 | 说明 |
+|------|------|
+| `/exit` 或 `/quit` | 退出 REPL |
+| `/clear` | 清除对话历史（保留 system prompt） |
+| 其他任意文本 | 发送给 LLM |
+
+> **设计决策**：Phase 0 使用 `StreamingLLMClient`（基于 `streamText`），LLM 回复逐字流式输出到 stdout，用户体验类似 Claude Code。非流式 `VercelLLMClient` 保留给 API / 测试场景。
 
 ---
 
@@ -986,8 +1246,6 @@ export function getDefaultModel() {
 
 | 排除项 | 原因 | 预计 Phase |
 |--------|------|-----------|
-| 业务逻辑实现 | 骨架只有空函数体 + 类型导出 | Phase 0 后续 |
-| packages/agent-cli/ | CLI 入口 Phase 1 | 1 |
 | packages/agent-dashboard/ | WebUI Dashboard | 2 |
 | providers/embedding/ | 嵌入独立 MCP Server | 1 |
 | providers/planning/ | 规划引擎 | 1 |
@@ -1025,10 +1283,17 @@ just lint-py                        # ✅ 无 lint 错误
 just build-rs                       # ✅ 构建成功
 just test-rs                        # ✅ 测试通过
 
-# 5. 一键启动 → 看到 LLM 连通验证
-just dev                            # ✅ 看到 "Quilin Agent starting" → "LLM connection verified" → "ready"
+# 5. 一键启动 → LLM 验证 → CLI REPL
+just dev                            # ✅ 看到 "Quilin Agent starting" → "LLM connection verified"
                                     # ✅ DeepSeek 返回 "Quilin Agent online."
-                                    # ✅ 输出全部是 JSON 格式（Monitor 可解析）
+                                    # ✅ 看到 "🐉 Quilin Agent v0.0.1 (DeepSeek)" 欢迎信息
+                                    # ✅ 出现 "quilin>" 提示符
+
+# 6. REPL 交互验证
+# 输入 "hello" → 看到流式文字逐字输出                     # ✅ 流式回复
+# 输入 /clear → 看到 "Conversation cleared."               # ✅ 清除历史
+# 输入 /exit → 看到 "Bye! 🐉" 并正常退出                   # ✅ 正常退出
+# Ctrl+C → 进程干净退出                                    # ✅ 信号处理
 
 # 7. 环境变量
 cat .env.example                    # ✅ 模板存在
@@ -1040,8 +1305,13 @@ cat .env.example                    # ✅ 模板存在
 
 骨架初始化完成后，按以下顺序进入 Phase 0 功能开发：
 
-1. **Agent Loop** — `loop.ts` 实现 < 200 行 while-loop
-2. **LLMClient** — `client.ts` 封装 Vercel AI SDK，接通 DeepSeek
+1. ~~**项目骨架**~~ — ✅ 已完成（ADR-002 §1-§12）
+2. **CLI REPL + Agent Loop** — `repl.ts` + `loop.ts` + `client.ts`（← **当前步骤，见 §6.5-§6.8**）
+   - `VercelLLMClient` / `StreamingLLMClient` 封装 Vercel AI SDK
+   - `runAgentLoop()` 单轮调用（Phase 0 简化版）
+   - `startRepl()` readline 交互循环
+   - `index.ts` 启动 → 验证 → 进入 REPL
+   - **验收标准**: `just dev` → 看到欢迎信息 → 输入文本 → 看到流式回复 → `/exit` 退出
 3. **ToolRouter** — `router.ts` 基础工具分发
 4. **MCP Client** — `mcp-client.ts` 连接 Python OmniMem
 5. **OmniMem MCP Server** — `providers/memory/` 实现 recall/store

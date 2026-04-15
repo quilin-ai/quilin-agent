@@ -1,6 +1,6 @@
 # Harness Engineering（脚手架工程）
 
-> Quilin Agent 的顶层架构概念。本文档综合了 OpenAI、Anthropic、Martin Fowler、LangChain、Manus 等行业最前沿的 harness 工程实践，将散落在 11 个工程领域中的 harness 相关设计统一为一个显式的一等架构理念。
+> Quilin Agent 的顶层架构概念。本文档综合了 OpenAI、Anthropic、Martin Fowler、LangChain、Manus、Epsilla 等行业最前沿的 harness 工程实践（18 篇来源），将散落在 12 个工程领域中的 harness 相关设计统一为一个显式的一等架构理念。
 
 ---
 
@@ -48,6 +48,8 @@ Harness Engineering 包含 Context Engineering，并吸纳 Prompt Engineering �
 | **Stripe Minions** | 交替确定性（lint/test）与 agentic（写代码）节点 | 1000+ PR/周 |
 | **Manus** | 6 个月 5 次重写 | 每次重写都在**删减**复杂度，模型越强 harness 越轻 |
 | **HumanLayer Terminal Bench** | 同一模型在不同 harness 中 | Opus 4.6 在 Claude Code 中排 #33，换 harness 后排 #5 |
+| **OpenAI 内部团队** | 同一模型+数据，仅改运行时环境 | 编程 benchmark 从 42% → 78%（**+36 pp**） |
+| **Epsilla** | $9 vs $200 对比实验 | $9 的 agent 产出碎片残品，$200 的产出完整可运行游戏——能力差距证明成本合理 |
 
 ### 2.2 缺乏 Harness 的代价（生产力悖论）
 
@@ -188,7 +190,7 @@ Agent Loop (模式 1)
 
 ## 五、Quilin 的 Harness 架构
 
-Quilin 的整体架构就是一个 harness。E-T-C-S-L-V 六组件 + 11 个工程领域共同构成了这个 harness：
+Quilin 的整体架构就是一个 harness。E-T-C-S-L-V 六组件 + 12 个工程领域共同构成了这个 harness：
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -225,7 +227,7 @@ Quilin 的整体架构就是一个 harness。E-T-C-S-L-V 六组件 + 11 个工�
 │   ╚════════════════════════════════════════════════════════════╝ │
 │                              │                                   │
 │                         ┌────▼────┐                              │
-│                         │   LLM   │  ← 任意模型（via litellm）   │
+│                         │   LLM   │  ← 任意模型（via Vercel AI SDK） │
 │                         └─────────┘                              │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -234,7 +236,7 @@ Quilin 的整体架构就是一个 harness。E-T-C-S-L-V 六组件 + 11 个工�
 
 ---
 
-## 六、Harness 的 8 个组成部分
+## 六、Harness 的 9 个组成部分
 
 ### 6.1 System Prompt 组装
 
@@ -296,9 +298,11 @@ Harness 决定 LLM 能调用哪些工具、工具描述怎么写、参数怎么�
 ```
 
 **行业洞察**：
-- **Stripe 策略**：交替确定性节点（lint/test）和 agentic 节点（写代码），强制验证关卡，agent 不得绕过。重试上限 2 次，超过即上报人类。
+- **Stripe "Two-Strike Rule"**：交替确定性节点（lint/test）和 agentic 节点（写代码），强制验证关卡，agent 不得绕过。CI 失败后自动修复一次（第一次机会），**第二次失败立即上报人类**，禁止无限重试循环。这防止了 agent 在同一个错误上无限消耗 token，同时给了 agent 一次自我纠正的机会。
 - **OpenAI 策略**：刚性分层架构（Types → Config → Repo → Service → Runtime → UI），单向依赖，自定义 linter + 结构测试机械化执行。
 - **权限分级**（多来源共识）：Safe（read/list → 自动通过）、Moderate（write/edit → 确认或白名单）、Dangerous（shell/网络/git push → 明确授权）。
+
+**Quilin 扩展**：采用 Two-Strike Rule 作为 Sub-Agent 执行策略的默认行为——06-MultiAgent 中 Sub-Agent 重试上限为 2，超过即 checkpoint + 上报 Main Agent 或用户。
 
 ### 6.5 推理策略切换
 
@@ -313,7 +317,7 @@ Harness 决定 LLM 能调用哪些工具、工具描述怎么写、参数怎么�
 
 **行业洞察**：
 - **"Reasoning Sandwich"**（LangChain）：在规划和验证两端分配最大算力，中间执行阶段用较少算力。
-- **自评估无效，外部评估有效**（Anthropic）：agent 会自信地赞扬自己的工作。需要独立的 evaluator agent。
+- **Evaluator Pattern — GAN 式双 Agent 架构**（Anthropic）：agent 无法准确评估自己的工作（会自信地赞扬自己）。解决方案借鉴 GAN 对抗思想：**Generator Agent** 执行主任务（写代码、设计界面），**Evaluator Agent** 作为严格 QA（用 Playwright 等工具端到端验证）。关键洞察：训练独立的 evaluator 做到严格评判，远比训练 generator 做到自我批判容易。
 
 ### 6.6 Token 预算管理
 
@@ -361,11 +365,32 @@ Harness 的每一步都产生 trace，让开发者能看到和 agent 看到了�
 
 加上**用户自助吸收**（吸收 GitHub 仓库的能力来升级自己的 harness），形成官方+用户双向进化的生态。
 
+### 6.9 Semantic Graph 协调（多 Agent 共享状态）
+
+**对应领域**：[06-多 Agent 工程](../engineering/06-multi-agent/README.md) + [03-记忆工程](../engineering/03-memory/README.md) | **控制类型**：前馈 + 反馈
+
+**行业洞察**（Epsilla 2026）：多 Agent 系统的通信不应依赖脆弱的直接协议（如消息传递、RPC），而应通过**共享 Semantic Graph** 实现间接协调：
+
+```
+Agent A ──写入──→ ┌─────────────────┐ ←──读取── Agent B
+                  │  Semantic Graph  │
+Agent C ──写入──→ │  (结构化约束 +   │ ←──读取── Agent D
+                  │   持久反馈环)    │
+                  └─────────────────┘
+```
+
+Semantic Graph 提供三层价值：
+1. **结构化约束**：Graph schema 定义操作规则，从结构上防止幻觉（agent 只能沿 schema 允许的路径行动）
+2. **持久反馈环**：Agent 的行动和评估结果编码回 graph，形成系统级的复合改进
+3. **异步多 Agent 交互**：Agent 通过共享 graph 状态通信，而非脆弱的直接协议，解耦了 agent 间的时序依赖
+
+**Quilin 映射**：OmniMem 的 KG（Knowledge Graph）层天然适合承担 Semantic Graph 角色——03-记忆的 LONG 层已设计了向量 + KG 双检索。将 KG 从"记忆检索"扩展为"多 Agent 共享状态协调"是 Phase 2 的自然演进路径。
+
 ---
 
 ## 七、Harness 设计原则
 
-从 16 篇文献中提炼的 9 条核心设计原则：
+从 18 篇文献中提炼的 9 条核心设计原则：
 
 ### 原则 1：约束悖论 — 约束越多，能力越强
 
@@ -373,9 +398,11 @@ Harness 的每一步都产生 trace，让开发者能看到和 agent 看到了�
 
 所有成功团队都在限制 agent 的自由度，而非扩展它：OpenAI 执行刚性架构、Stripe 强制 lint、Manus 删工具不加工具、Vercel 剥离到最简。
 
-### 原则 2：Build to Delete — 为删除而构建
+### 原则 2：Build to Delete — 为删除而构建（模型越强，Harness 越轻）
 
 每个 harness 组件在下一代模型发布时就是负债。设计时就为模块化拆除做准备。不要过度工程化控制流——模型升级时脆弱的"智能"逻辑会断裂。
+
+**行业验证**：Manus 团队在 6 个月内做了 5 次完整重写，每次都在**删减**复杂度而非增加。Anthropic 观察到 Sonnet 4.5 需要的上下文焦虑 workaround，在 Opus 4.5 中完全不需要。这意味着 harness 的每个组件都编码了一个"模型做不到什么"的假设——这些假设需要持续压测，过时的组件应立即删除而非保留。
 
 ### 原则 3：地图而非手册 — 渐进式披露
 
@@ -482,13 +509,13 @@ LangChain OPENDEV 赢了，因为 Terminal Bench 2.0 秒级反馈。如果反馈
                 └──────────┴──────────┘
 ```
 
-**Quilin 的策略**：把 harness 做到极致，让任何模型都能超水平发挥。模型是用户选的（via litellm），harness 是我们的核心竞争力。
+**Quilin 的策略**：把 harness 做到极致，让任何模型都能超水平发挥。模型是用户选的（via Vercel AI SDK），harness 是我们的核心竞争力。
 
 **行业验证**：LangChain 在同一模型上仅改 harness 就提升 13.7 pp。HumanLayer 发现 Opus 4.6 在不同 harness 中的排名从 #33 跳到 #5。这证明 harness 质量的影响可以超过模型换代的影响。
 
 ---
 
-## 十二、11 个工程领域的 Harness 角色映射
+## 十二、12 个工程领域的 Harness 角色映射
 
 | 领域 | Harness 角色 | 控制类型 | 重要性 |
 |------|-------------|---------|--------|
@@ -503,6 +530,7 @@ LangChain OPENDEV 赢了，因为 Terminal Bench 2.0 秒级反馈。如果反馈
 | 09-部署运行时 | 车库和加油站（运行环境 + 熵管理） | — | 基础 |
 | **10-自进化** | **自动调校（harness 自己改自己 + 用户自助吸收）** | **前馈+反馈** | **核心差异化** |
 | 11-Agent Mesh | 车联网（与其他 agent 通信） | — | 内置能力 |
+| 12-对话工程 | 驾驶员体验（活人感 + 风格适配 + 关系建模） | 前馈 | 差异化 |
 
 ---
 
@@ -541,3 +569,7 @@ LangChain OPENDEV 赢了，因为 Terminal Bench 2.0 秒级反馈。如果反馈
 | 12 | [Anthropic: Demystifying Evals](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents) | Eval 框架、pass@k/pass^k、评估驱动开发 |
 | 13 | [Anthropic: Context Engineering](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents) | 上下文有限资源理论、JIT 检索、sub-agent 隔离 |
 | 14 | [Zhang Handong: Harness Engineering from CC](https://zhanghandong.github.io/harness-engineering-from-cc-to-ai-coding/) | Claude Code 7 论文框架、微压缩、YOLO 分类器 |
+| 15 | [Epsilla: Harness Engineering Evolution](https://www.epsilla.com/blogs/harness-engineering-evolution-prompt-context-autonomous-agents) | 三代演进（Prompt→Context→Harness）、Semantic Graph 协调架构、GAN 式 Evaluator Pattern |
+| 16 | [Bassel Haidar: Agent Harness Architecture 2026](https://www.linkedin.com/pulse/agent-harness-architecture-dominate-2026-bassel-haidar-sczfe) | Harness 工业化论点、审计 trail + 可逆行动 + 策略边界、agent reliability engineering 作为标准平台学科 |
+| 17 | [hugo.im: The Agent Harness](https://hugo.im/posts/agent-harness-infrastructure/) | 基础设施 > 智能的论点、多 agent 协调脆弱性、harness 驱动的持续学习 |
+| 18 | [ICSE 2026 AGENT Workshop](https://conf.researchr.org/home/icse-2026/agent-2026) | 学术界正式承认 Agentic Engineering 为工程学科、基础模型驱动的自主系统设计与保障 |
