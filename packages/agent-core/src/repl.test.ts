@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { BasicContextManager } from "./context/manager.js";
 
 const mockQuestion = vi.fn();
 const mockClose = vi.fn();
@@ -107,16 +108,23 @@ describe("startRepl", () => {
 		expect(mockRunAgentLoop).toHaveBeenNthCalledWith(
 			1,
 			expect.objectContaining({
+				context: expect.any(BasicContextManager),
 				tools: [{ name: "memory_recall" }],
 			}),
 			expect.any(Array),
 		);
 		expect(capturedMessages[0]).toEqual([
-			expect.objectContaining({ role: "system" }),
+			expect.objectContaining({
+				role: "system",
+				content: expect.stringContaining("You are Quilin Agent"),
+			}),
 			{ role: "user", content: "hello" },
 		]);
 		expect(capturedMessages[1]).toEqual([
-			expect.objectContaining({ role: "system" }),
+			expect.objectContaining({
+				role: "system",
+				content: expect.stringContaining("You are Quilin Agent"),
+			}),
 			{ role: "user", content: "after clear" },
 		]);
 		expect(stderrWriteSpy).toHaveBeenCalledWith("Conversation cleared.\n\n");
@@ -145,7 +153,10 @@ describe("startRepl", () => {
 		});
 
 		expect(capturedMessages[1]).toEqual([
-			expect.objectContaining({ role: "system" }),
+			expect.objectContaining({
+				role: "system",
+				content: expect.stringContaining("You are Quilin Agent"),
+			}),
 			{ role: "user", content: "first" },
 			{ role: "assistant", content: "ok" },
 			{ role: "user", content: "second" },

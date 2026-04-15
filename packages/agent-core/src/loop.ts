@@ -1,3 +1,7 @@
+import {
+	createSystemContextSource,
+	DEFAULT_CONTEXT_BUDGET,
+} from "./context/manager.js";
 import type { ContextManager } from "./context/types.js";
 import type { InferenceConfig, LLMClient } from "./llm/types.js";
 import { getLoggerRuntimeMode, logger } from "./logger.js";
@@ -18,7 +22,7 @@ import type { Tool } from "./tools/types.js";
  *            → loop
  *
  * Phase 0 简化:
- *   - 无 ContextManager（直接传 messages）
+ *   - ContextManager 可选接入，仅重建 system prompt
  *   - 无 ToolRouter（无工具）
  *   - 无 Checkpoint（不持久化）
  *   - 纯文本对话，不处理 tool_calls
@@ -31,10 +35,26 @@ export async function runAgentLoop(
 	const shouldLogDebug = getLoggerRuntimeMode() !== "repl";
 	const router = new ToolRouter(config.tools ?? []);
 	const workingMessages: Message[] = [...messages];
+	const baseSystemPrompt =
+		messages[0]?.role === "system" ? messages[0].content : null;
+	if (config.context != null && baseSystemPrompt == null) {
+		logger.warn(
+			"ContextManager provided but no system message found — skipping context rebuild",
+		);
+	}
 	const maxTurns = config.maxTurns ?? Number.POSITIVE_INFINITY;
 	let turnCount = 0;
 
 	while (true) {
+		if (config.context != null && baseSystemPrompt != null) {
+			const systemPrompt = await config.context.buildContext(
+				[createSystemContextSource(baseSystemPrompt)],
+				DEFAULT_CONTEXT_BUDGET,
+			);
+
+			workingMessages[0] = { role: "system", content: systemPrompt };
+		}
+
 		if (turnCount >= maxTurns) {
 			throw new Error(`Agent loop exceeded maxTurns=${maxTurns}`);
 		}
@@ -49,7 +69,7 @@ export async function runAgentLoop(
 		}
 
 		const response = await llm.chat(
-			workingMessages,
+			[...workingMessages],
 			config.tools ?? [],
 			inferenceConfig,
 		);

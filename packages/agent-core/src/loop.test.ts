@@ -6,6 +6,7 @@ vi.mock("./logger.js", () => ({
 	getLoggerRuntimeMode: vi.fn(() => "service"),
 	logger: {
 		debug: vi.fn(),
+		warn: vi.fn(),
 	},
 }));
 
@@ -77,6 +78,39 @@ describe("runAgentLoop", () => {
 
 		expect(result).toBe("assistant reply");
 		expect(logger.debug).not.toHaveBeenCalled();
+	});
+
+	it("在提供 context manager 但没有 system message 时记录 warning", async () => {
+		vi.mocked(getLoggerRuntimeMode).mockReturnValue("repl");
+
+		const buildContext = vi.fn();
+		const chat = vi.fn().mockResolvedValue({
+			content: "assistant reply",
+			usage: {
+				inputTokens: 10,
+				outputTokens: 20,
+			},
+			finishReason: "stop",
+		});
+
+		const result = await runAgentLoop(
+			{
+				llm: { chat },
+				context: { buildContext },
+				inferenceConfig: {
+					temperature: 0.7,
+					maxTokens: 1024,
+					thinkingMode: "disabled",
+				},
+			},
+			[{ role: "user", content: "hello" }],
+		);
+
+		expect(result).toBe("assistant reply");
+		expect(buildContext).not.toHaveBeenCalled();
+		expect(logger.warn).toHaveBeenCalledWith(
+			"ContextManager provided but no system message found — skipping context rebuild",
+		);
 	});
 
 	it("在 tool_calls 场景下执行工具并把结果回灌给下一轮 LLM", async () => {
@@ -180,6 +214,131 @@ describe("runAgentLoop", () => {
 		);
 		expect(execute).toHaveBeenCalledWith({ query: "我叫什么" });
 		expect(logger.debug).toHaveBeenCalledTimes(4);
+	});
+
+	it("在提供 context manager 时每轮调用前重建 system prompt", async () => {
+		vi.mocked(getLoggerRuntimeMode).mockReturnValue("repl");
+
+		const buildContext = vi
+			.fn()
+			.mockResolvedValueOnce("assembled system prompt v1")
+			.mockResolvedValueOnce("assembled system prompt v2");
+		const chat = vi
+			.fn()
+			.mockResolvedValueOnce({
+				content: "",
+				toolCalls: [
+					{
+						id: "call-1",
+						name: "memory_recall",
+						arguments: { query: "我叫什么" },
+					},
+				],
+				usage: {
+					inputTokens: 10,
+					outputTokens: 20,
+				},
+				finishReason: "tool_calls",
+			})
+			.mockResolvedValueOnce({
+				content: "你叫小明。",
+				usage: {
+					inputTokens: 30,
+					outputTokens: 40,
+				},
+				finishReason: "stop",
+			});
+
+		const execute = vi.fn().mockResolvedValue({
+			toolCallId: "ignored-by-router",
+			content: JSON.stringify({
+				records: [{ id: "mem-1", content: "用户叫小明", tier: "short" }],
+			}),
+			isError: false,
+		});
+
+		await expect(
+			runAgentLoop(
+				{
+					llm: { chat },
+					context: { buildContext },
+					tools: [
+						{
+							name: "memory_recall",
+							description: "Recall memory",
+							parameters: {
+								safeParse: vi.fn().mockReturnValue({
+									success: true,
+									data: { query: "我叫什么" },
+								}),
+							} as never,
+							execute,
+						},
+					],
+					inferenceConfig: {
+						temperature: 0.7,
+						maxTokens: 1024,
+						thinkingMode: "disabled",
+					},
+				},
+				[
+					{ role: "system", content: "base system prompt" },
+					{ role: "user", content: "我叫什么" },
+				],
+			),
+		).resolves.toBe("你叫小明。");
+
+		expect(buildContext).toHaveBeenCalledTimes(2);
+		expect(buildContext).toHaveBeenNthCalledWith(
+			1,
+			[
+				expect.objectContaining({
+					type: "system",
+					content: "base system prompt",
+					priority: 100,
+				}),
+			],
+			expect.objectContaining({
+				total: expect.any(Number),
+			}),
+		);
+		expect(chat).toHaveBeenNthCalledWith(
+			1,
+			[
+				{ role: "system", content: "assembled system prompt v1" },
+				{ role: "user", content: "我叫什么" },
+			],
+			expect.any(Array),
+			expect.any(Object),
+		);
+		expect(chat).toHaveBeenNthCalledWith(
+			2,
+			[
+				{ role: "system", content: "assembled system prompt v2" },
+				{ role: "user", content: "我叫什么" },
+				{
+					role: "assistant",
+					content: "",
+					toolCalls: [
+						{
+							id: "call-1",
+							name: "memory_recall",
+							arguments: { query: "我叫什么" },
+						},
+					],
+				},
+				{
+					role: "tool",
+					toolCallId: "call-1",
+					name: "memory_recall",
+					content: JSON.stringify({
+						records: [{ id: "mem-1", content: "用户叫小明", tier: "short" }],
+					}),
+				},
+			],
+			expect.any(Array),
+			expect.any(Object),
+		);
 	});
 
 	it("在达到 maxTurns 上限后终止 tool loop", async () => {
