@@ -1,7 +1,10 @@
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runAgentLoop } from "../loop.js";
-import { MCPClientManager, writeReplLogSeparatorIfNeeded } from "./mcp-client.js";
+import {
+	MCPClientManager,
+	writeReplLogSeparatorIfNeeded,
+} from "./mcp-client.js";
 
 function getMemoryServerCwd() {
 	return fileURLToPath(

@@ -6,7 +6,11 @@ import {
 } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { getLoggerRuntimeMode, type LoggerRuntimeMode, logger } from "../logger.js";
+import {
+	getLoggerRuntimeMode,
+	type LoggerRuntimeMode,
+	logger,
+} from "../logger.js";
 import type { Tool } from "./types.js";
 
 const CONNECT_TIMEOUT_MS = 5_000;

@@ -8,7 +8,7 @@ import { startRepl } from "./repl.js";
 import { SQLiteCheckpoint } from "./state/checkpoint.js";
 import { MCPClientManager } from "./tools/mcp-client.js";
 
-export * from "./context/manager.js";
+export * from "./context/index.js";
 export * from "./llm/client.js";
 export * from "./llm/provider.js";
 export * from "./repl.js";

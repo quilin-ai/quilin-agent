@@ -1,10 +1,13 @@
 import { stderr, stdin } from "node:process";
 import * as readline from "node:readline/promises";
+import { createDefaultPromptSections } from "./context/default-sections.js";
 import {
 	BasicContextManager,
 	createSystemContextSource,
 	DEFAULT_CONTEXT_BUDGET,
 } from "./context/manager.js";
+import { PromptBuilder } from "./context/prompt-builder.js";
+import { createTemporalSection } from "./context/temporal.js";
 import { StreamingLLMClient } from "./llm/client.js";
 import type { createProvider } from "./llm/provider.js";
 import type { InferenceConfig } from "./llm/types.js";
@@ -13,17 +16,6 @@ import { runAgentLoop } from "./loop.js";
 import { SQLiteCheckpoint } from "./state/checkpoint.js";
 import type { AgentState, Message } from "./state/types.js";
 import type { Tool } from "./tools/types.js";
-
-const DEFAULT_SYSTEM_PROMPT_SOURCE = createSystemContextSource(
-	`You are Quilin Agent (麒麟), a helpful AI assistant.
-Be concise, accurate, and friendly. Answer in the same language as the user.
-
-Memory guidelines:
-- STORE: When the user shares identity details, preferences, or long-lived facts, call memory_store immediately. Examples: name, role, language preferences, project context.
-- RECALL: At the start of a new conversation or when the user greets you, call memory_recall with a broad query like "用户" or "user" to check if you know this person.
-- RECALL: When the user asks what you remember, or references past context, call memory_recall with relevant keywords before answering.
-- Recall queries can be short Chinese phrases (e.g. "名字", "偏好") — the search supports fuzzy matching.`,
-);
 
 const DEFAULT_INFERENCE_CONFIG: InferenceConfig = {
 	temperature: 0.7,
@@ -54,17 +46,62 @@ function createState(
 	};
 }
 
+function renderPromptText(prompt: {
+	staticPrefix: string;
+	dynamicSuffix: string;
+}): string {
+	return [prompt.staticPrefix, prompt.dynamicSuffix]
+		.filter((part) => part.length > 0)
+		.join("\n\n");
+}
+
+function buildDefaultSystemPrompt(
+	tools: readonly Tool[],
+	modelId: string,
+	lastSessionEndTime?: string,
+): string {
+	const promptBuilder = new PromptBuilder();
+	for (const section of createDefaultPromptSections()) {
+		promptBuilder.register(section);
+	}
+	promptBuilder.register(
+		createTemporalSection(() => ({
+			currentTime: new Date(),
+			lastMessageTime: null,
+			sessionStartTime: new Date(),
+			lastSessionEndTime:
+				lastSessionEndTime == null ? null : new Date(lastSessionEndTime),
+		})),
+	);
+
+	return renderPromptText(
+		promptBuilder.build({
+			userInput: "",
+			sessionState: {},
+			modelId,
+			availableTools: tools
+				.map((tool) => tool.name)
+				.filter((name): name is string => name != null),
+			profile: "full",
+		}),
+	);
+}
+
 export async function startRepl(options: ReplOptions): Promise<void> {
 	const { provider, modelId, sessionId, tools = [] } = options;
 	const context = new BasicContextManager();
 	const resolvedSessionId = sessionId ?? crypto.randomUUID();
-	const systemPrompt = await context.buildContext(
-		[DEFAULT_SYSTEM_PROMPT_SOURCE],
-		DEFAULT_CONTEXT_BUDGET,
-	);
 	const checkpoint = new SQLiteCheckpoint({ sessionId: resolvedSessionId });
 	const restoredState =
 		sessionId == null ? null : await checkpoint.load(resolvedSessionId);
+	const systemPrompt = await context.buildContext(
+		[
+			createSystemContextSource(
+				buildDefaultSystemPrompt(tools, modelId, restoredState?.lastActiveAt),
+			),
+		],
+		DEFAULT_CONTEXT_BUDGET,
+	);
 
 	stderr.write("\n🐉 Quilin Agent v0.0.3 (DeepSeek)\n");
 	stderr.write(
