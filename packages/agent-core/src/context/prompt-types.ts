@@ -1,3 +1,5 @@
+import type { ToolPromptDescriptor } from "../tools/tool-metadata.js";
+
 export type UpdateFrequency = "static" | "per_session" | "per_turn";
 
 export type PromptProfile = "full" | "minimal" | "none";
@@ -16,6 +18,7 @@ export interface BuildContext {
 	readonly sessionState: Record<string, unknown>;
 	readonly modelId: string;
 	readonly availableTools: readonly string[];
+	readonly availableToolDescriptors?: readonly ToolPromptDescriptor[];
 	readonly profile: PromptProfile;
 }
 

@@ -8,6 +8,48 @@ function describeTools(availableTools: readonly string[]): string {
 	return `Available tools: ${availableTools.join(", ")}`;
 }
 
+const CATEGORY_ORDER = [
+	"programmatic",
+	"interactive",
+	"control",
+	"gui",
+] as const;
+
+const CATEGORY_TITLES = {
+	programmatic: "Programmatic Tools",
+	interactive: "Interactive Tools",
+	control: "Control Tools",
+	gui: "GUI Tools",
+} as const;
+
+function describeToolDescriptors(ctx: BuildContext): string {
+	if (
+		ctx.availableToolDescriptors == null ||
+		ctx.availableToolDescriptors.length === 0
+	) {
+		return describeTools(ctx.availableTools);
+	}
+
+	const sections = CATEGORY_ORDER.flatMap((category) => {
+		const matchingTools = ctx.availableToolDescriptors
+			.filter((tool) => tool.category === category)
+			.sort((left, right) => left.name.localeCompare(right.name));
+
+		if (matchingTools.length === 0) {
+			return [];
+		}
+
+		return [
+			`## ${CATEGORY_TITLES[category]}`,
+			...matchingTools.map(
+				(tool) => `- ${tool.name} (${tool.riskLevel}): ${tool.description}`,
+			),
+		];
+	});
+
+	return sections.join("\n");
+}
+
 export function createIdentitySection(): PromptSection {
 	return {
 		name: "identity",
@@ -39,7 +81,7 @@ export function createToolGuidanceSection(): PromptSection {
 				'- RECALL: At the start of a new conversation or when the user greets you, call memory_recall with a broad query like "用户" or "user" to check if you know this person.',
 				"- RECALL: When the user asks what you remember, or references past context, call memory_recall with relevant keywords before answering.",
 				'- Recall queries can be short Chinese phrases (e.g. "名字", "偏好") — the search supports fuzzy matching.',
-				describeTools(ctx.availableTools),
+				describeToolDescriptors(ctx),
 			].join("\n"),
 	};
 }
