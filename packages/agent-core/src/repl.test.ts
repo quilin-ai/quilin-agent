@@ -10,12 +10,25 @@ const mockCreateInterface = vi.fn(() => ({
 const mockRunAgentLoop = vi.fn();
 const mockLoggerError = vi.fn();
 const mockStreamingClient = vi.fn();
+const mockCheckpointLoad = vi.fn();
+const mockCheckpointSave = vi.fn();
+const mockCheckpointConstructor = vi.fn();
 
 class MockStreamingLLMClient {
 	chat = vi.fn();
 
 	constructor(...args: unknown[]) {
 		mockStreamingClient(...args);
+	}
+}
+
+class MockSQLiteCheckpoint {
+	load = mockCheckpointLoad;
+	save = mockCheckpointSave;
+	list = vi.fn();
+
+	constructor(...args: unknown[]) {
+		mockCheckpointConstructor(...args);
 	}
 }
 
@@ -37,6 +50,10 @@ vi.mock("./llm/client.js", () => ({
 	StreamingLLMClient: MockStreamingLLMClient,
 }));
 
+vi.mock("./state/checkpoint.js", () => ({
+	SQLiteCheckpoint: MockSQLiteCheckpoint,
+}));
+
 describe("startRepl", () => {
 	const stdoutWriteSpy = vi.spyOn(process.stdout, "write");
 	const stderrWriteSpy = vi.spyOn(process.stderr, "write");
@@ -45,6 +62,8 @@ describe("startRepl", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		capturedMessages.length = 0;
+		mockCheckpointLoad.mockResolvedValue(null);
+		mockCheckpointSave.mockResolvedValue(undefined);
 		stdoutWriteSpy.mockImplementation(() => true);
 		stderrWriteSpy.mockImplementation(() => true);
 	});
@@ -83,6 +102,18 @@ describe("startRepl", () => {
 		expect(stderrWriteSpy).toHaveBeenCalledWith("\nBye! 🐉\n");
 		expect(stdoutWriteSpy).not.toHaveBeenCalled();
 		expect(mockClose).toHaveBeenCalled();
+		expect(mockCheckpointSave).toHaveBeenCalledWith({
+			messages: [
+				expect.objectContaining({
+					role: "system",
+					content: expect.stringContaining("You are Quilin Agent"),
+				}),
+			],
+			isTerminal: true,
+			turnCount: 0,
+			createdAt: expect.any(String),
+			lastActiveAt: expect.any(String),
+		});
 	});
 
 	it("clears history and sends only the fresh conversation", async () => {
@@ -165,5 +196,44 @@ describe("startRepl", () => {
 		expect(stderrWriteSpy).toHaveBeenCalledWith(
 			"\n[Error: LLM call failed. Check logs for details.]\n\n",
 		);
+	});
+
+	it("restores a saved session when sessionId is provided", async () => {
+		mockQuestion.mockResolvedValueOnce("next").mockResolvedValueOnce("/exit");
+		mockCheckpointLoad.mockResolvedValue({
+			messages: [
+				{ role: "system", content: "restored system prompt" },
+				{ role: "user", content: "before" },
+				{ role: "assistant", content: "after" },
+			],
+			isTerminal: false,
+			turnCount: 2,
+			createdAt: "2026-04-15T00:00:00.000Z",
+			lastActiveAt: "2026-04-15T00:01:00.000Z",
+		});
+		mockRunAgentLoop.mockImplementation(async (_config, messages) => {
+			capturedMessages.push(structuredClone(messages));
+			return "continued";
+		});
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: vi.fn().mockReturnValue("model-instance"),
+			modelId: "deepseek-chat",
+			sessionId: "resume-session",
+			tools: [{ name: "memory_recall" }] as never,
+		});
+
+		expect(mockCheckpointConstructor).toHaveBeenCalledWith({
+			sessionId: "resume-session",
+		});
+		expect(mockCheckpointLoad).toHaveBeenCalledWith("resume-session");
+		expect(capturedMessages[0]).toEqual([
+			{ role: "system", content: "restored system prompt" },
+			{ role: "user", content: "before" },
+			{ role: "assistant", content: "after" },
+			{ role: "user", content: "next" },
+		]);
 	});
 });

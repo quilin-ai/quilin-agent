@@ -113,6 +113,56 @@ describe("runAgentLoop", () => {
 		);
 	});
 
+	it("在提供 checkpoint 时保存最终 assistant 回复状态", async () => {
+		vi.mocked(getLoggerRuntimeMode).mockReturnValue("repl");
+
+		const chat = vi.fn().mockResolvedValue({
+			content: "assistant reply",
+			usage: {
+				inputTokens: 10,
+				outputTokens: 20,
+			},
+			finishReason: "stop",
+		});
+		const save = vi.fn().mockResolvedValue(undefined);
+
+		const result = await runAgentLoop(
+			{
+				llm: { chat },
+				checkpoint: {
+					save,
+					load: vi.fn(),
+					list: vi.fn(),
+				},
+				state: {
+					messages: [{ role: "user", content: "hello" }],
+					isTerminal: false,
+					turnCount: 3,
+					createdAt: "2026-04-15T00:00:00.000Z",
+					lastActiveAt: "2026-04-15T00:01:00.000Z",
+				},
+				inferenceConfig: {
+					temperature: 0.7,
+					maxTokens: 1024,
+					thinkingMode: "disabled",
+				},
+			},
+			[{ role: "user", content: "hello" }],
+		);
+
+		expect(result).toBe("assistant reply");
+		expect(save).toHaveBeenCalledWith({
+			messages: [
+				{ role: "user", content: "hello" },
+				{ role: "assistant", content: "assistant reply" },
+			],
+			isTerminal: false,
+			turnCount: 4,
+			createdAt: "2026-04-15T00:00:00.000Z",
+			lastActiveAt: expect.any(String),
+		});
+	});
+
 	it("在 tool_calls 场景下执行工具并把结果回灌给下一轮 LLM", async () => {
 		vi.mocked(getLoggerRuntimeMode).mockReturnValue("service");
 

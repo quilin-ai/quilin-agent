@@ -10,7 +10,8 @@ import type { createProvider } from "./llm/provider.js";
 import type { InferenceConfig } from "./llm/types.js";
 import { logger } from "./logger.js";
 import { runAgentLoop } from "./loop.js";
-import type { Message } from "./state/types.js";
+import { SQLiteCheckpoint } from "./state/checkpoint.js";
+import type { AgentState, Message } from "./state/types.js";
 import type { Tool } from "./tools/types.js";
 
 const DEFAULT_SYSTEM_PROMPT_SOURCE = createSystemContextSource(
@@ -27,23 +28,48 @@ const DEFAULT_INFERENCE_CONFIG: InferenceConfig = {
 interface ReplOptions {
 	provider: ReturnType<typeof createProvider>;
 	modelId: string;
+	sessionId?: string;
 	tools?: readonly Tool[];
 }
 
+function createState(
+	messages: readonly Message[],
+	overrides: Partial<AgentState> = {},
+): AgentState {
+	const now = new Date().toISOString();
+
+	return {
+		messages,
+		isTerminal: false,
+		turnCount: 0,
+		createdAt: now,
+		lastActiveAt: now,
+		...overrides,
+	};
+}
+
 export async function startRepl(options: ReplOptions): Promise<void> {
-	const { provider, modelId, tools = [] } = options;
+	const { provider, modelId, sessionId, tools = [] } = options;
 	const context = new BasicContextManager();
 	const systemPrompt = await context.buildContext(
 		[DEFAULT_SYSTEM_PROMPT_SOURCE],
 		DEFAULT_CONTEXT_BUDGET,
 	);
+	const checkpoint =
+		sessionId == null
+			? new SQLiteCheckpoint()
+			: new SQLiteCheckpoint({ sessionId });
+	const restoredState =
+		sessionId == null ? null : await checkpoint.load(sessionId);
 
 	stderr.write("\n🐉 Quilin Agent v0.0.1 (DeepSeek)\n");
 	stderr.write("Type your message, or /exit to quit.\n\n");
 
 	const rl = readline.createInterface({ input: stdin, output: stderr });
 
-	const messages: Message[] = [{ role: "system", content: systemPrompt }];
+	let state =
+		restoredState ?? createState([{ role: "system", content: systemPrompt }]);
+	const messages: Message[] = [...state.messages];
 
 	const llm = new StreamingLLMClient(provider(modelId), (chunk) => {
 		stderr.write(chunk);
@@ -58,6 +84,12 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 		}
 
 		if (trimmed === "/exit" || trimmed === "/quit") {
+			state = createState([...messages], {
+				...state,
+				isTerminal: true,
+				lastActiveAt: new Date().toISOString(),
+			});
+			await checkpoint.save(state);
 			stderr.write("\nBye! 🐉\n");
 			rl.close();
 			return;
@@ -65,11 +97,22 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 
 		if (trimmed === "/clear") {
 			messages.length = 1;
+			state = createState([...messages], {
+				...state,
+				messages: [...messages],
+				isTerminal: false,
+				lastActiveAt: new Date().toISOString(),
+			});
 			stderr.write("Conversation cleared.\n\n");
 			continue;
 		}
 
 		messages.push({ role: "user", content: trimmed });
+		state = createState([...messages], {
+			...state,
+			messages: [...messages],
+			lastActiveAt: new Date().toISOString(),
+		});
 		stderr.write("\n");
 
 		try {
@@ -77,6 +120,8 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 				{
 					llm,
 					context,
+					checkpoint,
+					state,
 					tools,
 					inferenceConfig: DEFAULT_INFERENCE_CONFIG,
 				},
@@ -84,11 +129,24 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 			);
 
 			messages.push({ role: "assistant", content: response });
+			state = createState([...messages], {
+				...state,
+				messages: [...messages],
+				turnCount: state.turnCount + 1,
+				isTerminal: false,
+				lastActiveAt: new Date().toISOString(),
+			});
 			stderr.write("\n\n");
 		} catch (err) {
 			logger.error({ err }, "REPL: LLM call failed");
 			stderr.write("\n[Error: LLM call failed. Check logs for details.]\n\n");
 			messages.pop();
+			state = createState([...messages], {
+				...state,
+				messages: [...messages],
+				isTerminal: false,
+				lastActiveAt: new Date().toISOString(),
+			});
 		}
 	}
 }

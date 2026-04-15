@@ -5,9 +5,25 @@ import {
 import type { ContextManager } from "./context/types.js";
 import type { InferenceConfig, LLMClient } from "./llm/types.js";
 import { getLoggerRuntimeMode, logger } from "./logger.js";
-import type { Checkpoint, Message } from "./state/types.js";
+import type { AgentState, Checkpoint, Message } from "./state/types.js";
 import { ToolRouter } from "./tools/router.js";
 import type { Tool } from "./tools/types.js";
+
+function buildCheckpointState(
+	messages: readonly Message[],
+	responseContent: string,
+	state?: AgentState,
+): AgentState {
+	const now = new Date().toISOString();
+
+	return {
+		messages: [...messages, { role: "assistant", content: responseContent }],
+		isTerminal: false,
+		turnCount: (state?.turnCount ?? 0) + 1,
+		createdAt: state?.createdAt ?? now,
+		lastActiveAt: now,
+	};
+}
 
 /**
  * Quilin Agent 核心循环
@@ -24,7 +40,7 @@ import type { Tool } from "./tools/types.js";
  * Phase 0 简化:
  *   - ContextManager 可选接入，仅重建 system prompt
  *   - 无 ToolRouter（无工具）
- *   - 无 Checkpoint（不持久化）
+ *   - Checkpoint 可选接入，仅保存最终 assistant 回复后的状态
  *   - 纯文本对话，不处理 tool_calls
  */
 export async function runAgentLoop(
@@ -86,6 +102,12 @@ export async function runAgentLoop(
 		}
 
 		if (response.finishReason !== "tool_calls") {
+			if (config.checkpoint != null) {
+				await config.checkpoint.save(
+					buildCheckpointState(workingMessages, response.content, config.state),
+				);
+			}
+
 			return response.content;
 		}
 
@@ -123,6 +145,7 @@ export interface AgentLoopConfig {
 	readonly context?: ContextManager;
 	readonly tools?: readonly Tool[];
 	readonly checkpoint?: Checkpoint;
+	readonly state?: AgentState;
 	readonly maxTurns?: number;
 	readonly inferenceConfig: InferenceConfig;
 }
