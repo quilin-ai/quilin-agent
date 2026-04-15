@@ -27,9 +27,10 @@
 
 1. **Multi-MCP Server Registry**
    - 当前 `MCPClientManager` 只管理单个 MCP Server 连接
-   - 扩展为 `MCPRegistry`：支持多 server 并行连接、动态注册/注销、断线重连
+   - 扩展为 `MCPRegistry`：支持多 server 并行连接、启动时注册
    - 工具名冲突解决：`<server-namespace>/<tool-name>` 前缀方案
-   - 配置驱动：server 列表从配置文件加载，支持运行时增删
+   - 配置驱动：server 列表从配置文件加载
+   - **运行时动态增删 server + 断线重连延后到 B1.1**（当前只保证启动时加载）
 
 2. **内置工具抽象**
    - 在 MCP 工具之外，提供本地内置工具（不走 MCP 协议，直接 TS 实现）
@@ -44,9 +45,11 @@
    - 风险级别标注：`riskLevel` (read / write / exec / high-risk)
    - 这些 metadata 是 B2 安全策略的基础，但 B1 只定义数据结构，不做执行拦截
 
-4. **Tool ↔ Context 集成**
+4. **Tool ↔ Context 集成（启动时）**
    - 工具描述 → PromptBuilder `tool-guidance` section（已存在占位 section）
-   - 工具执行结果 → 作为 `ContextSource` 参与 token budget 管理
+   - `BuildContext` 增量扩展：新增 `availableToolDescriptors?: readonly ToolPromptDescriptor[]`，不修改原 `availableTools: readonly string[]`
+   - ~~工具执行结果 → 作为 `ContextSource` 参与 token budget 管理~~ **延后到 Iter C**（需 loop.ts 改动，超出 B1 范围）
+   - ~~运行时增删 server 后自动刷新 prompt~~ **延后到 B1.1**（当前 repl.ts 只在启动时 build 一次 prompt）
    - 工具数量多时（>20），按任务相关性动态过滤暴露给 LLM 的工具列表
 
 ### B2: Safety Policy（安全策略）
