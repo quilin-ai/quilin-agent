@@ -131,6 +131,50 @@ async def test_store_persists_records_across_instances(tmp_path: Path) -> None:
     ]
 
 
+async def test_store_creates_fts_table() -> None:
+    store = OmniMemStore(db_path=":memory:")
+
+    table_names = {
+        row[0]
+        for row in store._conn.execute(  # type: ignore[attr-defined]
+            """
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'table'
+            """
+        ).fetchall()
+    }
+
+    assert "memory_records_fts" in table_names
+
+
+async def test_recall_uses_fts_for_cjk_tokens() -> None:
+    store = OmniMemStore(db_path=":memory:")
+    await store.store("用户的名字是老孟")
+
+    results = await store.recall("名字")
+
+    assert [record.content for record in results] == ["用户的名字是老孟"]
+
+
+async def test_recall_expands_generic_memory_queries_for_fts() -> None:
+    store = OmniMemStore(db_path=":memory:")
+    await store.store("用户的名字是老孟")
+
+    results = await store.recall("记得")
+
+    assert [record.content for record in results] == ["用户的名字是老孟"]
+
+
+async def test_recall_falls_back_to_like_when_fts_returns_no_results() -> None:
+    store = OmniMemStore(db_path=":memory:")
+    await store.store("用户的名字是老孟")
+
+    results = await store.recall("孟")
+
+    assert [record.content for record in results] == ["用户的名字是老孟"]
+
+
 async def test_store_defaults_to_quilin_home_db(
     monkeypatch: object,
     tmp_path: Path,
