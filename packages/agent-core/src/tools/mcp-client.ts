@@ -6,7 +6,7 @@ import {
 } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { logger } from "../logger.js";
+import { getLoggerRuntimeMode, type LoggerRuntimeMode, logger } from "../logger.js";
 import type { Tool } from "./types.js";
 
 const CONNECT_TIMEOUT_MS = 5_000;
@@ -52,6 +52,14 @@ function createDisconnectedResult(message: string): MCPToolCallResult {
 		content: JSON.stringify({ error: message }),
 		isError: true,
 	};
+}
+
+export function writeReplLogSeparatorIfNeeded(
+	runtimeMode: LoggerRuntimeMode = getLoggerRuntimeMode(),
+): void {
+	if (runtimeMode === "repl") {
+		process.stderr.write("\n");
+	}
 }
 
 function detectErrorPayload(content: string): boolean {
@@ -145,22 +153,26 @@ export class MCPClientManager {
 		const transport = new StdioClientTransport(transportConfig);
 
 		transport.onerror = (error) => {
+			writeReplLogSeparatorIfNeeded();
 			logger.error({ err: error }, "MCP transport error");
 		};
 		transport.onclose = () => {
 			this.isConnected = false;
 			this.disconnectReason = "MCP server disconnected";
+			writeReplLogSeparatorIfNeeded();
 			logger.warn("MCP transport closed");
 		};
 
 		transport.stderr?.on("data", (chunk) => {
 			const message = chunk.toString().trim();
 			if (message !== "") {
+				writeReplLogSeparatorIfNeeded();
 				logger.warn({ stderr: message }, "MCP server stderr");
 			}
 		});
 
 		client.onerror = (error) => {
+			writeReplLogSeparatorIfNeeded();
 			logger.error({ err: error }, "MCP client error");
 		};
 

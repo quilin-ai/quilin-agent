@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { runAgentLoop } from "../loop.js";
-import { MCPClientManager } from "./mcp-client.js";
+import { MCPClientManager, writeReplLogSeparatorIfNeeded } from "./mcp-client.js";
 
 function getMemoryServerCwd() {
 	return fileURLToPath(
@@ -18,6 +18,30 @@ function createMemoryServerConfig() {
 }
 
 describe.sequential("MCPClientManager", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it("writes a newline before MCP stderr logs in repl mode", () => {
+		const stderrWriteSpy = vi
+			.spyOn(process.stderr, "write")
+			.mockImplementation(() => true);
+
+		writeReplLogSeparatorIfNeeded("repl");
+
+		expect(stderrWriteSpy).toHaveBeenCalledWith("\n");
+	});
+
+	it("does not write a separator outside repl mode", () => {
+		const stderrWriteSpy = vi
+			.spyOn(process.stderr, "write")
+			.mockImplementation(() => true);
+
+		writeReplLogSeparatorIfNeeded("service");
+
+		expect(stderrWriteSpy).not.toHaveBeenCalled();
+	});
+
 	it("connects to OmniMem and maps MCP tools into local Tool definitions", async () => {
 		const manager = new MCPClientManager();
 
