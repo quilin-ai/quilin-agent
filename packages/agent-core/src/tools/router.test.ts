@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { ToolRouter } from "./router.js";
+import type { ToolWithMetadata } from "./tool-metadata.js";
 
 describe("ToolRouter", () => {
 	it("执行匹配工具并归一化 toolCallId", async () => {
@@ -100,6 +101,130 @@ describe("ToolRouter", () => {
 		expect(result.isError).toBe(true);
 		expect(JSON.parse(result.content)).toEqual({
 			error: "disk full",
+		});
+	});
+
+	it("支持执行带 metadata 的工具", async () => {
+		const execute = vi.fn().mockResolvedValue({
+			toolCallId: "wrong-id",
+			content: JSON.stringify({ ok: true }),
+			isError: false,
+		});
+		const tool: ToolWithMetadata = {
+			name: "file_read",
+			description: "Read a file with numbered lines.",
+			parameters: z.object({ path: z.string() }),
+			execute,
+			category: "programmatic",
+			riskLevel: "read",
+		};
+		const router = new ToolRouter([tool]);
+
+		const result = await router.execute({
+			id: "call-meta",
+			name: "file_read",
+			arguments: { path: "/tmp/demo.txt" },
+		});
+
+		expect(execute).toHaveBeenCalledWith({ path: "/tmp/demo.txt" });
+		expect(result).toEqual({
+			toolCallId: "call-meta",
+			content: JSON.stringify({ ok: true }),
+			isError: false,
+		});
+	});
+
+	it("优先精确匹配带 namespace 的工具名", async () => {
+		const execute = vi.fn().mockResolvedValue({
+			toolCallId: "wrong-id",
+			content: JSON.stringify({ records: [] }),
+			isError: false,
+		});
+		const router = new ToolRouter([
+			{
+				name: "omnimem/memory_recall",
+				description: "Recall memories",
+				parameters: z.object({ query: z.string() }),
+				execute,
+				category: "programmatic",
+				riskLevel: "read",
+				namespace: "omnimem",
+			} satisfies ToolWithMetadata,
+		]);
+
+		const result = await router.execute({
+			id: "call-ns",
+			name: "omnimem/memory_recall",
+			arguments: { query: "小明" },
+		});
+
+		expect(execute).toHaveBeenCalledWith({ query: "小明" });
+		expect(result.isError).toBe(false);
+	});
+
+	it("找不到精确匹配时回退到短名查找", async () => {
+		const execute = vi.fn().mockResolvedValue({
+			toolCallId: "wrong-id",
+			content: JSON.stringify({ records: [] }),
+			isError: false,
+		});
+		const router = new ToolRouter([
+			{
+				name: "omnimem/memory_recall",
+				description: "Recall memories",
+				parameters: z.object({ query: z.string() }),
+				execute,
+				category: "programmatic",
+				riskLevel: "read",
+				namespace: "omnimem",
+			} satisfies ToolWithMetadata,
+		]);
+
+		const result = await router.execute({
+			id: "call-short",
+			name: "memory_recall",
+			arguments: { query: "老孟" },
+		});
+
+		expect(execute).toHaveBeenCalledWith({ query: "老孟" });
+		expect(result.isError).toBe(false);
+	});
+
+	it("短名冲突时返回 tool not found 错误", async () => {
+		const executeOne = vi.fn();
+		const executeTwo = vi.fn();
+		const router = new ToolRouter([
+			{
+				name: "memory/search",
+				description: "Memory search",
+				parameters: z.object({ query: z.string() }),
+				execute: executeOne,
+				category: "programmatic",
+				riskLevel: "read",
+				namespace: "memory",
+			} satisfies ToolWithMetadata,
+			{
+				name: "web/search",
+				description: "Web search",
+				parameters: z.object({ query: z.string() }),
+				execute: executeTwo,
+				category: "programmatic",
+				riskLevel: "read",
+				namespace: "web",
+			} satisfies ToolWithMetadata,
+		]);
+
+		const result = await router.execute({
+			id: "call-ambiguous",
+			name: "search",
+			arguments: { query: "quilin" },
+		});
+
+		expect(executeOne).not.toHaveBeenCalled();
+		expect(executeTwo).not.toHaveBeenCalled();
+		expect(result.isError).toBe(true);
+		expect(JSON.parse(result.content)).toEqual({
+			error: expect.stringContaining("search"),
 		});
 	});
 });
