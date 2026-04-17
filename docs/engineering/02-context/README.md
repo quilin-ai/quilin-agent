@@ -696,7 +696,7 @@ function sectionSemanticEqual(a: string, b: string): boolean;
 | Agent | 实现 | 源码位置 |
 |-------|------|---------|
 | **Claude Code** | Tool JSON schema 通过 API `tools` 参数传入（由 Vercel AI SDK 处理），行为指导（何时用、注意事项）写在 system prompt 的静态段 `getUsingYourToolsSection()` 中 | `src/constants/prompts.ts` |
-| **Hermes** | `TOOL_USE_ENFORCEMENT_GUIDANCE`（强制模型调用工具而非口头描述）、`SKILLS_GUIDANCE`（技能使用最佳实践）、`SESSION_SEARCH_GUIDANCE`（搜索策略）分别作为独立段注入 system prompt；Tool schema 走 API 的 `tools` 字段 | `agent/prompt_builder.py` |
+| **Hermes** | `TOOL_USE_ENFORCEMENT_GUIDANCE`（强制模型调用工具而非口头描述）、`SKILLS_GUIDANCE`（技能使用最佳实践，技能目录与按需加载详见 [13-技能工程](../13-skills/README.md)）、`SESSION_SEARCH_GUIDANCE`（搜索策略）分别作为独立段注入 system prompt；Tool schema 走 API 的 `tools` 字段 | `agent/prompt_builder.py` |
 | **OpenClaw** | `tools.md` 作为 order=50 的上下文文件注入，内容是工具使用策略；实际的 tool definition 通过 `@modelcontextprotocol/sdk` 的 tool API 注册 | `src/agents/system-prompt.ts` |
 
 **为什么这样做**：

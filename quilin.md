@@ -4,7 +4,7 @@
 
 ## Project Overview
 
-Quilin Agent（麒麟）is a dynamic, self-evolving Agent framework that monitors 12 capability domains x Top 10 open-source projects each (~100 total upstreams). It auto-syncs upstream changes, uses AI agents to intelligently analyze diffs, generates fusion patches, and publishes new versions.
+Quilin Agent（麒麟）is a dynamic, self-evolving Agent framework that monitors 13 capability domains x Top 10 open-source projects each (~100 total upstreams). It auto-syncs upstream changes, uses AI agents to intelligently analyze diffs, generates fusion patches, and publishes new versions.
 
 ## Architecture
 
@@ -33,16 +33,16 @@ Quilin Agent（麒麟）is a dynamic, self-evolving Agent framework that monitor
 
 ## Current Status
 
-**Entering Phase 0** — all 12 engineering domain specs are complete. Project skeleton initialization (ADR-002) is the next step, followed by Phase 0 core implementation.
+**Entering Phase 0** — all 13 engineering domain specs are complete (含 13-skills，2026-04-17 基于四仓库对比研究新增)。Project skeleton initialization (ADR-002) is the next step, followed by Phase 0 core implementation.
 
 ## Documentation Map
 
 | 文档 | 位置 | 用途 |
 |------|------|------|
 | 架构决策 | `docs/adr/adr-###-slug.md` | 已定稿的技术决策 |
-| 架构总览 | `docs/architecture/overview.md` | 12 领域全景图 + 导航 |
+| 架构总览 | `docs/architecture/overview.md` | 13 领域全景图 + 导航 |
 | Harness 工程 | `docs/architecture/harness-engineering.md` | 顶层架构概念 |
-| 工程领域 spec | `docs/engineering/<编号-领域>/README.md` | 12 个领域详细设计 |
+| 工程领域 spec | `docs/engineering/<编号-领域>/README.md` | 13 个领域详细设计 |
 | 调研材料 | `docs/research/` | Claude Code / Codex / OpenClaw / Hermes 深度调研 |
 | 实施计划 | `docs/implementation-plan.md` | 三阶段迁移 + benchmark 竞赛 |
 
@@ -85,10 +85,11 @@ quilin-agent/
 ├── docs/
 │   ├── adr/                        # 架构决策记录
 │   ├── architecture/               # 架构总览 + Harness 工程
-│   ├── engineering/                # 12 个工程领域 spec
+│   ├── engineering/                # 13 个工程领域 spec
 │   │   ├── 01-llm-integration/
 │   │   ├── ...
-│   │   └── 12-conversation-engineering/
+│   │   ├── 12-conversation-engineering/
+│   │   └── 13-skills/
 │   ├── research/                   # 深度调研
 │   └── implementation-plan.md
 ├── scripts/                        # 自动化脚本
@@ -101,7 +102,7 @@ quilin-agent/
 └── readme.md
 ```
 
-## 12 Engineering Domains
+## 13 Engineering Domains
 
 | # | Domain | Key Design | Spec |
 |---|--------|-----------|------|
@@ -117,6 +118,7 @@ quilin-agent/
 | 10 | Self-Evolution | Trajectory analysis, scaffold self-modification, skill creation, User Insight Engine | [10](docs/engineering/10-self-evolution/README.md) |
 | 11 | Agent Mesh | Built-in mesh connectivity via AgentMesh SDK | [11](docs/engineering/11-agent-mesh/README.md) |
 | 12 | Conversation Engineering | 6-layer alive feeling, 3 style modes, relationship modeling | [12](docs/engineering/12-conversation-engineering/README.md) |
+| 13 | Skills | SKILL.md + frontmatter, catalog + on-demand load, path/size safety, M0/M1/M2+ phased | [13](docs/engineering/13-skills/README.md) |
 
 ## Code Style & Conventions
 

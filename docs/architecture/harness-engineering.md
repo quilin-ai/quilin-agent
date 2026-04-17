@@ -1,6 +1,6 @@
 # Harness Engineering（脚手架工程）
 
-> Quilin Agent 的顶层架构概念。本文档综合了 OpenAI、Anthropic、Martin Fowler、LangChain、Manus、Epsilla 等行业最前沿的 harness 工程实践（18 篇来源），将散落在 12 个工程领域中的 harness 相关设计统一为一个显式的一等架构理念。
+> Quilin Agent 的顶层架构概念。本文档综合了 OpenAI、Anthropic、Martin Fowler、LangChain、Manus、Epsilla 等行业最前沿的 harness 工程实践（18 篇来源），将散落在 13 个工程领域中的 harness 相关设计统一为一个显式的一等架构理念。
 
 ---
 
@@ -190,7 +190,7 @@ Agent Loop (模式 1)
 
 ## 五、Quilin 的 Harness 架构
 
-Quilin 的整体架构就是一个 harness。E-T-C-S-L-V 六组件 + 12 个工程领域共同构成了这个 harness：
+Quilin 的整体架构就是一个 harness。E-T-C-S-L-V 六组件 + 13 个工程领域共同构成了这个 harness：
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -515,7 +515,7 @@ LangChain OPENDEV 赢了，因为 Terminal Bench 2.0 秒级反馈。如果反馈
 
 ---
 
-## 十二、12 个工程领域的 Harness 角色映射
+## 十二、13 个工程领域的 Harness 角色映射
 
 | 领域 | Harness 角色 | 控制类型 | 重要性 |
 |------|-------------|---------|--------|
@@ -531,6 +531,7 @@ LangChain OPENDEV 赢了，因为 Terminal Bench 2.0 秒级反馈。如果反馈
 | **10-自进化** | **自动调校（harness 自己改自己 + 用户自助吸收）** | **前馈+反馈** | **核心差异化** |
 | 11-Agent Mesh | 车联网（与其他 agent 通信） | — | 内置能力 |
 | 12-对话工程 | 驾驶员体验（活人感 + 风格适配 + 关系建模） | 前馈 | 差异化 |
+| **13-技能工程** | **驾驶技巧手册（SKILL.md 目录 + 按需加载 → 喂给 02-上下文）** | **前馈** | **核心** |
 
 ---
 

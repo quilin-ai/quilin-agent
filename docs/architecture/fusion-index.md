@@ -28,7 +28,10 @@
 | 09 部署运行时 | 5 | 5 | 15 | 0 | 10 |
 | 10 自进化 | 5 | 5 | 16 | 0 | 11 |
 | 11 Agent Mesh | 5 | 6 | 15 | 0 | 9 |
-| **合计** | **55** | **56** | **165** | **0** | **109** |
+| 13 技能工程 | 4 | — | 5 | 0 | 5 |
+| **合计** | **59** | **56** | **170** | **0** | **114** |
+
+> 说明：12 对话工程的上游监控尚未录入（计划随 Phase 2 落地补齐）。13 技能工程的深入项目来自 [docs/research/skill-loading-comparison.md](../research/skill-loading-comparison.md) 的四仓库研究（Claude Code / Hermes / OpenClaw / Codex）。
 
 > 说明：功能点总数 = 深入功能点数 + 观察项目数（每个观察项目计 1 行）。规划中仅含深入功能点；观察项目均为 👀 观察中（不计入规划中）。
 
@@ -276,6 +279,19 @@
 
 ---
 
+## 13 — 技能工程
+
+> 深入研究详见 [docs/research/skill-loading-comparison.md](../research/skill-loading-comparison.md)。本表列出四仓库中用于对比研究的关键代码路径。
+
+| 功能点 | 来源项目 | 版本/Commit | 参考代码路径 | 状态 | 深度 |
+|--------|---------|-------------|-------------|------|------|
+| Bundled / File / MCP / Managed 四源发现 + ToolSearch 延迟加载 | Claude Code | latest (2026-04) | `src/skills/loadSkillsDir.ts` + `src/utils/toolSearch.ts` | 📋 | 深入 |
+| 文件系统扫描 + 3 层 LRU 缓存 + skills_guard 30+ 威胁模式 + background nudge | Hermes Agent | latest (2026-04) | `agent/prompt_builder.py` + `tools/skills_guard.py` + `run_agent.py` | 📋 | 深入 |
+| 6 级优先级发现 + realpath containment + plugin 贡献 skill roots | OpenClaw | latest (2026-04) | `src/agents/skills/workspace.ts` + `src/agents/skills/plugin-skills.ts` | 📋 | 深入 |
+| 分层 root registry + startup catalog + per-turn lazy injection + model-driven file open | Codex CLI | latest (2026-04) | `codex-rs/core-skills/src/manager.rs` + `loader.rs` + `render.rs` + `injection.rs` | 📋 | 深入 |
+
+---
+
 ## 附录：上游监控优先级
 
 | 领域 | 高优先级监控 | 中优先级监控 |
@@ -291,5 +307,6 @@
 | 09 部署运行时 | E2B（Sandbox API 变更）、Docker SDK（安全参数更新） | Modal、Daytona |
 | 10 自进化 | DSPy（Optimizer 更新）、OpenHands（轨迹格式变更） | Voyager、SWE-agent、ADAS |
 | 11 Agent Mesh | Google A2A（协议规范更新）、ACP（CLI 连接标准更新）、AgentsMesh（编排模式）、PraisonAI（多协议通信更新） | AgentBridge、Tailscale、MetaGPT、Agent Cow、clawhip |
+| 13 技能工程 | Claude Code（skill loader + ToolSearch 变更）、Hermes（skills_guard 威胁模式 + nudge 策略） | OpenClaw（plugin-skills 桥接）、Codex（core-skills 模块） |
 
 > **与脚本集成**：`sync-upstreams.py` 扫描本文件中的来源项目，优先对"深入"状态项目的上游变更触发 `merge-with-claude.sh` 进行智能 diff 分析与融合补丁生成。观察项目的上游变更仅记录，不自动触发融合。

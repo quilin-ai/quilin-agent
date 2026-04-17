@@ -217,6 +217,8 @@ for t in tools:
 
 ### 2.5 CLI-Anything 集成（GUI 工具 → CLI Wrapper）
 
+> **Skill ≠ Tool**：本领域定义的是**可执行动作层**（Tool = LLM 发 `tool_call` → 有副作用的 side effect）。知识/提示类资产（SKILL.md 目录 + YAML frontmatter + 按需加载）由 [13-技能工程](../13-skills/README.md) 统一管理。本节下述的 CLI wrapper 产出的 `SKILL.md` 只是**元数据清单**，用于自动派生 Tool schema；技能的索引、加载、沙箱安全策略走 13-skills 的管道。
+
 **问题**：大量桌面软件（GIMP、Blender、LibreOffice 等）仅有 GUI 界面，Agent 无法直接调用。工具能力不应受限于工具本身是否提供 CLI 接口。
 
 **方案**：集成 [CLI-Anything](https://github.com/HKUDS/CLI-Anything)（HKUDS），为 GUI-only 软件自动生成 Python Click CLI wrapper。

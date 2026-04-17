@@ -293,6 +293,8 @@ ScaffoldModifier.generate_proposals(pattern_report)
 
 ### 2.5 技能自创系统（Voyager 启发）
 
+> **与 [13-技能工程](../13-skills/README.md) 的分工**：本节聚焦"技能如何从成功轨迹被**提取**出来"（SkillManager.extract → Skill Memory Layer 4）；技能的**文件格式（SKILL.md + YAML frontmatter）、目录化索引、按需加载、在 system prompt 中的组装顺序、沙箱安全加载**由 13-skills 领域统一定义。两者共用同一个 `SkillDescriptor` 数据结构——10-自进化负责写入，13-技能工程负责索引与渲染。
+
 成功的任务执行轨迹不应该被丢弃——它们是可复用经验的原材料。SkillManager 负责将成功轨迹转化为可调用的"技能模板"。
 
 **技能提取流程：**

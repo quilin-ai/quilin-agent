@@ -56,6 +56,8 @@ Quilin 的整体架构就是一个 **Harness**——包裹在 LLM 外面的一�
 │  ◆◆◆  11-AgentMesh  ◆◆◆  内置能力 — 启动即加入 mesh 网络  ◆◆◆◆◆◆◆◆◆   │
 │                                                                             │
 │  ★★★  12-ConversationEng  ★★★  前馈 — 6 层活人感 + 风格模式  ★★★★★★  │
+│                                                                             │
+│  ✦✦✦  13-Skills  ✦✦✦  前馈 — SKILL.md 目录 + 按需加载 → 02-Context  ✦✦  │
 └─────────────────────────────────────────────────────────────────────────────┘
 
 数据流向：
@@ -85,7 +87,7 @@ TypeScript 实现 Agent 核心循环和 E-T-C-S-L-V 六组件；Python 封装 ML
 **E-T-C-S-L-V 六组件 = LLM 可调用的能力层**
 六组件不再是固定状态图节点，而是作为 LLM 可自主调用的能力暴露。LLM 自己决定何时查记忆、何时调工具、何时结束。
 
-**12 领域 × Top 10 上游监控 + 自动缝合**
+**13 领域 × Top 10 上游监控 + 自动缝合**
 持续追踪 ~100 个顶级开源项目的新版本，通过 Claude-powered diff 分析自动生成融合补丁，保持框架与社区最佳实践同步。
 
 ### 怎么做（Harness 设计原则）
@@ -109,7 +111,7 @@ agent 看不到的东西不存在。所有架构决策、规范、部署流程�
 
 ---
 
-## 12 大工程领域导航
+## 13 大工程领域导航
 
 | # | 领域 | 控制类型 | 描述 | 文档 | Phase |
 |---|------|---------|------|------|-------|
@@ -125,6 +127,7 @@ agent 看不到的东西不存在。所有架构决策、规范、部署流程�
 | 10 | 自进化 | 前馈+反馈 | 轨迹分析、scaffold 自修改、用户自助吸收 | [10-self-evolution](../engineering/10-self-evolution/README.md) | 2 |
 | 11 | Agent Mesh | — | 内置能力，启动即加入 AgentMesh 网络 | [11-agent-mesh](../engineering/11-agent-mesh/README.md) | 2 |
 | 12 | 对话工程 | 前馈 | 6 层活人感架构、风格模式配置、关系建模 | [12-conversation-engineering](../engineering/12-conversation-engineering/README.md) | 2 |
+| 13 | 技能工程 | 前馈 | SKILL.md + frontmatter、catalog 索引 + 按需加载、路径/大小安全、M0/M1/M2+ 分层 | [13-skills](../engineering/13-skills/README.md) | 1 |
 
 > **控制类型**来自 [harness-engineering.md §三](./harness-engineering.md#三harness-控制模型)：前馈（行动前引导）、反馈（行动后观察纠正）。
 >

@@ -8,7 +8,7 @@
 
 旧 Python Harness 已删除（ADR-001 结论：不用 LangGraph，自研极简 Loop）。当前状态：
 
-- 12 个工程领域的设计文档已完成
+- 13 个工程领域的设计文档已完成（2026-04-17 新增 13-技能工程，见 [docs/engineering/13-skills/](./engineering/13-skills/README.md)）
 - ~100 个上游子模块已配置
 - 核心架构决策已定稿（ADR-001）
 - Phase 0 已完成（v0.0.3）：Agent Loop + OmniMem MCP + REPL + 78 tests
@@ -43,7 +43,7 @@
 ## Quilin 独特优势
 
 1. **融合 6 大模型架构精华** — 7 个跨模型设计模式内化进框架
-2. **11 领域 × Top 10 上游监控 + 自动缝合** — 持续进化，不是一次性开发
+2. **13 领域 × Top 10 上游监控 + 自动缝合** — 持续进化，不是一次性开发
 3. **4 层分级记忆 + KG + 自反思** — 解决 OpenClaw 记忆失灵 + 跨项目污染
 4. **内置 Agent Mesh** — 天然接入去中心化 Agent 通信网络
 5. **热更新 + 主动通知** — 解决 OpenClaw/Hermes 更新断连痛点
@@ -173,7 +173,7 @@
 
 ### 迭代式模块专项路线图
 
-> **核心原则**：先把单 Agent 做强，再做大。不按 12 领域平铺推进，而按产品价值和依赖关系分 6 个迭代包递进。
+> **核心原则**：先把单 Agent 做强，再做大。不按 13 领域平铺推进，而按产品价值和依赖关系分 6 个迭代包递进。
 
 ```
 Phase 0 (PoC) ✅
@@ -377,7 +377,7 @@ CI/CD（工程保障）：
 
 **参考 spec**：[08-observability/README.md](engineering/08-observability/README.md)、[09-deployment-runtime/README.md](engineering/09-deployment-runtime/README.md)
 
-**CI 特别说明**：CI 不属于 12 领域之一，但它是工程 guardrail。建议与 Iteration A 并行补上，不等 D 才做。在路线图中标注为"并行工程保障"。
+**CI 特别说明**：CI 不属于 13 领域之一，但它是工程 guardrail。建议与 Iteration A 并行补上，不等 D 才做。在路线图中标注为"并行工程保障"。
 
 ---
 
@@ -497,7 +497,7 @@ Agent Mesh 接入（11）：
 ├── 08-Observability 是 06/10/11 的前置
 │   └── 没 traces/metrics → 多 Agent 和自进化不可调
 ├── 09-Deployment 依赖一定程度的 08
-└── CI 不属于 12 领域，但是工程 guardrail
+└── CI 不属于 13 领域，但是工程 guardrail
 
 深度体验层（Iter E，依赖 A/B/C/D 完成）
 ├── 03-advanced 依赖 02（context 使用层先就位）
@@ -511,7 +511,7 @@ Agent Mesh 接入（11）：
 
 ---
 
-## 12 工程领域 × 迭代映射
+## 13 工程领域 × 迭代映射
 
 | # | 领域 | Phase 0 ✅ | Iter A | Iter B | Iter C | Iter D | Iter E | Iter F |
 |---|------|-----------|--------|--------|--------|--------|--------|--------|
@@ -527,6 +527,9 @@ Agent Mesh 接入（11）：
 | 10 | 自进化 | — | — | — | — | — | — | **轨迹分析 + 自修改 + Insight** |
 | 11 | Agent Mesh | — | — | — | — | — | — | **meshd 接入** |
 | 12 | 对话工程 | — | — | — | — | — | **6 层活人感 + 风格模式** | — |
+| 13 | 技能工程 ★ | — | — | **Iter B3 — B3a Skills Core（窄收口）**：SKILL.md + frontmatter + bundled/user/project 三源发现 + catalog + `skill_view` on-demand + 路径/体积硬 guard | M1: 条件激活 + post-compact + CRUD + skills_guard | — | — | M2+: plugin + background nudge + ToolSearch（默认 OFF） |
+
+> **★ 13-技能工程**：2026-04-17 新增领域；Iter B3 分成 **B3a Skills Core**（5 个窄收口能力）+ **B3b Activation**（条件激活 / post-compact），B3a 依赖 B2 安全契约冻结。详见 [13-skills/README.md](./engineering/13-skills/README.md)，四上游调研见 [skill-loading-comparison.md](./research/skill-loading-comparison.md)。
 
 ---
 
