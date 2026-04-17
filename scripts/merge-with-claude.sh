@@ -102,7 +102,7 @@ CORE_CODE=$(cat "$QUILIN_DIR/core/Harness.py" 2>/dev/null || echo "")
 log "Step 3: Invoking Claude Code for intelligent merge..."
 
 # 构造 prompt
-PROMPT="你是 Quilin Agent 的自动融合引擎。
+PROMPT="你是 Quilin Agent 的 AI 辅助融合引擎（D-03：最终合并由人类 PR 审批决定）。
 
 ## 上游更新
 - **Submodule**: $SUBMODULE_NAME

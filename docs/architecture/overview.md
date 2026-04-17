@@ -1,8 +1,10 @@
 # Quilin Agent 架构总览
 
-> 融合全球最强 Agent 开源项目精华的自进化 Agent 框架
+> 精选上游项目 + 人类主导融合 PR 的自进化 Agent 框架
 >
-> **技术栈**：Bun (TS 运行时) + pnpm + Vitest | CPython 3.14 + uv + pytest | Rust 1.94 + cargo | Vercel AI SDK v6 (LLM 抽象) | Docker Dev Container | just (跨语言编排)
+> **技术栈（当前 Iter A..C）**：Bun (TS 运行时) + pnpm + Vitest | CPython 3.14 + uv + pytest | Vercel AI SDK v6 (LLM 抽象) | just (跨语言编排)
+>
+> **Rust 1.94 + cargo** 延后到 Iter D 引入（mesh-sdk 骨架 + WASM 沙箱准备）。
 
 ---
 
@@ -53,9 +55,9 @@ Quilin 的整体架构就是一个 **Harness**——包裹在 LLM 外面的一�
 │                                                                             │
 │  ████  10-SelfEvolution  ████  前馈+反馈 — 轨迹分析 + 自修改 + 吸收  ████  │
 │                                                                             │
-│  ◆◆◆  11-AgentMesh  ◆◆◆  内置能力 — 启动即加入 mesh 网络  ◆◆◆◆◆◆◆◆◆   │
+│  ◆◆◆  11-AgentMesh  ◆◆◆  Iter D 引入 — AgentMesh SDK 接入  ◆◆◆◆◆◆◆◆◆   │
 │                                                                             │
-│  ★★★  12-ConversationEng  ★★★  前馈 — 6 层活人感 + 风格模式  ★★★★★★  │
+│  ☐☐☐  12-ConversationEng  ☐☐☐  (Parked) — Iter F+ 解冻  ☐☐☐☐☐☐☐☐☐☐☐  │
 │                                                                             │
 │  ✦✦✦  13-Skills  ✦✦✦  前馈 — SKILL.md 目录 + 按需加载 → 02-Context  ✦✦  │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -78,8 +80,8 @@ Quilin 的整体架构就是一个 **Harness**——包裹在 LLM 外面的一�
 **自研极简 Agent Loop（< 200 行 TS）**
 不使用 LangGraph 或任何外部 Agent 框架。四大标杆（Claude Code、Codex、OpenClaw、Hermes）全部使用自研循环，详见 [ADR-001](../adr/adr-001-core-loop-and-language.md)。
 
-**三语言架构 — TS (核心) + Python (ML) + Rust (基础设施)**
-TypeScript 实现 Agent 核心循环和 E-T-C-S-L-V 六组件；Python 封装 ML Provider（向量检索、KG、DSPy）为独立 MCP Server；Rust 处理 Agent Mesh 网络层和 WASM 沙箱。
+**两语言运行时（Iter A..C）+ Iter D 引入 Rust**
+TypeScript 实现 Agent 核心循环和 E-T-C-S-L-V 六组件；Python 封装 ML Provider（向量检索、KG、DSPy）为独立 MCP Server。Rust（Agent Mesh 网络层 + WASM 沙箱）作为基础设施层延后到 **Iter D** 引入——未到阶段前 `crates/` 目录不存在。
 
 **单一模型 + Vercel AI SDK v6 统一接口**
 用户通过 Vercel AI SDK v6（630M+ 周下载，25+ providers）接入任意模型（GPT-4o、Claude、Gemini、本地模型等），框架内部不绑定任何特定供应商。
@@ -87,8 +89,8 @@ TypeScript 实现 Agent 核心循环和 E-T-C-S-L-V 六组件；Python 封装 ML
 **E-T-C-S-L-V 六组件 = LLM 可调用的能力层**
 六组件不再是固定状态图节点，而是作为 LLM 可自主调用的能力暴露。LLM 自己决定何时查记忆、何时调工具、何时结束。
 
-**13 领域 × Top 10 上游监控 + 自动缝合**
-持续追踪 ~100 个顶级开源项目的新版本，通过 Claude-powered diff 分析自动生成融合补丁，保持框架与社区最佳实践同步。
+**12 领域 × 精选上游 + AI 辅助人在回路融合**
+持续追踪 ~100 个精选开源项目的新版本，通过 Claude-powered diff 分析生成融合 **patch 建议**；合并决定由人类 reviewer 在 PR 中做出——**不做 scaffold 自动重写**。
 
 ### 怎么做（Harness 设计原则）
 
@@ -111,27 +113,32 @@ agent 看不到的东西不存在。所有架构决策、规范、部署流程�
 
 ---
 
-## 13 大工程领域导航
+## 12 活跃工程领域导航
 
-| # | 领域 | 控制类型 | 描述 | 文档 | Phase |
-|---|------|---------|------|------|-------|
-| 01 | LLM 接入 | — | 单一模型封装、ThinkingMode、InferenceConfig | [01-llm-integration](../engineering/01-llm-integration/README.md) | 0 |
-| 02 | 上下文 | 前馈 | 系统提示组装、token 预算、KV-cache 优化 | [02-context](../engineering/02-context/README.md) | 0 |
-| 03 | 记忆 | 前馈 | 4 层分级存储、向量+KG 检索、自动反思 | [03-memory](../engineering/03-memory/README.md) | 0-1 |
-| 04 | 规划 | 前馈 | 意图识别、任务分解、推理策略切换 | [04-planning](../engineering/04-planning/README.md) | 1 |
-| 05 | 工具 | 前馈+反馈 | 4 类混合动作空间、MCP 客户端、浏览器 | [05-tool](../engineering/05-tool/README.md) | 0-2 |
-| 06 | 多 Agent | 前馈+反馈 | 同构 spawn + 上下文防火墙 | [06-multi-agent](../engineering/06-multi-agent/README.md) | 2 |
-| 07 | 安全护栏 | 前馈+反馈 | 4 层验证、权限分级、约束即生产力 | [07-safety-guardrails](../engineering/07-safety-guardrails/README.md) | 1 |
-| 08 | 可观测性 | 反馈 | OTel 追踪、指标、评估驱动开发 | [08-observability](../engineering/08-observability/README.md) | 1 |
-| 09 | 部署运行时 | — | CLI、配置管理、热更新、熵管理 | [09-deployment-runtime](../engineering/09-deployment-runtime/README.md) | 1-2 |
-| 10 | 自进化 | 前馈+反馈 | 轨迹分析、scaffold 自修改、用户自助吸收 | [10-self-evolution](../engineering/10-self-evolution/README.md) | 2 |
-| 11 | Agent Mesh | — | 内置能力，启动即加入 AgentMesh 网络 | [11-agent-mesh](../engineering/11-agent-mesh/README.md) | 2 |
-| 12 | 对话工程 | 前馈 | 6 层活人感架构、风格模式配置、关系建模 | [12-conversation-engineering](../engineering/12-conversation-engineering/README.md) | 2 |
-| 13 | 技能工程 | 前馈 | SKILL.md + frontmatter、catalog 索引 + 按需加载、路径/大小安全、M0/M1/M2+ 分层 | [13-skills](../engineering/13-skills/README.md) | 1 |
+| # | 领域 | 控制类型 | 描述 | 文档 | Iter |
+|---|------|---------|------|------|------|
+| 01 | LLM 接入 | — | 单一模型封装、ThinkingMode、InferenceConfig | [01-llm-integration](../engineering/01-llm-integration/README.md) | A + C |
+| 02 | 上下文 | 前馈 | 系统提示组装、token 预算、KV-cache 优化 | [02-context](../engineering/02-context/README.md) | A |
+| 03 | 记忆 | 前馈 | 4 层分级存储、向量+KG 检索、自动反思 | [03-memory](../engineering/03-memory/README.md) | A + F |
+| 04 | 规划 | 前馈 | 意图识别、任务分解、推理策略切换 | [04-planning](../engineering/04-planning/README.md) | C |
+| 05 | 工具 | 前馈+反馈 | 4 类混合动作空间、MCP 客户端、浏览器 | [05-tool](../engineering/05-tool/README.md) | B |
+| 06 | 多 Agent | 前馈+反馈 | 同构 spawn + 上下文防火墙 | [06-multi-agent](../engineering/06-multi-agent/README.md) | F |
+| 07 | 安全护栏 | 前馈+反馈 | 4 层验证、READ-ONLY 默认 + AUTO opt-in、约束即生产力 | [07-safety-guardrails](../engineering/07-safety-guardrails/README.md) | B + C |
+| 08 | 可观测性 | 反馈 | OTel 追踪、指标、评估驱动开发 | [08-observability](../engineering/08-observability/README.md) | D |
+| 09 | 部署运行时 | — | CLI、配置管理、热更新、熵管理 | [09-deployment-runtime](../engineering/09-deployment-runtime/README.md) | D + F |
+| 10 | 自进化 | 前馈+反馈 | 轨迹分析、**human-in-loop scaffold patch**、用户自助吸收 | [10-self-evolution](../engineering/10-self-evolution/README.md) | F |
+| 11 | Agent Mesh | — | AgentMesh SDK 接入（Rust，crates/ 在 Iter D 引入） | [11-agent-mesh](../engineering/11-agent-mesh/README.md) | D + F |
+| 13 | 技能工程 | 前馈 | SKILL.md + frontmatter、catalog 索引 + 按需加载、路径/大小安全、M0/M1/M2+ 分层 | [13-skills](../engineering/13-skills/README.md) | B |
+
+### Parked
+
+| # | 领域 | 状态 |
+|---|------|------|
+| 12 | 对话工程 | **Parked** → Iter F 解冻。核心回路 benchmark 稳态之前不启动"活人感"工程。详见 [12-conversation-engineering](../engineering/12-conversation-engineering/README.md)。 |
 
 > **控制类型**来自 [harness-engineering.md §三](./harness-engineering.md#三harness-控制模型)：前馈（行动前引导）、反馈（行动后观察纠正）。
 >
-> **Phase** 对应 [implementation-plan.md](../implementation-plan.md) 的三阶段迁移：Phase 0 (PoC)、Phase 1 (核心)、Phase 2 (高级)。
+> **Iter** 对应 [implementation-plan.md](../implementation-plan.md) 的迭代划分 A..F，其中 Iter E 是 Benchmark Ascent（E1-E4）。
 
 ---
 
@@ -195,15 +202,15 @@ Quilin 选择**单线程主循环**作为核心，同时融合中间件思想（
 | 架构模式 | 单线程主循环 | 协议优先 App Server | 单线程 + 文件外存 | 主循环 + 中间件 hook + checkpoint |
 | 工具系统 | 内置 8 种 + MCP | Shell + patch + MCP | 最小工具集 | 内置 10+ + MCP 动态发现 + 自创工具 + CLI-Anything |
 | 记忆 | CLAUDE.md + 会话内 | AGENTS.md + docs/ | 文件系统外存 + todo 复述 | 4 层分级 + 向量+KG + 自反思 + 用户画像 |
-| 安全 | 权限提示 + hooks | OS 级沙箱 | — | 默认 AUTO 权限 + 2-stage Classifier + 4 层验证 |
+| 安全 | 权限提示 + hooks | OS 级沙箱 | — | **READ-ONLY 默认 + AUTO opt-in** + 2-stage Classifier + 4 层验证 |
 | 上下文经济学 | 基础 | Thread/Turn/Item | 极致 KV-cache 优化 | KV-cache + 压缩 + 预估 + 掩码 + 时间感知 |
-| 自进化 | 无 | 无 | 重写删减（人工） | 轨迹分析 + scaffold 自修改 + User Insight Engine |
+| 自进化 | 无 | 无 | 重写删减（人工） | 轨迹分析 + **human-in-loop scaffold patch** + User Insight Engine |
 | 用户理解 | Auto Memory（被动） | 无 | 无 | 主动画像收集 + 持续学习 + 三层时间感知 + Aha Moment |
-| Benchmark | 内部评测 | SWE-bench | 内部 | SWE-bench + GAIA + BFCL 公开榜单参赛 |
+| Benchmark | 内部评测 | SWE-bench | 内部 | **3 pinned（SWE-bench Verified / GAIA / BFCL v4）+ aspirational roadmap** |
 | Dashboard | 无 | 无 | 有（Web UI） | 独立 WebUI Dashboard（任务/记忆/指标/拓扑全局可视化） |
 | 主线程不阻塞 | Sub-agent 并行（主线程可能阻塞） | 无 | 主线程会阻塞 | Supervisor 永不阻塞 + Sub-Agent 进度汇报协议 |
-| 空闲自进化 | 无 | 无 | 无 | 两种计费模式 + 空闲时自动进化 + 透明汇报 |
-| 对话工程 | 基础人格 | 无 | 无 | 6 层活人感 + 3 种风格模式（原版/自定义/活人感） |
+| 空闲自进化 | 无 | 无 | 无 | **Opt-in**（默认 OFF）+ 日预算上限 + 透明汇报 |
+| 对话工程 | 基础人格 | 无 | 无 | (Iter F 解冻) 6 层活人感 + 3 种风格模式 |
 
 > 完整 harness 维度对比（含 LangChain、Stripe 等 6 家）详见 [harness-engineering.md §十三](./harness-engineering.md#十三与竞品的-harness-对比)。
 
@@ -213,16 +220,28 @@ Quilin 选择**单线程主循环**作为核心，同时融合中间件思想（
 
 详见 [ADR-001 迁移路径](../adr/adr-001-core-loop-and-language.md#5-迁移路径) 和 [implementation-plan.md](../implementation-plan.md)。
 
-三阶段迁移：
+迭代路线（详见 [implementation-plan.md](../implementation-plan.md)）：
 
 ```
-Phase 0 (PoC): TS Agent Loop + 1 个 Python MCP Provider，跑通端到端
+Phase 0 (PoC) ✅ — Agent Loop + OmniMem MCP + REPL
     │
     ▼
-Phase 1 (核心): TS 核心完整替代旧 Harness — ToolRouter, Context, Guardrails, Lifecycle, Plugins
+Iter A (Grounded Context) ✅ — 多源 context 组装 + temporal
     │
     ▼
-Phase 2 (高级): Streaming UI + Agent Mesh + 自进化 + WASM 沙箱
+Iter B (Tools + Skills + Safety) 📝 — B1 ✅ / B2 📝 / B3a ⏳
+    │
+    ▼
+Iter C (Planning Core) — 意图识别 + 动态推理
+    │
+    ▼
+Iter D (Operability + Rust 基础设施) — OTel + CI 三语言 + crates/ 骨架
+    │
+    ▼
+Iter E (Benchmark Ascent E1-E4) — 3 pinned 榜单
+    │
+    ▼
+Iter F (Scale-Out + Memory Depth + Self-Evolution)
 ```
 
 ---

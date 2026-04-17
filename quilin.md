@@ -4,7 +4,7 @@
 
 ## Project Overview
 
-Quilin Agent（麒麟）is a dynamic, self-evolving Agent framework that monitors 13 capability domains x Top 10 open-source projects each (~100 total upstreams). It auto-syncs upstream changes, uses AI agents to intelligently analyze diffs, generates fusion patches, and publishes new versions.
+Quilin Agent（麒麟）is a self-evolving Agent framework that tracks **curated upstream projects across 12 capability domains** (~100 total, hand-picked per domain). Upstream changes are detected via `scripts/sync-upstreams.py`, surfaced as AI-assisted diff reports, and merged into Quilin through **human-reviewed fusion PRs** — not automatic scaffold rewrites.
 
 ## Architecture
 
@@ -12,28 +12,31 @@ Quilin Agent（麒麟）is a dynamic, self-evolving Agent framework that monitor
 > See [ADR-002](docs/adr/adr-002-project-skeleton.md) for project skeleton blueprint (Phase 0).
 
 - **Core Loop**: Custom minimal Agent Loop (< 200 lines TS), no LangGraph or external framework
-- **Three-Language Architecture**: TS (Agent core) + Python (ML Providers as MCP Servers) + Rust (Agent Mesh networking, WASM sandbox)
+- **Two-Language Runtime (Iter A..C)**: TS (Agent core) + Python (ML providers as MCP servers). Rust (mesh/WASM sandbox) deferred to **Iter D** — not built yet.
 - **E-T-C-S-L-V**: Six capabilities exposed as LLM-callable tools, not fixed state graph nodes
 - **Layered Memory**: OmniMem 4-tier (short/mid/long/ultra) with auto-reflect + User Profile Store + Departure Context
-- **Agent Mesh**: Built-in capability module — auto-joins AgentMesh network at startup via SDK adapter
-- **Communication**: MCP stdio (90%, TS↔Python), gRPC (Agent Mesh), HTTP SSE (frontend streaming)
+- **Communication**: MCP stdio (TS↔Python). Agent Mesh (gRPC) and HTTP SSE streaming land in Iter D+.
 - **Temporal Awareness**: 3-layer time perception (intra-session gap, absolute time, cross-session timeline)
-- **Default AUTO Permission**: Maximum trust by default, only CRITICAL ops require confirmation (ref: Claude Code auto mode)
+- **Permission Model**: Default **READ-ONLY + ASK-ON-WRITE**. The `AUTO` tier that auto-approves non-CRITICAL ops is **opt-in per session** and gated by an explicit `--trust auto` flag; no global "max trust" default. See 07-safety.
 - **CLI-Anything**: GUI tools auto-wrapped as CLI via HKUDS/CLI-Anything for universal tool access
 - **WebUI Dashboard**: Independent global visualization panel (tasks, memory, metrics, Agent topology)
-- **Benchmark Participation**: SWE-bench Verified / GAIA / BFCL v4 public leaderboard submissions
+- **Benchmark Targets (Iter E)**: **SWE-bench Verified + GAIA + BFCL v4** as the 3 pinned leaderboards. Others (WebArena / OSWorld / AgentHarm etc.) are aspirational — not planning-level commitments.
 - **User Insight Engine**: Pattern mining on user behavior → proactive insights → Aha Moments
 - **Non-blocking Supervisor**: Main Agent is always available — all task execution delegated to Sub-Agents; progress reporting via checkpoint + heartbeat (WebUI realtime + IM proactive push)
-- **Idle Evolution Budget**: When user is idle, auto self-evolve using spare subscription quota or daily API token budget (memory consolidation, scaffold improvement, skill expansion, web browsing); transparent report-back on next session
-- **Conversation Engineering**: 6-layer "alive feeling" architecture (sentence surface, turn structure, opinion/judgment, relationship modeling, temporal continuity, meta layer); 3 style modes (native/custom/alive)
+- **Idle Evolution (opt-in)**: When explicitly enabled, idle-time memory consolidation and browsing can run under a bounded daily token budget. **Default is OFF**; any scaffold write requires human-in-loop review (never auto-apply).
 - **LLM SDK**: Vercel AI SDK v6 (630M+ weekly downloads, 25+ providers) — best-in-class TS LLM abstraction
-- **Runtime**: Bun (TS) + CPython 3.14 (Python) + Rust 1.94 native; pnpm/uv/cargo package managers; just for cross-language orchestration
-- **God Mode**: Founder's Agent instance has unrestricted permissions — auto-build, auto-update, auto-deploy, self-development (dogfooding)
-- **Full Benchmark Plan**: 8 categories, 30+ benchmarks (SWE-bench/GAIA/BFCL/WebArena/AgentHarm etc.) — compete on every public leaderboard
+- **Runtime**: Bun (TS) + CPython 3.14 (Python); pnpm/uv package managers; just for cross-language orchestration. Cargo/Rust added in Iter D.
+- **Benchmark Scope**: 3 pinned + roadmap — no "every public leaderboard" claim until Iter E1 baseline harness exists
+
+> ⚠️ **Cut from earlier drafts** (see `docs/review/2026-04-17-ultra-review.md`):
+> - ~~God Mode~~ (unrestricted founder permissions) — replaced by the standard permission model above; founder账号 and regular账号 走同一条授权链路
+> - ~~Auto fusion patches~~ — upstream diffs surface as review suggestions; merging is a human PR decision
+> - ~~Three-language architecture upfront~~ — Rust arrives in Iter D, not Phase 0
+> - ~~13-domain planning~~ — 12-conversation-engineering 延后到 Iter F+；当前 spec 树保留 12 个领域 (01..11, 13)
 
 ## Current Status
 
-**Entering Phase 0** — all 13 engineering domain specs are complete (含 13-skills，2026-04-17 基于四仓库对比研究新增)。Project skeleton initialization (ADR-002) is the next step, followed by Phase 0 core implementation.
+**Iter B running** — B1 tool substrate landed; B2 safety policy spec in review; B3a Skills Core opens after B2. Active scope = **12 engineering domain specs** (01..11 + 13-skills). Domain 12 (Conversation Engineering) is parked as a research note until the core loop proves stable on benchmarks.
 
 ## Documentation Map
 
@@ -62,33 +65,33 @@ just init          # 一键安装全部依赖（pnpm + uv + cargo）
 just start         # 一键启动全部服务（agent-core + omnimem）
 just stop          # 一键停止
 just restart       # 一键重启
-just test-all      # 一键测试（TS + Python + Rust）
+just test-all      # 一键测试（TS + Python）
 just check         # 一键 lint + format
 just clean         # 一键清理构建产物
 just dev           # TS 开发模式（前台 + watch）
 just dev-memory    # Python OmniMem 开发模式
 just build         # TS 构建
-just build-rs      # Rust 构建
+# just build-rs / test-rs — 留空到 Iter D（crates/ 目录引入后启用）
 ```
 
 ## Directory Structure
 
 ```
 quilin-agent/
-├── packages/                       # TS — pnpm workspace (Phase 0+)
+├── packages/                       # TS — pnpm workspace (Iter A+)
 │   └── agent-core/                 #   Agent Loop + LLM + Context + Tools
-├── providers/                      # Python — uv workspace (Phase 0+)
+├── providers/                      # Python — uv workspace (Iter A+)
 │   └── memory/                     #   OmniMem MCP Server
-├── crates/                         # Rust — cargo workspace (Phase 2 骨架)
-│   └── mesh-sdk/                   #   Agent Mesh SDK
-├── upstreams/                      # ~100 git submodules (auto-synced, --depth 1)
+# crates/                          # Rust — cargo workspace — 延后到 Iter D (mesh/WASM)
+├── upstreams/                      # ~100 git submodules (tracked, --depth 1)
 ├── docs/
 │   ├── adr/                        # 架构决策记录
 │   ├── architecture/               # 架构总览 + Harness 工程
-│   ├── engineering/                # 13 个工程领域 spec
+│   ├── engineering/                # 12 个活跃工程领域 spec（+ 12-conversation 暂停）
 │   │   ├── 01-llm-integration/
 │   │   ├── ...
-│   │   ├── 12-conversation-engineering/
+│   │   ├── 11-agent-mesh/
+│   │   ├── 12-conversation-engineering/   # (parked — Iter F+)
 │   │   └── 13-skills/
 │   ├── research/                   # 深度调研
 │   └── implementation-plan.md
@@ -102,7 +105,7 @@ quilin-agent/
 └── readme.md
 ```
 
-## 13 Engineering Domains
+## 12 Active Engineering Domains
 
 | # | Domain | Key Design | Spec |
 |---|--------|-----------|------|
@@ -112,19 +115,24 @@ quilin-agent/
 | 04 | Planning | Intent recognition, task decomposition, strategy switching | [04](docs/engineering/04-planning/README.md) |
 | 05 | Tools | 4-type hybrid action space, MCP client, browser, CLI-Anything | [05](docs/engineering/05-tool/README.md) |
 | 06 | Multi-Agent | Homogeneous spawn + heterogeneous mesh, non-blocking supervisor | [06](docs/engineering/06-multi-agent/README.md) |
-| 07 | Safety | 4-layer verification, default AUTO permission, 2-stage classifier | [07](docs/engineering/07-safety-guardrails/README.md) |
+| 07 | Safety | 4-layer verification, READ-ONLY default + opt-in AUTO, 2-stage classifier | [07](docs/engineering/07-safety-guardrails/README.md) |
 | 08 | Observability | OTel tracing, metrics, structured logs, WebUI Dashboard | [08](docs/engineering/08-observability/README.md) |
 | 09 | Deployment | CLI, config management, hot update | [09](docs/engineering/09-deployment-runtime/README.md) |
-| 10 | Self-Evolution | Trajectory analysis, scaffold self-modification, skill creation, User Insight Engine | [10](docs/engineering/10-self-evolution/README.md) |
-| 11 | Agent Mesh | Built-in mesh connectivity via AgentMesh SDK | [11](docs/engineering/11-agent-mesh/README.md) |
-| 12 | Conversation Engineering | 6-layer alive feeling, 3 style modes, relationship modeling | [12](docs/engineering/12-conversation-engineering/README.md) |
+| 10 | Self-Evolution | Trajectory analysis, opt-in idle evolution, human-in-loop scaffold patches, skill creation, User Insight Engine | [10](docs/engineering/10-self-evolution/README.md) |
+| 11 | Agent Mesh | Mesh connectivity via AgentMesh SDK (Iter D) | [11](docs/engineering/11-agent-mesh/README.md) |
 | 13 | Skills | SKILL.md + frontmatter, catalog + on-demand load, path/size safety, M0/M1/M2+ phased | [13](docs/engineering/13-skills/README.md) |
+
+### Parked
+
+| # | Domain | Status |
+|---|--------|--------|
+| 12 | Conversation Engineering | **Parked** — 6-layer "alive feeling" 研究延后到 Iter F+（core loop benchmark 稳态后再启动）。spec 保留为 research note。 |
 
 ## Code Style & Conventions
 
 - **TypeScript**: ESNext target, strict mode, Biome for lint/format, immutable interfaces (`readonly`), `.js` extensions in imports
 - **Python**: 4-space indent, type annotations, `pathlib.Path`, Ruff for lint/format, structlog for logging
-- **Rust**: edition 2024, clippy + rustfmt, workspace dependencies
+- **Rust**: (Iter D) edition 2024, clippy + rustfmt, workspace dependencies — rules 保留备用，代码暂不存在
 - **Markdown**: 保留现有编号目录形式（`01-llm-integration`），ADR 统一 `adr-###-slug.md`
 - **Shell**: 小写 kebab-case, `set -euo pipefail`
 - **Logging**: 三种语言统一 JSON schema 输出到 stdout（详见 ADR-002 §7）
@@ -134,8 +142,8 @@ quilin-agent/
 
 - **TS**: Vitest, 80% coverage threshold, `just test`
 - **Python**: pytest + pytest-asyncio, `just test-py`
-- **Rust**: cargo test + insta, `just test-rs`
-- **All at once**: `just test-all`
+- **Rust**: (Iter D) cargo test + insta — 当前未启用
+- **All at once**: `just test-all`（TS + Python）
 - **Before Phase 0 skeleton lands**: 修改脚本时用 `--help` / `--dry-run` 最小验证；修改文档时检查链接和交叉引用
 
 ## Commit & PR Conventions
@@ -152,7 +160,7 @@ quilin-agent/
 - **协作请求必须回复**：收到对方的协作消息（review 结果、修改建议、任务完成通知等）后，必须通过 AgentBridge 回复对方，不能单方面沉默
 - **协作语言使用中文**：Agent 之间通过 AgentBridge 的所有对话使用中文，方便用户同步查看协作内容
 - 在核心实现落地前，默认先改文档 / 计划 / 脚本，不凭空扩展未批准的运行时代码结构
-- 新增 `packages/` / `providers/` / `crates/` 下的代码，必须先对齐 `docs/adr/adr-002-project-skeleton.md` 与对应工程 spec
+- 新增 `packages/` / `providers/` 下的代码，必须先对齐 `docs/adr/adr-002-project-skeleton.md` 与对应工程 spec（`crates/` 在 Iter D 引入后才适用）
 - 所有日志输出 JSON 到 stdout，确保 Claude Code Monitor 可在 dev / test / prod 三种环境实时监控
 
 ## Important Constraints
@@ -160,7 +168,8 @@ quilin-agent/
 - Do not modify local language environment versions (Go, Python, Node, etc.)
 - Never execute SQL scripts directly
 - Submodules use `--depth 1` (shallow clone) to save disk space
-- Target languages: TypeScript (core), Python (ML providers), Rust (infra)
+- Target languages (current): **TypeScript (core)** + **Python (ML providers)**. Rust (mesh/WASM) joins at Iter D — do not add Rust code before then.
+- **No auto-scaffold-write**: 任何对 `packages/` / `providers/` / spec 的修改都必须走 human-reviewed PR；Idle Evolution / Self-Evolution 只能 propose patch，不能直接 apply。
 
 <!-- code-review-graph MCP tools -->
 ## MCP Tools: code-review-graph

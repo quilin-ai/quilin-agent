@@ -221,9 +221,11 @@ class PatternAggregator:
 **示例聚合结论**：
 > "在 `research` 类型任务中，`INSUFFICIENT_CONTEXT` 类失败占比 67%（过去 30 次任务中 20 次），集中在第 2-3 步，表现为未主动检索背景知识就直接开始推理。建议在系统提示中增加'研究类任务必须先执行至少一次信息检索'的约束。"
 
-### 2.4 Scaffold 自修改（核心创新）
+### 2.4 Scaffold 自修改（人在回路，核心创新）
 
-这是自进化中最具创新性、也最需要谨慎设计的部分。自修改按风险等级分为 4 层，从低风险到高风险递进。
+> **D-01 决策（2026-04-17 ultra-review）**：所有 Scaffold 自修改均需人工审批，不再保留"自动应用"路径。Agent 只生成建议（proposal）+ 沙箱验证报告，由人类通过 PR 评审决定合并。
+
+这是自进化中最具创新性、也最需要谨慎设计的部分。自修改按变更幅度分为 4 层，**所有层级都走 human-in-loop PR 合并**；差别仅在建议结构、沙箱验证强度与回滚代价。
 
 **修改层级矩阵：**
 
@@ -231,15 +233,17 @@ class PatternAggregator:
 Level 1（低风险）：系统提示调整
 ┌─────────────────────────────────────────────────────┐
 │ 修改内容：增/删规则、调整示例、补充约束              │
-│ 审批要求：无需人工确认，自动应用                     │
-│ 回滚复杂度：即时（1 秒内）                          │
+│ 审批要求：人工 PR review（轻量 template）           │
+│ 沙箱验证：同任务类型 20 条历史轨迹重放              │
+│ 回滚复杂度：即时（revert commit）                   │
 │ 影响范围：全局行为偏好                              │
 └─────────────────────────────────────────────────────┘
 
 Level 2（中风险）：工具配置修改
 ┌─────────────────────────────────────────────────────┐
 │ 修改内容：添加/禁用工具、调整工具优先级、修改参数    │
-│ 审批要求：无需人工确认，沙箱验证后自动应用           │
+│ 审批要求：人工 PR review（需沙箱测试报告）          │
+│ 沙箱验证：隔离环境执行核心任务集                    │
 │ 回滚复杂度：即时（切换配置文件）                    │
 │ 影响范围：可用工具集合                              │
 └─────────────────────────────────────────────────────┘
@@ -247,7 +251,8 @@ Level 2（中风险）：工具配置修改
 Level 3（高风险）：推理策略切换
 ┌─────────────────────────────────────────────────────┐
 │ 修改内容：ReAct→PlanAndExecute、调整 ThinkingMode   │
-│ 审批要求：需人类确认（发送审批请求，24h 内响应）     │
+│ 审批要求：人工 PR review + A/B 对比报告             │
+│ 沙箱验证：benchmark 子集回归                        │
 │ 回滚复杂度：即时（策略枚举切换）                    │
 │ 影响范围：所有任务的推理过程                        │
 └─────────────────────────────────────────────────────┘
@@ -255,7 +260,8 @@ Level 3（高风险）：推理策略切换
 Level 4（极高风险）：工作流重构
 ┌─────────────────────────────────────────────────────┐
 │ 修改内容：修改状态机节点顺序、添加新节点、删除节点  │
-│ 审批要求：必须人类确认 + 完整 A/B 测试报告          │
+│ 审批要求：人工 PR review + 完整 benchmark 报告      │
+│ 沙箱验证：全量 benchmark 回归 + 人类 QA            │
 │ 回滚复杂度：从版本历史恢复（< 5 秒）               │
 │ 影响范围：整体 Agent 执行流程                       │
 └─────────────────────────────────────────────────────┘
@@ -278,18 +284,22 @@ ScaffoldModifier.generate_proposals(pattern_report)
       │       "operation": "append",
       │       "content": "研究类任务必须先执行...",
       │       "rationale": "过去 30 次任务中...",
-      │       "confidence": 0.87
+      │       "confidence": 0.87,
+      │       "sandbox_report": { pass: 18, fail: 2, regressions: [...] }
       │     }
       │
-      ├── Level 1-2：直接提交沙箱验证
-      └── Level 3-4：发送人类审批请求 → 等待确认 → 沙箱验证
+      ├── 所有 Level：写入 .patches/scaffold/<ts>-<level>.patch
+      │                + 自动开 PR + 等待人工 review
+      └── 合并后：记录 scaffold 版本号 + 发布发行说明
 ```
 
 **Scaffold 版本控制：**
-每次修改都会生成新的版本号，格式 `scaffold-v{major}.{minor}.{patch}`：
-- patch：Level 1 修改（自动）
-- minor：Level 2 修改（自动）
-- major：Level 3-4 修改（需人工）
+每次**合并后的**修改都会生成新的版本号，格式 `scaffold-v{major}.{minor}.{patch}`：
+- patch：Level 1 合并
+- minor：Level 2 合并
+- major：Level 3-4 合并
+
+> **为什么砍掉 Level 1-2 的自动应用**？Ultra-review 发现原设计存在"静默 drift"风险（Agent 悄悄改自己行为但用户不知），且绕过了 safety-guardrails 的 4 层验证链。保留 human-in-loop 并不会削弱自进化能力——多数 Agent 框架的失败源于缺少高质量 pattern 分析，而不是缺少自动应用通道。
 
 ### 2.5 技能自创系统（Voyager 启发）
 
@@ -431,12 +441,13 @@ scaffold_manager.rollback(version="scaffold-v2.3.1")  # 立即生效
 │  │ • 人类审批接口（不能绕过人类确认）                   │  │
 │  └──────────────────────────────────────────────────────┘  │
 │                                                             │
-│  Layer 2：修改频率限制                                       │
+│  Layer 2：修改频率限制（所有 Level 都需人工 PR review）      │
 │  ┌──────────────────────────────────────────────────────┐  │
-│  │ • Level 1-2 修改：最多 1 次/小时                     │  │
-│  │ • Level 3 修改：最多 1 次/天，需人类确认             │  │
-│  │ • Level 4 修改：最多 1 次/周，需人类确认             │  │
-│  │ • 连续 3 次修改均未改善 → 暂停自进化 48 小时        │  │
+│  │ • Level 1 proposal：最多 1 次/小时（开 PR 即计数）   │  │
+│  │ • Level 2 proposal：最多 1 次/天                     │  │
+│  │ • Level 3 proposal：最多 1 次/天                     │  │
+│  │ • Level 4 proposal：最多 1 次/周                     │  │
+│  │ • 连续 3 次 proposal 被 reject → 暂停自进化 48 小时 │  │
 │  └──────────────────────────────────────────────────────┘  │
 │                                                             │
 │  Layer 3：沙箱验证（修改上线前）                             │
@@ -456,24 +467,26 @@ scaffold_manager.rollback(version="scaffold-v2.3.1")  # 立即生效
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**人类审批流程（Level 3-4）：**
+**人类审批流程（所有 Level 统一 PR 路径）：**
 
 ```
 自进化引擎生成修改方案
         │
         ▼
-发送审批请求（含：修改内容、理由、预期收益、风险评估）
+发送审批请求（含：修改内容、理由、预期收益、风险评估、沙箱报告）
         │
-        ├── 24 小时内无响应 → 取消本次修改，记录待审批队列
+        ├── 超过 SLA（Level 1: 24h / Level 2-3: 48h / Level 4: 7d）无响应 → 自动关 PR，记录待审批队列
         │
         ├── 人类拒绝 → 记录拒绝原因 → 送回失败分析器参考
         │
         └── 人类批准 → 进入沙箱验证 → A/B 评估 → 上线
 ```
 
-### 2.8 上游监控自动缝合
+### 2.8 上游监控辅助融合（AI 辅助人类合并，非自动缝合）
 
-自进化不只针对 Agent 自身行为，也包括对 90 个上游项目更新的智能吸收。
+> **D-03 决策（2026-04-17 ultra-review）**：删除"自动缝合"叙事。Quilin 只提供 diff 分析与融合建议，最终合并由人类通过 PR 执行。
+
+自进化不只针对 Agent 自身行为，也包括对 ~100 个上游项目更新的 AI 辅助吸收。
 
 **缝合流程：**
 
@@ -831,11 +844,13 @@ Quilin 运行标准化深度调研（6 步流程，见 deep-code-research-method
 - 两者共享同一套调研流程（[deep-code-research-methodology.md](../research/deep-code-research-methodology.md)）
 - 两者产出的补丁格式相同，通过同一套 Scaffold 修改系统应用
 
-### 2.12 空闲自进化经济学（Idle Evolution Budget）
+### 2.12 空闲自进化经济学（Idle Evolution Budget, 默认关闭）
 
-> **核心理念**：用户不在时 ≠ Agent 停工。空闲资源应被自动用于自我提升，而不是白白浪费。
+> **D-01 决策（2026-04-17 ultra-review）**：Idle Evolution 默认 **OFF**，用户需在 `config.yaml` 中显式 opt-in (`idle_evolution.enabled: true`) 并设置预算。空闲期间产生的所有 scaffold proposal 仍需走 §2.4 的 human-in-loop PR，不会自动合入生产。
 
-大多数 Agent 在用户离开后完全闲置。Quilin 的设计哲学是：**用户离开的时间恰好是 Agent 自我进化的最佳窗口**——不抢用户资源、不阻塞交互、不产生意外副作用。
+> **核心理念**：用户不在时，Agent 可以做**可回滚的准备工作**（整理记忆、提炼 proposal 草稿），但不会悄悄改变自己的行为。
+
+大多数 Agent 在用户离开后完全闲置。Quilin 的设计哲学是：**用户离开的时间是 Agent 生成 proposal 的合适窗口**——不抢用户资源、不阻塞交互、不自动修改生产 scaffold。
 
 #### 两种计费模式
 
@@ -873,7 +888,7 @@ class IdleEvolutionTrigger:
 | 优先级 | 活动类型 | 消耗 | 产出 | 频率 |
 |--------|---------|------|------|------|
 | P0 | **记忆整合** | 低（本地计算为主） | Working → Episodic 归档、去重、KG 补充 | 每次空闲 |
-| P1 | **Scaffold 自改进** | 中（需 LLM 调用） | 基于积累轨迹的 Level 1-2 修改 | 每日最多 1 轮 |
+| P1 | **Scaffold proposal 草稿** | 中（需 LLM 调用） | 基于积累轨迹生成 Level 1-2 proposal（开 PR 等人审） | 每日最多 1 轮 |
 | P2 | **技能库扩充** | 中 | 从成功轨迹提取新技能、验证已有技能 | 每日最多 1 轮 |
 | P3 | **浏览用户相关内容** | 高（浏览器 + LLM） | 用户关注领域的新动态、趋势摘要 | 每周 2-3 次 |
 | P4 | **上游监控加速** | 高 | 主动分析上游项目更新的融合价值 | 有新上游更新时 |
@@ -932,11 +947,13 @@ class IdleBudgetState:
 
 | 约束 | 说明 |
 |------|------|
-| 仅执行 Level 1-2 修改 | 空闲期间不触发需人类审批的 Level 3-4 修改 |
+| **默认关闭** | `idle_evolution.enabled` 默认 `false`，用户显式 opt-in 才生效 |
+| 仅生成 Level 1-2 proposal | 空闲期间不生成 Level 3-4 提案，已生成的 proposal 必须走人工 PR |
+| 不自动应用 scaffold | 即使 Level 1，也只能开 PR 等待人工合并（沿用 §2.4 决策） |
 | 预算硬上限 | 超出预算立即停止，不借用下一日额度 |
 | 活动白名单 | 仅允许上述 5 种活动类型，不执行任何用户任务 |
-| 沙箱隔离 | 所有 scaffold 修改在沙箱中验证，不影响生产环境 |
-| 可完全关闭 | 用户可在 config.yaml 中 `idle_evolution.enabled: false` |
+| 沙箱隔离 | 所有 scaffold proposal 在沙箱中验证，不影响生产环境 |
+| 可随时关闭 | 用户可在 config.yaml 中 `idle_evolution.enabled: false` 立即停止 |
 
 #### 与其他组件的协作
 
@@ -958,7 +975,7 @@ class IdleBudgetState:
     └── 记录空闲活动日志，供 Dashboard 展示
 
 10-Self-Evolution（2.4 Scaffold 自修改）
-    └── 空闲时运行 run_cycle() 的 Level 1-2 部分
+    └── 空闲时运行 run_cycle() 的 Level 1-2 proposal 生成部分（PR 开给用户）
 ```
 
 ---
@@ -1113,7 +1130,7 @@ LLMRouter（LLM 层）
     └── ScaffoldModifier 使用"中等模型"生成修改方案
 
 sync-upstreams.py（脚本层）
-    └── 触发上游监控自动缝合流程
+    └── 触发上游监控辅助融合流程（AI 生成 diff 分析 + 建议，人类决定合并）
     └── 读取 fusion-index.md 确定监控目标
 ```
 
@@ -1196,7 +1213,7 @@ self_evolution:
     sync_interval_minutes: 5       # 同步间隔（与 sync-upstreams.py 一致）
     relevance_threshold: "medium"  # 最低相关性阈值才触发缝合
   idle_evolution:
-    enabled: true
+    enabled: false                 # D-01: 默认 OFF，用户需显式 opt-in
     mode: "api"                    # "subscription" | "api"
     min_idle_minutes: 30           # 用户至少空闲 N 分钟才触发
     allowed_hours: "08:00-23:00"   # 允许运行的时间窗口
@@ -1210,7 +1227,7 @@ self_evolution:
       skill_expansion: true
       web_browsing: true
       upstream_analysis: true
-    max_scaffold_level: 2          # 空闲期间最高修改级别（不超过 2）
+    max_scaffold_level: 2          # 空闲期间最高 proposal 级别（不超过 2；合入仍需人审）
     report_back: true              # 用户上线时汇报空闲活动
 ```
 

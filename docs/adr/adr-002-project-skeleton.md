@@ -1,9 +1,11 @@
 # ADR-002: 项目骨架初始化 — Phase 0 开发 Blueprint
 
-> **状态**: Accepted
-> **日期**: 2026-04-15
+> **状态**: Accepted (D-04 修订 2026-04-17)
+> **日期**: 2026-04-15（原）/ 2026-04-17（D-04 修订）
 > **决策者**: Quilin Agent 团队
 > **前置**: [ADR-001](./adr-001-core-loop-and-language.md)（核心 Agent Loop 与语言架构）
+>
+> **⚠️ D-04 修订（2026-04-17 ultra-review）**：删除 Phase 0 的 `crates/` 骨架。Rust 基础设施推迟至 Iter D 引入（对应 11-Agent Mesh 的实际落地）。原因：Phase 0 仅有占位 lib.rs 无实际业务价值，且三语言 CI 矩阵拖慢迭代。本文档中所有关于 `crates/` / `Cargo.toml` / Rust toolchain 的章节暂标记为 **[Iter D 引入]**，Phase 0 不需执行。
 
 ---
 
@@ -22,16 +24,17 @@
 
 ## 2. 架构决策：按语言隔离的 Monorepo
 
-三种语言各用自己的 workspace 管理器，`just` 统一编排：
+Phase 0 使用**两种语言**（TS + Python），Rust 推迟到 Iter D。各用自己的 workspace 管理器，`just` 统一编排：
 
-| 语言 | 目录 | 运行时 | 包管理 | 测试 | 构建 |
-|------|------|--------|-------|------|------|
-| TypeScript | `packages/` | Bun (latest stable) | pnpm | Vitest | Bun bundler |
-| Python | `providers/` | CPython 3.14 | uv (Astral) | pytest | uv + hatchling |
-| Rust | `crates/` | native + Tokio | cargo | cargo test + insta | cargo |
+| 语言 | 目录 | 运行时 | 包管理 | 测试 | 构建 | 阶段 |
+|------|------|--------|-------|------|------|------|
+| TypeScript | `packages/` | Bun (latest stable) | pnpm | Vitest | Bun bundler | **Phase 0** |
+| Python | `providers/` | CPython 3.14 | uv (Astral) | pytest | uv + hatchling | **Phase 0** |
+| Rust | `crates/` | native + Tokio | cargo | cargo test + insta | cargo | **Iter D**（11-Agent Mesh 落地时引入） |
 
-**为什么不用扁平 `src/`**：三语言混在同一目录下，workspace 管理混乱，IDE 支持差。
+**为什么不用扁平 `src/`**：多语言混在同一目录下，workspace 管理混乱，IDE 支持差。
 **为什么不按领域切 12 个 TS package**：Phase 0 过早抽象，管理开销大。后续按需拆分。
+**为什么 Rust 推迟到 Iter D**（D-04）：Phase 0 的 `crates/mesh-sdk` 仅是占位 lib.rs，Iter A-C 无调用者；三语言 CI 矩阵已拖慢迭代。Iter D 引入 Rust 时同时落地 11-Agent Mesh 的真实业务逻辑，避免骨架腐坏。
 
 ---
 
@@ -78,12 +81,14 @@ quilin-agent/
 │               ├── store.py            # 记忆存储
 │               └── types.py            # 记忆类型
 │
-├── crates/                             # Rust — cargo workspace (Phase 2 骨架)
-│   └── mesh-sdk/
-│       ├── Cargo.toml                  # → §5.2
-│       └── src/
-│           └── lib.rs                  # 占位，Phase 2 实现
-│
+# ⚠️ D-04: crates/ 已从 Phase 0 骨架中移除，下面这一段保留作为 Iter D 蓝图。Phase 0 不创建。
+# ├── crates/                             # Rust — cargo workspace (Iter D 引入)
+# │   └── mesh-sdk/
+# │       ├── Cargo.toml                  # → §5.2
+# │       └── src/
+# │           └── lib.rs                  # 占位，Iter D 实现 11-Agent Mesh
+#
+
 ├── .devcontainer/                      # Dev Container → §9
 │   ├── devcontainer.json
 │   └── Dockerfile
@@ -96,7 +101,7 @@ quilin-agent/
 ├── pnpm-workspace.yaml                 # → §4.1
 ├── package.json                        # root workspace → §4.2
 ├── tsconfig.base.json                  # TS 基础配置 → §4.4
-├── Cargo.toml                          # Rust workspace root → §5.2
+# ├── Cargo.toml                          # Rust workspace root → §5.2 (Iter D 引入)
 ├── .env.example                        # 环境变量模板 → §11
 ├── .gitignore                          # 更新：新增构建产物排除
 │
@@ -236,7 +241,7 @@ export default defineConfig({
 
 ---
 
-## 5. Python & Rust 配置
+## 5. Python 配置（Phase 0）+ Rust 配置（Iter D 引入）
 
 ### 5.1 providers/memory/pyproject.toml
 
@@ -279,9 +284,11 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 ```
 
-### 5.2 Rust workspace
+### 5.2 Rust workspace [Iter D 引入，Phase 0 跳过]
 
-**根 Cargo.toml**：
+> D-04: 以下 Cargo 配置保留作为 Iter D 参考蓝图。Phase 0 不要创建 `Cargo.toml` 或 `crates/`。
+
+**根 Cargo.toml**（Iter D）：
 
 ```toml
 [workspace]
@@ -302,7 +309,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ```
 
-**crates/mesh-sdk/Cargo.toml**：
+**crates/mesh-sdk/Cargo.toml**（Iter D）：
 
 ```toml
 [package]
@@ -951,11 +958,12 @@ logger = structlog.get_logger(
 )
 ```
 
-### 7.4 Rust 日志 (`crates/mesh-sdk/src/lib.rs`)
+### 7.4 Rust 日志 [Iter D 引入]
 
 ```rust
-// Phase 2 实现，使用 tracing + tracing-subscriber (JSON layer)
-// 输出格式与 TS/Python 对齐
+// Iter D 实现 (`crates/mesh-sdk/src/lib.rs`)：
+// 使用 tracing + tracing-subscriber (JSON layer)；输出格式与 TS/Python 对齐。
+// Phase 0 不需要。
 ```
 
 ### 7.5 监控方式
@@ -1049,18 +1057,17 @@ lint-py:
 fmt-py:
     cd providers/memory && uv run ruff format src/ tests/
 
-# ============ Rust (crates/) ============
-
-build-rs:
-    cargo build --workspace
-
-test-rs:
-    cargo test --workspace
-
-lint-rs:
-    cargo clippy --workspace -- -D warnings
-fmt-rs:
-    cargo fmt --all
+# ============ Rust (crates/) — Iter D 引入，Phase 0 不需要 ============
+# D-04: 以下 Rust target 在 Iter D 引入 11-Agent Mesh 时启用。
+# Phase 0 的 justfile 不应包含这些 target；init/test-all/check 也不应调用 cargo。
+# build-rs:
+#     cargo build --workspace
+# test-rs:
+#     cargo test --workspace
+# lint-rs:
+#     cargo clippy --workspace -- -D warnings
+# fmt-rs:
+#     cargo fmt --all
 
 # ============ 生产 ============
 
@@ -1089,10 +1096,8 @@ _start-memory:
     "dockerfile": "Dockerfile"
   },
   "features": {
-    "ghcr.io/devcontainers/features/rust:1": {
-      "version": "1.94",
-      "profile": "default"
-    },
+    // D-04: rust feature 在 Iter D 引入；Phase 0 不需要
+    // "ghcr.io/devcontainers/features/rust:1": { "version": "1.94", "profile": "default" },
     "ghcr.io/devcontainers/features/python:1": {
       "version": "3.14"
     },
@@ -1100,7 +1105,7 @@ _start-memory:
       "version": "22"
     }
   },
-  "postCreateCommand": "npm install -g pnpm@10 && curl -fsSL https://bun.sh/install | bash && curl -LsSf https://astral.sh/uv/install.sh | sh && cargo install just && just init",
+  "postCreateCommand": "npm install -g pnpm@10 && curl -fsSL https://bun.sh/install | bash && curl -LsSf https://astral.sh/uv/install.sh | sh && (command -v just || cargo install just || brew install just) && just init",
   "customizations": {
     "vscode": {
       "extensions": [
@@ -1174,18 +1179,19 @@ jobs:
       - run: cd providers/memory && uv run ruff check src/
       - run: cd providers/memory && uv run pytest
 
-  rust:
-    name: Rust
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.94"
-          components: clippy, rustfmt
-      - run: cargo clippy --workspace -- -D warnings
-      - run: cargo fmt --all -- --check
-      - run: cargo test --workspace
+  # D-04: rust job 在 Iter D 启用；Phase 0 CI 只跑 TS + Python
+  # rust:
+  #   name: Rust
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: dtolnay/rust-toolchain@stable
+  #       with:
+  #         toolchain: "1.94"
+  #         components: clippy, rustfmt
+  #     - run: cargo clippy --workspace -- -D warnings
+  #     - run: cargo fmt --all -- --check
+  #     - run: cargo test --workspace
 ```
 
 ---
@@ -1297,7 +1303,7 @@ export function getDefaultModel() {
 | 08-Observability (OTel) | Phase 1 领域 | 1 |
 | 09-Deployment 热更新 | Phase 2 | 2 |
 | 10-SelfEvolution | Phase 2 领域 | 2 |
-| 11-Agent Mesh 业务代码 | Rust 骨架只有 lib.rs 占位 | 2 |
+| 11-Agent Mesh + Rust crates/ | D-04: Phase 0 不创建骨架，Iter D 引入 | Iter D |
 | 12-Conversation Engineering | Phase 2 领域 | 2 |
 | Docker 生产镜像 | Dev Container 先行 | 1 |
 | SWE-bench harness | benchmark 适配器 | 0 后续 |
@@ -1321,9 +1327,9 @@ just lint                           # ✅ 无 lint 错误
 just test-py                        # ✅ 测试通过
 just lint-py                        # ✅ 无 lint 错误
 
-# 4. Rust 构建 + 测试
-just build-rs                       # ✅ 构建成功
-just test-rs                        # ✅ 测试通过
+# 4. Rust 构建 + 测试 [D-04: Iter D 引入，Phase 0 跳过]
+# just build-rs                     # Iter D 引入
+# just test-rs                      # Iter D 引入
 
 # 5. 一键启动 → LLM 验证 → 运行模式分发
 just dev                            # ✅ 看到 "Quilin Agent starting" → "LLM connection verified"

@@ -434,19 +434,22 @@ class MetaVerificationTrigger:
 
 | 模式 | 只读工具 | 写入工具 | 危险操作 | 适用场景 |
 |------|---------|---------|---------|---------|
-| **AUTO** | 自动执行 | 自动执行 | 自动执行 | **默认模式** — 最大信任，最小打断 |
-| **DEFAULT** | 自动执行 | 需确认 | 阻止 | 需要更多控制时手动切换（`--default`） |
+| **DEFAULT (READ-ONLY + ASK-ON-WRITE)** | 自动执行 | 需确认 | 阻止 | **默认模式**（D-01，2026-04-17 ultra-review）——符合最小权限原则 |
+| **AUTO** | 自动执行 | 自动执行 | 需确认 | 受信任工作流 opt-in（`--trust auto`），CRITICAL 仍强制确认 |
 | **STRICT** | 需确认 | 需确认 | 阻止 + 告警 | 高安全要求环境、审计模式（`--strict`） |
 
-> **设计哲学：默认最大信任**
+> **设计哲学（D-01 修订）：读默认自动，写默认询问**
 >
-> Quilin 默认使用 AUTO 模式——只有 CRITICAL 级操作（drop_table、rm -rf、payment.transfer 等不可逆操作）才需要人工确认。这参考了 Claude Code `--enable-auto-mode` 的设计理念：
+> Quilin 默认采用 **READ-ONLY + ASK-ON-WRITE** 姿态——读操作（grep、read、search、query）自动执行不打断；写操作（edit、shell 写入、外部 API 调用）首次触发会询问用户；CRITICAL 级操作（drop_table、rm -rf、payment.transfer 等不可逆操作）无论哪种模式都强制确认。
 >
-> - **频繁请求权限会打断工作流**，降低 Agent 的 agentic 体验
-> - **90%+ 的工具调用是安全的**（读取文件、搜索、查询等），无需人工干预
-> - 通过 2-stage Classifier（快速路径 + LLM 深度审查）替代人工确认，实现安全与效率的平衡
-> - **连续被拒降级机制**：当 Classifier 连续拒绝 N 次（默认 3），自动降级回 DEFAULT 模式（交互式确认），防止 Agent 锁死
-> - 用户可通过 `--default` 或 `--strict` flag 手动切换到更保守的模式
+> 这比原 AUTO 默认更保守的理由：
+>
+> - Agent 框架首次运行的用户对 Agent 的写操作范围尚无概念，默认"自动执行一切"风险过高
+> - Anthropic Claude Code 自 2025 年起也从纯 auto 改为"按工具分级"确认
+> - 用户可通过 `--trust auto` 显式 opt-in 到原 AUTO 模式，或通过 `allowlist` 配置逐工具放行
+> - **连续被拒降级机制**：当 Classifier 连续拒绝 N 次（默认 3），自动升级到 STRICT 模式（全部需确认），防止 Agent 被恶意 prompt 诱导后滥用权限
+>
+> 为什么不完全丢掉 AUTO？—— 对创始开发者、脚手架重复任务、CI 环境，AUTO 模式可显著降低打断；保留它但不作为默认。
 
 #### 2.6.2 权限决策树
 
@@ -1399,7 +1402,7 @@ class Quilin:
 ```yaml
 # quilin/config.yaml（安全护栏相关配置）
 guardrails:
-  permission_level: "auto"  # auto | default | strict（默认 auto：最大信任，CRITICAL 仍强制确认）
+  permission_level: "default"  # default | auto | strict — D-01: 默认 READ-ONLY + ASK-ON-WRITE，opt-in auto via `--trust auto`
   
   input_validation:
     injection_threshold: 0.5
