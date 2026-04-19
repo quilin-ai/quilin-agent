@@ -89,10 +89,10 @@
 **主要缓解**：
 - TH-01：shell_exec 改为 `execFile` 风格（executable + args 数组），内置危险模式 denylist（`rm -rf /`、`:(){ :|:& };:`、`curl | sh` 等），命令超时 clamp [1s, 60s]。✅ Codex P0-4 已落地。
 - TH-02：文件工具走 realpath resolve + workspace 白名单前缀检查，拒绝 symlink 逃逸。
-- TH-03：MCP spawn 走 command / arg allowlist + 显式 env allowlist（`LOG_LEVEL` / `QUILIN_ENV` 等）。✅ Codex P0-4 已落地；零继承 env 见 Task #84（backlog）。
+- TH-03：MCP spawn 走 command / arg allowlist + 显式 env allowlist（`LOG_LEVEL` / `QUILIN_ENV` 等）。✅ Codex P0-4 已落地；**零继承 env 已达成**（`createMCPSpawnEnv` 仅透传 2 个 key，MCP SDK 在 env 显式传入时不 merge `process.env`；2026-04-20 delta audit 验收 FIXED，Task #84 已 close）。
 - TH-04：skill_manage 必须走 13-skills 的 validator，路径必须在 `~/.quilin/skills/**` 或 `.quilin/skills/**` 内，size ≤ 32KB，frontmatter 必须 schema valid。
 - TH-05：所有 tool result 过大小限制（默认 16KB）+ 执行超时；超限 truncate + 记日志。
-- TH-06：web_fetch 限制 scheme（`https://` only），denylist 内网 CIDR（10/8、172.16/12、192.168/16、169.254/16、127/8），DNS 解析后再次校验。
+- TH-06：web_fetch 限制 scheme，denylist 内网 CIDR（`10/8`、`172.16/12`、`192.168/16`、`169.254/16`、`127/8`、`0.0.0.0/8`、`100.64.0.0/10` CGNAT、IPv6 `::1`、`fc00::/7`、`fe80::/10` link-local、IPv4-mapped 私网前缀），DNS 解析后校验 + 用 `undici.Agent` pinned lookup 防 DNS rebinding TOCTOU。✅ 基础 SSRF guard 已落地（9df1e8c）；⚠️ 数字 IP 字面量（`http://2130706433/` / `http://0x7f000001/`）绕过见 2026-04-20 delta audit NEW-01（Task #88 在修）。
 
 ### 3.3 Scaffold Drift（自进化风险）
 
@@ -160,7 +160,7 @@
 | TH-03 | Layer 2 + MCP spawn allowlist | `packages/agent-core/src/tools/mcp-client.ts` | ✅ P0-4 |
 | TH-04 | 13-skills validator | `packages/agent-core/src/skills/` | 💭 未建 |
 | TH-05 | Layer 3（输出）+ size/timeout clamp | `packages/agent-core/src/loop.ts` | ✅ P0-4 |
-| TH-06 | Layer 2 URL allowlist / CIDR blocklist | （待建）`web-fetch.ts` | 💭 未建 |
+| TH-06 | Layer 2 URL allowlist / CIDR blocklist + DNS pinning | `packages/agent-core/src/tools/builtin/web-fetch.ts` | 🚧 基础落地（9df1e8c）；NEW-01/02 修复在 Task #88 |
 | SD-01..04 | Layer 4（元验证）+ 人工 review gate | ADR / PR flow | ✅ 流程固化 |
 | CE-01..05 | Layer 3（输出）secret scrubber + PII detector | （待建）`scrubber.ts` | 💭 Iter B2+ |
 | SC-01..04 | CI + supply chain policy | `.github/workflows/*.yml` | 🚧 部分 |
@@ -177,7 +177,7 @@
 
 | 残留风险 | 接受理由 | 下一步 |
 |---------|---------|-------|
-| MCP StdioClientTransport 合并 safe inherited env（非零继承） | 当前不含 API key 类敏感项；彻底隔离需自定义 transport 或 upstream patch | Task #84（P2 backlog） |
+| ~~MCP StdioClientTransport 合并 safe inherited env~~ | ~~当前不含 API key 类敏感项~~ | ✅ 已解决（`createMCPSpawnEnv` 零继承；2026-04-20 delta audit 验收） |
 | 用户的 `~/.bashrc` 可能含敏感 alias，被 shell_exec 间接执行 | 用户主责管理 shell 环境；Agent 不做 shell rc 扫描 | 用 `execFile` 不走 shell 可缓解（已做） |
 | LLM Provider 侧对 prompt/response 的处理 | 依赖商业合约，无技术缓解 | 在 AGENTS.md 标注禁止上传生产密钥级提示词 |
 | Indirect prompt injection 100% 消除不可能 | 同上；只做最佳实践防御 | 持续更新 scanner 模式库 |
@@ -190,6 +190,6 @@
 - **审查节奏**：每个 Iter 的 retro 会上复盘一次；新增工具、新增远程能力、新语言环境必须同步更新。
 - **版本轨迹**：本文档放在 `docs/engineering/07-safety-guardrails/threat-model.md`，所有修订走 PR。
 - **关联**：
-  - 上游决策：[ADR-001](../../adr/adr-001-core-loop-and-language.md)、[ADR-002](../../adr/adr-002-project-skeleton.md)、D-01/D-08（`docs/review/2026-04-17-ultra-review.md`）
+  - 上游决策：[ADR-001](../../adr/adr-001-core-loop-and-language.md)、[ADR-002](../../adr/adr-002-project-skeleton.md)、D-01/D-08（`docs/review/2026-04-17-ultra-review.md`）、2026-04-20 delta audit（`docs/review/2026-04-20-delta-audit.md`）
   - 下游实现：[07-safety-guardrails/README.md](./README.md) Layer 1..4 章节；`packages/agent-core/src/tools/builtin/shell-exec.ts` 等
-  - 相关 backlog：Task #84（零继承 env transport）
+  - 相关 backlog：Task #88（NEW-01 SSRF 数字 IP 绕过 + NEW-02 DNS rebinding，P0）、Task #89（P1 批量 delta fix）
