@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { logger } from "../logger.js";
 
 type JsonSchemaPrimitiveType =
 	| "string"
@@ -9,8 +10,11 @@ type JsonSchemaPrimitiveType =
 	| "object";
 
 interface JsonSchemaBase {
+	readonly $id?: string;
 	readonly type?: JsonSchemaPrimitiveType | string;
 	readonly enum?: readonly unknown[];
+	readonly anyOf?: readonly JsonSchema[];
+	readonly oneOf?: readonly JsonSchema[];
 }
 
 export interface JsonSchemaObject extends JsonSchemaBase {
@@ -26,6 +30,17 @@ export interface JsonSchemaArray extends JsonSchemaBase {
 
 export type JsonSchema = JsonSchemaObject | JsonSchemaArray | JsonSchemaBase;
 
+function fallbackToUnknown(schema: JsonSchema, schemaType: string): z.ZodUnknown {
+	logger.warn(
+		{
+			schemaType,
+			schemaId: schema.$id,
+		},
+		"unsupported MCP schema, falling back to unknown",
+	);
+	return z.unknown();
+}
+
 function toRequiredShape(
 	properties: Readonly<Record<string, JsonSchema>>,
 	required: ReadonlySet<string>,
@@ -39,6 +54,14 @@ function toRequiredShape(
 }
 
 export function jsonSchemaToZod(schema: JsonSchema): z.ZodTypeAny {
+	if (schema.anyOf != null) {
+		return fallbackToUnknown(schema, "anyOf");
+	}
+
+	if (schema.oneOf != null) {
+		return fallbackToUnknown(schema, "oneOf");
+	}
+
 	switch (schema.type) {
 		case "string":
 			if (
@@ -67,8 +90,6 @@ export function jsonSchemaToZod(schema: JsonSchema): z.ZodTypeAny {
 			return z.object(toRequiredShape(schema.properties ?? {}, required));
 		}
 		default:
-			throw new Error(
-				`Unsupported MCP schema type: ${schema.type ?? "unknown"}`,
-			);
+			return fallbackToUnknown(schema, schema.type ?? "unknown");
 	}
 }

@@ -1,7 +1,19 @@
-import { describe, expect, it } from "vitest";
+import { z } from "zod";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { logger } from "../logger.js";
 import { jsonSchemaToZod } from "./schema-converter.js";
 
+vi.mock("../logger.js", () => ({
+	logger: {
+		warn: vi.fn(),
+	},
+}));
+
 describe("jsonSchemaToZod", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+	});
+
 	it("converts required and optional string fields", () => {
 		const schema = jsonSchemaToZod({
 			type: "object",
@@ -109,14 +121,73 @@ describe("jsonSchemaToZod", () => {
 		).toBe(false);
 	});
 
-	it("throws for unsupported schema types", () => {
-		expect(() =>
+	it("falls back to z.unknown for anyOf/oneOf branches", () => {
+		expect(
 			jsonSchemaToZod({
-				type: "object",
-				properties: {
-					value: { type: "null" },
+				anyOf: [{ type: "string" }, { type: "number" }],
+			} as never),
+		).toBeInstanceOf(z.ZodUnknown);
+		expect(
+			jsonSchemaToZod({
+				oneOf: [{ type: "string" }, { type: "number" }],
+			} as never),
+		).toBeInstanceOf(z.ZodUnknown);
+		expect(logger.warn).toHaveBeenCalledWith(
+			expect.objectContaining({ schemaType: "anyOf" }),
+			"unsupported MCP schema, falling back to unknown",
+		);
+		expect(logger.warn).toHaveBeenCalledWith(
+			expect.objectContaining({ schemaType: "oneOf" }),
+			"unsupported MCP schema, falling back to unknown",
+		);
+	});
+
+	it("falls back to unknown fields instead of throwing for null and unknown types", () => {
+		const schema = jsonSchemaToZod({
+			type: "object",
+			properties: {
+				value: { type: "null" },
+				extra: { type: "mystery" },
+			},
+			required: ["value", "extra"],
+		});
+
+		expect(
+			schema.safeParse({
+				value: "anything",
+				extra: { nested: true },
+			}).success,
+		).toBe(true);
+		expect(logger.warn).toHaveBeenCalledWith(
+			expect.objectContaining({ schemaType: "null" }),
+			"unsupported MCP schema, falling back to unknown",
+		);
+		expect(logger.warn).toHaveBeenCalledWith(
+			expect.objectContaining({ schemaType: "mystery" }),
+			"unsupported MCP schema, falling back to unknown",
+		);
+	});
+
+	it("keeps object schema conversion alive when a property uses anyOf", () => {
+		const schema = jsonSchemaToZod({
+			type: "object",
+			properties: {
+				query: { type: "string" },
+				filters: {
+					anyOf: [
+						{ type: "string" },
+						{ type: "object", properties: { limit: { type: "number" } } },
+					],
 				},
-			}),
-		).toThrow(/Unsupported MCP schema type/);
+			},
+			required: ["query", "filters"],
+		} as never);
+
+		expect(
+			schema.safeParse({
+				query: "hello",
+				filters: { limit: 10 },
+			}).success,
+		).toBe(true);
 	});
 });
