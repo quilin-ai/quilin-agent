@@ -9,7 +9,6 @@ set dotenv-load := true
 init:
     pnpm install
     cd providers/memory && uv sync --extra dev
-    cargo build --workspace
     cp -n .env.example .env 2>/dev/null || true
     @echo '✅ All dependencies installed. Edit .env with your API keys.'
 
@@ -32,7 +31,7 @@ stop:
 restart: stop start
 
 # 一键测试全部
-test-all: test test-py test-rs
+test-all: test test-py
 
 # 一键质量检查
 check: lint fmt
@@ -41,7 +40,6 @@ check: lint fmt
 clean:
     pnpm -r exec -- rm -rf dist
     cd providers/memory && rm -rf .venv __pycache__
-    cargo clean
 
 # ============ TS (packages/) ============
 
@@ -87,15 +85,15 @@ fmt-py:
 # ============ Rust (crates/) ============
 
 build-rs:
-    cargo build --workspace
+    @echo '{"ts":"'"$(date -Iseconds)"'","level":"info","service":"quilin","msg":"Rust workspace is deferred until Iter D; build-rs is currently a no-op."}'
 
 test-rs:
-    cargo test --workspace
+    @echo '{"ts":"'"$(date -Iseconds)"'","level":"info","service":"quilin","msg":"Rust workspace is deferred until Iter D; test-rs is currently a no-op."}'
 
 lint-rs:
-    cargo clippy --workspace -- -D warnings
+    @echo '{"ts":"'"$(date -Iseconds)"'","level":"info","service":"quilin","msg":"Rust workspace is deferred until Iter D; lint-rs is currently a no-op."}'
 fmt-rs:
-    cargo fmt --all
+    @echo '{"ts":"'"$(date -Iseconds)"'","level":"info","service":"quilin","msg":"Rust workspace is deferred until Iter D; fmt-rs is currently a no-op."}'
 
 # ============ 生产 ============
 
