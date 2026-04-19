@@ -3,6 +3,7 @@ import {
 	createFileReadTool,
 	createFileWriteTool,
 	type FileReadToolOptions,
+	type FileWriteToolOptions,
 } from "./file-tools.js";
 import {
 	createShellExecTool,
@@ -14,6 +15,7 @@ import type { ToolWithMetadata } from "../tool-metadata.js";
 
 export interface BuiltinToolOptions {
 	readonly fileRead?: FileReadToolOptions;
+	readonly fileWrite?: FileWriteToolOptions;
 	readonly shellExec?: ShellExecToolOptions;
 	readonly webFetch?: WebFetchToolOptions;
 	readonly writeAuthority?: WriteAuthority;
@@ -24,7 +26,10 @@ export function createBuiltinTools(
 ): ToolWithMetadata[] {
 	return [
 		createFileReadTool(options.fileRead),
-		createFileWriteTool(),
+		createFileWriteTool({
+			...options.fileWrite,
+			authority: options.writeAuthority ?? options.fileWrite?.authority,
+		}),
 		createFileListTool(),
 		createShellExecTool({
 			...options.shellExec,

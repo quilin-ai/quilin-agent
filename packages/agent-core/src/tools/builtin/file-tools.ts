@@ -17,6 +17,10 @@ import {
 	resolve,
 } from "node:path";
 import { z } from "zod";
+import {
+	WriteAuthority,
+	type WriteOrigin,
+} from "../../safety/write-authority.js";
 import type { ToolWithMetadata } from "../tool-metadata.js";
 import type { ToolResult } from "../types.js";
 
@@ -307,11 +311,15 @@ export function createFileReadTool(
 export interface FileWriteToolOptions {
 	readonly allowedRoots?: readonly string[];
 	readonly maxBytes?: number;
+	readonly authority?: WriteAuthority;
+	readonly origin?: WriteOrigin;
 }
 
 export function createFileWriteTool(
 	options: FileWriteToolOptions = {},
 ): ToolWithMetadata {
+	const authority = options.authority ?? new WriteAuthority();
+
 	return {
 		name: "file_write",
 		description: "Write utf-8 content to a file.",
@@ -333,9 +341,20 @@ export function createFileWriteTool(
 					options.allowedRoots,
 					"write",
 				);
+				const pathIsSensitive = await isSensitivePath(resolvedPath);
+				const writeDecision = await authority.authorize({
+					tool: "file_write",
+					riskLevel: pathIsSensitive ? "critical" : "medium",
+					summary: `Write ${absolutePath}`,
+					detail: resolvedPath,
+					origin: options.origin ?? "agent",
+				});
+				if (writeDecision.kind !== "allow") {
+					return createErrorResult("builtin-file-write", writeDecision.reason);
+				}
 				const bytesWritten = Buffer.byteLength(content, "utf8");
 
-				if (await isSensitivePath(resolvedPath)) {
+				if (pathIsSensitive) {
 					return createErrorResult(
 						"builtin-file-write",
 						`Writing sensitive file is not allowed: ${basename(resolvedPath)}`,

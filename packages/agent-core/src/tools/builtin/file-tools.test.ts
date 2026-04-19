@@ -10,11 +10,19 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { WriteAuthority } from "../../safety/write-authority.js";
 import {
 	createFileListTool,
 	createFileReadTool,
 	createFileWriteTool,
 } from "./file-tools.js";
+
+function createPermissiveAuthority(): WriteAuthority {
+	return new WriteAuthority({
+		mode: "ask",
+		confirm: async () => true,
+	});
+}
 
 describe("builtin file tools", () => {
 	let tempDir: string;
@@ -97,7 +105,10 @@ describe("builtin file tools", () => {
 
 	it("file_write writes utf-8 content and reports written bytes", async () => {
 		const filePath = join(tempDir, "output.txt");
-		const tool = createFileWriteTool({ allowedRoots: [tempDir] });
+		const tool = createFileWriteTool({
+			allowedRoots: [tempDir],
+			authority: createPermissiveAuthority(),
+		});
 
 		const result = await tool.execute({
 			path: filePath,
@@ -120,7 +131,10 @@ describe("builtin file tools", () => {
 		vi.stubEnv("HOME", fakeHome);
 		await mkdir(sshDir, { recursive: true });
 
-		const sensitiveTool = createFileWriteTool({ allowedRoots: [fakeHome] });
+		const sensitiveTool = createFileWriteTool({
+			allowedRoots: [fakeHome],
+			authority: createPermissiveAuthority(),
+		});
 		const sensitiveResult = await sensitiveTool.execute({
 			path: authorizedKeysPath,
 			content: "ssh-ed25519 AAAATEST user@example",
@@ -134,6 +148,7 @@ describe("builtin file tools", () => {
 		const oversizedTool = createFileWriteTool({
 			allowedRoots: [tempDir],
 			maxBytes: 4,
+			authority: createPermissiveAuthority(),
 		} as never);
 		const oversizedResult = await oversizedTool.execute({
 			path: join(tempDir, "too-large.txt"),
@@ -149,7 +164,10 @@ describe("builtin file tools", () => {
 	it("file_write replaces files without leaving temporary artifacts", async () => {
 		const filePath = join(tempDir, "atomic.txt");
 		await writeFile(filePath, "before", "utf8");
-		const tool = createFileWriteTool({ allowedRoots: [tempDir] });
+		const tool = createFileWriteTool({
+			allowedRoots: [tempDir],
+			authority: createPermissiveAuthority(),
+		});
 
 		const result = await tool.execute({
 			path: filePath,
@@ -269,5 +287,42 @@ describe("builtin file tools", () => {
 		expect(JSON.parse(missingResult.content)).toEqual({
 			error: "Path not accessible",
 		});
+	});
+
+	it("file_write returns an error when WriteAuthority denies the write", async () => {
+		const filePath = join(tempDir, "blocked.txt");
+		const tool = createFileWriteTool({
+			allowedRoots: [tempDir],
+			authority: new WriteAuthority({ mode: "deny-all" }),
+		});
+
+		const result = await tool.execute({
+			path: filePath,
+			content: "blocked",
+		});
+
+		expect(result.isError).toBe(true);
+		expect(JSON.parse(result.content)).toEqual({
+			error: expect.stringContaining("write authority"),
+		});
+	});
+
+	it("file_write proceeds after WriteAuthority confirmation succeeds", async () => {
+		const filePath = join(tempDir, "confirmed.txt");
+		const tool = createFileWriteTool({
+			allowedRoots: [tempDir],
+			authority: new WriteAuthority({
+				mode: "ask",
+				confirm: async () => true,
+			}),
+		});
+
+		const result = await tool.execute({
+			path: filePath,
+			content: "confirmed",
+		});
+
+		expect(result.isError).toBe(false);
+		expect(await readFile(filePath, "utf8")).toBe("confirmed");
 	});
 });
