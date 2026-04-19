@@ -1,3 +1,4 @@
+import { isAbsolute, relative, resolve } from "node:path";
 import {
 	createSystemContextSource,
 	DEFAULT_CONTEXT_BUDGET,
@@ -24,6 +25,27 @@ function buildCheckpointState(
 		createdAt: state?.createdAt ?? now,
 		lastActiveAt: now,
 	};
+}
+
+function isWithinWorkspace(filePath: string): boolean {
+	const resolvedWorkspace = resolve(process.cwd());
+	const resolvedPath = resolve(filePath);
+	const relativePath = relative(resolvedWorkspace, resolvedPath);
+	return (
+		relativePath === "" ||
+		(!relativePath.startsWith("..") && !isAbsolute(relativePath))
+	);
+}
+
+function shouldTrustToolOutput(
+	toolName: string,
+	toolArgs: Record<string, unknown>,
+): boolean {
+	return (
+		toolName === "file_read" &&
+		typeof toolArgs.path === "string" &&
+		isWithinWorkspace(toolArgs.path)
+	);
 }
 
 /**
@@ -61,6 +83,7 @@ export async function runAgentLoop(
 	}
 	const maxTurns = config.maxTurns ?? Number.POSITIVE_INFINITY;
 	let turnCount = 0;
+	let consecutiveBlockedToolOutputs = 0;
 
 	while (true) {
 		if (config.context != null && baseSystemPrompt != null) {
@@ -131,9 +154,14 @@ export async function runAgentLoop(
 		// TODO: 在明确工具副作用/顺序语义后，将独立 tool calls 改为并行执行。
 		for (const toolCall of response.toolCalls) {
 			const toolResult = await router.execute(toolCall);
+			const trustedToolOutput = shouldTrustToolOutput(
+				toolCall.name,
+				toolCall.arguments,
+			);
 			const scanResult = scanExternalContext(
 				toolResult.content,
 				`tool:${toolCall.name}`,
+				{ trustedSource: trustedToolOutput },
 			);
 			if (!scanResult.safe) {
 				logger.warn(
@@ -141,12 +169,27 @@ export async function runAgentLoop(
 					"Tool output scan detected threats",
 				);
 			}
+
+			const hasBlockedThreat = scanResult.threats.some(
+				(threat) => threat.severity === "block",
+			);
+			consecutiveBlockedToolOutputs =
+				hasBlockedThreat && !trustedToolOutput
+					? consecutiveBlockedToolOutputs + 1
+					: 0;
+
 			workingMessages.push({
 				role: "tool",
 				toolCallId: toolResult.toolCallId,
 				name: toolCall.name,
 				content: scanResult.sanitizedContent,
 			});
+
+			if (consecutiveBlockedToolOutputs >= 3) {
+				throw new Error(
+					"Agent loop aborted after 3 consecutive blocked tool outputs",
+				);
+			}
 		}
 	}
 }

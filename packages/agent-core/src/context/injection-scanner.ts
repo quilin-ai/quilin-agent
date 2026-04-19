@@ -11,6 +11,10 @@ export interface ScanResult {
 	readonly sanitizedContent: string;
 }
 
+export interface ScanExternalContextOptions {
+	readonly trustedSource?: boolean;
+}
+
 const THREAT_PATTERNS: ReadonlyArray<{
 	readonly name: string;
 	readonly regex: RegExp;
@@ -53,7 +57,16 @@ const THREAT_PATTERNS: ReadonlyArray<{
 export function scanExternalContext(
 	content: string,
 	source: string,
+	options: ScanExternalContextOptions = {},
 ): ScanResult {
+	if (options.trustedSource) {
+		return {
+			safe: true,
+			threats: [],
+			sanitizedContent: content,
+		};
+	}
+
 	const threats: ThreatMatch[] = [];
 	let sanitized = content;
 
@@ -71,13 +84,18 @@ export function scanExternalContext(
 		if (pattern.severity === "warn" && pattern.name === "invisible_unicode") {
 			sanitized = sanitized.replace(pattern.regex, "");
 		}
-	}
 
-	const hasBlock = threats.some((threat) => threat.severity === "block");
+		if (pattern.severity === "block") {
+			sanitized = sanitized.replace(
+				pattern.regex,
+				`[REDACTED: ${pattern.name}]`,
+			);
+		}
+	}
 
 	return {
 		safe: threats.length === 0,
 		threats,
-		sanitizedContent: hasBlock ? "" : sanitized,
+		sanitizedContent: sanitized,
 	};
 }
