@@ -20,39 +20,7 @@ const ALLOWED_ENV_KEYS = new Set([
 	"PWD",
 ]);
 
-const BLOCKED_COMMAND_PATTERNS: ReadonlyArray<{
-	readonly pattern: RegExp;
-	readonly reason: string;
-}> = [
-	{
-		pattern: /\brm\s+-rf\s+\/(?:\s|$)/i,
-		reason: "destructive filesystem wipe patterns are not allowed",
-	},
-	{
-		pattern: /\bcurl\b[\s\S]*\|\s*(?:sh|bash|zsh|fish|dash)\b/i,
-		reason: "shell pipelines into interpreters are not allowed",
-	},
-	{
-		pattern: /\beval\b/i,
-		reason: "eval execution is not allowed",
-	},
-	{
-		pattern: /`[^`]*`/,
-		reason: "backtick command substitution is not allowed",
-	},
-	{
-		pattern: /\$\([^)]*\)/,
-		reason: "command substitution is not allowed",
-	},
-	{
-		pattern: /:\s*\(\)\s*\{\s*:\|\:&\s*;\s*}\s*;/,
-		reason: "fork bomb patterns are not allowed",
-	},
-	{
-		pattern: /(?:^|[^\w./-])(?:\|\||&&|;|[|<>])/,
-		reason: "shell control operators are not allowed",
-	},
-];
+const CONTROL_OPERATOR_TOKENS = new Set(["|", "||", "&", "&&", ";", "<", ">", ">>"]);
 
 interface ShellRunnerResult {
 	readonly stdout: string;
@@ -120,9 +88,23 @@ function clampTimeoutMs(timeoutMs: number): number {
 	return Math.min(MAX_TIMEOUT_MS, Math.max(MIN_TIMEOUT_MS, timeoutMs));
 }
 
-function findBlockedCommandReason(command: string): string | undefined {
-	return BLOCKED_COMMAND_PATTERNS.find(({ pattern }) => pattern.test(command))
-		?.reason;
+function findBlockedCommandReason(
+	executable: string,
+	args: readonly string[],
+): string | undefined {
+	if (/^eval$/i.test(executable)) {
+		return "eval execution is not allowed";
+	}
+
+	if (
+		/^rm$/i.test(executable) &&
+		args.includes("-rf") &&
+		args.some((arg) => arg === "/" || arg.startsWith("/"))
+	) {
+		return "destructive filesystem wipe patterns are not allowed";
+	}
+
+	return undefined;
 }
 
 function tokenizeCommand(command: string): string[] {
@@ -136,7 +118,9 @@ function tokenizeCommand(command: string): string[] {
 	let quote: '"' | "'" | null = null;
 	let escaped = false;
 
-	for (const character of trimmed) {
+	for (let index = 0; index < trimmed.length; index += 1) {
+		const character = trimmed[index]!;
+
 		if (escaped) {
 			current += character;
 			escaped = false;
@@ -167,6 +151,26 @@ function tokenizeCommand(command: string): string[] {
 				tokens.push(current);
 				current = "";
 			}
+			continue;
+		}
+
+		if ("|&;<>".includes(character)) {
+			if (current !== "") {
+				tokens.push(current);
+				current = "";
+			}
+
+			const nextCharacter = trimmed[index + 1];
+			if (
+				(character === "|" || character === "&" || character === ">") &&
+				nextCharacter === character
+			) {
+				tokens.push(`${character}${character}`);
+				index += 1;
+				continue;
+			}
+
+			tokens.push(character);
 			continue;
 		}
 
@@ -278,21 +282,30 @@ export function createShellExecTool(
 				cwd?: string;
 				timeoutMs?: number;
 			};
-			const blockedReason = findBlockedCommandReason(command);
-			if (blockedReason != null) {
-				return createErrorResult("builtin-shell-exec", {
-					error: `Command blocked: ${blockedReason}`,
-				});
-			}
 
 			let executable: string;
 			let argv: string[];
+			let tokens: string[];
 			try {
-				[executable, ...argv] = tokenizeCommand(command);
+				tokens = tokenizeCommand(command);
+				[executable, ...argv] = tokens;
 			} catch (error) {
 				return createErrorResult("builtin-shell-exec", {
 					error:
 						error instanceof Error ? error.message : "Command parsing failed",
+				});
+			}
+
+			if (tokens.some((token) => CONTROL_OPERATOR_TOKENS.has(token))) {
+				return createErrorResult("builtin-shell-exec", {
+					error: "Command blocked: shell control operators are not allowed",
+				});
+			}
+
+			const blockedReason = findBlockedCommandReason(executable, argv);
+			if (blockedReason != null) {
+				return createErrorResult("builtin-shell-exec", {
+					error: `Command blocked: ${blockedReason}`,
 				});
 			}
 

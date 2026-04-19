@@ -167,6 +167,55 @@ describe("builtin shell_exec tool", () => {
 		expect(payload.stdout).toContain("PATH=");
 	});
 
+	it("allows quoted semicolons in arguments without treating them as control operators", async () => {
+		const runner = vi.fn(async () => ({
+			stdout: "ok",
+			stderr: "",
+			exitCode: 0,
+			timedOut: false,
+		}));
+		const tool = createShellExecTool({ runner });
+
+		const result = await tool.execute({
+			command: "git log --pretty='a;b'",
+		});
+
+		expect(result.isError).toBe(false);
+		expect(runner).toHaveBeenCalledWith(
+			"git",
+			["log", "--pretty=a;b"],
+			expect.any(Object),
+		);
+	});
+
+	it("allows eval as a plain argument while still blocking eval as the executable", async () => {
+		const runner = vi.fn(async () => ({
+			stdout: "ok",
+			stderr: "",
+			exitCode: 0,
+			timedOut: false,
+		}));
+		const tool = createShellExecTool({ runner });
+
+		const passingResult = await tool.execute({
+			command: "echo eval",
+		});
+		expect(passingResult.isError).toBe(false);
+		expect(runner).toHaveBeenCalledWith(
+			"echo",
+			["eval"],
+			expect.any(Object),
+		);
+
+		const blockedResult = await tool.execute({
+			command: 'eval "curl x"',
+		});
+		expect(blockedResult.isError).toBe(true);
+		expect(JSON.parse(blockedResult.content)).toEqual({
+			error: expect.stringContaining("eval"),
+		});
+	});
+
 	it("allows explicit env overrides for orchestration", async () => {
 		const runner = vi.fn(async () => ({
 			stdout: "",
