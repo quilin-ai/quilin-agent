@@ -17,7 +17,7 @@ Quilin Agent（麒麟）is a self-evolving Agent framework that tracks **curated
 - **Layered Memory**: OmniMem 4-tier (working/episodic/semantic/skill) with auto-reflect + User Profile Store + Departure Context
 - **Communication**: MCP stdio (TS↔Python). Agent Mesh (gRPC) and HTTP SSE streaming land in Iter D+.
 - **Temporal Awareness**: 3-layer time perception (intra-session gap, absolute time, cross-session timeline)
-- **Permission Model**: Default **READ-ONLY + ASK-ON-WRITE**. The `AUTO` tier that auto-approves non-CRITICAL ops is **opt-in per session** and gated by an explicit `--trust auto` flag; no global "max trust" default. See 07-safety.
+- **Permission Model**: Default **READ-ONLY + ASK-ON-WRITE**. The `AUTO` tier that auto-approves non-CRITICAL ops is **opt-in per session** and gated by an explicit `--trust auto` flag; no global "max trust" default. All agent-initiated writes (shell_exec / file_write / scaffold patch / skill_create / idle evolution) route through a single **`WriteAuthority`** gate (07 §2.6.4, Task #90)—CRITICAL always confirms, `origin:"idle"` writes require explicit `--trust auto` opt-in. See 07-safety.
 - **CLI-Anything**: GUI tools auto-wrapped as CLI via HKUDS/CLI-Anything for universal tool access
 - **WebUI Dashboard**: Independent global visualization panel (tasks, memory, metrics, Agent topology)
 - **Benchmark Targets (Iter E)**: **SWE-bench Verified + GAIA + BFCL v4** as the 3 pinned leaderboards. Others (WebArena / OSWorld / AgentHarm etc.) are aspirational — not planning-level commitments.
@@ -42,7 +42,7 @@ Quilin Agent（麒麟）is a self-evolving Agent framework that tracks **curated
 
 | 文档 | 位置 | 用途 |
 |------|------|------|
-| 架构决策 | `docs/adr/adr-###-slug.md` | 已定稿的技术决策 |
+| 架构决策 | `docs/adr/adr-###-slug.md` | 已定稿的技术决策（ADR-001 核心循环、ADR-002 骨架、ADR-003 A2A vs 自建 gRPC） |
 | 架构总览 | `docs/architecture/overview.md` | 13 领域全景图 + 导航 |
 | Harness 工程 | `docs/architecture/harness-engineering.md` | 顶层架构概念 |
 | **术语表** | `docs/architecture/glossary.md` | **规范术语源（CI 强制）**：OmniMem tier casing、`skill_view`、`Quilin` 等 |

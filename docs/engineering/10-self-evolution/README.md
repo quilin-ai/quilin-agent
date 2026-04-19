@@ -229,6 +229,8 @@ class PatternAggregator:
 ### 2.4 Scaffold 自修改（人在回路，核心创新）
 
 > **D-01 决策（2026-04-17 ultra-review）**：所有 Scaffold 自修改均需人工审批，不再保留"自动应用"路径。Agent 只生成建议（proposal）+ 沙箱验证报告，由人类通过 PR 评审决定合并。
+>
+> **运行时闸门（Task #90）**：proposal 从 `FailureAnalyzer` 走到 PR 之前，**必须**过 [07 §2.6.4 WriteAuthority](../07-safety-guardrails/README.md#264-writeauthority-gate权限模式的运行时执行器) gate：`origin:"agent"`（Idle Evolution 触发时为 `origin:"idle"`）、`riskLevel:"critical"`（所有 4 个 Level 均强制 `critical`，因为均触及 `packages/agent-core/` 安全代码可能面）、`summary` 含 patch 摘要、`detail` 含完整 diff。Gate 的 `confirm` 决策等价于 PR 评审环节——禁止任何绕过 gate 的直接写路径。
 
 这是自进化中最具创新性、也最需要谨慎设计的部分。自修改按变更幅度分为 4 层，**所有层级都走 human-in-loop PR 合并**；差别仅在建议结构、沙箱验证强度与回滚代价。
 
@@ -1133,9 +1135,10 @@ Quilin（主循环）
     │
     └── 定时触发（默认每 6 小时）：SelfEvolutionEngine.run_cycle()
 
-OmniMem（记忆层）← Skill Memory（Layer 4）
-    └── SkillManager 直接写入 Skill Memory 层
-    └── SkillManager 读取 Skill Memory 获取复用技能
+13-skills（SKILL.md 真源）+ OmniMem Layer 4（usage counter 镜像）
+    └── SkillManager 只产出"草案" → 经 07 §2.6.4 WriteAuthority + 13-skills `skill_manage` 工具落盘 SKILL.md
+    └── SkillManager 查 13-skills 注册表获取可复用 skill；调用后仅更新 OmniMem Layer 4 的 usage counter（不写 body）
+    └── 真源始终是 `~/.quilin/skills/**/SKILL.md`（D-11 2026-04-20 NEW-11 修复：03-memory 不再双写 skill body）
 
 Verifier（验证层）
     └── ABEvaluator 借用 Verifier 的沙箱执行能力运行评估任务
@@ -1163,7 +1166,8 @@ Quilin.run()
     │
     ├──[成功]──→ SkillManager.extract(trajectory)
     │                        │
-    │                        └──→ 写入 Skill Memory
+    │                        └──→ 产出 skill 草案 → `skill_manage(create)` + WriteAuthority 落盘 SKILL.md（13-skills 真源）
+    │                             同步 upsert OmniMem Layer 4 的 usage counter（仅计数，不存 body）
     │
     └──[失败]──→ FailureAnalyzer.analyze(trajectory) [异步]
                             │

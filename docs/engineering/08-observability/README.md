@@ -804,6 +804,7 @@ class Quilin:
 |----|-------|------------|
 | **LLM Brain** | `LLMClient.chat()` 返回后 | 记录 LLM Span：model/tokens/cost/latency |
 | **Memory** | `OmniMem.retrieve()` 前后 | 记录 Tool Span：检索延迟/命中数 |
+| **Memory Tier Transition**（D-18 2026-04-20 NEW-12） | FIFO Working→Episodic / Discard-all / Reflector 抽取触发时 | 记录 `memory_tier_transition` Span，attrs `{from_tier, to_tier, items_affected, tokens_before, tokens_after, trigger: fifo\|discard_all\|reflect}`；Counter `memory.tier_transitions_total{from,to,trigger}`；Histogram `memory.compression_ratio`。用于 debug "agent 突然忘了上下文" 回归。 |
 | **Planning** | `plan` 节点执行后 | 记录规划质量评分（StepEvaluator）|
 | **Tools** | `ToolRouter.execute()` 前后 | 记录 Tool Span：工具名/参数/耗时/成功率 |
 | **Orchestration** | MCPBus 消息发送/接收 | 记录跨 Agent 通信延迟 |

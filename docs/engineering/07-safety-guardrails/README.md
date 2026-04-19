@@ -163,6 +163,14 @@ Agent 错误调用工具导致不期望的副作用。
                      最终安全输出
 ```
 
+> **当前实现状态（2026-04-20）**：
+>
+> - ✅ **Layer 1 子集**：`scanExternalContext`（`packages/agent-core/src/safety/injection-scanner.ts`）已落地，但**仅覆盖 tool outputs**（`loop.ts:132-149`），不扫用户输入、web_fetch body、OmniMem recall。
+> - 🚧 **`<external_context>` XML 隔离**：尚未实现。当前外部内容直接拼入 prompt，依赖 LLM 遵循"把 external 当数据不当指令"的 system prompt 规范——这是**非强约束**。Iter B2 补全（ContextAssembler 接管）。
+> - 🚧 **Layer 2 步骤验证**：三问框架已写入 spec，实现未落。
+> - ✅ **Layer 2 ExecutionGate 子集**：shell_exec / file_write 已有 denylist + 路径白名单（#85），#90 Task 接入 `WriteAuthority` 统一 gate。
+> - 💭 **Layer 3 输出验证 / Layer 4 元验证**：未开始。
+
 ### 2.2 Layer 1：输入验证详细设计
 
 #### 2.2.1 三级检测链（级联设计）
@@ -512,6 +520,61 @@ TOOL_RISK_LEVELS = {
     ],
 }
 ```
+
+#### 2.6.4 WriteAuthority Gate：权限模式的运行时执行器
+
+> **来源**：D-01（2026-04-17 ultra-review §1）收敛修复项 R-02；MVP 实现由 Task #90 交付。
+
+§2.6.1..2.6.3 定义了权限**策略**（三级模式 + 危险等级），`WriteAuthority` 是这套策略的**单一运行时 gate**：所有 agent-initiated writes（shell_exec / file_write / scaffold patch / skill create / idle evolution）在进入工具沙箱前必须经过它决策，**不允许绕过**。
+
+**目标**：消除 "God Mode + AUTO + Idle Evolution + Scaffold Level-1 自动应用" 四件套叠加路径下没有独立审批闸门的问题。
+
+**接口契约**（`packages/agent-core/src/safety/write-authority.ts`）：
+
+```ts
+type WriteRiskLevel = "low" | "medium" | "high" | "critical";
+
+type WriteDecision =
+  | { kind: "allow" }
+  | { kind: "deny"; reason: string }
+  | { kind: "confirm"; prompt: string };
+
+interface WriteRequest {
+  tool: string;           // shell_exec / file_write / scaffold_patch / skill_create ...
+  riskLevel: WriteRiskLevel;
+  summary: string;         // 给用户看的一句话
+  detail?: string;         // 完整 diff / command / payload
+  origin: "user" | "agent" | "idle";  // 关键：idle 发起的写必须 opt-in
+}
+
+type AuthorityMode = "ask" | "auto-low" | "auto-medium" | "deny-all";
+```
+
+**决策不变式**：
+
+1. **默认 `ask`**：全局默认 confirm-every-write（与 §2.6.1 "READ-ONLY + ASK-ON-WRITE" 一致）
+2. **CRITICAL 永远 confirm**：即使 `auto-medium` 模式也强制询问（对齐 §2.6.3 分类表）
+3. **`origin: "idle"` 必须 opt-in**：`ask` 模式下 idle 写直接 deny；只有用户显式切 `auto-*` 才允许
+4. **所有 decision 落 audit log**：JSONL 到 stderr / `.logs/authority-audit.jsonl`
+
+**当前落地范围（Iter B2 MVP，Task #90）**：
+
+| 工具 | 接线状态 | 风险等级默认 |
+|------|:------:|------------|
+| `shell_exec` | ✅ MVP | `high` |
+| `file_write`（非敏感路径） | ✅ MVP | `medium` |
+| `file_write`（敏感路径如 `~/.aws/*`） | ✅ MVP | `critical` |
+| `web_fetch` | ❌ 不接（`riskLevel="read"`） | — |
+| scaffold patch | 💭 Iter E+（10-self-evolution 落地后） | `critical` |
+| skill create | 💭 Iter B3+（13-skills M1 落地后） | `high` |
+| idle evolution | 💭 默认 OFF；启用时走 `origin:"idle"` | 按单次操作 |
+
+**未接入 WriteAuthority 不得作为 "疏漏" 被 idle evolution 或 scaffold patch 绕过**——任何**新**自主写路径必须在上线前接入 gate。CI 层面通过 `scripts/lint-glossary.py` 扩展检查新 tool 的 `riskLevel` 字段。
+
+**与 Layer 2（步骤验证）的关系**：
+
+- Layer 2 的"是否触发权限边界？"一问由 WriteAuthority 的 decision 作为客观输入（而非 LLM 自评），避免 step verifier 自己猜测权限状态
+- WriteAuthority 的 `confirm` 决策在 REPL 模式下触发 readline 询问；在 service-loop 模式下默认 deny + 记 audit
 
 ### 2.7 Hooks 系统设计
 

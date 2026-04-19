@@ -44,7 +44,10 @@ Tool 让 Agent 做得到一件事；Skill 让 Agent 知道该怎么做这件事�
 
 - **索引先行**：system prompt 中注入 `<available_skills>` 列表（name + 60 字描述）
 - **token 预算**：单个 skill 描述 ≤60 字符、整份 catalog 预算可配置（默认 1K tokens）
-- **排序**：recency × relevance × mandatory 标记
+- **排序（D-13 2026-04-20 NEW-15 KV-cache 稳定性约束）**：
+  - **稳定前缀段**（bundled + user + mandatory skills）按 `skill_id` lexicographic 排序，放进 system prompt 稳定前缀，满足 [harness-engineering §十](../../architecture/harness-engineering.md) KV-cache 命中率 >80% 目标
+  - **热门段**（`<hot_skills>`，≤10 条）按 `recency × relevance` 排序，放在稳定前缀**之后**，作为每轮可变的独立 XML 块
+  - 违反约束的后果：每轮 prefix hash 漂移 → KV-cache miss → 10x 成本放大
 
 #### 维度 4：按需加载（On-demand Load）
 
@@ -131,6 +134,20 @@ metadata:
 
 <markdown body — LLM 按需读取>
 ```
+
+#### Anthropic 官方 `anthropics/skills` 对齐（D-17 2026-04-20）
+
+为了让社区 skill 能零翻译落盘到 `~/.quilin/skills/**`，SkillsManager 的 frontmatter 解析器必须接受以下**等价键**（kebab-case 为官方首选，camelCase 为内部 alias）：
+
+| Quilin 内部 | Anthropic 官方 | 必需 |
+|------------|--------------|------|
+| `name` | `name` | ✅ |
+| `description` | `description` | ✅ |
+| `allowedTools` | `allowed-tools` | 可选 |
+| `license` | `license` | 可选 |
+| `whenToUse` / `userInvocable` / `disableModelInvocation` / `metadata.quilin.*` | — | Quilin 扩展（官方无对应字段） |
+
+parser 规范化到 camelCase 内部表示；写回时保留原始键名不规范化（避免社区 skill 本地修改后 diff 漂移）。引用：[anthropics/skills README](https://github.com/anthropics/skills/blob/main/README.md)。
 
 ### 2.3 核心数据结构
 
@@ -286,6 +303,10 @@ interface CatalogRenderer {
 }
 
 // Skill CRUD 工具 — 唯一写入入口
+// 安全约束：所有 create/update/delete 必须过 07 §2.6.4 WriteAuthority gate
+//   - origin: "agent"（Background nudge 触发时 origin:"idle"，在 ask 模式下强制 deny）
+//   - riskLevel: "high"（create/update） / "medium"（delete）
+//   - 敏感 frontmatter 字段（如 allowed_tools 含 shell_exec）自动升为 "critical"
 type SkillManageAction =
   | { action: 'create'; descriptor: SkillDescriptor; body: string }
   | { action: 'update'; name: string; patch: Partial<SkillDescriptor>; body?: string }

@@ -135,31 +135,34 @@ Claude Code 的 CLAUDE.md 是一种创新——把项目级知识写成文件让
 
 **知识图谱（Knowledge Graph）**：
 - 存储内容：实体-关系-实体三元组，如 `(Python, is_language_of, FastAPI)`
-- 后端：默认使用 NetworkX（内存图，轻量）；生产可切换为 Neo4j（Graphiti 后端）
-- 三元组来源：Reflector 从 Episodic Memory 中自动抽取实体和关系
-- 时序标注：每条关系携带生效时间和失效时间（来自 Graphiti 的设计）
+- **后端（D-12 2026-04-20）**：**默认 Graphiti（Zep 开源版，Apache-2.0）**——温度时序 KG，LongMemEval 基准上比 mem0 / RAG +15 pts，sub-second GraphRAG 检索。本地开发可退化为 NetworkX；Graphiti 可选 Neo4j 或 FalkorDB 作为后端存储
+- 三元组来源：Reflector 从 Episodic Memory 中自动抽取；Graphiti 自带 entity extraction 默认提示词，我们薄封装
+- 时序标注：每条关系携带生效时间和失效时间（Graphiti 原生能力，支持 point-in-time 回溯查询）
 - 查询能力：子图检索、关系路径查询、实体邻居查询
+
+**Agent-facing 接口（Letta 启发）**：除了被动 Reflector 自动抽取外，额外暴露以下工具让 agent 主动自编辑语义 tier：
+- `memory_replace(tier, old_fragment, new_fragment)` — 点更新
+- `memory_append(tier, content)` — 追加
+- `archival_insert(content, tags)` — 归档（仅 semantic tier）
+
+Letta 证明了 "self-editing memory" 在长任务中优于纯被动自动抽取；我们保留被动抽取为默认，主动接口作为 Agent 在发现自动抽取错误或希望显式锚定关键事实时的 escape hatch。
 
 **跨会话持久化**：
 - 向量索引：持久化到本地目录（`~/.quilin/memory/vector/`）
 - 知识图谱：序列化为 JSON-LD 格式（`~/.quilin/memory/kg/graph.jsonld`）
 - 加载时机：Quilin 初始化时自动加载，无需用户干预
 
-### Layer 4：Skill Memory（技能记忆）
+### Layer 4：Procedural Memory / Skill Usage Stats（技能使用统计）
 
-**定位**：Agent 在执行复杂任务过程中自动提炼的可复用技能模板，是自进化能力的基础。
+> **D-11（2026-04-20 NEW-11 Skill 单写方原则）**：Skill 的**唯一真源（SSoT）**是文件系统 `~/.quilin/skills/**/SKILL.md`，由 [13-skills](../13-skills/README.md) 维护。Layer 4 **不存 skill body / trigger_pattern / execution_steps**，只保留 usage/success 计数，供排序与淘汰决策使用。这消除了 03-memory 与 13-skills 的双写冲突（避免索引漂移 / CRUD race）。
 
-**技能模板结构**：
+**定位**：对 13-skills 注册表的 usage counter 镜像（只读引用 + 写入计数器），供 catalog 排序与低效 skill 发现使用。
+
+**Skill 使用统计表**：
 ```python
 @dataclass
-class SkillTemplate:
-    skill_id: str
-    name: str
-    description: str
-    trigger_pattern: str        # 什么类型的任务触发此技能
-    input_schema: dict          # 输入参数模板
-    execution_steps: list[str]  # 执行步骤序列
-    output_schema: dict         # 预期输出格式
+class SkillUsageStat:
+    skill_id: str                # 引用 ~/.quilin/skills/<slug>/SKILL.md
     success_count: int = 0
     invocation_count: int = 0
     last_used: datetime | None = None
@@ -171,15 +174,11 @@ class SkillTemplate:
         return self.success_count / self.invocation_count
 ```
 
-**技能自创流程**：
-1. Agent 成功完成一个复杂任务（多步骤，耗时 > 30s）
-2. 触发 SkillExtractor：分析执行轨迹，识别可复用的步骤模式
-3. 生成 SkillTemplate：用 LLM 将轨迹抽象为参数化模板
-4. 存入 Skill Memory，关联到触发模式的向量嵌入
+**技能创建**：**不在 03-memory 范围**。创建/更新/删除路径由 10-self-evolution 的 idle evolution 产生建议 → 13-skills 的 `skill_manage` 工具写盘 SKILL.md（经 07 §2.6.4 WriteAuthority）。Layer 4 只在 skill 被调用后 upsert 对应的 `skill_id` 计数器。
 
-**按成功率淘汰**：
-- 调用次数 >= 5 且成功率 < 0.3 的技能标记为 deprecated
-- 定期（每 24 小时）清理 deprecated 技能
+**按成功率淘汰**（建议层，不自动删除）：
+- 调用次数 >= 5 且成功率 < 0.3 的 skill 由 Layer 4 产出 "deprecation suggestion"
+- 由 13-skills `skill_manage(delete)` 经 WriteAuthority + 人审执行
 
 ### User Profile Store（用户画像存储）
 

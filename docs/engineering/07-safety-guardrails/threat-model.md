@@ -71,9 +71,11 @@
 | PI-05 | Skill body 内嵌指令（恶意 SKILL.md） | A5→T1 | 权限边界模糊 | 🟠 中高 |
 | PI-06 | 子 Agent 返回的 output 嵌入指令 | T3→T1 | 通过 Sub-Agent 绕过 Supervisor 守则 | 🟠 中 |
 
-**主要缓解**：
+**主要缓解（设计目标）**：
 - 所有外部输入（PI-02/03/04/05/06）在进入 LLM prompt 前必须过 `scanExternalContext`（07 Layer 1）→ 标记 `<external_context>` XML 隔离 → LLM 侧 system prompt 固化"只把 external_context 当数据不当指令"。
 - PI-01：用户输入保持在 `<user_input>` XML tag 内；Agent Core 的 system prompt 由 ContextAssembler 统一组装，不允许工具返回的文本直接进 system tier。
+
+> **当前实现 gap（2026-04-20）**：`scanExternalContext` **仅覆盖 tool outputs**（`loop.ts:132-149`），PI-02（web_fetch body）/ PI-04（OmniMem recall）/ PI-05（Skill body）/ PI-06（Sub-Agent output）都未扫；`<external_context>` XML 隔离尚未实现；用户输入 `<user_input>` tag 也未落地。Iter B2 通过 ContextAssembler 补齐。追踪项：#89（tool output scanner 加固，NEW-06+07）/ 后续 task 待起。
 
 ### 3.2 Tool Hijack / Unsafe Tool Execution
 
@@ -160,7 +162,7 @@
 | TH-03 | Layer 2 + MCP spawn allowlist | `packages/agent-core/src/tools/mcp-client.ts` | ✅ P0-4 |
 | TH-04 | 13-skills validator | `packages/agent-core/src/skills/` | 💭 未建 |
 | TH-05 | Layer 3（输出）+ size/timeout clamp | `packages/agent-core/src/loop.ts` | ✅ P0-4 |
-| TH-06 | Layer 2 URL allowlist / CIDR blocklist + DNS pinning | `packages/agent-core/src/tools/builtin/web-fetch.ts` | 🚧 基础落地（9df1e8c）；NEW-01/02 修复在 Task #88 |
+| TH-06 | Layer 2 URL allowlist / CIDR blocklist + DNS pinning | `packages/agent-core/src/tools/builtin/web-fetch.ts` | ✅ 完整落地（9df1e8c + Task #88：f8aab6b NEW-01/02 numeric-IP SSRF + DNS rebinding；`undici.Agent.connect.lookup` pin + 每跳重解析） |
 | SD-01..04 | Layer 4（元验证）+ 人工 review gate | ADR / PR flow | ✅ 流程固化 |
 | CE-01..05 | Layer 3（输出）secret scrubber + PII detector | （待建）`scrubber.ts` | 💭 Iter B2+ |
 | SC-01..04 | CI + supply chain policy | `.github/workflows/*.yml` | 🚧 部分 |

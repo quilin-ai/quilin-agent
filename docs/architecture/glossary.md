@@ -44,6 +44,7 @@
 | KV-cache | KV-cache | 全文连字符 |
 | E-T-C-S-L-V | E-T-C-S-L-V | 历史六分类；见 [overview.md §附录 A](./overview.md#附录-a-e-t-c-s-l-v-历史分类) |
 | Harness-only 基准 | Harness-only 基准 | [harness-engineering.md §十](./harness-engineering.md#十核心度量) |
+| Deferred Tools | **Deferred Tools** | Claude Code 风格的按需加载 tool schema 机制：system prompt 只暴露工具名 + 一句描述；具体 schema 由 agent 通过 `ToolSearch` 在需要时拉取。用于降低首轮 token 成本。见 [05-tool §2.5](../engineering/05-tool/README.md)。 |
 
 ## 四、实现状态标签（R-07）
 
@@ -64,6 +65,8 @@
 | CRITICAL / HIGH / MEDIUM / LOW | 4 级操作风险；CRITICAL 永远需要人类批准 |
 | Two-Strike | 安全失败两次即升级人审（07-safety）|
 | Human-in-loop | Scaffold patch / 融合 PR 必须走 |
+| **`WriteAuthority`** | 07 §2.6.4 权限模式的**运行时执行器**；所有 agent-initiated writes（shell_exec / file_write / scaffold patch / skill_create / idle evolution）必须经其决策。规范写法：类型名 `WriteAuthority` / `WriteRequest` / `WriteDecision` / `AuthorityMode`。反模式禁用：`WriteGate`、`AuthorityGate`、`ExecutionGate`（§2.6 已有 ExecutionGate 概念词，指 Layer 2 的工具步骤验证，与 WriteAuthority 是**不同层**，不要混用）|
+| `origin` 字段 | `WriteRequest.origin: "user" \| "agent" \| "idle"`——`idle` 发起的写在 `ask` 模式下强制 deny |
 
 ## 六、与 Fusion（上游融合）相关
 

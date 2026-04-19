@@ -23,14 +23,21 @@
 
 | Benchmark | 版本 | 范畴 | 首次目标 | SOTA（2026-04） | 评估成本 |
 |-----------|------|------|---------|----------------|---------|
-| **SWE-bench Verified** | Verified（500 题） | 真实 GitHub issue 修复 | 进入 top-10 | 65%+ | 🔴 高 |
-| **GAIA** | v1 | 多步推理 + 工具使用（466 题） | ≥35% | 44.8% | 🟠 中 |
-| **BFCL v4** | v4 | 工具调用准确率 | overall ≥85% | 90%+ | 🟡 中低 |
+| **SWE-bench Verified** | Verified（500 题） | 真实 GitHub issue 修复 | 进入 top-10 | 74.4%（Claude Opus 4.5） | 🔴 高 |
+| **GAIA** | v1 | 多步推理 + 工具使用（466 题） | ≥35% | 74.6%（Claude Sonnet 4.5） | 🟠 中 |
+| **BFCL v4** | v4 | 工具调用准确率 | overall ≥85% | 70.9%（GLM-4.5 开源领先） | 🟡 中低 |
+| **τ2-bench** ⭐**NEW** | v2（2025-12） | 多轮工具 + 用户交互（telecom / retail / airline） | telecom ≥85% | Opus 4.6 telecom 99.3% / retail 91.9% | 🟡 中 |
 
-**为什么这三个**：
+**为什么这四个**（D-16 2026-04-20 加入 τ2-bench）：
 - **SWE-bench Verified**：覆盖核心用户场景（coding agent），有标准 harness，SOTA 分布已稳定。
 - **GAIA**：检验多步规划 + tool use + web browsing 的综合能力，LLM-based evaluator 成本可控。
 - **BFCL v4**：检验 Iter B（工具系统）+ Iter A（LLM 集成）底座，单题短，迭代快，能快速暴露回归。
+- **τ2-bench**：Sierra Research 2025-12 发布，唯一专门测 **多轮工具 + 真实用户交互**的榜单；对 "single-shot information exchange" 攻击天然免疫，补齐前三榜单被 [Berkeley RDI audit](https://rdi.berkeley.edu/blog/trustworthy-benchmarks-cont/) 批评的 gaming 风险。
+
+**Benchmark 整合性警告（D-16 同批添加）**：Berkeley RDI + 其他独立审计已证明 SWE-bench / WebArena / GAIA 的部分条目可以被"刷分"（如提前读 patch 解、通过 env var 泄漏答案）。我们的应对：
+- 每次提交必附全量 trace，接受公开审查
+- 不使用任何"用榜单数据 few-shot / fine-tune"的手段
+- τ2-bench 作为 4 榜中最难 game 的锚定点
 
 **不选**的常见 benchmark 原因见 §五。
 
@@ -44,7 +51,7 @@
 | **OSWorld** | 跨应用桌面自动化 | WebArena 稳定 + GUI 工具包到位 | F2 |
 | **AgentBench** | 综合 8 子任务 | SWE-bench + GAIA 进 top-10 后升级 | F2 |
 | **MLE-bench** | ML 工程任务 | OmniMem vector + Skill Layer 4 就绪 | F3 |
-| **tau-bench** | Tool-use + 人机协作 | BFCL v4 ≥90% 后解锁 | F1 |
+| ~~tau-bench~~ | 已升级到 Pinned（τ2-bench）| — | — |
 | **HumanEval+ / MBPP+** | 纯代码生成 | Iter A2 LLM 集成回归需要 | E4 尾声 |
 
 **Roadmap 条目的共同要求**：

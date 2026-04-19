@@ -275,6 +275,16 @@ Quilin 不是简单的 Coding Agent，而是拥有 11 个能力域的通用框�
 
 ---
 
+## 7.1 后续细化 — Event-Sourced State（2026-04-20 D-19）
+
+OpenHands Software Agent SDK（arXiv 2511.03690, Nov 2025）证明了 **stateless Agent + append-only event stream** 模式在 SWE-bench Verified 上跑出 72% + GAIA 67.9%。其设计思想和本 ADR "消息数组为核心状态" 一致，但把 state truth 明确绑定到 event stream 上，带来 checkpoint / resume / replay 的天然支持。
+
+**当前状态**：保持 <200 LOC loop.ts 不变（Iter B 已稳定）；event-sourced 重构**延后到 Iter C**，作为 planning 层引入时一并做。Iter C 开工前先 spike `packages/agent-core/src/state/event-stream.ts`（50-80 LOC POC），验证与 08-observability span 模型、10-self-evolution trajectory analyzer 的对齐度。
+
+参考：[docs/research/openhands-sdk-event-sourced-loop.md](../research/openhands-sdk-event-sourced-loop.md)
+
+---
+
 ## 8. 参考
 
 ### 调研项目

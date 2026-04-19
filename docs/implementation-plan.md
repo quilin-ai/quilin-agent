@@ -128,7 +128,7 @@ Iter F: Scale-Out + Memory Depth + Self-Evolution
 | Iter E = Memory Depth & Personality | Iter E = Benchmark Ascent（E1-E4） |
 | Memory Depth 放 Iter E | 合并进 Iter F（与 Scale-Out / Self-Evolution 同期） |
 | 12-Conversation Engineering 放 Iter E | Parked → Iter F+（core loop benchmark 稳后解冻） |
-| Iter D CI 矩阵含 Rust | Iter D CI 只跑 TS + Python；crates/ 在 Iter D 引入 |
+| Iter D CI 矩阵含 Rust | Iter D 引入 `crates/` 骨架 + Rust CI job（`cargo check` 强制通过；`cargo test` 允许 noop 套件） |
 | Benchmark 贯穿各 iter | Iter E 为独立 benchmark iter |
 | "全量 30+ benchmark 参赛" | 3 pinned + roadmap aspirational |
 
@@ -285,7 +285,7 @@ CI/CD（工程保障）：
 - GitHub Actions workflow：`.github/workflows/ci.yml`
   - TS：`bun run vitest run`（packages/agent-core）
   - Python：`uv run pytest`（providers/memory）
-  - **Rust：`cargo test`（crates/ 在本 Iter 引入后启用）**
+  - **Rust：`cargo check` 强制通过；`cargo test` 允许 noop 套件（crates/ 本 Iter 引入；D-14 2026-04-20 NEW-13 对齐）**
 - Lint：Biome（TS）+ Ruff（Python）+ Clippy（Rust）
 
 Rust 基础设施骨架：
@@ -297,7 +297,7 @@ Rust 基础设施骨架：
 - [ ] LLM 调用和工具调用有 OTel span
 - [ ] Request ID 贯穿完整调用链
 - [ ] `~/.quilin/config.toml` 可配置 provider / model / 权限模式
-- [ ] CI 在 GitHub Actions 上三语言（TS+Py+Rust）测试全绿
+- [ ] CI 在 GitHub Actions 上：TS + Python 测试全绿；Rust `cargo check` 强制通过，`cargo test` 允许 noop（D-14 2026-04-20 NEW-13 对齐）
 - [ ] `cargo check` 通过，mesh-sdk workspace 结构可编译
 
 **涉及工程领域**：08-Observability（主）、09-Deployment、11-Agent Mesh（骨架）
@@ -322,7 +322,8 @@ Rust 基础设施骨架：
 
 #### E2 — SWE-bench Verified ⭐ Pinned
 - SWE-bench Verified harness 专项（500 真实 GitHub issue）
-- 依赖：Iter B 文件/shell 工具 + Iter C planning + Iter D observability
+- 依赖：Iter B 文件/shell 工具 + Iter C planning + Iter D observability + **03-memory Phase 0 FTS5 + per-task scratchpad（D-15 2026-04-20 NEW-14 补）**
+- **Memory 降级策略**：E2 baseline **不使用**跨会话 OmniMem 4 层（完整 4 层要到 Iter F）；仅依赖 per-task working set + SQLite FTS5；长轨迹溢出时用 episodic 摘要 stub
 - 首次目标：**Top 20（≥75% 解决率）**；长期目标：Top 10（≥78%）
 - 现状参考：2026-04 前 10 名在 77.8-80.9%
 
