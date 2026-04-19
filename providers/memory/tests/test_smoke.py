@@ -12,24 +12,24 @@ def test_package_imports() -> None:
 
 def test_memory_record_default_tier() -> None:
     record = MemoryRecord(id="1", content="hello")
-    assert record.tier == "short"
+    assert record.tier == "working"
 
 
 def test_memory_record_custom_tier() -> None:
-    record = MemoryRecord(id="1", content="hello", tier="long")
-    assert record.tier == "long"
+    record = MemoryRecord(id="1", content="hello", tier="semantic")
+    assert record.tier == "semantic"
 
 
 def test_memory_record_to_dict() -> None:
-    record = MemoryRecord(id="abc", content="test content", tier="mid")
+    record = MemoryRecord(id="abc", content="test content", tier="episodic")
     result = record.to_dict()
-    assert result == {"id": "abc", "content": "test content", "tier": "mid"}
+    assert result == {"id": "abc", "content": "test content", "tier": "episodic"}
 
 
 def test_memory_record_to_dict_default_tier() -> None:
     record = MemoryRecord(id="xyz", content="hello world")
     result = record.to_dict()
-    assert result == {"id": "xyz", "content": "hello world", "tier": "short"}
+    assert result == {"id": "xyz", "content": "hello world", "tier": "working"}
 
 
 def test_memory_record_is_frozen() -> None:

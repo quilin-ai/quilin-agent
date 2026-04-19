@@ -1,44 +1,133 @@
 from __future__ import annotations
 
 import json
+from contextlib import asynccontextmanager
+from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 
 from .logging import logger
 from .store import OmniMemStore
-
-mcp = FastMCP("omnimem")
-_store = OmniMemStore()
+from .types import MemoryTier
 
 
-@mcp.tool()
-async def memory_recall(query: str) -> str:
+async def _memory_recall_with_store(store: OmniMemStore, query: str) -> str:
     """Recall memory records matching a query string (substring, case-insensitive).
 
     Returns all records if query is empty.
     """
     try:
-        results = await _store.recall(query)
+        results = await store.recall(query)
         return json.dumps({"records": [r.to_dict() for r in results]})
     except Exception as exc:
         logger.error("memory_recall failed", error=str(exc))
         return json.dumps({"error": str(exc)})
 
 
-@mcp.tool()
-async def memory_store(content: str, tier: str = "short") -> str:
+async def _memory_store_with_store(
+    store: OmniMemStore,
+    content: str,
+    tier: MemoryTier = "working",
+) -> str:
     """Store a new memory record.
 
     Args:
         content: The text content to store.
-        tier: Memory tier (default "short").
+        tier: Memory tier (default "working").
     """
     try:
-        record = await _store.store(content, tier)
+        record = await store.store(content, tier)
         return json.dumps({"id": record.id})
     except Exception as exc:
         logger.error("memory_store failed", error=str(exc))
         return json.dumps({"error": str(exc)})
+
+
+def _get_store_from_context(ctx: Context[object, Any, object] | None) -> OmniMemStore | None:
+    if ctx is None or getattr(ctx, "_request_context", None) is None:
+        return None
+
+    lifespan_context = ctx.request_context.lifespan_context
+    if not isinstance(lifespan_context, dict):
+        return None
+
+    store = lifespan_context.get("store")
+    return store if isinstance(store, OmniMemStore) else None
+
+
+def _build_store_lifespan(
+    store: OmniMemStore | None,
+):
+    @asynccontextmanager
+    async def lifespan(_app: FastMCP):
+        if store is not None:
+            yield {"store": store}
+            return
+
+        async with OmniMemStore() as lifespan_store:
+            yield {"store": lifespan_store}
+
+    return lifespan
+
+
+async def memory_recall(query: str) -> str:
+    """Legacy direct helper that opens a store per call."""
+    async with OmniMemStore() as store:
+        return await _memory_recall_with_store(store, query)
+
+
+async def memory_store(content: str, tier: MemoryTier = "working") -> str:
+    """Legacy direct helper that opens a store per call."""
+    async with OmniMemStore() as store:
+        return await _memory_store_with_store(store, content, tier)
+
+
+def create_server(store: OmniMemStore | None = None) -> FastMCP:
+    server_store: OmniMemStore | None = store
+    server = FastMCP("omnimem", lifespan=_build_store_lifespan(store))
+
+    async def resolve_store(
+        ctx: Context[object, Any, object] | None = None,
+    ) -> OmniMemStore:
+        context_store = _get_store_from_context(ctx)
+        if context_store is not None:
+            return context_store
+
+        nonlocal server_store
+        if server_store is None:
+            server_store = OmniMemStore()
+
+        return server_store
+
+    @server.tool(name="memory_recall")
+    async def memory_recall_tool(
+        query: str,
+        ctx: Context[object, Any, object] | None = None,
+    ) -> str:
+        """Recall memory records matching a query string (substring, case-insensitive).
+
+        Returns all records if query is empty.
+        """
+        return await _memory_recall_with_store(await resolve_store(ctx), query)
+
+    @server.tool(name="memory_store")
+    async def memory_store_tool(
+        content: str,
+        tier: MemoryTier = "working",
+        ctx: Context[object, Any, object] | None = None,
+    ) -> str:
+        """Store a new memory record.
+
+        Args:
+            content: The text content to store.
+            tier: Memory tier (default "working").
+        """
+        return await _memory_store_with_store(await resolve_store(ctx), content, tier)
+
+    return server
+
+
+mcp = create_server()
 
 
 def main() -> None:

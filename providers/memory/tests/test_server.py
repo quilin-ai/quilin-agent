@@ -1,100 +1,195 @@
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
 
-from omnimem.server import _store, memory_recall, memory_store
+import pytest
+
+from omnimem.server import create_server
+from omnimem.store import OmniMemStore
 
 
-async def test_memory_store_tool_returns_id() -> None:
-    # Reset shared store for test isolation
-    _store.reset()
-    result_json = await memory_store("test content")
-    result = json.loads(result_json)
+def _decode_call_tool_result(result: object) -> dict[str, object]:
+    _content, metadata = result  # type: ignore[misc]
+    return json.loads(metadata["result"])
+
+
+@pytest.fixture
+async def store() -> AsyncIterator[OmniMemStore]:
+    async with OmniMemStore(db_path=":memory:") as bound_store:
+        yield bound_store
+
+
+@pytest.fixture
+def server(store: OmniMemStore):
+    return create_server(store)
+
+
+async def test_memory_store_tool_returns_id(server: object) -> None:
+    result = _decode_call_tool_result(
+        await server.call_tool("memory_store", {"content": "test content"})  # type: ignore[attr-defined]
+    )
     assert "id" in result
     assert isinstance(result["id"], str)
     assert len(result["id"]) > 0
 
 
-async def test_memory_store_tool_with_tier() -> None:
-    _store.reset()
-    result_json = await memory_store("important", tier="long")
-    result = json.loads(result_json)
+async def test_memory_store_tool_with_tier(server: object) -> None:
+    result = _decode_call_tool_result(
+        await server.call_tool(  # type: ignore[attr-defined]
+            "memory_store",
+            {"content": "important", "tier": "semantic"},
+        )
+    )
     assert "id" in result
 
 
-async def test_memory_recall_tool_returns_records() -> None:
-    _store.reset()
-    await memory_store("hello world")
-    await memory_store("hello there")
-    await memory_store("goodbye")
+async def test_memory_recall_tool_returns_records(server: object) -> None:
+    await server.call_tool("memory_store", {"content": "hello world"})  # type: ignore[attr-defined]
+    await server.call_tool("memory_store", {"content": "hello there"})  # type: ignore[attr-defined]
+    await server.call_tool("memory_store", {"content": "goodbye"})  # type: ignore[attr-defined]
 
-    result_json = await memory_recall("hello")
-    result = json.loads(result_json)
+    result = _decode_call_tool_result(
+        await server.call_tool("memory_recall", {"query": "hello"})  # type: ignore[attr-defined]
+    )
     assert "records" in result
     assert len(result["records"]) == 2
-    for record in result["records"]:
+    for record in result["records"]:  # type: ignore[index]
         assert "id" in record
         assert "content" in record
         assert "tier" in record
 
 
-async def test_memory_recall_tool_empty_query() -> None:
-    _store.reset()
-    await memory_store("alpha")
-    await memory_store("beta")
+async def test_memory_recall_tool_empty_query(server: object) -> None:
+    await server.call_tool("memory_store", {"content": "alpha"})  # type: ignore[attr-defined]
+    await server.call_tool("memory_store", {"content": "beta"})  # type: ignore[attr-defined]
 
-    result_json = await memory_recall("")
-    result = json.loads(result_json)
+    result = _decode_call_tool_result(
+        await server.call_tool("memory_recall", {"query": ""})  # type: ignore[attr-defined]
+    )
     assert len(result["records"]) == 2
 
 
-async def test_memory_recall_tool_no_match() -> None:
-    _store.reset()
-    await memory_store("apple")
+async def test_memory_recall_tool_no_match(server: object) -> None:
+    await server.call_tool("memory_store", {"content": "apple"})  # type: ignore[attr-defined]
 
-    result_json = await memory_recall("banana")
-    result = json.loads(result_json)
+    result = _decode_call_tool_result(
+        await server.call_tool("memory_recall", {"query": "banana"})  # type: ignore[attr-defined]
+    )
     assert result["records"] == []
 
 
-async def test_roundtrip_store_then_recall() -> None:
+async def test_roundtrip_store_then_recall(server: object) -> None:
     """Store a record and recall it, verifying the full wire schema."""
-    _store.reset()
-
-    store_result = json.loads(await memory_store("my memory", tier="mid"))
+    store_result = _decode_call_tool_result(
+        await server.call_tool(  # type: ignore[attr-defined]
+            "memory_store",
+            {"content": "my memory", "tier": "episodic"},
+        )
+    )
     stored_id = store_result["id"]
 
-    recall_result = json.loads(await memory_recall("my memory"))
+    recall_result = _decode_call_tool_result(
+        await server.call_tool("memory_recall", {"query": "my memory"})  # type: ignore[attr-defined]
+    )
     records = recall_result["records"]
     assert len(records) == 1
-    assert records[0] == {"id": stored_id, "content": "my memory", "tier": "mid"}
+    assert records[0] == {
+        "id": stored_id,
+        "content": "my memory",
+        "tier": "episodic",
+    }
 
 
-async def test_memory_recall_error_path(monkeypatch: object) -> None:
+async def test_memory_recall_error_path(
+    store: OmniMemStore,
+    server: object,
+    monkeypatch: object,
+) -> None:
     """memory_recall should return error JSON when store.recall raises."""
-    _store.reset()
 
     async def _raise_on_recall(query: str) -> list:
         raise RuntimeError("database connection lost")
 
-    monkeypatch.setattr(_store, "recall", _raise_on_recall)  # type: ignore[attr-defined]
+    monkeypatch.setattr(store, "recall", _raise_on_recall)  # type: ignore[attr-defined]
 
-    result_json = await memory_recall("anything")
-    result = json.loads(result_json)
+    result = _decode_call_tool_result(
+        await server.call_tool("memory_recall", {"query": "anything"})  # type: ignore[attr-defined]
+    )
     assert "error" in result
     assert "database connection lost" in result["error"]
 
 
-async def test_memory_store_error_path(monkeypatch: object) -> None:
+async def test_memory_store_error_path(
+    store: OmniMemStore,
+    server: object,
+    monkeypatch: object,
+) -> None:
     """memory_store should return error JSON when store.store raises."""
-    _store.reset()
 
-    async def _raise_on_store(content: str, tier: str = "short") -> None:
+    async def _raise_on_store(content: str, tier: str = "working") -> None:
         raise RuntimeError("disk full")
 
-    monkeypatch.setattr(_store, "store", _raise_on_store)  # type: ignore[attr-defined]
+    monkeypatch.setattr(store, "store", _raise_on_store)  # type: ignore[attr-defined]
 
-    result_json = await memory_store("test content")
-    result = json.loads(result_json)
+    result = _decode_call_tool_result(
+        await server.call_tool("memory_store", {"content": "test content"})  # type: ignore[attr-defined]
+    )
     assert "error" in result
     assert "disk full" in result["error"]
+
+
+async def test_create_server_uses_injected_store_isolation() -> None:
+    left_server = create_server(OmniMemStore(db_path=":memory:"))
+    right_server = create_server(OmniMemStore(db_path=":memory:"))
+
+    await left_server.call_tool(
+        "memory_store",
+        {"content": "left only", "tier": "working"},
+    )
+
+    left_result = _decode_call_tool_result(
+        await left_server.call_tool("memory_recall", {"query": "left"})
+    )
+    right_result = _decode_call_tool_result(
+        await right_server.call_tool("memory_recall", {"query": "left"})
+    )
+
+    assert left_result["records"] == [
+        {
+            "id": left_result["records"][0]["id"],  # type: ignore[index]
+            "content": "left only",
+            "tier": "working",
+        }
+    ]
+    assert right_result["records"] == []
+
+
+async def test_create_server_rejects_invalid_tier_enum() -> None:
+    server = create_server(OmniMemStore(db_path=":memory:"))
+
+    with pytest.raises(Exception, match="tier"):
+        await server.call_tool(
+            "memory_store",
+            {"content": "bad tier", "tier": "short"},
+        )
+
+
+async def test_default_server_instances_do_not_share_state() -> None:
+    left_server = create_server()
+    right_server = create_server()
+
+    await left_server.call_tool(
+        "memory_store",
+        {"content": "left only", "tier": "working"},
+    )
+
+    left_result = _decode_call_tool_result(
+        await left_server.call_tool("memory_recall", {"query": "left"})
+    )
+    right_result = _decode_call_tool_result(
+        await right_server.call_tool("memory_recall", {"query": "left"})
+    )
+
+    assert len(left_result["records"]) == 1
+    assert right_result["records"] == []

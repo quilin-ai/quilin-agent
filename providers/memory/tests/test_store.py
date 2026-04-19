@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import time
 import uuid
 from pathlib import Path
 
+from omnimem import store as store_module
 from omnimem.store import OmniMemStore
 
 
@@ -10,16 +13,16 @@ async def test_store_returns_record_with_uuid() -> None:
     store = OmniMemStore(db_path=":memory:")
     record = await store.store("hello world")
     assert record.content == "hello world"
-    assert record.tier == "short"
+    assert record.tier == "working"
     # Verify the id is a valid UUID
     uuid.UUID(record.id)
 
 
 async def test_store_with_custom_tier() -> None:
     store = OmniMemStore(db_path=":memory:")
-    record = await store.store("important fact", tier="long")
+    record = await store.store("important fact", tier="semantic")
     assert record.content == "important fact"
-    assert record.tier == "long"
+    assert record.tier == "semantic"
     uuid.UUID(record.id)
 
 
@@ -117,7 +120,7 @@ async def test_store_persists_records_across_instances(tmp_path: Path) -> None:
     db_path = tmp_path / "omnimem.db"
 
     writer = OmniMemStore(db_path=str(db_path))
-    await writer.store("remember me", tier="long")
+    await writer.store("remember me", tier="semantic")
 
     reader = OmniMemStore(db_path=str(db_path))
     results = await reader.recall("remember")
@@ -187,3 +190,49 @@ async def test_store_defaults_to_quilin_home_db(
     await store.store("home default path")
 
     assert (tmp_path / ".quilin" / "memory.db").exists()
+
+
+async def test_store_rejects_invalid_tier() -> None:
+    import pytest
+
+    store = OmniMemStore(db_path=":memory:")
+
+    with pytest.raises(ValueError, match="Invalid memory tier"):
+        await store.store("bad tier", tier="short")  # type: ignore[arg-type]
+
+
+async def test_store_offloads_blocking_db_work_from_event_loop(
+    monkeypatch: object,
+) -> None:
+    store = OmniMemStore(db_path=":memory:")
+    original_build_keywords = store_module._build_keywords
+
+    def slow_build_keywords(content: str) -> str:
+        time.sleep(0.05)
+        return original_build_keywords(content)
+
+    monkeypatch.setattr(store_module, "_build_keywords", slow_build_keywords)  # type: ignore[attr-defined]
+
+    concurrent_start = time.perf_counter()
+    await asyncio.gather(
+        store.store("alpha"),
+        store.store("beta"),
+    )
+    concurrent_elapsed = time.perf_counter() - concurrent_start
+
+    sequential_start = time.perf_counter()
+    await store.store("gamma")
+    await store.store("delta")
+    sequential_elapsed = time.perf_counter() - sequential_start
+
+    assert concurrent_elapsed < sequential_elapsed * 0.75
+
+
+async def test_store_closes_via_async_context_manager() -> None:
+    import pytest
+
+    async with OmniMemStore(db_path=":memory:") as store:
+        await store.store("alpha")
+
+    with pytest.raises(Exception):
+        store.reset()

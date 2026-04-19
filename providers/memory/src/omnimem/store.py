@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 import sqlite3
 import uuid
 from pathlib import Path
 
-from .types import MemoryRecord
+from .types import MemoryRecord, MemoryTier, VALID_MEMORY_TIERS
 
 ASCII_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_]+")
 CJK_RUN_PATTERN = re.compile(r"[\u4e00-\u9fff]+")
@@ -65,6 +66,22 @@ def _build_match_query(query: str) -> str | None:
     return " OR ".join(f'"{term.replace("\"", "\"\"")}"' for term in terms)
 
 
+def _validate_memory_tier(tier: str) -> MemoryTier:
+    if tier not in VALID_MEMORY_TIERS:
+        valid_tiers = ", ".join(VALID_MEMORY_TIERS)
+        raise ValueError(f"Invalid memory tier: {tier}. Expected one of: {valid_tiers}")
+
+    return tier
+
+
+def _row_to_record(row: sqlite3.Row) -> MemoryRecord:
+    return MemoryRecord(
+        id=row["id"],
+        content=row["content"],
+        tier=_validate_memory_tier(row["tier"]),
+    )
+
+
 class OmniMemStore:
     def __init__(self, db_path: str | None = None) -> None:
         if db_path is None:
@@ -79,14 +96,17 @@ class OmniMemStore:
         if db_path != ":memory:":
             Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 
-        self._conn = sqlite3.connect(db_path)
+        self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        self._closed = False
         self._conn.execute(
             """
             CREATE TABLE IF NOT EXISTS memory_records (
                 id TEXT PRIMARY KEY,
                 content TEXT NOT NULL,
-                tier TEXT NOT NULL
+                tier TEXT NOT NULL CHECK (
+                    tier IN ('working', 'episodic', 'semantic', 'skill')
+                )
             )
             """
         )
@@ -103,12 +123,31 @@ class OmniMemStore:
         self._rebuild_fts_index()
         self._conn.commit()
 
+    async def __aenter__(self) -> OmniMemStore:
+        return self
+
+    async def __aexit__(self, *_args: object) -> None:
+        await self.close()
+
     def reset(self) -> None:
         self._conn.execute("DELETE FROM memory_records")
         self._conn.execute("DELETE FROM memory_records_fts")
         self._conn.commit()
 
+    async def close(self) -> None:
+        await asyncio.to_thread(self._close_sync)
+
+    def _close_sync(self) -> None:
+        if self._closed:
+            return
+
+        self._conn.close()
+        self._closed = True
+
     async def recall(self, query: str) -> list[MemoryRecord]:
+        return await asyncio.to_thread(self._recall_sync, query)
+
+    def _recall_sync(self, query: str) -> list[MemoryRecord]:
         if not query:
             rows = self._conn.execute(
                 "SELECT id, content, tier FROM memory_records ORDER BY rowid ASC"
@@ -126,13 +165,25 @@ class OmniMemStore:
                     (f"%{query.lower()}%",),
                 ).fetchall()
 
-        return [
-            MemoryRecord(id=row["id"], content=row["content"], tier=row["tier"])
-            for row in rows
-        ]
+        return [_row_to_record(row) for row in rows]
 
-    async def store(self, content: str, tier: str = "short") -> MemoryRecord:
-        record = MemoryRecord(id=str(uuid.uuid4()), content=content, tier=tier)
+    async def store(
+        self,
+        content: str,
+        tier: MemoryTier = "working",
+    ) -> MemoryRecord:
+        return await asyncio.to_thread(self._store_sync, content, tier)
+
+    def _store_sync(
+        self,
+        content: str,
+        tier: MemoryTier = "working",
+    ) -> MemoryRecord:
+        record = MemoryRecord(
+            id=str(uuid.uuid4()),
+            content=content,
+            tier=_validate_memory_tier(tier),
+        )
         self._conn.execute(
             "INSERT INTO memory_records (id, content, tier) VALUES (?, ?, ?)",
             (record.id, record.content, record.tier),
