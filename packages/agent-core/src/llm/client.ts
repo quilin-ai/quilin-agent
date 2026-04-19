@@ -7,6 +7,7 @@ import {
 } from "ai";
 import type { Message } from "../state/types.js";
 import type { Tool } from "../tools/types.js";
+import { normalizeTokenUsage } from "./token-usage.js";
 import type { InferenceConfig, LLMClient, LLMResponse } from "./types.js";
 
 function parseToolOutput(content: string) {
@@ -138,24 +139,6 @@ function mapFinishReason(
 	}
 }
 
-function mapUsage(
-	usage:
-		| {
-				promptTokens?: number;
-				completionTokens?: number;
-				inputTokens?: number;
-				outputTokens?: number;
-				inputTokenDetails?: { cacheReadTokens?: number };
-		  }
-		| undefined,
-) {
-	return {
-		inputTokens: usage?.promptTokens ?? usage?.inputTokens ?? 0,
-		outputTokens: usage?.completionTokens ?? usage?.outputTokens ?? 0,
-		cacheHitTokens: usage?.inputTokenDetails?.cacheReadTokens,
-	};
-}
-
 /**
  * 基于 Vercel AI SDK 的 LLMClient 实现（非流式）
  *
@@ -181,7 +164,7 @@ export class VercelLLMClient implements LLMClient {
 		return {
 			content: result.text,
 			toolCalls: mapToolCalls(result.toolCalls),
-			usage: mapUsage(result.usage),
+			usage: normalizeTokenUsage(result.usage),
 			finishReason: mapFinishReason(result.finishReason),
 		};
 	}
@@ -225,7 +208,7 @@ export class StreamingLLMClient implements LLMClient {
 		return {
 			content: fullText,
 			toolCalls: mapToolCalls(toolCalls),
-			usage: mapUsage(usage),
+			usage: normalizeTokenUsage(usage),
 			finishReason: mapFinishReason(finishReason),
 		};
 	}

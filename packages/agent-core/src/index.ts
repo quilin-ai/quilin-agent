@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { generateText } from "ai";
 import { createProvider, getDefaultModel } from "./llm/provider.js";
+import { normalizeTokenUsage } from "./llm/token-usage.js";
 import { configureLogger, logger } from "./logger.js";
 import { startRepl } from "./repl.js";
 import { SQLiteCheckpoint } from "./state/checkpoint.js";
@@ -46,24 +47,6 @@ function findWorkspaceRoot(startDir: string): string {
 
 		currentDir = parentDir;
 	}
-}
-
-function getTokenCount(
-	usage:
-		| {
-				promptTokens?: number;
-				completionTokens?: number;
-				inputTokens?: number;
-				outputTokens?: number;
-		  }
-		| undefined,
-	key: "input" | "output",
-) {
-	if (key === "input") {
-		return usage?.promptTokens ?? usage?.inputTokens ?? 0;
-	}
-
-	return usage?.completionTokens ?? usage?.outputTokens ?? 0;
 }
 
 function resolveRuntimeMode(runtimeMode?: RuntimeMode): RuntimeMode {
@@ -155,12 +138,13 @@ export async function main(options: MainOptions = {}): Promise<void> {
 			prompt: 'Reply with exactly: "Quilin Agent online." Nothing else.',
 			maxTokens: 20,
 		});
+		const normalizedUsage = normalizeTokenUsage(usage);
 
 		logger.info(
 			{
 				response: text.trim(),
-				inputTokens: getTokenCount(usage, "input"),
-				outputTokens: getTokenCount(usage, "output"),
+				inputTokens: normalizedUsage.inputTokens,
+				outputTokens: normalizedUsage.outputTokens,
 			},
 			"LLM connection verified",
 		);
