@@ -132,6 +132,26 @@ describe("builtin web_fetch tool", () => {
 		expect(fetcher).not.toHaveBeenCalled();
 	});
 
+	it("rejects numeric IP literals and IPv4-mapped private ranges", async () => {
+		const fetcher = vi.fn();
+		const tool = createWebFetchTool({ fetcher });
+
+		for (const url of [
+			"http://2130706433/",
+			"http://0x7f000001/",
+			"http://0/",
+			"http://[::ffff:10.0.0.1]/",
+		]) {
+			const result = await tool.execute({ url });
+			expect(result.isError).toBe(true);
+			expect(JSON.parse(result.content)).toEqual({
+				error: expect.stringContaining("not allowed"),
+			});
+		}
+
+		expect(fetcher).not.toHaveBeenCalled();
+	});
+
 	it("re-validates redirects and blocks redirects into private targets", async () => {
 		const fetcher = vi
 			.fn()
@@ -188,5 +208,47 @@ describe("builtin web_fetch tool", () => {
 		expect(JSON.parse(result.content)).toEqual({
 			error: expect.stringMatching(/timed out|aborted|timeout/i),
 		});
+	});
+
+	it("pins the first resolved address to avoid DNS rebinding", async () => {
+		const resolver = vi
+			.fn<(_: string) => Promise<readonly string[]>>()
+			.mockResolvedValueOnce(["8.8.8.8"])
+			.mockResolvedValueOnce(["127.0.0.1"]);
+		const dispatcherFactory = vi.fn((resolvedAddress: unknown) => ({
+			resolvedAddress,
+			close: vi.fn(),
+		}));
+		const fetcher = vi.fn(async (_url: string, init?: RequestInit) => {
+			expect(init).toEqual(
+				expect.objectContaining({
+					dispatcher: expect.objectContaining({
+						resolvedAddress: expect.objectContaining({
+							address: "8.8.8.8",
+						}),
+					}),
+				}),
+			);
+
+			return new Response("ok", { status: 200 });
+		});
+		const tool = createWebFetchTool({
+			fetcher,
+			resolver,
+			dispatcherFactory,
+		} as never);
+
+		const result = await tool.execute({
+			url: "https://rebind.example/data",
+		});
+
+		expect(result.isError).toBe(false);
+		expect(fetcher).toHaveBeenCalledTimes(1);
+		expect(resolver).toHaveBeenCalledTimes(1);
+		expect(dispatcherFactory).toHaveBeenCalledWith(
+			expect.objectContaining({
+				address: "8.8.8.8",
+			}),
+		);
 	});
 });
