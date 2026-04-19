@@ -58,7 +58,7 @@ describe("tools integration", () => {
 	let tempDir: string;
 
 	beforeEach(async () => {
-		tempDir = await mkdtemp(join(tmpdir(), "quilin-tools-integration-"));
+		tempDir = await mkdtemp(join(process.cwd(), "quilin-tools-integration-"));
 	});
 
 	afterEach(async () => {

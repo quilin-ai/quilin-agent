@@ -1,12 +1,58 @@
-import { exec } from "node:child_process";
+import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { z } from "zod";
-import type { ToolResult } from "../types.js";
 import type { ToolWithMetadata } from "../tool-metadata.js";
+import type { ToolResult } from "../types.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+const MIN_TIMEOUT_MS = 1_000;
+const MAX_TIMEOUT_MS = 60_000;
 const DEFAULT_MAX_OUTPUT_CHARS = 10_240;
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
+const ALLOWED_ENV_KEYS = new Set([
+	"PATH",
+	"HOME",
+	"LANG",
+	"LC_ALL",
+	"TERM",
+	"USER",
+	"SHELL",
+	"PWD",
+]);
+
+const BLOCKED_COMMAND_PATTERNS: ReadonlyArray<{
+	readonly pattern: RegExp;
+	readonly reason: string;
+}> = [
+	{
+		pattern: /\brm\s+-rf\s+\/(?:\s|$)/i,
+		reason: "destructive filesystem wipe patterns are not allowed",
+	},
+	{
+		pattern: /\bcurl\b[\s\S]*\|\s*(?:sh|bash|zsh|fish|dash)\b/i,
+		reason: "shell pipelines into interpreters are not allowed",
+	},
+	{
+		pattern: /\beval\b/i,
+		reason: "eval execution is not allowed",
+	},
+	{
+		pattern: /`[^`]*`/,
+		reason: "backtick command substitution is not allowed",
+	},
+	{
+		pattern: /\$\([^)]*\)/,
+		reason: "command substitution is not allowed",
+	},
+	{
+		pattern: /:\s*\(\)\s*\{\s*:\|\:&\s*;\s*}\s*;/,
+		reason: "fork bomb patterns are not allowed",
+	},
+	{
+		pattern: /(?:^|[^\w./-])(?:\|\||&&|;|[|<>])/,
+		reason: "shell control operators are not allowed",
+	},
+];
 
 interface ShellRunnerResult {
 	readonly stdout: string;
@@ -18,10 +64,12 @@ interface ShellRunnerResult {
 export interface ShellRunnerOptions {
 	readonly cwd?: string;
 	readonly timeoutMs: number;
+	readonly env?: NodeJS.ProcessEnv;
 }
 
 export type ShellRunner = (
-	command: string,
+	executable: string,
+	args: readonly string[],
 	options: ShellRunnerOptions,
 ) => Promise<ShellRunnerResult>;
 
@@ -68,16 +116,93 @@ function truncateText(
 	};
 }
 
+function clampTimeoutMs(timeoutMs: number): number {
+	return Math.min(MAX_TIMEOUT_MS, Math.max(MIN_TIMEOUT_MS, timeoutMs));
+}
+
+function findBlockedCommandReason(command: string): string | undefined {
+	return BLOCKED_COMMAND_PATTERNS.find(({ pattern }) => pattern.test(command))
+		?.reason;
+}
+
+function tokenizeCommand(command: string): string[] {
+	const trimmed = command.trim();
+	if (trimmed === "") {
+		throw new Error("Command cannot be empty");
+	}
+
+	const tokens: string[] = [];
+	let current = "";
+	let quote: '"' | "'" | null = null;
+	let escaped = false;
+
+	for (const character of trimmed) {
+		if (escaped) {
+			current += character;
+			escaped = false;
+			continue;
+		}
+
+		if (character === "\\" && quote !== "'") {
+			escaped = true;
+			continue;
+		}
+
+		if (quote != null) {
+			if (character === quote) {
+				quote = null;
+			} else {
+				current += character;
+			}
+			continue;
+		}
+
+		if (character === '"' || character === "'") {
+			quote = character;
+			continue;
+		}
+
+		if (/\s/.test(character)) {
+			if (current !== "") {
+				tokens.push(current);
+				current = "";
+			}
+			continue;
+		}
+
+		current += character;
+	}
+
+	if (escaped) {
+		throw new Error("Command cannot end with an escape character");
+	}
+
+	if (quote != null) {
+		throw new Error("Command contains an unterminated quoted string");
+	}
+
+	if (current !== "") {
+		tokens.push(current);
+	}
+
+	if (tokens.length === 0) {
+		throw new Error("Command cannot be empty");
+	}
+
+	return tokens;
+}
+
 async function defaultShellRunner(
-	command: string,
+	executable: string,
+	args: readonly string[],
 	options: ShellRunnerOptions,
 ): Promise<ShellRunnerResult> {
 	try {
-		const { stdout, stderr } = await execAsync(command, {
+		const { stdout, stderr } = await execFileAsync(executable, [...args], {
 			cwd: options.cwd,
 			timeout: options.timeoutMs,
-			shell: process.env.SHELL ?? "/bin/sh",
 			maxBuffer: 1024 * 1024,
+			env: options.env,
 		});
 
 		return {
@@ -119,6 +244,18 @@ export interface ShellExecToolOptions {
 	readonly runner?: ShellRunner;
 	readonly defaultTimeoutMs?: number;
 	readonly maxOutputChars?: number;
+	readonly env?: NodeJS.ProcessEnv;
+}
+
+function buildShellExecEnv(overrides?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+	const baseEntries = Object.entries(process.env).filter(([key, value]) => {
+		return value != null && ALLOWED_ENV_KEYS.has(key);
+	});
+
+	return {
+		...Object.fromEntries(baseEntries),
+		...overrides,
+	};
 }
 
 export function createShellExecTool(
@@ -141,10 +278,31 @@ export function createShellExecTool(
 				cwd?: string;
 				timeoutMs?: number;
 			};
+			const blockedReason = findBlockedCommandReason(command);
+			if (blockedReason != null) {
+				return createErrorResult("builtin-shell-exec", {
+					error: `Command blocked: ${blockedReason}`,
+				});
+			}
+
+			let executable: string;
+			let argv: string[];
+			try {
+				[executable, ...argv] = tokenizeCommand(command);
+			} catch (error) {
+				return createErrorResult("builtin-shell-exec", {
+					error:
+						error instanceof Error ? error.message : "Command parsing failed",
+				});
+			}
+
 			const runner = options.runner ?? defaultShellRunner;
-			const result = await runner(command, {
+			const result = await runner(executable, argv, {
 				cwd,
-				timeoutMs: timeoutMs ?? options.defaultTimeoutMs ?? DEFAULT_TIMEOUT_MS,
+				env: buildShellExecEnv(options.env),
+				timeoutMs: clampTimeoutMs(
+					timeoutMs ?? options.defaultTimeoutMs ?? DEFAULT_TIMEOUT_MS,
+				),
 			});
 			const stdout = truncateText(
 				result.stdout,

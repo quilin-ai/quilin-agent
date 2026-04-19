@@ -1,11 +1,28 @@
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
-import { basename, dirname, join, resolve } from "node:path";
+import {
+	mkdir,
+	readFile,
+	readdir,
+	realpath,
+	rename,
+	rm,
+	writeFile,
+} from "node:fs/promises";
+import { homedir } from "node:os";
+import {
+	basename,
+	dirname,
+	isAbsolute,
+	join,
+	relative,
+	resolve,
+} from "node:path";
 import { z } from "zod";
-import type { ToolResult } from "../types.js";
 import type { ToolWithMetadata } from "../tool-metadata.js";
+import type { ToolResult } from "../types.js";
 
 const DEFAULT_MAX_CHARS = 32_768;
-const SENSITIVE_FILE_PATTERNS = [
+const DEFAULT_MAX_WRITE_BYTES = 2 * 1024 * 1024;
+const BASENAME_SENSITIVE_FILE_PATTERNS = [
 	/^\.env(\..+)?$/i,
 	/^id_(rsa|dsa|ecdsa|ed25519)(\.pub)?$/i,
 	/\.pem$/i,
@@ -31,9 +48,69 @@ function createErrorResult(toolCallId: string, message: string): ToolResult {
 	};
 }
 
-function isSensitivePath(filePath: string): boolean {
-	const name = basename(filePath);
-	return SENSITIVE_FILE_PATTERNS.some((pattern) => pattern.test(name));
+function normalizePath(filePath: string): string {
+	return resolve(filePath).replaceAll("\\", "/");
+}
+
+function getHomePath(): string {
+	return process.env.HOME ?? homedir();
+}
+
+async function resolvePathIfPossible(filePath: string): Promise<string> {
+	try {
+		return await realpath(filePath);
+	} catch {
+		return filePath;
+	}
+}
+
+async function isSensitivePath(filePath: string): Promise<boolean> {
+	const normalizedPath = normalizePath(filePath);
+	const homePath = normalizePath(await resolvePathIfPossible(getHomePath()));
+	const fileName = basename(normalizedPath);
+
+	if (BASENAME_SENSITIVE_FILE_PATTERNS.some((pattern) => pattern.test(fileName))) {
+		return true;
+	}
+
+	const exactSensitivePaths = [
+		join(homePath, ".aws", "credentials"),
+		join(homePath, ".aws", "config"),
+		join(homePath, ".kube", "config"),
+		join(homePath, ".npmrc"),
+		join(homePath, ".pypirc"),
+		join(homePath, ".netrc"),
+		join(homePath, ".gitconfig"),
+	].map(normalizePath);
+
+	if (exactSensitivePaths.includes(normalizedPath)) {
+		return true;
+	}
+
+	const sensitiveDirectoryPrefixes = [
+		join(homePath, ".gcloud"),
+		join(homePath, ".azure"),
+	].map(normalizePath);
+	if (
+		sensitiveDirectoryPrefixes.some(
+			(prefix) =>
+				normalizedPath === prefix || normalizedPath.startsWith(`${prefix}/`),
+		)
+	) {
+		return true;
+	}
+
+	const sshDirectory = normalizePath(join(homePath, ".ssh"));
+	if (
+		normalizedPath.startsWith(`${sshDirectory}/`) &&
+		(fileName === "authorized_keys" ||
+			/^id_.+/i.test(fileName) ||
+			/.+_key(?:\.pub)?$/i.test(fileName))
+	) {
+		return true;
+	}
+
+	return false;
 }
 
 function toAbsolutePath(filePath: string): string {
@@ -53,27 +130,26 @@ function truncateFormattedLines(
 	maxChars: number,
 	offset = 0,
 ): { readonly content: string; readonly truncated: boolean } {
-	let rawBudget = 0;
+	let renderedBudget = 0;
 	const kept: string[] = [];
 
 	for (let index = 0; index < lines.length; index += 1) {
-		const colonIndex = lines[index].indexOf(": ");
-		const rawLine =
-			colonIndex === -1 ? lines[index] : lines[index].slice(colonIndex + 2);
-		const rawLength = rawLine.length + 1;
+		const formattedLine = lines[index];
+		const renderedLength = formattedLine.length + (kept.length === 0 ? 0 : 1);
 
-		if (rawBudget + rawLength > maxChars) {
+		if (renderedBudget + renderedLength > maxChars) {
 			const nextLineNumber = offset + index + 1;
 			const ellipsisLine = `${nextLineNumber}: ...`;
+			const content =
+				kept.length === 0 ? ellipsisLine : `${kept.join("\n")}\n${ellipsisLine}`;
 			return {
-				content:
-					kept.length === 0 ? ellipsisLine : `${kept.join("\n")}\n${ellipsisLine}`,
+				content: content.slice(0, maxChars),
 				truncated: true,
 			};
 		}
 
-		kept.push(lines[index]);
-		rawBudget += rawLength;
+		kept.push(formattedLine);
+		renderedBudget += renderedLength;
 	}
 
 	return {
@@ -88,8 +164,60 @@ function globToRegExp(pattern: string): RegExp {
 	return new RegExp(`^${regex}$`);
 }
 
+async function resolveAllowedRoots(
+	allowedRoots: readonly string[] | undefined,
+): Promise<readonly string[]> {
+	const roots = allowedRoots == null || allowedRoots.length === 0
+		? [process.cwd()]
+		: [...allowedRoots];
+
+	return Promise.all(
+		roots.map(async (root) => {
+			const absoluteRoot = resolve(root);
+			return await realpath(absoluteRoot);
+		}),
+	);
+}
+
+function isWithinRoot(targetPath: string, rootPath: string): boolean {
+	const pathRelative = relative(rootPath, targetPath);
+	return (
+		pathRelative === "" ||
+		(!pathRelative.startsWith("..") && !isAbsolute(pathRelative))
+	);
+}
+
+async function resolveSandboxedPath(
+	filePath: string,
+	allowedRoots: readonly string[] | undefined,
+	mode: "read" | "write" | "list",
+): Promise<{ readonly absolutePath: string; readonly resolvedPath: string }> {
+	const absolutePath = toAbsolutePath(filePath);
+	let resolvedPath: string;
+
+	try {
+		resolvedPath = await realpath(absolutePath);
+	} catch (error) {
+		const fsError = error as NodeJS.ErrnoException;
+		if (mode !== "write" || fsError.code !== "ENOENT") {
+			throw error;
+		}
+
+		const resolvedParent = await realpath(dirname(absolutePath));
+		resolvedPath = join(resolvedParent, basename(absolutePath));
+	}
+
+	const resolvedRoots = await resolveAllowedRoots(allowedRoots);
+	if (!resolvedRoots.some((rootPath) => isWithinRoot(resolvedPath, rootPath))) {
+		throw new Error(`Path is outside allowed roots: ${absolutePath}`);
+	}
+
+	return { absolutePath, resolvedPath };
+}
+
 export interface FileReadToolOptions {
 	readonly maxChars?: number;
+	readonly allowedRoots?: readonly string[];
 }
 
 export function createFileReadTool(
@@ -111,17 +239,22 @@ export function createFileReadTool(
 				offset?: number;
 				limit?: number;
 			};
-			const absolutePath = toAbsolutePath(path);
-
-			if (isSensitivePath(absolutePath)) {
-				return createErrorResult(
-					"builtin-file-read",
-					`Reading sensitive file is not allowed: ${basename(absolutePath)}`,
-				);
-			}
 
 			try {
-				const fileContent = await readFile(absolutePath, "utf8");
+				const { absolutePath, resolvedPath } = await resolveSandboxedPath(
+					path,
+					options.allowedRoots,
+					"read",
+				);
+
+				if (await isSensitivePath(resolvedPath)) {
+					return createErrorResult(
+						"builtin-file-read",
+						`Reading sensitive file is not allowed: ${basename(resolvedPath)}`,
+					);
+				}
+
+				const fileContent = await readFile(resolvedPath, "utf8");
 				const numberedLines = formatNumberedLines(fileContent, offset, limit);
 				const { content, truncated } = truncateFormattedLines(
 					numberedLines,
@@ -144,7 +277,14 @@ export function createFileReadTool(
 	};
 }
 
-export function createFileWriteTool(): ToolWithMetadata {
+export interface FileWriteToolOptions {
+	readonly allowedRoots?: readonly string[];
+	readonly maxBytes?: number;
+}
+
+export function createFileWriteTool(
+	options: FileWriteToolOptions = {},
+): ToolWithMetadata {
 	return {
 		name: "file_write",
 		description: "Write utf-8 content to a file.",
@@ -159,14 +299,42 @@ export function createFileWriteTool(): ToolWithMetadata {
 				path: string;
 				content: string;
 			};
-			const absolutePath = toAbsolutePath(path);
 
 			try {
-				await mkdir(dirname(absolutePath), { recursive: true });
-				await writeFile(absolutePath, content, "utf8");
+				const { absolutePath, resolvedPath } = await resolveSandboxedPath(
+					path,
+					options.allowedRoots,
+					"write",
+				);
+				const bytesWritten = Buffer.byteLength(content, "utf8");
+
+				if (await isSensitivePath(resolvedPath)) {
+					return createErrorResult(
+						"builtin-file-write",
+						`Writing sensitive file is not allowed: ${basename(resolvedPath)}`,
+					);
+				}
+
+				const maxBytes = options.maxBytes ?? DEFAULT_MAX_WRITE_BYTES;
+				if (bytesWritten > maxBytes) {
+					return createErrorResult(
+						"builtin-file-write",
+						`Content exceeds maxBytes limit: ${bytesWritten} > ${maxBytes}`,
+					);
+				}
+
+				await mkdir(dirname(resolvedPath), { recursive: true });
+				const tempPath = `${resolvedPath}.tmp-${crypto.randomUUID()}`;
+				try {
+					await writeFile(tempPath, content, "utf8");
+					await rename(tempPath, resolvedPath);
+				} catch (error) {
+					await rm(tempPath, { force: true });
+					throw error;
+				}
 				return createSuccessResult("builtin-file-write", {
 					path: absolutePath,
-					bytesWritten: Buffer.byteLength(content, "utf8"),
+					bytesWritten,
 				});
 			} catch (error) {
 				return createErrorResult(
@@ -178,7 +346,13 @@ export function createFileWriteTool(): ToolWithMetadata {
 	};
 }
 
-export function createFileListTool(): ToolWithMetadata {
+export interface FileListToolOptions {
+	readonly allowedRoots?: readonly string[];
+}
+
+export function createFileListTool(
+	options: FileListToolOptions = {},
+): ToolWithMetadata {
 	return {
 		name: "file_list",
 		description: "List directory entries with optional glob filtering.",
@@ -193,11 +367,23 @@ export function createFileListTool(): ToolWithMetadata {
 				path: string;
 				pattern?: string;
 			};
-			const absolutePath = toAbsolutePath(path);
 			const matcher = pattern == null ? null : globToRegExp(pattern);
 
 			try {
-				const entries = await readdir(absolutePath, { withFileTypes: true });
+				const { absolutePath, resolvedPath } = await resolveSandboxedPath(
+					path,
+					options.allowedRoots,
+					"list",
+				);
+
+				if (await isSensitivePath(resolvedPath)) {
+					return createErrorResult(
+						"builtin-file-list",
+						`Listing sensitive path is not allowed: ${basename(resolvedPath)}`,
+					);
+				}
+
+				const entries = await readdir(resolvedPath, { withFileTypes: true });
 				const filtered = entries
 					.filter((entry) => matcher == null || matcher.test(entry.name))
 					.map((entry) => ({
