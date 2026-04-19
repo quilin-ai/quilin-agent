@@ -86,5 +86,5 @@
 ## 参考 Spec
 
 - [03-memory/README.md](../../engineering/03-memory/README.md)
-- [12-conversation-engineering/README.md](../../engineering/12-conversation-engineering/README.md)
+- [02-context/conversation-engineering/README.md](../../engineering/02-context/conversation-engineering/README.md) (2026-04-18 起从 12- 搬迁为 02 子模块)
 - [10-self-evolution/README.md](../../engineering/10-self-evolution/README.md)

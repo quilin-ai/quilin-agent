@@ -64,7 +64,7 @@ describe("VercelLLMClient", () => {
 					inputSchema: memoryRecallTool.parameters,
 				},
 			},
-			maxTokens: 512,
+			maxOutputTokens: 512,
 			temperature: 0.7,
 			topP: 0.9,
 		});
@@ -226,7 +226,7 @@ describe("VercelLLMClient", () => {
 					],
 				},
 			],
-			maxTokens: 128,
+			maxOutputTokens: 128,
 			temperature: 0.7,
 			topP: undefined,
 		});
@@ -268,7 +268,7 @@ describe("StreamingLLMClient", () => {
 		expect(streamText).toHaveBeenCalledWith({
 			model,
 			messages: [{ role: "user", content: "hi" }],
-			maxTokens: 64,
+			maxOutputTokens: 64,
 			temperature: 0.2,
 			topP: undefined,
 		});

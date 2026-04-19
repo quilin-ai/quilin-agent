@@ -68,7 +68,7 @@
 
 | # | 设计模式 | 来源 | 融入的组件 | 所在 Iter |
 |---|---------|------|-----------|----------|
-| 1 | 分层记忆 | UI-TARS-2, GLM-5.1 | OmniMem（4 层：SHORT/MID/LONG/ULTRA） | F |
+| 1 | 分层记忆 | UI-TARS-2, GLM-5.1 | OmniMem（4 层：working/episodic/semantic/skill） | F |
 | 2 | 混合动作空间 | MAI-UI, UI-TARS-2 | ToolRouter（代码/浏览器/Shell/MCP 四类） | B |
 | 3 | 自进化闭环 | MiniMax M2.7 | SelfEvolution（human-in-loop scaffold patch） | F |
 | 4 | 两段式定位 | MAI-UI | BrowserProvider（Zoom-In 视觉模式） | F |
@@ -369,7 +369,7 @@ Agent Mesh 接入（11）：
 - 能力声明与查询
 
 记忆深度（03-advanced）：
-- OmniMem 4 层分级（SHORT → MID → LONG → ULTRA）
+- OmniMem 4 层分级（short → mid → long → ultra）
 - 向量检索 + KG 三元组
 - User Profile Store + auto-reflect
 - 记忆去重 / 冲突检测 / 遗忘策略
@@ -392,7 +392,7 @@ Agent Mesh 接入（11）：
 - [ ] 自进化运行 10+ 次，scaffold patch proposal 质量可评估；**人类 reviewer 决定是否 merge**
 - [ ] User Insight Engine 产生用户洞察
 - [ ] Idle Evolution 开启后运行，预算内完成，下次会话透明汇报
-- [ ] 记忆自动从 SHORT 提升到 MID；向量检索命中语义相似的历史记忆
+- [ ] 记忆自动从 short 提升到 mid；向量检索命中语义相似的历史记忆
 
 **涉及工程领域**：06-MultiAgent、11-AgentMesh、10-SelfEvolution、03-Memory、12-Conversation、08-Observability（Dashboard）、09-Deployment（热更新）
 
@@ -456,11 +456,11 @@ Benchmark 验证层（Iter E 独立 iter）
 | 11 | Agent Mesh | — | — | — | — | **crates/ 骨架** | — | **mesh-sdk 填肉 + discover/send/receive** |
 | 13 | 技能工程 ★ | — | — | **B3a Skills Core（窄收口）**：SKILL.md + frontmatter + 三源发现 + catalog + `skill_view` + 路径/体积硬 guard | B3b: 条件激活 + CRUD + skills_guard | — | — | M2+: plugin + background nudge（默认 OFF） |
 
-### Parked
+### Parked (sub-module under 02-context)
 
 | # | 领域 | 状态 |
 |---|------|------|
-| 12 | 对话工程 | **Parked** → Iter F 解冻。核心回路在 Iter E benchmark 上稳态之前不启动"活人感"工程。spec 保留为研究笔记。 |
+| 02.x | 对话工程（原 12-） | **降级为 02-context 子模块**（2026-04-18 D-05）→ Iter F 解冻。核心回路在 Iter E benchmark 上稳态之前不启动"活人感"工程。spec 保留为研究笔记，见 [02-context/conversation-engineering](engineering/02-context/conversation-engineering/README.md)。 |
 
 > **★ 13-技能工程**：2026-04-17 新增领域；Iter B3 分成 **B3a Skills Core**（5 个窄收口能力）+ **B3b Activation**（条件激活 / post-compact），B3a 依赖 B2 安全契约冻结。详见 [13-skills/README.md](./engineering/13-skills/README.md)，四上游调研见 [skill-loading-comparison.md](./research/skill-loading-comparison.md)。
 

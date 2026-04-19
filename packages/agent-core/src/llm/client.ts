@@ -173,7 +173,7 @@ export class VercelLLMClient implements LLMClient {
 			model: this.model,
 			messages: toSdkMessages(messages),
 			tools: toSdkTools(tools),
-			maxTokens: config.maxTokens,
+			maxOutputTokens: config.maxTokens,
 			temperature: config.temperature,
 			topP: config.topP,
 		});
@@ -207,7 +207,7 @@ export class StreamingLLMClient implements LLMClient {
 			model: this.model,
 			messages: toSdkMessages(messages),
 			tools: toSdkTools(tools),
-			maxTokens: config.maxTokens,
+			maxOutputTokens: config.maxTokens,
 			temperature: config.temperature,
 			topP: config.topP,
 		});
