@@ -79,9 +79,15 @@ class MockDatabase {
 					throw new TypeError("Invalid session row");
 				}
 
+				const existing = this.sessions.get(sessionId);
+				const nextCreatedAt =
+					existing != null && !sql.includes("created_at = excluded.created_at")
+						? existing.createdAt
+						: createdAt;
+
 				this.sessions.set(sessionId, {
 					stateJson,
-					createdAt,
+					createdAt: nextCreatedAt,
 					lastActiveAt,
 				});
 
@@ -274,6 +280,34 @@ describe("SQLiteCheckpoint", () => {
 		await resumed.save(state);
 
 		await expect(resumed.load("resume-session")).resolves.toEqual(state);
+	});
+
+	it("preserves createdAt when saving an existing session", async () => {
+		const dbPath = makeMemoryDbPath("checkpoint-preserve-created-at");
+		const checkpoint = new SQLiteCheckpoint({
+			sessionId: "stable-session",
+			dbPath,
+		});
+
+		await checkpoint.save(
+			makeState({
+				createdAt: "2026-04-15T00:00:00.000Z",
+				lastActiveAt: "2026-04-15T00:01:00.000Z",
+			}),
+		);
+		await checkpoint.save(
+			makeState({
+				createdAt: "2026-04-15T00:02:00.000Z",
+				lastActiveAt: "2026-04-15T00:03:00.000Z",
+			}),
+		);
+
+		expect(databases.get(dbPath)?.get("stable-session")).toEqual(
+			expect.objectContaining({
+				createdAt: "2026-04-15T00:00:00.000Z",
+				lastActiveAt: "2026-04-15T00:03:00.000Z",
+			}),
+		);
 	});
 
 	it("returns null and warns when a stored checkpoint contains invalid JSON", async () => {

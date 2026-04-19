@@ -138,7 +138,6 @@ export class SQLiteCheckpoint implements Checkpoint {
 				VALUES (?, ?, ?, ?)
 				ON CONFLICT(session_id) DO UPDATE SET
 					state_json = excluded.state_json,
-					created_at = excluded.created_at,
 					last_active_at = excluded.last_active_at
 			`).run(
 			this.currentSessionId,
