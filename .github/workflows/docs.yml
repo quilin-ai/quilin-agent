@@ -1,0 +1,56 @@
+name: Docs Lint
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "**/*.md"
+      - "docs/**"
+      - "scripts/lint-glossary.py"
+      - ".github/workflows/docs.yml"
+      - ".github/markdown-link-check.json"
+  pull_request:
+    branches: [master]
+    paths:
+      - "**/*.md"
+      - "docs/**"
+      - "scripts/lint-glossary.py"
+      - ".github/workflows/docs.yml"
+      - ".github/markdown-link-check.json"
+
+jobs:
+  glossary:
+    name: Glossary Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: python3 scripts/lint-glossary.py
+
+  links:
+    name: Markdown Link Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install markdown-link-check
+        run: npm install -g markdown-link-check@3.12.2
+      - name: Check links (docs/**/*.md and root *.md, excluding upstreams/)
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(find . \
+            -path ./upstreams -prune -o \
+            -path ./node_modules -prune -o \
+            -path ./.git -prune -o \
+            -path ./dist -prune -o \
+            -path ./target -prune -o \
+            -path ./docs/superpowers -prune -o \
+            -type f -name '*.md' -print)
+          status=0
+          for f in "${files[@]}"; do
+            echo "::group::$f"
+            markdown-link-check --quiet --config .github/markdown-link-check.json "$f" || status=$?
+            echo "::endgroup::"
+          done
+          exit $status
