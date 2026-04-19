@@ -1,6 +1,13 @@
 # 上下文工程（Context Engineering）
 
+> **实现状态（R-07，2026-04-18）**
+> - ✅ **已实现**：`packages/agent-core/src/context/` — source types、token budget、MemoryBridge（§5.5）、assembler 骨架
+> - 🚧 **进行中**：Iter A2 剩余项（完整 7 步流水线 build_context、prompt cache prefix）
+> - 💭 **未开始**：RelevanceSelector、ContextCompressor、对话工程子模块实现（parked 至 Iter F）
+
 > **ADR-001 对齐说明**：核心语言已决策为 TypeScript（见 [ADR-001](../../adr/adr-001-core-loop-and-language.md)）。本文档中的 Python 代码示例仅表达设计意图，实施时将以 TS 重写。`quilin/` 路径为规划参考，最终目录结构以实施时为准。
+>
+> **2026-04-18 D-05 集成**：对话工程（原独立领域 12-）降级为本领域子模块 [`conversation-engineering/`](./conversation-engineering/README.md)，parked 至 Iter F。ContextAssembler 统一 own 所有 prompt 组装，对话工程只贡献 6 层"活人感"配方。
 
 Quilin Agent 的核心本质是一个**上下文工程自动化流水线**，11 大能力领域各自负责上下文生命周期的一个环节。
 
@@ -925,6 +932,43 @@ def build_context(self, state: HarnessState) -> AssembledContext:
 
     return assembled
 ```
+
+### 5.5 MemoryBridge（D-05：02 ↔ 03 边界）
+
+**定位**：OmniMem（03）的 recall 结果到 ContextSource 的**薄适配层**，是 02-Context 与 03-Memory 之间唯一的数据转换点。
+
+**权威实现**：[`packages/agent-core/src/context/memory-bridge.ts`](../../../packages/agent-core/src/context/memory-bridge.ts)
+
+**合同**（TS）：
+
+```typescript
+export interface MemoryRecallResult {
+  readonly content: string
+  readonly score: number
+  readonly timestamp: number
+  readonly layer: 'working' | 'episodic' | 'semantic' | 'skill'
+}
+
+export function recallResultsToSources(
+  results: readonly MemoryRecallResult[],
+  options: { threshold: number },
+): ContextSource[]
+```
+
+**设计原则**：
+- **不做关键词抽取**：查询字符串直接透传给 OmniMem，由 03 侧的检索器自己做 query expansion / CJK n-gram / vector encode（D-05 要求分层只在一侧做）。
+- **只做转换 + 阈值过滤**：score < threshold 的结果直接丢弃；其余按 `ContextSource` schema 打平，标记 `sourceType='memory'` / `isExternal=true` / `metadata.layer`。
+- **无状态**：不维护任何缓存；每次 `build_context()` 都现转，避免跨 turn 数据漂移。
+
+**与 03 的接口约定**（由 OmniMem MCP Server 返回）：
+- `layer` 字段用于下游的 layer_priority 权重计算（见 03 §混合检索）。
+- `score` 已在 03 侧做过综合评分（vector + time_decay + layer_priority + task_relevance），02 不二次加权，只做 cutoff。
+- `timestamp` 单位：Unix ms，供 ContextAssembler 排序使用。
+
+**反模式（禁止）**：
+- ❌ 在 MemoryBridge 里调用 embedding / 跑 rerank（这是 03 的事）。
+- ❌ 在 MemoryBridge 里写回 OmniMem（单向流，写入只能通过 03 自己的 `MemoryStore` API）。
+- ❌ 把 `ContextSource` 反向转回 `MemoryRecallResult` 发回 03（单向流，只能 01 → 03 提交 `ProfileSignal` 或完整对话 turn）。
 
 ---
 

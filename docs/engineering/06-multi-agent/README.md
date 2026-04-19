@@ -1,5 +1,10 @@
 # 多 Agent 工程（Multi-Agent Engineering）
 
+> **实现状态（R-07，2026-04-18）**
+> - ✅ **已实现**：无（核心 loop + 工具系统先行）
+> - 🚧 **进行中**：无（Supervisor 规则 D-06 已定稿）
+> - 💭 **未开始**：Supervisor / Sub-Agent spawn、进度聚合器、IM 推送、mesh 客户端（走 11）— 全部待 Iter C..D 启动
+
 > **ADR-001 对齐说明**：同构 Agent 在 TS 进程内 spawn；异构 Agent 通过 Agent Mesh 通信（见 [11-agent-mesh](../11-agent-mesh/README.md)）。mesh 上怎么做事情由用户决定，Quilin 不设计编排策略。本文档中的 Python 代码示例仅表达设计意图。`quilin/` 路径为规划参考。详见 [ADR-001](../../adr/adr-001-core-loop-and-language.md)。
 
 ## 一、问题定义
@@ -94,11 +99,11 @@ class SupervisorResponsibilities:
     
     ALLOWED = [
         "接收用户输入",
-        "意图识别与任务分解",
+        "意图识别与任务分解（快模型：Haiku 4.5，≤5s 预算）",
         "选择/创建 Sub-Agent",
         "分配任务给 Sub-Agent",
         "监控 Sub-Agent 状态",
-        "收集/聚合 Sub-Agent 结果",
+        "收集/聚合 Sub-Agent 结果（聚合本身仍走快模型，不做深推理）",
         "向用户返回结果",
         "响应用户的进度查询",
         "处理任务取消/重试请求",
@@ -108,10 +113,24 @@ class SupervisorResponsibilities:
     FORBIDDEN = [
         "直接执行代码修改/文件操作",
         "直接调用外部 API/浏览器",
-        "长时间 LLM 推理（超过 ~5s 的推理交给 Sub-Agent）",
+        "调用慢模型（Sonnet 4.6 / Opus 4.7）做推理——必须 spawn Sub-Agent 承接",
+        "任何单步 LLM 调用预算 > 5s 的操作（硬超时：监督器级别 SLO）",
         "任何可能阻塞用户交互的操作",
     ]
 ```
+
+**D-06 双模型分工（2026-04-18 定稿）**：
+
+| 场景 | 模型 | 延迟预算 | 执行位置 |
+|------|------|---------|---------|
+| 意图识别 / 任务分解 / 进度聚合 | **Haiku 4.5**（快模型） | ≤5s | **Supervisor 进程内**，同步调用 |
+| 代码生成 / 深度推理 / 长任务 | **Sonnet 4.6 或 Opus 4.7**（慢模型） | 无上限（用户可取消） | **Sub-Agent 进程**，异步 spawn |
+| 纯规则决策（路由 / 配额检查） | 无 LLM | <50ms | Supervisor 进程内 |
+
+**硬约束**：
+- Supervisor 进程内绝不调用慢模型，哪怕"只要问一下"也不行——统一按 spawn Sub-Agent 处理。这避免了"快 fallback 慢"导致的阻塞雪崩。
+- 快模型单次调用超过 5s 预算 → 直接 timeout，降级为"我再看看"+ spawn Sub-Agent 继续。用户看到 Supervisor 依然可交互。
+- Sub-Agent 结果聚合若需要 LLM，用**快模型**做简单合并；如果需要深思（合并冲突、多方意见调和），则再 spawn 一个 summary Sub-Agent。
 
 **与空闲自进化的联动**：当 Supervisor 处于真正空闲状态（无用户输入 AND 无 pending Sub-Agent 任务）时，自动进入空闲自进化模式（详见 [10-self-evolution 2.12](../10-self-evolution/README.md)）。
 
@@ -535,88 +554,26 @@ class ParallelExecutor:
         ]
 ```
 
-### 通信架构（三级）
+### 通信架构
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│  Level 1: 本机通信（Local）                                   │
-│  同一台机器上的多个 Agent 进程                                  │
-│  协议：Unix Socket / Shared Memory / IPC                      │
-│  延迟：<1ms                                                   │
-├─────────────────────────────────────────────────────────────┤
-│  Level 2: 内网通信（Intranet）                                 │
-│  同一内网/集群中的多台机器                                       │
-│  协议：gRPC / MCP over TCP / Redis Pub/Sub                    │
-│  延迟：1-10ms                                                 │
-├─────────────────────────────────────────────────────────────┤
-│  Level 3: 网络通信（Internet）                                 │
-│  跨网络/跨云的 Agent 通信                                       │
-│  协议：HTTPS / WebSocket / A2A Protocol                       │
-│  延迟：10-500ms                                               │
-└─────────────────────────────────────────────────────────────┘
-```
+> **D-05 边界**：跨进程 / 跨机器 / 跨网络的 Agent 通信**全部归 [11-agent-mesh](../11-agent-mesh/README.md) 管辖**，本领域不再定义 `AgentMessage` / A2A / Agent Card 等数据结构。本领域只涉及：
+> - **同进程内**的 Sub-Agent 编排（`spawn_subagent` / `await_result`），直接通过 Python/TS 函数调用 + asyncio task 完成，不进入消息总线。
+> - 对外调用 mesh 时使用 11 暴露的 SDK（`MeshClient.send(msg)` / `MeshClient.subscribe(topic)`），数据结构、序列化、service discovery、A2A 协议、Agent Card 等都由 11-agent-mesh 权威定义。
+>
+> 这样避免 06 和 11 定义两套等价但不同步的消息类型（原稿中 `AgentMessage` 就是典型例子）。迁移节点见 ADR-001：mesh 能力在 **Iter D** 才启用；在此之前 06 只做同进程编排，不需要跨进程消息。
 
-**统一 MCPBus 消息格式**（不管哪级通信，上层 API 一致）：
+**Supervisor 跨 Agent 调用最小 API**（供本领域调用 11 的 thin wrapper）：
 
 ```python
-@dataclass
-class AgentMessage:
-    msg_id:    str           # 消息唯一 ID（用于幂等性）
-    from_id:   str           # 发送方 agent_id
-    to_id:     str           # 接收方 agent_id（"*" 表示广播）
-    type:      str           # "request" | "response" | "event"
-    payload:   dict          # 业务数据
-    timestamp: float         # Unix 时间戳
-    ttl:       int = 60      # 消息存活时间（秒），过期丢弃
+from quilin.mesh import MeshClient   # 由 11-agent-mesh 提供
+
+async def call_remote_agent(agent_id: str, payload: dict) -> dict:
+    """本领域唯一的跨进程调用入口——序列化 / routing / timeout 全部委派给 11。"""
+    client = MeshClient.default()
+    return await client.request(agent_id, payload, timeout_s=30)
 ```
 
-**通信模式**：
-
-- **同步请求/响应**：Agent A 调用 Agent B 并等待结果（适合强依赖任务）
-- **异步消息**：Agent A 发送消息后继续执行，Agent B 稍后回复（适合松耦合）
-- **发布/订阅**：Agent 订阅特定事件，有更新时收到通知（适合状态广播）
-- **流式**：Agent B 边处理边返回中间结果给 Agent A（适合长时间生成任务）
-
-**通信设计要点**：
-
-- 自动降级（网络不可达时降级到缓存结果）
-- 服务发现（Agent 怎么找到其他 Agent，通过 Agent Card 注册）
-- 负载均衡（同类 Agent 多个实例时的轮询/最少连接分发）
-- 消息持久化（通信记录可回放、可审计）
-
-### A2A 协议（Agent-to-Agent Protocol）
-
-Google 提出的 A2A 协议，定义了 Agent 之间的标准化交互方式，类似 MCP 对工具调用的标准化：
-
-```
-MCP  = Agent ↔ Tool 的标准协议（工具调用层）
-A2A  = Agent ↔ Agent 的标准协议（Agent 协作层）
-两者互补，不冲突
-```
-
-**核心概念**：
-
-| 概念 | 说明 | 对应 Harness 实现 |
-|------|------|-----------------|
-| **Agent Card** | Agent 的自我描述（能力/端点/认证） | `AgentCard` dataclass + HTTP 发布 |
-| **Task** | Agent 之间的任务工作单元 | `A2ATask` + 状态机管理 |
-| **Message / Part** | 通信消息体（文本/文件/数据） | `AgentMessage` 的 payload |
-| **Artifact** | 任务产物（文件、JSON、报告等） | `AgentResult.output` + 文件存储 |
-
-**Agent Card 示例**：
-
-```json
-{
-  "agent_id": "omni-coder-001",
-  "name": "OmniCoder Agent",
-  "version": "1.2.0",
-  "capabilities": ["python", "code_review", "test_generation"],
-  "endpoint": "https://harness.example.com/agents/omni-coder-001",
-  "auth": {"type": "bearer", "scope": "agent:invoke"},
-  "max_concurrency": 5,
-  "avg_latency_ms": 3000
-}
-```
+> 同进程 Sub-Agent spawn 不经过 MeshClient；只有当目标 Agent 不在当前进程（Iter D+ 场景）才走 mesh。
 
 ---
 

@@ -1,5 +1,10 @@
 # 可观测性工程（Observability Engineering）
 
+> **实现状态（R-07，2026-04-18）**
+> - ✅ **已实现**：`packages/agent-core/src/logger.ts` — JSON 结构化日志到 stdout（三语言统一 schema）
+> - 🚧 **进行中**：无
+> - 💭 **未开始**：OTel tracing 注入、metrics exporter、WebUI Dashboard、benchmark trace 采集 — 全部待 Iter D 启动
+
 > 本文档是 Quilin Agent 工程规格系列的第 8 篇，定义可观测性层的设计方案、参考来源与验证标准。可观测性是横切所有层的基础能力，为追踪、指标和日志提供统一基础设施。
 >
 > **ADR-001 对齐说明**：可观测性通过 OpenTelemetry hooks 无侵入注入 TS 核心层。旧路径 `quilin/layers/observability/` 已删除。本文档中的 Python 代码示例仅表达设计意图。`quilin/` 路径为规划参考。详见 [ADR-001](../../adr/adr-001-core-loop-and-language.md)。

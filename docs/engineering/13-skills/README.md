@@ -1,5 +1,10 @@
 # 技能工程（Skill Engineering）
 
+> **实现状态（R-07，2026-04-18）**
+> - ✅ **已实现**：无
+> - 🚧 **进行中**：无（B3a 排期开启后进入 M0）
+> - 💭 **未开始**：SKILL.md frontmatter 解析器、SkillsManager（扫描/缓存/懒加载）、CatalogRenderer（system prompt 索引）、skill_manage 工具（读/写单写口，D-05）、路径/大小安全校验、skill → Sub-Agent 桥接。Iter 排期 = M0（B3a） → M1（后续）；Self-Evolution 写入路径依赖 M1 完成。
+
 > **ADR-001 对齐说明**：技能系统（Skill Loading）用 TS 实现，作为 Agent Core 内的独立子系统。Skill 与 Tool 严格分离：Tool 是运行时可执行动作，Skill 是可被 LLM 读取的知识/指令资产。本文档中的 Python 代码示例仅表达设计意图，实施时以 TS 落地。
 
 > **研究依据**：[docs/research/skill-loading-comparison.md](../../research/skill-loading-comparison.md) — 四仓库对比（Claude Code / Hermes / OpenClaw / Codex CLI），已由 Codex adversarial review 通过。
@@ -232,11 +237,42 @@ class LoadedSkill:
 
 ### 2.6 关键接口（TS 伪代码）
 
+> **D-05 跨域合同**：TS 是 Agent Core 的主语言，下列接口为**权威源**；Python 侧（03-Memory、ML providers）通过 MCP 边界以等价 schema 使用。`SkillDescriptor` 是 10-self-evolution ↔ 13-skills 的共享数据结构：10 只**生成草稿并调用 `skill_manage`**，13 负责**路径/大小/frontmatter 校验、落盘、catalog 索引更新**——CRUD 唯一写入方是 13。
+
 ```typescript
 // packages/agent-core/src/skills/
 
+interface SkillFrontmatter {
+  readonly name: string
+  readonly description: string
+  readonly whenToUse?: string
+  readonly allowedTools?: readonly string[]
+  readonly version?: string
+  readonly userInvocable: boolean
+  readonly disableModelInvocation: boolean
+  // M1
+  readonly requiresTools?: readonly string[]
+  readonly requiresToolsets?: readonly string[]
+  readonly platforms?: readonly string[]
+  readonly trust: 'builtin' | 'trusted' | 'community' | 'agent-created'
+}
+
+interface SkillDescriptor {
+  readonly name: string
+  readonly description: string
+  readonly path: string                 // SKILL.md 绝对路径
+  readonly source: 'bundled' | 'user' | 'project' | 'plugin'
+  readonly frontmatter: SkillFrontmatter
+}
+
+interface LoadedSkill {
+  readonly descriptor: SkillDescriptor
+  readonly body: string                 // Markdown body 全文
+  readonly tokenEstimate: number
+}
+
 interface SkillsManager {
-  discover(): Promise<SkillDescriptor[]>
+  discover(): Promise<readonly SkillDescriptor[]>
   findByName(name: string): SkillDescriptor | null
   load(name: string): Promise<LoadedSkill>
   watch(onChange: (descriptors: readonly SkillDescriptor[]) => void): () => void
@@ -249,13 +285,23 @@ interface CatalogRenderer {
   ): string  // <available_skills> XML block
 }
 
+// Skill CRUD 工具 — 唯一写入入口
+type SkillManageAction =
+  | { action: 'create'; descriptor: SkillDescriptor; body: string }
+  | { action: 'update'; name: string; patch: Partial<SkillDescriptor>; body?: string }
+  | { action: 'delete'; name: string; reason: string }
+
+type SkillManageResult =
+  | { ok: true; descriptor: SkillDescriptor }
+  | { ok: false; error: 'validation_failed' | 'path_denied' | 'size_exceeded' | 'not_found'; detail: string }
+
 interface SkillTool {
-  // 暴露给 LLM 的工具
   skill_view: Tool<{ name: string }, LoadedSkill>
-  // M1
-  skill_manage?: Tool<{ action: 'create' | 'update' | 'delete', ... }, ...>
+  skill_manage?: Tool<SkillManageAction, SkillManageResult>  // M1
 }
 ```
+
+> Python 侧（如 10-self-evolution 的 SkillManager.extract）仍可用 `@dataclass` 形式表达 `SkillDescriptor` 草稿，但落盘时**必须**通过 MCP 走 `skill_manage` 到达 TS 侧 SkillsManager——没有直接文件写入通道。
 
 ---
 

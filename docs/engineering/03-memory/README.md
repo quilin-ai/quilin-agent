@@ -1,5 +1,10 @@
 # 记忆工程（Memory Engineering）
 
+> **实现状态（R-07，2026-04-18）**
+> - ✅ **已实现**：`providers/memory/` — OmniMem MCP Server 骨架、SQLite + FTS5 Semantic Memory、integration tests（31/31 绿）
+> - 🚧 **进行中**：vector deps 移到 optional extras（P0-2 已修）、R-12 `create_server(store)` 工厂重构
+> - 💭 **未开始**：Working / Episodic / Skill 三层、User Profile Store + ProfileUpdater、向量索引 + KG、混合检索
+
 > OmniMem 4 层分级记忆系统详细规格
 >
 > **ADR-001 对齐说明**：核心语言已决策为 TypeScript，OmniMem 将封装为 Python MCP Server（ML 依赖），TS 核心通过 MCP stdio 调用。本文档中的 Python 代码示例仅表达设计意图。`quilin/` 路径为规划参考。详见 [ADR-001](../../adr/adr-001-core-loop-and-language.md)。
@@ -95,15 +100,7 @@ Claude Code 的 CLAUDE.md 是一种创新——把项目级知识写成文件让
 - 移交前触发 LLM 摘要：将被淘汰轮次的内容压缩为关键摘要
 - 摘要格式：`{轮次: N, 关键动作: [...], 关键结论: ..., 相关实体: [...]}`
 
-**上下文注入顺序**（在 ContextManager.build_context 中）：
-```
-[System Prompt]
-[Project Memory: MEMORY.md 精华]
-[Semantic Memory: 检索命中的相关知识]
-[Episodic Memory: 最近几条摘要]
-[Working Memory: 最近 k 轮完整内容]  ← 最靠近当前推理，权重最高
-[当前任务描述]
-```
+**上下文注入顺序**：由 [02-Context ContextAssembler](../02-context/README.md) 统一决定（D-05：组装权归 02，本领域只返回 recall 结果 + layer 标签，不定义排布顺序）。典型顺序见 02-Context 规范。
 
 ### Layer 2：Episodic Memory（情景记忆）
 
@@ -221,11 +218,29 @@ class UserProfile:
     interaction_count: int = 0          # 总交互次数
     last_seen: datetime | None = None   # 最后一次活跃时间
     created_at: datetime                # 首次使用时间
+    schema_version: int = 1             # 用于跨版本迁移（D-05）
 ```
+
+#### 唯一写入方（D-05 合同）
+
+> **单写原则**：UserProfile 只能通过本领域暴露的 `ProfileUpdater` 写入，任何其他领域（02-Context、对话工程子模块、10-Self-Evolution 等）都只能**读**不能**写**。这避免了多写方 race、口径漂移和回滚困难。
+
+```python
+class ProfileUpdater:
+    """UserProfile 的唯一写入入口 — 供 OmniMem 内部调度，不对外直接暴露。"""
+
+    def apply_signal(self, user_id: str, signal: ProfileSignal) -> UserProfile: ...
+    def bulk_apply(self, user_id: str, signals: list[ProfileSignal]) -> UserProfile: ...
+    def reset(self, user_id: str, reason: str) -> None: ...  # 审计日志必填
+```
+
+- **对外接口**：其他领域通过 `OmniMemClient.emit_profile_signal(signal)` 发送**候选信号**，由 ProfileUpdater 聚合判决后才落盘。
+- **写入审计**：每次写入记录 `who(caller_domain) / when / why(signal) / diff`，写入 Semantic Memory 的 meta 层，供 08-Observability 消费。
+- **schema 版本化**：UserProfile 字段变更必须递增 `schema_version`，ProfileUpdater 持有向前迁移脚本，不允许字段级破坏性变更直接上线。
 
 #### 持续静默更新
 
-不靠用户主动告知，Agent 在每次交互中自动推断并更新画像：
+不靠用户主动告知，Agent 在每次交互中**发出 ProfileSignal**（不是直接写），由 ProfileUpdater 聚合判决后更新画像：
 
 | 信号 | 推断 | 更新字段 |
 |------|------|---------|

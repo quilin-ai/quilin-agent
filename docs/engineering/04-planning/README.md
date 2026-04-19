@@ -1,5 +1,10 @@
 # 规划工程（Planning Engineering）
 
+> **实现状态（R-07，2026-04-18）**
+> - ✅ **已实现**：无（Iter C 未启动）
+> - 🚧 **进行中**：无
+> - 💭 **未开始**：意图识别、任务分解、策略切换、Planner tool — 全部待 Iter C 启动
+
 > **ADR-001 对齐说明**：不使用 LangGraph 作为核心运行时（见 [ADR-001](../../adr/adr-001-core-loop-and-language.md)）。规划能力作为 LLM 可调用的工具暴露，而非固定状态图节点。本文档中 LangGraph 相关内容仅作为上游参考，不代表 Quilin 的实现方案。Python 代码示例仅表达设计意图，实施时将以 TS 重写。`quilin/` 路径为规划参考。
 
 ## 一、问题定义
@@ -715,7 +720,7 @@ LangGraph 的核心创新是将 Agent 循环建模为**显式状态图**，而�
 
 Quilin 的 `AgentState` 直接继承这一思想，`_build_graph()` 方法构建的字典结构正是 LangGraph StateGraph 的简化实现。重点吸收：
 
-1. **检查点持久化**：LangGraph 的 `MemorySaver` / `SqliteSaver` 机制启发了 Quilin 的检查点设计。每 N 步将 `AgentState.variables` 快照到 OmniMem 的 LONG tier，用于 Level 3 回滚重规划。
+1. **检查点持久化**：LangGraph 的 `MemorySaver` / `SqliteSaver` 机制启发了 Quilin 的检查点设计。每 N 步将 `AgentState.variables` 快照到 OmniMem 的 long tier，用于 Level 3 回滚重规划。
 2. **条件边路由**：`_node_decide` 的三路分支（end/plan/replan）直接对应 LangGraph 的 `add_conditional_edges`，决策逻辑完全内化在节点函数中。
 3. **中断/恢复**：LangGraph 的 `interrupt_before/interrupt_after` 机制启发了用户中断时的安全保存逻辑。
 

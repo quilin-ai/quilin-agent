@@ -1,8 +1,34 @@
 # LLM 接入工程（LLM Integration Engineering）
 
+> **实现状态（R-07，2026-04-18）**
+> - ✅ **已实现**：`packages/agent-core/src/llm/` — `LLMClient`（AI SDK v6 包装）、`InferenceConfig`、`ThinkingMode`、`maxOutputTokens` 传参（P0-1 修复）
+> - 🚧 **进行中**：provider 能力矩阵全量验收（Anthropic ✅ / OpenAI 🚧 / Google 🚧 / 本地 Ollama 💭）
+> - 💭 **未开始**：流式 token 计数 / fallback 链 / retry 策略（Iter A3）
+
 > 本文档是 Quilin Agent 工程规格系列的第 1 篇，定义 LLM 接入层的设计方案、参考来源与验证标准。
 >
 > **ADR-001 对齐说明**：核心语言已决策为 TypeScript（见 [ADR-001](../../adr/adr-001-core-loop-and-language.md)），旧 Python 代码（`quilin/core/llm.py`）已删除。本文档中的 Python 代码示例仅表达设计意图，实施时将以 TS 重写。`quilin/` 路径为规划参考，最终目录结构以实施时为准。
+
+> **D-07 裁决（2026-04-18）：Vercel AI SDK v6 权威锁定**
+>
+> - **运行时**：Agent Core 统一使用 **Vercel AI SDK v6**（`ai` + 各 provider 包，如 `@ai-sdk/anthropic` / `@ai-sdk/openai` / `@ai-sdk/google`）作为 LLM 调用底座。文档中所有 **`litellm` / `LiteLLMClient` / `acompletion` 描述均为历史设计语境**，实施时以 AI SDK v6 API 为准。
+> - **参数命名权威**：AI SDK v6 起 `maxTokens` 已重命名为 **`maxOutputTokens`**（v5 → v6 breaking change）。所有新代码必须使用 `maxOutputTokens`；v5 shim 禁止存在（见 R-11 / TS-03）。
+> - **provider 归一化**：AI SDK 的 `LanguageModelV2` interface 已处理 tool call / stream / token count 归一化，**不再引入 litellm 中间层**。需要接国内模型（Qwen / GLM 等）时，优先看 community provider package；没有则自行实现 `LanguageModelV2`。
+> - **Python 侧**：仅 03-Memory / ML providers 使用 Python；**不做 LLM 调用**（避免跨语言同时维护两套 LLM 客户端）。Python 侧如需 LLM，走 MCP 调回 TS 的 LLMClient。
+> - **Thinking token / reasoning 支持**：通过 AI SDK v6 的 `providerOptions.{anthropic|openai|google}` 透传（`thinking` / `reasoning_effort` 等），在 `LLMClient` 层做统一 `ThinkingMode` 映射。
+>
+> **Provider 能力矩阵**（2026-04-18 权威表，随 SDK 更新必须同步）：
+>
+> | Provider | Package | tool calling | streaming | reasoning token | multi-modal | 备注 |
+> |----------|---------|:-:|:-:|:-:|:-:|------|
+> | Anthropic Claude | `@ai-sdk/anthropic` | ✅ | ✅ | ✅ (`providerOptions.anthropic.thinking`) | ✅ 图像 | 主力模型，Opus 4.7 / Sonnet 4.6 / Haiku 4.5 |
+> | OpenAI | `@ai-sdk/openai` | ✅ | ✅ | ✅ o 系列 `reasoning_effort` | ✅ 图像 | GPT-5.4 及后续 |
+> | Google Gemini | `@ai-sdk/google` | ✅ | ✅ | ⚠️ 预览 | ✅ 图像/视频 | Gemini 2.x |
+> | Groq / Cerebras | `@ai-sdk/groq` 等 | ✅ | ✅ | ❌ | ❌ | 低延迟备选 |
+> | 本地 Ollama | `ollama-ai-provider` (community) | ✅ | ✅ | ❌ | 部分 | 离线 fallback |
+> | 国内 Qwen / GLM | 自行 `LanguageModelV2` 实现 | ⚠️ 需验证 | ⚠️ | ❌ | ⚠️ | 按需接入，能力矩阵随实现更新 |
+>
+> ❌ 表示**未实现或无此能力**；⚠️ 表示**能力存在但 SDK 兼容性/稳定性未验收**；✅ 表示**已走通 + 集成测试覆盖**。`LLMClient` 调用前必须查能力矩阵，不支持的能力直接返回 `UnsupportedCapabilityError`，禁止静默 fallback。
 
 ---
 

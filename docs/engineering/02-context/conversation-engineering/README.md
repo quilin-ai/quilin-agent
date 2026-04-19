@@ -1,6 +1,8 @@
-# 对话工程（Conversation Engineering）
+# 对话工程（Conversation Engineering）— 02-context 子模块（Parked → Iter F）
 
-> 本文档是 Quilin Agent 工程规格系列的第 12 篇，定义对话工程的设计方案、6 层架构与验证标准。对话工程是 Quilin 的核心差异化能力——让 Agent 像真人一样对话，而不是像客服机器人。
+> **2026-04-18 D-05 降级**：从独立领域 12- 降级为 `02-context/conversation-engineering/` 子模块。所有 prompt 组装仍由 02-context 的 ContextAssembler 统一 own，本模块只贡献 6 层"活人感"设计配方，由 02 宿主装配。**Parked** 至 Iter F——核心回路 benchmark 稳态前不启动。
+>
+> 本文档定义对话工程的设计方案、6 层架构与验证标准。对话工程是 Quilin 的核心差异化能力——让 Agent 像真人一样对话，而不是像客服机器人。
 >
 > **ADR-001 对齐说明**：对话工程通过 system prompt 模板 + 运行时参数注入实现，不修改底模。TS 核心的 ContextManager 负责将对话风格参数编织进 system prompt。本文档中的代码示例仅表达设计意图。
 
@@ -169,7 +171,7 @@ class PersonalityPreferences:
 
 Agent 应该不断微调对用户的假设（专业程度、情绪状态、今天是不是累），然后用这个假设调整语气和内容。**关键是不能播报观察**。"我注意到你似乎很累"是反人味的极致。真朋友不会这样说，他会直接用低能耗的方式和你说话。
 
-与 03-Memory 的 User Profile Store 深度集成——但画像的使用方式是隐式的。
+与 03-Memory 的 User Profile Store 深度集成，但**本子模块只读**（D-05 单写原则）——画像的使用方式是隐式的，任何更新必须通过 03-Memory 的 `ProfileUpdater` 写入，对话工程只能 `emit_profile_signal()` 发送候选信号。
 
 **记住小事，忘掉大事的表述**：
 
@@ -347,10 +349,10 @@ class ConversationEngineerProtocol(Protocol):
         ...
 
 class RelationshipModelProtocol(Protocol):
-    """关系建模接口（与 03-Memory UserProfile 集成）"""
+    """关系建模接口（只读消费 03-Memory UserProfile；D-05：不写）"""
     
     def get_implicit_adjustments(self, user_profile: dict) -> dict:
-        """根据用户画像返回隐式调整参数"""
+        """根据用户画像返回隐式调整参数（纯读）"""
         ...
     
     def should_misunderstand(self, input_ambiguity: float) -> bool:
@@ -359,6 +361,13 @@ class RelationshipModelProtocol(Protocol):
     
     def get_memory_bias(self) -> dict[str, float]:
         """返回记忆检索的权重偏移"""
+        ...
+    
+    def emit_profile_signal(self, signal: "ProfileSignal") -> None:
+        """
+        向 03-Memory 的 ProfileUpdater 发送候选信号（不直接写）。
+        所有"从对话推断出的偏好"只以 signal 形式上交，由 03 侧聚合判决后才落盘。
+        """
         ...
 ```
 

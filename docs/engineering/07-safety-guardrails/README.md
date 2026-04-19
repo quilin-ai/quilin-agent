@@ -1,5 +1,10 @@
 # 安全护栏工程（Safety & Guardrails Engineering）
 
+> **实现状态（R-07，2026-04-18）**
+> - ✅ **已实现**：shell_exec 危险模式拦截、MCP spawn allowlist、tool result 体积/超时 clamp、`scanExternalContext` 注入点（全部 P0-4 落地）、[threat-model.md](./threat-model.md)（D-08 首发）
+> - 🚧 **进行中**：B2 Safety Policy Gate spec（[`../../iterations/2026-04-xx-iter-b-tools/spec-b2.md`](../../iterations/2026-04-xx-iter-b-tools/spec-b2.md)）— ExecutionGate 接线 + confirm 语义待定稿
+> - 💭 **未开始**：Layer 1 完整输入分类器、Layer 3 secret scrubber + PII detector、Layer 4 元验证、web_fetch SSRF 防护
+
 > 本文档是 Quilin Agent 工程规格系列的第 7 篇，定义安全护栏层的设计方案、参考来源与验证标准。安全护栏是系统的横切关注点，贯穿输入、推理、输出、元验证的全流程。
 >
 > **ADR-001 对齐说明**：安全护栏实现为 Guardrails middleware（pre/post hooks），在 TS 核心层实现。本文档中的 Python 代码示例仅表达设计意图，实施时将以 TS 重写。`quilin/` 路径为规划参考。详见 [ADR-001](../../adr/adr-001-core-loop-and-language.md)。

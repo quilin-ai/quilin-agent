@@ -1,6 +1,9 @@
 # Agent Mesh 工程（Agent Mesh Engineering）
 
-> 本文档是 Quilin Agent 工程规格系列的第 11 篇，定义 Quilin 如何作为 mesh 网络中的一个 agent 天然接入 AgentMesh。
+> **实现状态（R-07，2026-04-18）**
+> - ✅ **已实现**：无
+> - 🚧 **进行中**：无
+> - 💭 **未开始**：MeshClient SDK 接入、A2A Protocol 对齐、Agent Card 发布、mDNS/LAN 发现、加密/身份层、gRPC/HTTP SSE bridge。**整领域延期到 Iter D**（核心 loop + 工具 + memory 稳态后才启动），当前不允许任何跨进程 Agent 通信代码落地；06-multi-agent 只能保留进程内 Sub-Agent 编排。
 
 ---
 

@@ -1,5 +1,10 @@
 # 部署运行时工程（Deployment & Runtime Engineering）
 
+> **实现状态（R-07，2026-04-18）**
+> - ✅ **已实现**：`justfile`（跨语言编排）、`packages/agent-core/src/repl.ts` REPL 入口、基础 config 加载
+> - 🚧 **进行中**：无
+> - 💭 **未开始**：CLI 完整参数、config 热更新、单 binary 打包、devcontainer CI/CD 流水线
+
 > 本文档是 Quilin Agent 工程规格系列的第 9 篇，定义部署运行时层的设计方案、参考来源与验证标准。
 >
 > **ADR-001 对齐说明**：旧路径 `quilin/plugins/deploy/` 已删除。本文档中的 Python 代码示例仅表达设计意图，实施时将以 TS 重写。`quilin/` 路径为规划参考。详见 [ADR-001](../../adr/adr-001-core-loop-and-language.md)。

@@ -1,5 +1,10 @@
 # 自进化工程（Self-Evolution Engineering）
 
+> **实现状态（R-07，2026-04-18）**
+> - ✅ **已实现**：无（整个领域尚未落地）
+> - 🚧 **进行中**：无
+> - 💭 **未开始**：TrajectoryCollector、FailureAnalyzer、DSPy 优化器 MCP Server、AutoReflector、skill_manage 集成（依赖 13-skills M1）、User Insight Engine、Idle Evolution 预算控制、human-in-loop scaffold patch 流水线。**不在 Iter A/B 范围，最早 Iter D 起步。**
+
 > 本文档是 Quilin Agent 工程规格系列的第 10 篇，也是最具野心的一篇。自进化是让 Agent 能够从失败中学习、自动改进自身 scaffold（提示词/工具配置/工作流）的能力——这是我们区别于绝大多数竞品的核心竞争力。核心设计受 MiniMax M2.7 的自进化闭环启发，系统化地融合了 DSPy、Voyager、ADAS 等最前沿的自动优化研究成果。
 >
 > **ADR-001 对齐说明**：自进化系统作为异步后台子系统运行，不阻塞主 Loop。DSPy 优化器等 ML 依赖封装为 Python MCP Server。本文档中的 Python 代码示例仅表达设计意图。`quilin/` 路径为规划参考。详见 [ADR-001](../../adr/adr-001-core-loop-and-language.md)。
@@ -303,7 +308,11 @@ ScaffoldModifier.generate_proposals(pattern_report)
 
 ### 2.5 技能自创系统（Voyager 启发）
 
-> **与 [13-技能工程](../13-skills/README.md) 的分工**：本节聚焦"技能如何从成功轨迹被**提取**出来"（SkillManager.extract → Skill Memory Layer 4）；技能的**文件格式（SKILL.md + YAML frontmatter）、目录化索引、按需加载、在 system prompt 中的组装顺序、沙箱安全加载**由 13-skills 领域统一定义。两者共用同一个 `SkillDescriptor` 数据结构——10-自进化负责写入，13-技能工程负责索引与渲染。
+> **与 [13-技能工程](../13-skills/README.md) 的分工（D-05 合同）**：
+> - 本节聚焦"技能如何从成功轨迹被**提取**出来"（SkillManager.extract → 产出 `SkillDescriptor` 草稿）。
+> - **写入权归 13-skills**：本领域**不**直接落盘 SKILL.md 文件，必须通过 13-skills 暴露的 `skill_manage(create|update|delete)` 工具提交，由 13-skills 做路径/大小/ frontmatter 校验后生效。这保证了 Skill CRUD 单写方，避免 10 和 13 两边并行写造成的索引失真。
+> - 技能的**文件格式（SKILL.md + YAML frontmatter）、目录化索引、按需加载、在 system prompt 中的组装顺序、沙箱安全加载**由 13-skills 领域统一定义。
+> - 两者共用同一个 `SkillDescriptor` TS interface（见 13-skills §2.x）——10-自进化负责**提取草稿并调用 `skill_manage`**，13-技能工程负责**持久化、索引与渲染**。
 
 成功的任务执行轨迹不应该被丢弃——它们是可复用经验的原材料。SkillManager 负责将成功轨迹转化为可调用的"技能模板"。
 
@@ -326,7 +335,7 @@ ScaffoldModifier.generate_proposals(pattern_report)
         │           error_type: "{error_type}",
         │           fix_strategy: "{fix_strategy}" }
         │
-        └── 4. 生成技能模板（存储到 Skill Memory）
+        └── 4. 生成 SkillDescriptor 草稿 → 调用 `skill_manage(create, descriptor)` 提交到 13-skills
                {
                  "skill_id": "fix_python_off_by_one_v1",
                  "description": "修复 Python 函数的 off-by-one 边界错误",
@@ -337,6 +346,12 @@ ScaffoldModifier.generate_proposals(pattern_report)
                  "usage_count": 0,
                  "created_from": "task_20260413_042"
                }
+               ↓
+               13-skills.skill_manage("create", descriptor)
+                 → 路径/大小/frontmatter 校验
+                 → 写入 SKILL.md
+                 → 更新 catalog 索引
+                 → 返回 skill_id 或 validation_error
 ```
 
 **技能复用逻辑：**
@@ -482,47 +497,47 @@ scaffold_manager.rollback(version="scaffold-v2.3.1")  # 立即生效
         └── 人类批准 → 进入沙箱验证 → A/B 评估 → 上线
 ```
 
-### 2.8 上游监控辅助融合（AI 辅助人类合并，非自动缝合）
+### 2.8 前沿研究辅助（跟踪主流 Agent 框架的设计演进）
 
-> **D-03 决策（2026-04-17 ultra-review）**：删除"自动缝合"叙事。Quilin 只提供 diff 分析与融合建议，最终合并由人类通过 PR 执行。
+> Quilin 通过系统性研究主流 Agent 框架获取设计灵感，最终由人类评审后以原生方式纳入路线图——不做自动补丁注入。
 
-自进化不只针对 Agent 自身行为，也包括对 ~100 个上游项目更新的 AI 辅助吸收。
+自进化不只针对 Agent 自身行为，也包括对主流 Agent 框架设计演进的持续跟踪与模式提炼。
 
-**缝合流程：**
+**研究流程：**
 
 ```
-sync-upstreams.py 检测到上游 commit
+sync-upstreams.py 检测到参考项目 commit
         │
         ▼
 git diff 提取变更内容
         │
         ▼
 Claude 分析 diff：
-  ① 这个更新涉及哪个功能点？
-  ② 我们是否已经吸收了这个功能的旧版本？
-  ③ 这个更新是否比我们的实现更好？
-  ④ 如何将这个更新融合到 Harness 中？
+  ① 这个变更涉及哪个设计维度？
+  ② 我们的现有实现在这一维度处于什么位置？
+  ③ 这个变更是否揭示了新的设计取舍？
+  ④ 是否值得在 Quilin 的路线图中立项借鉴？
         │
         ├── 不相关 → 记录到 fusion-index.md（观察状态）
         │
-        └── 相关 → 生成融合补丁建议
+        └── 相关 → 生成研究摘要与设计建议
                     │
                     ▼
-              merge-with-claude.sh 生成 PR
+              merge-with-claude.sh 生成研究报告 PR
                     │
                     ▼
-              人类审核 → 合并 → 更新 fusion-index.md
+              人类评审 → 决策是否立项 → 更新 fusion-index.md
 ```
 
 **相关性判断逻辑（Claude prompt 关键部分）：**
 
 ```
 判断标准：
-1. 功能相关性：这个 diff 修改的功能是否在我们的吸收计划中？
-   参考 fusion-index.md 中的"吸收中"或"规划中"条目
-2. 质量提升：新版本是否解决了我们已知的问题？
-3. 破坏性：这个更新是否会破坏我们现有的集成？
-4. 工作量：吸收这个更新大约需要多少工作量？
+1. 设计相关性：这个 diff 涉及的设计维度是否在我们的研究计划中？
+   参考 fusion-index.md 中的"研究中"或"规划中"条目
+2. 启发价值：该变更是否揭示了我们尚未覆盖的设计取舍？
+3. 兼容性：借鉴这个设计是否会破坏我们现有的架构约束？
+4. 工作量：立项跟进大约需要多少工作量？
 
 输出格式：
 {
@@ -838,8 +853,8 @@ Quilin 运行标准化深度调研（6 步流程，见 deep-code-research-method
          └── 手动合并（交互式解决）
 ```
 
-**与上游监控（2.8）的关系**：
-- 2.8 是**官方**对 ~100 个上游项目的自动监控缝合
+**与前沿研究（2.8）的关系**：
+- 2.8 是**官方**对参考项目的自动变更跟踪与研究摘要
 - 2.11 是**用户**对任意 GitHub 仓库的自助吸收
 - 两者共享同一套调研流程（[deep-code-research-methodology.md](../research/deep-code-research-methodology.md)）
 - 两者产出的补丁格式相同，通过同一套 Scaffold 修改系统应用
@@ -891,7 +906,7 @@ class IdleEvolutionTrigger:
 | P1 | **Scaffold proposal 草稿** | 中（需 LLM 调用） | 基于积累轨迹生成 Level 1-2 proposal（开 PR 等人审） | 每日最多 1 轮 |
 | P2 | **技能库扩充** | 中 | 从成功轨迹提取新技能、验证已有技能 | 每日最多 1 轮 |
 | P3 | **浏览用户相关内容** | 高（浏览器 + LLM） | 用户关注领域的新动态、趋势摘要 | 每周 2-3 次 |
-| P4 | **上游监控加速** | 高 | 主动分析上游项目更新的融合价值 | 有新上游更新时 |
+| P4 | **前沿跟踪加速** | 高 | 主动识别参考项目的设计演进与可借鉴模式 | 有新上游变更时 |
 
 #### 预算核算协议
 
@@ -1130,8 +1145,8 @@ LLMRouter（LLM 层）
     └── ScaffoldModifier 使用"中等模型"生成修改方案
 
 sync-upstreams.py（脚本层）
-    └── 触发上游监控辅助融合流程（AI 生成 diff 分析 + 建议，人类决定合并）
-    └── 读取 fusion-index.md 确定监控目标
+    └── 触发前沿研究跟踪流程（AI 生成 diff 分析 + 研究摘要，人类决定是否立项）
+    └── 读取 fusion-index.md 确定跟踪目标
 ```
 
 ### 5.3 数据流图
@@ -1211,7 +1226,7 @@ self_evolution:
   upstream_monitor:
     enabled: true
     sync_interval_minutes: 5       # 同步间隔（与 sync-upstreams.py 一致）
-    relevance_threshold: "medium"  # 最低相关性阈值才触发缝合
+    relevance_threshold: "medium"  # 最低相关性阈值
   idle_evolution:
     enabled: false                 # D-01: 默认 OFF，用户需显式 opt-in
     mode: "api"                    # "subscription" | "api"
@@ -1465,6 +1480,6 @@ metrics_to_watch = [
 
 ---
 
-> **与上游监控的关联**：本文档对应 `fusion-index.md` 中的 Section 10（自进化）。上游项目的监控优先级：DSPy 的 optimizer 更新（高优先级）> Voyager 的 skill_library 更新（中优先级）> SWE-agent 的 ACI 更新（中优先级）> ADAS 的 meta_agent 更新（中优先级）。
+> **与前沿研究的关联**：本文档对应 `fusion-index.md` 中的 Section 10（自进化）。参考项目的跟踪优先级：DSPy 的 optimizer 设计演进（高优先级）> Voyager 的 skill_library 范式（中优先级）> SWE-agent 的 ACI 设计（中优先级）> ADAS 的 meta_agent 取舍（中优先级）。
 >
 > **实施阶段**：自进化工程对应 `implementation-plan.md` 的 Phase 8+，在前 7 个 Phase（LLM 接入 → 可观测性 → 部署运行时）完成后实施。TrajectoryStore 可在 Phase 3 提前埋点，为 Phase 8 的自进化积累初始数据。
