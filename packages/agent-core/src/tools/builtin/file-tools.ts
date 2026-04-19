@@ -22,12 +22,15 @@ import type { ToolResult } from "../types.js";
 
 const DEFAULT_MAX_CHARS = 32_768;
 const DEFAULT_MAX_WRITE_BYTES = 2 * 1024 * 1024;
+const ACCESS_DENIED_MESSAGE = "Path not accessible";
 const BASENAME_SENSITIVE_FILE_PATTERNS = [
 	/^\.env(\..+)?$/i,
 	/^id_(rsa|dsa|ecdsa|ed25519)(\.pub)?$/i,
 	/\.pem$/i,
 	/\.key$/i,
 ];
+const SYSTEM_SENSITIVE_EXACT_PATHS = ["/etc/shadow", "/etc/passwd", "/etc/sudoers"];
+const SYSTEM_SENSITIVE_PREFIXES = ["/root"];
 
 function createSuccessResult(
 	toolCallId: string,
@@ -50,6 +53,22 @@ function createErrorResult(toolCallId: string, message: string): ToolResult {
 
 function normalizePath(filePath: string): string {
 	return resolve(filePath).replaceAll("\\", "/");
+}
+
+function isSystemSensitivePath(filePath: string): boolean {
+	const normalizedPath = normalizePath(filePath);
+	return (
+		SYSTEM_SENSITIVE_EXACT_PATHS.some(
+			(sensitivePath) => normalizedPath === normalizePath(sensitivePath),
+		) ||
+		SYSTEM_SENSITIVE_PREFIXES.some((prefix) => {
+			const normalizedPrefix = normalizePath(prefix);
+			return (
+				normalizedPath === normalizedPrefix ||
+				normalizedPath.startsWith(`${normalizedPrefix}/`)
+			);
+		})
+	);
 }
 
 function getHomePath(): string {
@@ -193,6 +212,9 @@ async function resolveSandboxedPath(
 	mode: "read" | "write" | "list",
 ): Promise<{ readonly absolutePath: string; readonly resolvedPath: string }> {
 	const absolutePath = toAbsolutePath(filePath);
+	if (isSystemSensitivePath(absolutePath)) {
+		throw new Error(ACCESS_DENIED_MESSAGE);
+	}
 	let resolvedPath: string;
 
 	try {
@@ -200,16 +222,21 @@ async function resolveSandboxedPath(
 	} catch (error) {
 		const fsError = error as NodeJS.ErrnoException;
 		if (mode !== "write" || fsError.code !== "ENOENT") {
-			throw error;
+			throw new Error(ACCESS_DENIED_MESSAGE);
 		}
 
-		const resolvedParent = await realpath(dirname(absolutePath));
+		let resolvedParent: string;
+		try {
+			resolvedParent = await realpath(dirname(absolutePath));
+		} catch {
+			throw new Error(ACCESS_DENIED_MESSAGE);
+		}
 		resolvedPath = join(resolvedParent, basename(absolutePath));
 	}
 
 	const resolvedRoots = await resolveAllowedRoots(allowedRoots);
 	if (!resolvedRoots.some((rootPath) => isWithinRoot(resolvedPath, rootPath))) {
-		throw new Error(`Path is outside allowed roots: ${absolutePath}`);
+		throw new Error(ACCESS_DENIED_MESSAGE);
 	}
 
 	return { absolutePath, resolvedPath };

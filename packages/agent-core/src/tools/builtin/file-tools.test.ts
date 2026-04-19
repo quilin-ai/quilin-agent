@@ -202,13 +202,13 @@ describe("builtin file tools", () => {
 		});
 		expect(traversalResult.isError).toBe(true);
 		expect(JSON.parse(traversalResult.content)).toEqual({
-			error: expect.stringContaining("allowed roots"),
+			error: "Path not accessible",
 		});
 
 		const symlinkResult = await tool.execute({ path: symlinkPath });
 		expect(symlinkResult.isError).toBe(true);
 		expect(JSON.parse(symlinkResult.content)).toEqual({
-			error: expect.stringContaining("allowed roots"),
+			error: "Path not accessible",
 		});
 	});
 
@@ -241,14 +241,33 @@ describe("builtin file tools", () => {
 		});
 		expect(writeResult.isError).toBe(true);
 		expect(JSON.parse(writeResult.content)).toEqual({
-			error: expect.stringContaining("allowed roots"),
+			error: "Path not accessible",
 		});
 
 		const listTool = createFileListTool({ allowedRoots: [rootDir] });
 		const listResult = await listTool.execute({ path: tempDir });
 		expect(listResult.isError).toBe(true);
 		expect(JSON.parse(listResult.content)).toEqual({
-			error: expect.stringContaining("allowed roots"),
+			error: "Path not accessible",
+		});
+	});
+
+	it("uses the same inaccessible-path message for system sensitive and missing paths", async () => {
+		const systemTool = createFileReadTool({ allowedRoots: ["/"] });
+		const systemResult = await systemTool.execute({ path: "/etc/shadow" });
+
+		expect(systemResult.isError).toBe(true);
+		expect(JSON.parse(systemResult.content)).toEqual({
+			error: "Path not accessible",
+		});
+
+		const missingTool = createFileReadTool({ allowedRoots: [tempDir] });
+		const missingResult = await missingTool.execute({
+			path: join(tempDir, "missing.txt"),
+		});
+		expect(missingResult.isError).toBe(true);
+		expect(JSON.parse(missingResult.content)).toEqual({
+			error: "Path not accessible",
 		});
 	});
 });
