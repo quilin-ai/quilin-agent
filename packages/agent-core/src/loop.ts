@@ -2,6 +2,7 @@ import {
 	createSystemContextSource,
 	DEFAULT_CONTEXT_BUDGET,
 } from "./context/manager.js";
+import { scanExternalContext } from "./context/injection-scanner.js";
 import type { ContextManager } from "./context/types.js";
 import type { InferenceConfig, LLMClient } from "./llm/types.js";
 import { getLoggerRuntimeMode, logger } from "./logger.js";
@@ -130,11 +131,21 @@ export async function runAgentLoop(
 		// TODO: 在明确工具副作用/顺序语义后，将独立 tool calls 改为并行执行。
 		for (const toolCall of response.toolCalls) {
 			const toolResult = await router.execute(toolCall);
+			const scanResult = scanExternalContext(
+				toolResult.content,
+				`tool:${toolCall.name}`,
+			);
+			if (!scanResult.safe) {
+				logger.warn(
+					{ toolName: toolCall.name, threats: scanResult.threats },
+					"Tool output scan detected threats",
+				);
+			}
 			workingMessages.push({
 				role: "tool",
 				toolCallId: toolResult.toolCallId,
 				name: toolCall.name,
-				content: toolResult.content,
+				content: scanResult.sanitizedContent,
 			});
 		}
 	}
