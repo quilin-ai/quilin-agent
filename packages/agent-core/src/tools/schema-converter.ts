@@ -10,6 +10,7 @@ type JsonSchemaPrimitiveType =
 
 interface JsonSchemaBase {
 	readonly type?: JsonSchemaPrimitiveType | string;
+	readonly enum?: readonly unknown[];
 }
 
 export interface JsonSchemaObject extends JsonSchemaBase {
@@ -40,6 +41,16 @@ function toRequiredShape(
 export function jsonSchemaToZod(schema: JsonSchema): z.ZodTypeAny {
 	switch (schema.type) {
 		case "string":
+			if (
+				Array.isArray(schema.enum) &&
+				schema.enum.length > 0 &&
+				schema.enum.every((value) => typeof value === "string")
+			) {
+				return z.enum([
+					schema.enum[0],
+					...schema.enum.slice(1),
+				] as [string, ...string[]]);
+			}
 			return z.string();
 		case "number":
 		case "integer":

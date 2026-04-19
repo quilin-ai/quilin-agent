@@ -7,7 +7,10 @@ describe("jsonSchemaToZod", () => {
 			type: "object",
 			properties: {
 				query: { type: "string" },
-				tier: { type: "string" },
+				tier: {
+					type: "string",
+					enum: ["working", "episodic", "semantic", "skill"],
+				},
 			},
 			required: ["query"],
 		});
@@ -15,7 +18,7 @@ describe("jsonSchemaToZod", () => {
 		expect(
 			schema.safeParse({
 				query: "老孟",
-				tier: "short",
+				tier: "working",
 			}).success,
 		).toBe(true);
 		expect(
@@ -23,7 +26,13 @@ describe("jsonSchemaToZod", () => {
 				query: "老孟",
 			}).success,
 		).toBe(true);
-		expect(schema.safeParse({ tier: "short" }).success).toBe(false);
+		expect(schema.safeParse({ tier: "working" }).success).toBe(false);
+		expect(
+			schema.safeParse({
+				query: "老孟",
+				tier: "short",
+			}).success,
+		).toBe(false);
 	});
 
 	it("converts number, integer, and boolean fields", () => {
