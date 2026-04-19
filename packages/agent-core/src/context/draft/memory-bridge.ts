@@ -1,5 +1,5 @@
+import { estimateTokens } from "../tokens.js";
 import type { ContextSource } from "./source-types.js";
-import { estimateTokens } from "./tokens.js";
 
 export interface MemoryRecallResult {
 	readonly content: string;

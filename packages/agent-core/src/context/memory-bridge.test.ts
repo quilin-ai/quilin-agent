@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { recallResultsToSources } from "./memory-bridge.js";
+import { recallResultsToSources } from "./draft/memory-bridge.js";
 
 describe("recallResultsToSources", () => {
 	test("低于阈值的记忆被过滤", () => {

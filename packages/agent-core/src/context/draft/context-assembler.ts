@@ -1,8 +1,8 @@
-import { logger } from "../logger.js";
-import { TokenBudgetAllocator, trimSourcesToBudget } from "./budget.js";
-import { scanExternalContext } from "./injection-scanner.js";
-import { PromptBuilder } from "./prompt-builder.js";
-import type { AssembledPrompt, BuildContext } from "./prompt-types.js";
+import { logger } from "../../logger.js";
+import { TokenBudgetAllocator, trimSourcesToBudget } from "../budget.js";
+import { scanExternalContext } from "../injection-scanner.js";
+import { PromptBuilder } from "../prompt-builder.js";
+import type { AssembledPrompt, BuildContext } from "../prompt-types.js";
 import type { BudgetPolicy, ContextSource } from "./source-types.js";
 
 export interface AssembledContext {

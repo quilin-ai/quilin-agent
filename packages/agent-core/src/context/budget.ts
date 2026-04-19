@@ -1,4 +1,4 @@
-import type { BudgetPolicy, ContextSource } from "./source-types.js";
+import type { BudgetPolicy, ContextSource } from "./draft/source-types.js";
 
 type KnownTaskType = "simple_qa" | "deep_reasoning" | "tool_use";
 
