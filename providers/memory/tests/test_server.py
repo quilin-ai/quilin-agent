@@ -4,6 +4,7 @@ import json
 from collections.abc import AsyncIterator
 
 import pytest
+from mcp.types import CallToolRequest, CallToolRequestParams
 
 from omnimem.server import create_server
 from omnimem.store import OmniMemStore
@@ -12,6 +13,16 @@ from omnimem.store import OmniMemStore
 def _decode_call_tool_result(result: object) -> dict[str, object]:
     _content, metadata = result  # type: ignore[misc]
     return json.loads(metadata["result"])
+
+
+async def _call_tool_request(server: object, name: str, arguments: dict[str, object]):
+    handler = server._mcp_server.request_handlers[CallToolRequest]  # type: ignore[attr-defined]
+    return await handler(
+        CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(name=name, arguments=arguments),
+        )
+    )
 
 
 @pytest.fixture
@@ -106,18 +117,16 @@ async def test_memory_recall_error_path(
     server: object,
     monkeypatch: object,
 ) -> None:
-    """memory_recall should return error JSON when store.recall raises."""
+    """memory_recall should surface an MCP error result when store.recall raises."""
 
     async def _raise_on_recall(query: str) -> list:
         raise RuntimeError("database connection lost")
 
     monkeypatch.setattr(store, "recall", _raise_on_recall)  # type: ignore[attr-defined]
 
-    result = _decode_call_tool_result(
-        await server.call_tool("memory_recall", {"query": "anything"})  # type: ignore[attr-defined]
-    )
-    assert "error" in result
-    assert "database connection lost" in result["error"]
+    result = await _call_tool_request(server, "memory_recall", {"query": "anything"})
+    assert result.root.isError is True
+    assert "database connection lost" in result.root.content[0].text
 
 
 async def test_memory_store_error_path(
@@ -125,18 +134,16 @@ async def test_memory_store_error_path(
     server: object,
     monkeypatch: object,
 ) -> None:
-    """memory_store should return error JSON when store.store raises."""
+    """memory_store should surface an MCP error result when store.store raises."""
 
     async def _raise_on_store(content: str, tier: str = "working") -> None:
         raise RuntimeError("disk full")
 
     monkeypatch.setattr(store, "store", _raise_on_store)  # type: ignore[attr-defined]
 
-    result = _decode_call_tool_result(
-        await server.call_tool("memory_store", {"content": "test content"})  # type: ignore[attr-defined]
-    )
-    assert "error" in result
-    assert "disk full" in result["error"]
+    result = await _call_tool_request(server, "memory_store", {"content": "test content"})
+    assert result.root.isError is True
+    assert "disk full" in result.root.content[0].text
 
 
 async def test_create_server_uses_injected_store_isolation() -> None:

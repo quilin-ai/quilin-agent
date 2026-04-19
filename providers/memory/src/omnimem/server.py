@@ -18,10 +18,11 @@ async def _memory_recall_with_store(store: OmniMemStore, query: str) -> str:
     """
     try:
         results = await store.recall(query)
-        return json.dumps({"records": [r.to_dict() for r in results]})
     except Exception as exc:
         logger.error("memory_recall failed", error=str(exc))
-        return json.dumps({"error": str(exc)})
+        raise
+
+    return json.dumps({"records": [r.to_dict() for r in results]})
 
 
 async def _memory_store_with_store(
@@ -37,10 +38,11 @@ async def _memory_store_with_store(
     """
     try:
         record = await store.store(content, tier)
-        return json.dumps({"id": record.id})
     except Exception as exc:
         logger.error("memory_store failed", error=str(exc))
-        return json.dumps({"error": str(exc)})
+        raise
+
+    return json.dumps({"id": record.id})
 
 
 def _get_store_from_context(ctx: Context[object, Any, object] | None) -> OmniMemStore | None:
