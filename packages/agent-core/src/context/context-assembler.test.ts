@@ -28,7 +28,7 @@ describe("ContextAssembler", () => {
 		expect(result.contextSources).toEqual([]);
 	});
 
-	test("扫描外部来源并清空 block 级内容", () => {
+	test("扫描外部来源并对 block 级内容做 span 脱敏", () => {
 		const assembler = createAssembler();
 		const malicious: ContextSource = {
 			sourceType: "memory",
@@ -42,7 +42,10 @@ describe("ContextAssembler", () => {
 
 		const result = assembler.assembleContext("test", {}, [malicious], []);
 
-		expect(result.contextSources).toHaveLength(0);
+		expect(result.contextSources).toHaveLength(1);
+		expect(result.contextSources[0]?.content).toBe(
+			"[REDACTED: instruction_override]",
+		);
 	});
 
 	test("内部来源不做扫描", () => {
