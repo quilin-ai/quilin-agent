@@ -5,12 +5,14 @@ description = "Quilin OmniMem — 4-tier memory system as MCP Server"
 requires-python = ">=3.14"
 dependencies = [
     "mcp[cli]>=1.27.0",
-    "sentence-transformers>=5.4.1",
-    "chromadb>=1.5.7",
     "structlog>=25.5.0",
 ]
 
 [project.optional-dependencies]
+vector = [
+    "sentence-transformers>=5.4.1",
+    "chromadb>=1.5.7",
+]
 dev = [
     "pytest>=9.0.3",
     "pytest-asyncio>=1.3.0",

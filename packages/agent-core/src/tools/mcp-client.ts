@@ -1,4 +1,4 @@
-import { resolve } from "node:path";
+import { basename, isAbsolute, resolve } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client";
 import {
 	StdioClientTransport,
@@ -14,6 +14,32 @@ import { jsonSchemaToZod } from "./schema-converter.js";
 import type { Tool } from "./types.js";
 
 const CONNECT_TIMEOUT_MS = 5_000;
+const ALLOWED_PATH_COMMANDS = new Set(["bun", "node", "npx", "python", "python3", "uv"]);
+const ALLOWED_ABSOLUTE_COMMAND_PREFIXES = [
+	"/bin/",
+	"/opt/homebrew/bin/",
+	"/usr/bin/",
+	"/usr/local/bin/",
+] as const;
+const DISALLOWED_SHELL_EXECUTABLES = new Set([
+	"bash",
+	"cmd",
+	"cmd.exe",
+	"dash",
+	"fish",
+	"powershell",
+	"pwsh",
+	"sh",
+	"zsh",
+]);
+const DISALLOWED_SHELL_ARGS = new Set([
+	"-c",
+	"-command",
+	"-encodedcommand",
+	"-lc",
+	"/c",
+	"/k",
+]);
 const CLIENT_INFO = {
 	name: "quilin-agent-core",
 	version: "0.0.1",
@@ -28,6 +54,52 @@ export interface MCPServerConfig {
 	readonly command: string;
 	readonly args: readonly string[];
 	readonly cwd?: string;
+}
+
+function isAllowedAbsoluteCommand(command: string): boolean {
+	return (
+		isAbsolute(command) &&
+		ALLOWED_ABSOLUTE_COMMAND_PREFIXES.some((prefix) =>
+			command.startsWith(prefix),
+		) &&
+		!DISALLOWED_SHELL_EXECUTABLES.has(basename(command).toLowerCase())
+	);
+}
+
+export function validateMCPServerConfig(config: MCPServerConfig): void {
+	const normalizedCommand = config.command.trim();
+	if (normalizedCommand === "") {
+		throw new Error("MCP command must not be empty");
+	}
+
+	const lowerCommand = basename(normalizedCommand).toLowerCase();
+	if (
+		!ALLOWED_PATH_COMMANDS.has(normalizedCommand) &&
+		!ALLOWED_PATH_COMMANDS.has(lowerCommand) &&
+		!isAllowedAbsoluteCommand(normalizedCommand)
+	) {
+		throw new Error(`MCP command not allowed: ${config.command}`);
+	}
+
+	if (DISALLOWED_SHELL_EXECUTABLES.has(lowerCommand)) {
+		throw new Error(`MCP command not allowed: ${config.command}`);
+	}
+
+	const disallowedArg = config.args.find((arg) =>
+		DISALLOWED_SHELL_ARGS.has(arg.toLowerCase()),
+	);
+	if (disallowedArg != null) {
+		throw new Error(`MCP arguments not allowed: ${disallowedArg}`);
+	}
+}
+
+export function createMCPSpawnEnv(
+	env: NodeJS.ProcessEnv = process.env,
+): Record<string, string> {
+	return {
+		LOG_LEVEL: env.LOG_LEVEL ?? "debug",
+		QUILIN_ENV: env.QUILIN_ENV ?? "dev",
+	};
 }
 
 function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
@@ -119,16 +191,14 @@ export class MCPClientManager {
 
 	async connect(config: MCPServerConfig): Promise<Tool[]> {
 		await this.disconnect();
+		validateMCPServerConfig(config);
 
 		const transportConfig: StdioServerParameters = {
 			command: config.command,
 			args: [...config.args],
 			cwd: config.cwd ? resolve(config.cwd) : undefined,
 			stderr: "pipe",
-			env: {
-				LOG_LEVEL: process.env.LOG_LEVEL ?? "debug",
-				QUILIN_ENV: process.env.QUILIN_ENV ?? "dev",
-			},
+			env: createMCPSpawnEnv(),
 		};
 
 		const client = new Client(CLIENT_INFO);
