@@ -13,6 +13,7 @@ import type { createProvider } from "./llm/provider.js";
 import type { InferenceConfig } from "./llm/types.js";
 import { logger } from "./logger.js";
 import { runAgentLoop } from "./loop.js";
+import { WriteAuthority } from "./safety/write-authority.js";
 import { SQLiteCheckpoint } from "./state/checkpoint.js";
 import type { AgentState, Message } from "./state/types.js";
 import { createBuiltinTools } from "./tools/builtin/index.js";
@@ -111,9 +112,37 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 	const resolvedSessionId = sessionId ?? crypto.randomUUID();
 	const checkpoint = new SQLiteCheckpoint({ sessionId: resolvedSessionId });
 	let rl: readline.Interface | undefined;
+	const writeAuthority = new WriteAuthority({
+		actor: resolvedSessionId,
+		confirm: async (request) => {
+			if (rl == null) {
+				return false;
+			}
+
+			const answer = (
+				await rl.question(
+					`[WriteAuthority] ${request.tool} (${request.riskLevel.toUpperCase()}): ${request.summary}\nAllow? [y/N/always-low/always-medium]: `,
+				)
+			)
+				.trim()
+				.toLowerCase();
+
+			if (answer === "always-low") {
+				writeAuthority.setMode("auto-low");
+				return true;
+			}
+
+			if (answer === "always-medium") {
+				writeAuthority.setMode("auto-medium");
+				return true;
+			}
+
+			return answer === "y" || answer === "yes";
+		},
+	});
 
 	try {
-		registry.registerBuiltin(createBuiltinTools());
+		registry.registerBuiltin(createBuiltinTools({ writeAuthority }));
 		for (const entry of mcpServers) {
 			await registry.register(entry);
 		}

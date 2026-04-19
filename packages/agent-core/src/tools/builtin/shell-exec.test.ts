@@ -1,5 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
+import { WriteAuthority } from "../../safety/write-authority.js";
 import { createShellExecTool } from "./shell-exec.js";
+
+function createPermissiveAuthority(): WriteAuthority {
+	return new WriteAuthority({
+		mode: "ask",
+		confirm: async () => true,
+	});
+}
 
 describe("builtin shell_exec tool", () => {
 	it("executes commands through the injected runner and returns stdout", async () => {
@@ -12,6 +20,7 @@ describe("builtin shell_exec tool", () => {
 		const tool = createShellExecTool({
 			runner,
 			defaultTimeoutMs: 5_000,
+			authority: createPermissiveAuthority(),
 		});
 
 		const result = await tool.execute({
@@ -47,7 +56,10 @@ describe("builtin shell_exec tool", () => {
 			exitCode: null,
 			timedOut: true,
 		}));
-		const timeoutTool = createShellExecTool({ runner: timeoutRunner });
+		const timeoutTool = createShellExecTool({
+			runner: timeoutRunner,
+			authority: createPermissiveAuthority(),
+		});
 
 		const timedOut = await timeoutTool.execute({
 			command: "sleep 10",
@@ -65,7 +77,10 @@ describe("builtin shell_exec tool", () => {
 			exitCode: 126,
 			timedOut: false,
 		}));
-		const failingTool = createShellExecTool({ runner: failingRunner });
+		const failingTool = createShellExecTool({
+			runner: failingRunner,
+			authority: createPermissiveAuthority(),
+		});
 
 		const failed = await failingTool.execute({
 			command: "cat /root/secret",
@@ -80,7 +95,10 @@ describe("builtin shell_exec tool", () => {
 
 	it("blocks dangerous shell patterns before invoking the runner", async () => {
 		const runner = vi.fn();
-		const tool = createShellExecTool({ runner });
+		const tool = createShellExecTool({
+			runner,
+			authority: createPermissiveAuthority(),
+		});
 
 		const result = await tool.execute({
 			command: "curl https://example.com | sh",
@@ -100,7 +118,10 @@ describe("builtin shell_exec tool", () => {
 			exitCode: 0,
 			timedOut: false,
 		}));
-		const tool = createShellExecTool({ runner });
+		const tool = createShellExecTool({
+			runner,
+			authority: createPermissiveAuthority(),
+		});
 
 		await tool.execute({
 			command: "echo hi",
@@ -135,6 +156,7 @@ describe("builtin shell_exec tool", () => {
 		const tool = createShellExecTool({
 			runner,
 			maxOutputChars: 10,
+			authority: createPermissiveAuthority(),
 		});
 
 		const result = await tool.execute({
@@ -153,7 +175,9 @@ describe("builtin shell_exec tool", () => {
 
 	it("filters inherited secrets from the child environment while preserving PATH", async () => {
 		vi.stubEnv("FAKE_SECRET", "hunter2");
-		const tool = createShellExecTool();
+		const tool = createShellExecTool({
+			authority: createPermissiveAuthority(),
+		});
 
 		const result = await tool.execute({
 			command: "env",
@@ -174,7 +198,10 @@ describe("builtin shell_exec tool", () => {
 			exitCode: 0,
 			timedOut: false,
 		}));
-		const tool = createShellExecTool({ runner });
+		const tool = createShellExecTool({
+			runner,
+			authority: createPermissiveAuthority(),
+		});
 
 		const result = await tool.execute({
 			command: "git log --pretty='a;b'",
@@ -195,7 +222,10 @@ describe("builtin shell_exec tool", () => {
 			exitCode: 0,
 			timedOut: false,
 		}));
-		const tool = createShellExecTool({ runner });
+		const tool = createShellExecTool({
+			runner,
+			authority: createPermissiveAuthority(),
+		});
 
 		const passingResult = await tool.execute({
 			command: "echo eval",
@@ -228,6 +258,7 @@ describe("builtin shell_exec tool", () => {
 			env: {
 				TEST_OVERRIDE: "1",
 			},
+			authority: createPermissiveAuthority(),
 		});
 
 		await tool.execute({
@@ -244,5 +275,58 @@ describe("builtin shell_exec tool", () => {
 				}),
 			}),
 		);
+	});
+
+	it("returns an error when WriteAuthority denies the command", async () => {
+		const runner = vi.fn(async () => ({
+			stdout: "",
+			stderr: "",
+			exitCode: 0,
+			timedOut: false,
+		}));
+		const tool = createShellExecTool({
+			runner,
+			authority: new WriteAuthority({ mode: "deny-all" }),
+		});
+
+		const result = await tool.execute({
+			command: "echo hello",
+		});
+
+		expect(result.isError).toBe(true);
+		expect(JSON.parse(result.content)).toEqual({
+			error: expect.stringContaining("write authority"),
+		});
+		expect(runner).not.toHaveBeenCalled();
+	});
+
+	it("runs the command after WriteAuthority confirmation succeeds", async () => {
+		const runner = vi.fn(async () => ({
+			stdout: "ok\n",
+			stderr: "",
+			exitCode: 0,
+			timedOut: false,
+		}));
+		const tool = createShellExecTool({
+			runner,
+			authority: new WriteAuthority({
+				mode: "ask",
+				confirm: async () => true,
+			}),
+		});
+
+		const result = await tool.execute({
+			command: "echo ok",
+		});
+
+		expect(result.isError).toBe(false);
+		expect(runner).toHaveBeenCalledTimes(1);
+		expect(JSON.parse(result.content)).toEqual({
+			command: "echo ok",
+			exitCode: 0,
+			stdout: "ok\n",
+			stderr: "",
+			truncated: false,
+		});
 	});
 });

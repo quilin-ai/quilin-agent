@@ -1,6 +1,10 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { z } from "zod";
+import {
+	WriteAuthority,
+	type WriteOrigin,
+} from "../../safety/write-authority.js";
 import type { ToolWithMetadata } from "../tool-metadata.js";
 import type { ToolResult } from "../types.js";
 
@@ -249,6 +253,8 @@ export interface ShellExecToolOptions {
 	readonly defaultTimeoutMs?: number;
 	readonly maxOutputChars?: number;
 	readonly env?: NodeJS.ProcessEnv;
+	readonly authority?: WriteAuthority;
+	readonly origin?: WriteOrigin;
 }
 
 function buildShellExecEnv(overrides?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -265,6 +271,8 @@ function buildShellExecEnv(overrides?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 export function createShellExecTool(
 	options: ShellExecToolOptions = {},
 ): ToolWithMetadata {
+	const authority = options.authority ?? new WriteAuthority();
+
 	return {
 		name: "shell_exec",
 		description: "Execute a shell command with timeout and output capture.",
@@ -306,6 +314,19 @@ export function createShellExecTool(
 			if (blockedReason != null) {
 				return createErrorResult("builtin-shell-exec", {
 					error: `Command blocked: ${blockedReason}`,
+				});
+			}
+
+			const writeDecision = await authority.authorize({
+				tool: "shell_exec",
+				riskLevel: "high",
+				summary: command,
+				detail: command,
+				origin: options.origin ?? "agent",
+			});
+			if (writeDecision.kind !== "allow") {
+				return createErrorResult("builtin-shell-exec", {
+					error: writeDecision.reason,
 				});
 			}
 

@@ -9,12 +9,14 @@ import {
 	type ShellExecToolOptions,
 } from "./shell-exec.js";
 import { createWebFetchTool, type WebFetchToolOptions } from "./web-fetch.js";
+import type { WriteAuthority } from "../../safety/write-authority.js";
 import type { ToolWithMetadata } from "../tool-metadata.js";
 
 export interface BuiltinToolOptions {
 	readonly fileRead?: FileReadToolOptions;
 	readonly shellExec?: ShellExecToolOptions;
 	readonly webFetch?: WebFetchToolOptions;
+	readonly writeAuthority?: WriteAuthority;
 }
 
 export function createBuiltinTools(
@@ -24,7 +26,10 @@ export function createBuiltinTools(
 		createFileReadTool(options.fileRead),
 		createFileWriteTool(),
 		createFileListTool(),
-		createShellExecTool(options.shellExec),
+		createShellExecTool({
+			...options.shellExec,
+			authority: options.writeAuthority ?? options.shellExec?.authority,
+		}),
 		createWebFetchTool(options.webFetch),
 	];
 }
