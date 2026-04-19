@@ -1,9 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { logger } from "../logger.js";
 import type { MCPServerConfig } from "./mcp-client.js";
 import { MCPRegistry } from "./registry.js";
 import type { ToolWithMetadata } from "./tool-metadata.js";
 import type { Tool } from "./types.js";
+
+vi.mock("../logger.js", () => ({
+	logger: {
+		warn: vi.fn(),
+	},
+}));
 
 function createServerConfig(): MCPServerConfig {
 	return {
@@ -190,5 +197,70 @@ describe("MCPRegistry", () => {
 		expect(webClient.disconnect).toHaveBeenCalledTimes(1);
 		expect(registry.findTool("web/fetch")).toBeUndefined();
 		expect(registry.findTool("file_read")?.name).toBe("file_read");
+	});
+
+	it("keeps the existing server state when replacement connect fails", async () => {
+		const existingClient = createFakeClient([createTool("memory_recall")]);
+		const replacementClient = {
+			connect: vi.fn(async () => {
+				throw new Error("connect failed");
+			}),
+			disconnect: vi.fn(async () => {}),
+		};
+		const registry = new MCPRegistry(() => {
+			if (!registry.findTool("memory/memory_recall")) {
+				return existingClient;
+			}
+
+			return replacementClient;
+		});
+
+		await registry.register({
+			id: "memory",
+			config: createServerConfig(),
+			namespace: "memory",
+		});
+
+		await expect(
+			registry.register({
+				id: "memory",
+				config: createServerConfig(),
+				namespace: "memory",
+			}),
+		).rejects.toThrow("connect failed");
+
+		expect(existingClient.disconnect).not.toHaveBeenCalled();
+		expect(replacementClient.disconnect).toHaveBeenCalledTimes(1);
+		expect(registry.findTool("memory/memory_recall")?.name).toBe(
+			"memory/memory_recall",
+		);
+	});
+
+	it("cleans registry state even when disconnect throws during unregister", async () => {
+		const disconnectError = new Error("disconnect failed");
+		const failingClient = {
+			connect: vi.fn(async (_config: MCPServerConfig) => [
+				createTool("memory_recall"),
+			]),
+			disconnect: vi.fn(async () => {
+				throw disconnectError;
+			}),
+		};
+		const registry = new MCPRegistry(() => failingClient);
+
+		await registry.register({
+			id: "memory",
+			config: createServerConfig(),
+			namespace: "memory",
+		});
+
+		await expect(registry.unregister("memory")).resolves.toBeUndefined();
+
+		expect(logger.warn).toHaveBeenCalledWith(
+			{ err: disconnectError, serverId: "memory" },
+			"MCP server disconnect failed during unregister",
+		);
+		expect(registry.findTool("memory/memory_recall")).toBeUndefined();
+		expect(registry.getAllTools()).toEqual([]);
 	});
 });

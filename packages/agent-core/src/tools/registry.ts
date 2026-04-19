@@ -1,3 +1,4 @@
+import { logger } from "../logger.js";
 import { MCPClientManager, type MCPServerConfig } from "./mcp-client.js";
 import type {
 	RiskLevel,
@@ -52,11 +53,32 @@ export class MCPRegistry {
 			new MCPClientManager(),
 	) {}
 
-	async register(entry: MCPServerEntry): Promise<ToolWithMetadata[]> {
-		if (this.connections.has(entry.id)) {
-			await this.unregister(entry.id);
-		}
+	private installServerTools(
+		serverId: string,
+		client: MCPClientConnection,
+		tools: readonly ToolWithMetadata[],
+	): void {
+		this.connections.set(serverId, client);
+		this.serverToolNames.set(
+			serverId,
+			tools.map((tool) => tool.name),
+		);
+		tools.forEach((tool) => {
+			this.serverTools.set(tool.name, tool);
+		});
+	}
 
+	private clearServerTools(serverId: string): void {
+		const toolNames = this.serverToolNames.get(serverId) ?? [];
+
+		this.connections.delete(serverId);
+		this.serverToolNames.delete(serverId);
+		toolNames.forEach((toolName) => {
+			this.serverTools.delete(toolName);
+		});
+	}
+
+	async register(entry: MCPServerEntry): Promise<ToolWithMetadata[]> {
 		const client = this.createClient();
 
 		try {
@@ -69,14 +91,23 @@ export class MCPRegistry {
 				),
 			);
 
-			this.connections.set(entry.id, client);
-			this.serverToolNames.set(
-				entry.id,
-				wrappedTools.map((tool) => tool.name),
-			);
-			wrappedTools.forEach((tool) => {
-				this.serverTools.set(tool.name, tool);
-			});
+			const existingClient = this.connections.get(entry.id);
+			if (existingClient != null) {
+				try {
+					await existingClient.disconnect();
+				} catch (error) {
+					await client.disconnect().catch(() => undefined);
+					logger.warn(
+						{ err: error, serverId: entry.id },
+						"MCP server disconnect failed during register",
+					);
+					throw error;
+				}
+
+				this.clearServerTools(entry.id);
+			}
+
+			this.installServerTools(entry.id, client, wrappedTools);
 
 			return wrappedTools;
 		} catch (error) {
@@ -87,15 +118,17 @@ export class MCPRegistry {
 
 	async unregister(serverId: string): Promise<void> {
 		const client = this.connections.get(serverId);
-		const toolNames = this.serverToolNames.get(serverId) ?? [];
 
-		await client?.disconnect();
-
-		this.connections.delete(serverId);
-		this.serverToolNames.delete(serverId);
-		toolNames.forEach((toolName) => {
-			this.serverTools.delete(toolName);
-		});
+		try {
+			await client?.disconnect();
+		} catch (error) {
+			logger.warn(
+				{ err: error, serverId },
+				"MCP server disconnect failed during unregister",
+			);
+		} finally {
+			this.clearServerTools(serverId);
+		}
 	}
 
 	registerBuiltin(tools: readonly ToolWithMetadata[]): void {
