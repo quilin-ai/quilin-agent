@@ -321,7 +321,7 @@ describe("startRepl", () => {
 		mockQuestion.mockResolvedValueOnce("next").mockResolvedValueOnce("/exit");
 		mockCheckpointLoad.mockResolvedValue({
 			messages: [
-				{ role: "system", content: "restored system prompt" },
+				{ role: "system", content: "restored system prompt with obsolete_tool" },
 				{ role: "user", content: "before" },
 				{ role: "assistant", content: "after" },
 			],
@@ -355,11 +355,19 @@ describe("startRepl", () => {
 			"Messages: 3 | Last active: 2026-04-15T00:01:00.000Z\n",
 		);
 		expect(capturedMessages[0]).toEqual([
-			{ role: "system", content: "restored system prompt" },
+			expect.objectContaining({
+				role: "system",
+				content: expect.stringContaining("memory_recall"),
+			}),
 			{ role: "user", content: "before" },
 			{ role: "assistant", content: "after" },
 			{ role: "user", content: "next" },
 		]);
+		expect(capturedMessages[0][0]).not.toEqual(
+			expect.objectContaining({
+				content: expect.stringContaining("obsolete_tool"),
+			}),
+		);
 		expect(mockRegistryDisconnectAll).toHaveBeenCalledTimes(1);
 	});
 

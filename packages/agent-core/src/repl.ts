@@ -151,8 +151,22 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 
 		rl = readline.createInterface({ input: stdin, output: stderr });
 
-		let state =
-			restoredState ?? createState([{ role: "system", content: systemPrompt }]);
+		let state = restoredState;
+		if (state == null) {
+			state = createState([{ role: "system", content: systemPrompt }]);
+		} else {
+			const restoredMessages = [...state.messages];
+			if (restoredMessages[0]?.role === "system") {
+				restoredMessages[0] = { role: "system", content: systemPrompt };
+			} else {
+				restoredMessages.unshift({ role: "system", content: systemPrompt });
+			}
+
+			state = createState(restoredMessages, {
+				...state,
+				messages: restoredMessages,
+			});
+		}
 		const messages: Message[] = [...state.messages];
 
 		const llm = new StreamingLLMClient(provider(modelId), (chunk) => {

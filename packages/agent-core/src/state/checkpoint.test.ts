@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { SQLiteCheckpoint } from "./checkpoint.js";
+import { logger } from "../logger.js";
+import { MigrationError, SQLiteCheckpoint } from "./checkpoint.js";
 import type { AgentState } from "./types.js";
 
 interface StoredSession {
@@ -94,6 +95,12 @@ vi.mock("bun:sqlite", () => ({
 	Database: MockDatabase,
 }));
 
+vi.mock("../logger.js", () => ({
+	logger: {
+		warn: vi.fn(),
+	},
+}));
+
 function makeMemoryDbPath(name: string): string {
 	return `file:${name}?mode=memory&cache=shared`;
 }
@@ -107,6 +114,24 @@ function makeState(overrides: Partial<AgentState> = {}): AgentState {
 		lastActiveAt: "2026-04-15T00:00:00.000Z",
 		...overrides,
 	};
+}
+
+function seedSession(
+	dbPath: string,
+	sessionId: string,
+	stateJson: string,
+): void {
+	let sessions = databases.get(dbPath);
+	if (sessions == null) {
+		sessions = new Map<string, StoredSession>();
+		databases.set(dbPath, sessions);
+	}
+
+	sessions.set(sessionId, {
+		stateJson,
+		createdAt: "2026-04-15T00:00:00.000Z",
+		lastActiveAt: "2026-04-15T00:00:00.000Z",
+	});
 }
 
 describe("SQLiteCheckpoint", () => {
@@ -249,5 +274,39 @@ describe("SQLiteCheckpoint", () => {
 		await resumed.save(state);
 
 		await expect(resumed.load("resume-session")).resolves.toEqual(state);
+	});
+
+	it("returns null and warns when a stored checkpoint contains invalid JSON", async () => {
+		const dbPath = makeMemoryDbPath("checkpoint-invalid-json");
+		seedSession(dbPath, "broken-session", "{not valid json");
+		const checkpoint = new SQLiteCheckpoint({ dbPath });
+
+		await expect(checkpoint.load("broken-session")).resolves.toBeNull();
+		expect(logger.warn).toHaveBeenCalledWith(
+			expect.objectContaining({
+				sessionId: "broken-session",
+				err: expect.any(SyntaxError),
+			}),
+			"Checkpoint load skipped invalid JSON payload",
+		);
+	});
+
+	it("throws MigrationError for unsupported schemaVersion values", async () => {
+		const dbPath = makeMemoryDbPath("checkpoint-unknown-schema");
+		seedSession(
+			dbPath,
+			"future-session",
+			JSON.stringify({
+				schemaVersion: 99,
+				createdAt: "2026-04-15T00:00:00.000Z",
+				updatedAt: "2026-04-15T00:00:00.000Z",
+				payload: makeState(),
+			}),
+		);
+		const checkpoint = new SQLiteCheckpoint({ dbPath });
+
+		await expect(checkpoint.load("future-session")).rejects.toThrow(
+			MigrationError,
+		);
 	});
 });
