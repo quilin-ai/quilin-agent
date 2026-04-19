@@ -14,7 +14,7 @@ Quilin Agent（麒麟）is a self-evolving Agent framework that tracks **curated
 - **Core Loop**: Custom minimal Agent Loop (< 200 lines TS), no LangGraph or external framework
 - **Two-Language Runtime (Iter A..C)**: TS (Agent core) + Python (ML providers as MCP servers). Rust (mesh/WASM sandbox) deferred to **Iter D** — not built yet.
 - **E-T-C-S-L-V**: Six capabilities exposed as LLM-callable tools, not fixed state graph nodes
-- **Layered Memory**: OmniMem 4-tier (short/mid/long/ultra) with auto-reflect + User Profile Store + Departure Context
+- **Layered Memory**: OmniMem 4-tier (working/episodic/semantic/skill) with auto-reflect + User Profile Store + Departure Context
 - **Communication**: MCP stdio (TS↔Python). Agent Mesh (gRPC) and HTTP SSE streaming land in Iter D+.
 - **Temporal Awareness**: 3-layer time perception (intra-session gap, absolute time, cross-session timeline)
 - **Permission Model**: Default **READ-ONLY + ASK-ON-WRITE**. The `AUTO` tier that auto-approves non-CRITICAL ops is **opt-in per session** and gated by an explicit `--trust auto` flag; no global "max trust" default. See 07-safety.
@@ -32,7 +32,7 @@ Quilin Agent（麒麟）is a self-evolving Agent framework that tracks **curated
 > - ~~God Mode~~ (unrestricted founder permissions) — replaced by the standard permission model above; founder账号 and regular账号 走同一条授权链路
 > - ~~Auto fusion patches~~ — upstream diffs surface as review suggestions; merging is a human PR decision
 > - ~~Three-language architecture upfront~~ — Rust arrives in Iter D, not Phase 0
-> - ~~13-domain planning~~ — 12-conversation-engineering 延后到 Iter F+；当前 spec 树保留 12 个领域 (01..11, 13)
+> - ~~13-domain planning~~ — 12-conversation-engineering 已降级为 `02-context/conversation-engineering/` 子模块并延后到 Iter F+（2026-04-18 D-05）；主语汇 12 个领域 (01..11, 13)
 
 ## Current Status
 
@@ -45,9 +45,11 @@ Quilin Agent（麒麟）is a self-evolving Agent framework that tracks **curated
 | 架构决策 | `docs/adr/adr-###-slug.md` | 已定稿的技术决策 |
 | 架构总览 | `docs/architecture/overview.md` | 13 领域全景图 + 导航 |
 | Harness 工程 | `docs/architecture/harness-engineering.md` | 顶层架构概念 |
+| **术语表** | `docs/architecture/glossary.md` | **规范术语源（CI 强制）**：OmniMem tier casing、`skill_view`、`Quilin` 等 |
 | 工程领域 spec | `docs/engineering/<编号-领域>/README.md` | 13 个领域详细设计 |
 | 调研材料 | `docs/research/` | Claude Code / Codex / OpenClaw / Hermes 深度调研 |
 | 实施计划 | `docs/implementation-plan.md` | 三阶段迁移 + benchmark 竞赛 |
+| 2026-04-17 Ultra-Review | `docs/review/2026-04-17-ultra-review.md` | Opus 4.7 全面复查报告（170 findings） |
 
 ## Commands
 
@@ -87,11 +89,12 @@ quilin-agent/
 ├── docs/
 │   ├── adr/                        # 架构决策记录
 │   ├── architecture/               # 架构总览 + Harness 工程
-│   ├── engineering/                # 12 个活跃工程领域 spec（+ 12-conversation 暂停）
+│   ├── engineering/                # 12 个活跃工程领域 spec
 │   │   ├── 01-llm-integration/
+│   │   ├── 02-context/
+│   │   │   └── conversation-engineering/  # parked sub-module — Iter F+（搬自 12-）
 │   │   ├── ...
 │   │   ├── 11-agent-mesh/
-│   │   ├── 12-conversation-engineering/   # (parked — Iter F+)
 │   │   └── 13-skills/
 │   ├── research/                   # 深度调研
 │   └── implementation-plan.md
@@ -122,11 +125,11 @@ quilin-agent/
 | 11 | Agent Mesh | Mesh connectivity via AgentMesh SDK (Iter D) | [11](docs/engineering/11-agent-mesh/README.md) |
 | 13 | Skills | SKILL.md + frontmatter, catalog + on-demand load, path/size safety, M0/M1/M2+ phased | [13](docs/engineering/13-skills/README.md) |
 
-### Parked
+### Parked (sub-module)
 
 | # | Domain | Status |
 |---|--------|--------|
-| 12 | Conversation Engineering | **Parked** — 6-layer "alive feeling" 研究延后到 Iter F+（core loop benchmark 稳态后再启动）。spec 保留为 research note。 |
+| 02.x | Conversation Engineering（原 12-） | **Parked sub-module under 02-context** — 6-layer "alive feeling" 研究延后到 Iter F+（core loop benchmark 稳态后再启动）。spec 保留为 research note，见 [02-context/conversation-engineering](docs/engineering/02-context/conversation-engineering/README.md)。 |
 
 ## Code Style & Conventions
 

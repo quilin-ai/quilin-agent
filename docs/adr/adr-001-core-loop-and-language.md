@@ -206,7 +206,7 @@ Quilin 不是简单的 Coding Agent，而是拥有 11 个能力域的通用框�
 2. Agent Mesh gRPC 层 (Rust)
 3. WASM 插件沙箱 (Rust)
 4. 轨迹分析 + Scaffold 自修改 (SelfEvolution)
-5. Dream Cycles (gbrain) 集成到 OmniMem ULTRA 层
+5. Dream Cycles (gbrain) 集成到 OmniMem ultra 层
 ```
 
 ---

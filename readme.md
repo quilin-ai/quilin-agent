@@ -2,20 +2,20 @@
 
 > **Quilin** = Quilt（拼布）+ Qilin（麒麟）
 >
-> 一个由精选上游项目滋养、长期演进的自研 Agent 框架
+> 一个基于对主流 Agent 框架系统性研究、原生构建的自演进 Agent 平台
 
-**愿景**：把 harness（包裹在 LLM 外面的一切）做到极致，让任何模型都能超水平发挥。我们在 **12 个工程领域** 内追踪一批精选上游项目，由 `sync-upstreams.py` 侦察 diff，由 AI 辅助人类 reviewer 生成融合 PR — **不做自动 scaffold 重写**，每一次变更都走标准 human-reviewed PR 流程。
+**愿景**：把 harness（包裹在 LLM 外面的一切）做到极致，让任何模型都能超水平发挥。我们从 Agent 工程的 **12 个关键维度** 深入研究领先框架的设计取舍，提炼跨方案的共性模式，形成统一的原生实现——每一次架构演进都走人工 review PR 流程，配合 benchmark 验证。
 
 ## 一句话定位
 
-**Quilin = 极简 Agent Loop + 12 领域 harness + 两语言运行时 + AI 辅助的人在回路融合工作流**
+**Quilin = 极简 Agent Loop + 12 领域 harness + 两语言运行时 + 研究驱动的持续演进**
 
-不是 LangGraph 变体，不是 LangChain 上层封装，而是按 Harness Engineering 原则自研的一个可被人类主导演进的 Agent 操作系统。
+不是 LangGraph 变体，不是 LangChain 上层封装，而是按 Harness Engineering 原则原生构建的、可被团队主导演进的 Agent 操作系统。
 
 ## 核心架构
 
 - **自研极简 Agent Loop**（< 200 行 TS while-loop）—— 不依赖 LangGraph / LangChain / AutoGen 等外部 Agent 框架
-- **两语言运行时（Iter A..C）** —— TypeScript（Agent 核心 + E-T-C-S-L-V 六组件）+ Python（ML Provider 封装为 MCP Server）。**Rust**（mesh / WASM 沙箱）延后到 **Iter D**，当前 `crates/` 目录不存在。
+- **两语言运行时（Iter A..C）** —— TypeScript（Agent 核心 + E-T-C-S-L-V 六组件）+ Python（ML Provider 封装为 MCP Server）。**Rust**（mesh / WASM 沙箱）在 Iter D 引入。
 - **Harness Engineering 顶层组织原则** —— LLM 是发动机，12 领域是整辆车
 - **E-T-C-S-L-V 六组件** —— Execution / Tools / Context / State / Lifecycle / Verification 作为可调用能力层暴露给 LLM，而非固定状态图节点
 - **LLM 抽象** —— Vercel AI SDK v6（630M+ 周下载，25+ providers）
@@ -55,19 +55,19 @@
 | 09 | 部署运行时 | CLI、配置管理、热更新 + 主动通知 | C | [09](docs/engineering/09-deployment-runtime/README.md) |
 | 10 | 自进化 | 轨迹分析、**human-in-loop scaffold patch**、技能自创、User Insight Engine | D | [10](docs/engineering/10-self-evolution/README.md) |
 | 11 | Agent Mesh | AgentMesh SDK 接入（Rust，Iter D） | D | [11](docs/engineering/11-agent-mesh/README.md) |
-| 13 | ★ 技能工程 | SKILL.md + YAML frontmatter、catalog 索引 + 按需加载、Skill ≠ Tool、M0/M1/M2+ 分层 | B | [13](docs/engineering/13-skills/README.md) |
+| 13 | 技能工程 | SKILL.md + YAML frontmatter、catalog 索引 + 按需加载、Skill ≠ Tool、M0/M1/M2+ 分层 | B | [13](docs/engineering/13-skills/README.md) |
 
-> **Domain 12（Conversation Engineering / 对话工程）** —— 暂停到 Iter F+，保留为研究笔记。核心回路未在 benchmark 上稳态之前不投入"活人感"工程（[为什么](docs/review/2026-04-17-ultra-review.md#d-02)）。
+> **Domain 12（Conversation Engineering / 对话工程）** —— 暂停到 Iter F+，保留为研究笔记。核心回路在 benchmark 上稳态之前不投入"活人感"工程。
 
-> 第 13 领域于 2026-04-17 基于 [Claude Code / Hermes / OpenClaw / Codex CLI 四上游对比研究](docs/research/skill-loading-comparison.md) 新增。
+> 技能工程域的设计依据见 [Claude Code / Hermes / OpenClaw / Codex CLI 四框架对比研究](docs/research/skill-loading-comparison.md)。
 
 ## Quilin 独特优势
 
 1. **Harness Engineering 顶层显式命名** —— 综合 18 篇行业文献的统一学科，把 12 领域组织成一等架构理念
 2. **融合 6 大模型架构精华** —— 7 个跨模型设计模式（分层记忆、混合动作空间、自进化闭环、两段式定位、成本感知、思考模式、内建验证）内化进框架
-3. **精选上游 + AI 辅助融合 PR** —— ~100 个 git submodule（--depth 1）被持续追踪，diff 通过 `sync-upstreams.py` 侦察后由人类 reviewer 决定是否融合
-4. **OmniMem 4 层分级记忆** —— SHORT/MID/LONG/ULTRA + 向量检索 + 知识图谱 + 自反思 + User Profile Store + Departure Context
-5. **✦ 技能工程（第 13 领域 NEW）** —— Skill ≠ Tool 严格分离；SKILL.md + frontmatter 目录化；catalog 先行 + 按需 `skill_view` 加载；路径 / 大小 / symlink 多层安全；M0 → M1 → M2+ 分阶段落地
+3. **研究驱动的架构演进** —— 持续跟踪 Agent 框架前沿，提炼跨方案的共性模式与工程取舍，由团队评估后以原生方式纳入设计
+4. **OmniMem 4 层分级记忆** —— working/episodic/semantic/skill + 向量检索 + 知识图谱 + 自反思 + User Profile Store + Departure Context
+5. **技能工程（第 13 领域）** —— Skill ≠ Tool 严格分离；SKILL.md + frontmatter 目录化；catalog 先行 + 按需 `skill_view` 加载；路径 / 大小 / symlink 多层安全；M0 → M1 → M2+ 分阶段落地
 6. **Agent Mesh 能力**（Iter D） —— AgentMesh SDK adapter 提供去中心化 Agent 通信
 7. **热更新 + 主动通知** —— 解决 OpenClaw / Hermes 更新断连痛点
 8. **自进化带验证 + 人在回路** —— Scaffold 修改走 propose-patch → human review → apply 流程，不盲目自信也不自动 apply
@@ -79,27 +79,16 @@
 14. **Idle Evolution（opt-in）** —— 显式开启后才用闲置配额做记忆整合 / 浏览；默认 OFF，任何写入动作都需审批
 15. **AgentBridge 双 Agent 协作** —— Claude + Codex 分工，协作语言中文便于用户同步
 
-> **早期版本中的 "God Mode" / "自动缝合发布"  / "默认最大信任" / "每个榜单都上"** 叙述已在 2026-04-17 ultra-review 后收回，见 [review 报告](docs/review/2026-04-17-ultra-review.md)。
+## 架构演进机制
 
-## 融合工作流（human-in-loop）
+Quilin 不是定版即止，而是持续演进的平台：
 
-```
-sync-upstreams.py  监控 ~100 个上游 submodule
-        │
-        ▼
-  检测到新 commit → shallow pull
-        │
-        ▼
-merge-with-claude.sh  Claude Code 生成 diff 分析 + 建议 patch
-        │
-        ▼
-  人类 reviewer 在 PR 中评审（"Hindsight 新 Reflect 机制是否值得接入 OmniMem Tier-2？"）
-        │
-        ▼
-  合并 PR → `just test-all` 全绿 → release.sh 打 tag 发布
-```
+1. **研究** —— 跟踪 Agent 工程前沿（学术论文 + 主流框架的设计动向）
+2. **提炼** —— 识别跨方案的共性模式与工程取舍
+3. **设计** —— 结合自身架构约束，给出原生解决方案
+4. **落地** —— 所有变更走人工 review PR，配合 benchmark 验证
 
-**不做的事**：上游任意 commit 自动 apply；AI 在无 human review 情况下修改 `packages/` / `providers/` 代码；scaffold 自动重写。
+`scripts/sync-upstreams.py` 用作研究辅助——定时扫描领先框架的变更，生成摘要供 reviewer 参考。**不自动 apply 代码，不自动修改 scaffold**；所有架构变更必须经过团队 review + benchmark 验证。
 
 ## 目录结构
 
@@ -114,9 +103,10 @@ quilin-agent/
 ├── docs/
 │   ├── adr/                        # 架构决策（adr-001 core loop、adr-002 skeleton）
 │   ├── architecture/               # 总览 + Harness Engineering + Fusion Index
-│   ├── engineering/                # 12 个活跃工程领域 spec + 12-conversation（parked）
+│   ├── engineering/                # 12 个活跃工程领域 spec
 │   │   ├── 01-llm-integration/ ... 11-agent-mesh/
-│   │   ├── 12-conversation-engineering/  # parked — Iter F+
+│   │   ├── 02-context/
+│   │   │   └── conversation-engineering/  # parked sub-module — Iter F+（搬自 12-）
 │   │   └── 13-skills/              #   ★ 技能工程（新）
 │   ├── review/                     # 架构 review 报告（2026-04-17 ultra-review）
 │   ├── research/                   # 深度调研（Claude Code / Codex / OpenClaw / Hermes / Skill Loading）
@@ -150,36 +140,15 @@ bash scripts/init-all-submodules.sh           # 首次初始化 submodule
 
 ## Benchmark 目标
 
-**Iter E 聚焦 3 个核心 leaderboard**（不做"每一个榜单都参赛"的承诺）：
+聚焦 **3 个核心 leaderboard**（不做"每一个榜单都参赛"的承诺）：
 
-| 榜单 | 阶段 | 覆盖能力 |
-|------|------|---------|
-| **SWE-bench Verified** | Iter E2 | 代码 Agent 核心能力（500 真实 GitHub issue） |
-| **GAIA** | Iter E3 | 通用推理 + 工具调用 |
-| **BFCL v4** | Iter E3 | Function calling 准确率 |
+| 榜单 | 覆盖能力 |
+|------|---------|
+| **SWE-bench Verified** | 代码 Agent 核心能力（500 真实 GitHub issue） |
+| **GAIA** | 通用推理 + 工具调用 |
+| **BFCL v4** | Function calling 准确率 |
 
-其余 benchmark（τ-bench / Terminal-Bench / LiveCodeBench / WebArena / OSWorld / ARC-AGI / AgentHarm / InjecAgent / ScienceAgentBench 等）作为 **aspirational roadmap**，Iter E4+ 视 baseline harness 稳定性再启动。
-
-完整 benchmark 矩阵与阶段划分见 [implementation-plan.md](docs/implementation-plan.md)。
-
-## 当前状态
-
-**Iter A 完成** + **Iter B 进行中**：
-
-已交付：
-- 自研 Agent Loop（TS，< 200 行）
-- OmniMem MCP Server（Python + SQLite + FTS5）
-- ToolRouter + MCP Client Bridge
-- PromptBuilder + ContextAssembler + InjectionScanner + TemporalAwareness
-- REPL + session restore
-- 91 TS tests + 31 Python tests
-
-正在推进：
-- Iter B2：Safety Policy spec（审核中）
-- Iter B3a：Skills Core（SKILL.md + catalog + on-demand load，紧随 B2）
-- P0 修复批：TS-03 maxOutputTokens / PY-03 ghost deps / MCP spawn 沙箱 / MCPRegistry 原子化（见 [2026-04-17 ultra-review](docs/review/2026-04-17-ultra-review.md)）
-
-详见 [implementation-plan.md](docs/implementation-plan.md) 迭代路线图。
+其余 benchmark（τ-bench / Terminal-Bench / LiveCodeBench / WebArena / OSWorld / ARC-AGI / AgentHarm / InjecAgent / ScienceAgentBench 等）作为 **aspirational roadmap**，视基线 harness 稳定性再启动。完整矩阵见 [benchmark-roadmap.md](docs/architecture/benchmark-roadmap.md)。
 
 ## 多 Agent 协作
 
@@ -194,15 +163,14 @@ bash scripts/init-all-submodules.sh           # 首次初始化 submodule
 
 ## 架构决策记录
 
-- [ADR-001 Core Loop and Language](docs/adr/adr-001-core-loop-and-language.md) — 不用 LangGraph，自研极简 Loop；TS（核心）+ Python（ML）。Rust 在 Iter D 引入。
+- [ADR-001 Core Loop and Language](docs/adr/adr-001-core-loop-and-language.md) — 不用 LangGraph，原生极简 Loop；TS（核心）+ Python（ML）。Rust 在 Iter D 引入。
 - [ADR-002 Project Skeleton](docs/adr/adr-002-project-skeleton.md) — 骨架蓝图、目录布局、日志 JSON schema
-- [2026-04-17 Ultra-Review](docs/review/2026-04-17-ultra-review.md) — Opus 4.7 全面复查报告，170 findings
 
 ## 为什么叫 Quilin？
 
-**麒麟**是中华神话中最早的「缝合神兽」—— 鹿角、牛尾、龙鳞、马蹄，融合多种生物的精华于一身。
+**麒麟**汇聚百兽之灵——鹿角、牛尾、龙鳞、马蹄，集多种灵性于一身，却是一种独立而完整的祥瑞。
 
-我们的 Agent 框架也是如此：人类主导从 ~100 个精选开源项目中挑选、融合、发布。名字本身也是在「缝合」—— **Quilt**（拼布）+ **Qilin**（麒麟）= **Quilin**。
+我们的 Agent 平台也是如此：工程团队主导研究 Agent 工程的最佳实践，提炼、设计、原生实现，最终构成一个完整统一的体系。名字本身即是这种精神——**Quilt**（拼布）+ **Qilin**（麒麟）= **Quilin**。
 
 ---
 
