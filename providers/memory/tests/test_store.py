@@ -213,19 +213,15 @@ async def test_store_offloads_blocking_db_work_from_event_loop(
 
     monkeypatch.setattr(store_module, "_build_keywords", slow_build_keywords)  # type: ignore[attr-defined]
 
-    concurrent_start = time.perf_counter()
-    await asyncio.gather(
-        store.store("alpha"),
-        store.store("beta"),
-    )
-    concurrent_elapsed = time.perf_counter() - concurrent_start
+    observed: list[str] = []
 
-    sequential_start = time.perf_counter()
-    await store.store("gamma")
-    await store.store("delta")
-    sequential_elapsed = time.perf_counter() - sequential_start
+    async def heartbeat() -> None:
+        await asyncio.sleep(0.01)
+        observed.append("tick")
 
-    assert concurrent_elapsed < sequential_elapsed * 0.75
+    await asyncio.gather(store.store("alpha"), heartbeat())
+
+    assert observed == ["tick"]
 
 
 async def test_store_closes_via_async_context_manager() -> None:
@@ -236,3 +232,21 @@ async def test_store_closes_via_async_context_manager() -> None:
 
     with pytest.raises(Exception):
         store.reset()
+
+
+async def test_store_keeps_main_and_fts_counts_aligned_under_concurrency() -> None:
+    store = OmniMemStore(db_path=":memory:")
+
+    await asyncio.gather(
+        *[store.store(f"concurrent-{index}") for index in range(100)]
+    )
+
+    main_count = store._conn.execute(  # type: ignore[attr-defined]
+        "SELECT COUNT(*) FROM memory_records"
+    ).fetchone()[0]
+    fts_count = store._conn.execute(  # type: ignore[attr-defined]
+        "SELECT COUNT(*) FROM memory_records_fts"
+    ).fetchone()[0]
+
+    assert main_count == 100
+    assert fts_count == main_count

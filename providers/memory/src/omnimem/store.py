@@ -4,6 +4,7 @@ import asyncio
 import os
 import re
 import sqlite3
+import threading
 import uuid
 from pathlib import Path
 
@@ -96,9 +97,15 @@ class OmniMemStore:
         if db_path != ":memory:":
             Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 
-        self._conn = sqlite3.connect(db_path, check_same_thread=False)
+        self._conn = sqlite3.connect(
+            db_path,
+            check_same_thread=False,
+            isolation_level=None,
+        )
         self._conn.row_factory = sqlite3.Row
+        self._lock = threading.Lock()
         self._closed = False
+        self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute(
             """
             CREATE TABLE IF NOT EXISTS memory_records (
@@ -130,9 +137,11 @@ class OmniMemStore:
         await self.close()
 
     def reset(self) -> None:
-        self._conn.execute("DELETE FROM memory_records")
-        self._conn.execute("DELETE FROM memory_records_fts")
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            with self._conn:
+                self._conn.execute("DELETE FROM memory_records")
+                self._conn.execute("DELETE FROM memory_records_fts")
 
     async def close(self) -> None:
         await asyncio.to_thread(self._close_sync)
@@ -141,29 +150,31 @@ class OmniMemStore:
         if self._closed:
             return
 
-        self._conn.close()
-        self._closed = True
+        with self._lock:
+            self._conn.close()
+            self._closed = True
 
     async def recall(self, query: str) -> list[MemoryRecord]:
         return await asyncio.to_thread(self._recall_sync, query)
 
     def _recall_sync(self, query: str) -> list[MemoryRecord]:
-        if not query:
-            rows = self._conn.execute(
-                "SELECT id, content, tier FROM memory_records ORDER BY rowid ASC"
-            ).fetchall()
-        else:
-            rows = self._recall_with_fts(query)
-            if not rows:
+        with self._lock:
+            if not query:
                 rows = self._conn.execute(
-                    """
-                    SELECT id, content, tier
-                    FROM memory_records
-                    WHERE lower(content) LIKE ?
-                    ORDER BY rowid ASC
-                    """,
-                    (f"%{query.lower()}%",),
+                    "SELECT id, content, tier FROM memory_records ORDER BY rowid ASC"
                 ).fetchall()
+            else:
+                rows = self._recall_with_fts(query)
+                if not rows:
+                    rows = self._conn.execute(
+                        """
+                        SELECT id, content, tier
+                        FROM memory_records
+                        WHERE lower(content) LIKE ?
+                        ORDER BY rowid ASC
+                        """,
+                        (f"%{query.lower()}%",),
+                    ).fetchall()
 
         return [_row_to_record(row) for row in rows]
 
@@ -184,18 +195,20 @@ class OmniMemStore:
             content=content,
             tier=_validate_memory_tier(tier),
         )
-        self._conn.execute(
-            "INSERT INTO memory_records (id, content, tier) VALUES (?, ?, ?)",
-            (record.id, record.content, record.tier),
-        )
-        self._conn.execute(
-            """
-            INSERT INTO memory_records_fts (id, content, keywords)
-            VALUES (?, ?, ?)
-            """,
-            (record.id, record.content, _build_keywords(record.content)),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            with self._conn:
+                self._conn.execute(
+                    "INSERT INTO memory_records (id, content, tier) VALUES (?, ?, ?)",
+                    (record.id, record.content, record.tier),
+                )
+                self._conn.execute(
+                    """
+                    INSERT INTO memory_records_fts (id, content, keywords)
+                    VALUES (?, ?, ?)
+                    """,
+                    (record.id, record.content, _build_keywords(record.content)),
+                )
         return record
 
     def _rebuild_fts_index(self) -> None:
