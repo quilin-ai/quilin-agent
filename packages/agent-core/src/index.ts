@@ -13,6 +13,7 @@ export * from "./context/index.js";
 export * from "./llm/client.js";
 export * from "./llm/provider.js";
 export * from "./repl.js";
+export * from "./safety/write-authority.js";
 export * from "./state/checkpoint.js";
 export * from "./tools/mcp-client.js";
 export * from "./tools/router.js";
