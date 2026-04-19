@@ -72,6 +72,35 @@ describe.sequential("MCPClientManager", () => {
 		});
 	});
 
+	it("times out slow MCP tool calls", async () => {
+		vi.useFakeTimers();
+		const manager = new MCPClientManager();
+		const slowClient = {
+			callTool: vi.fn(
+				() => new Promise<never>(() => undefined),
+			),
+		};
+
+		Object.assign(manager as object, {
+			client: slowClient,
+			isConnected: true,
+		});
+
+		const pendingCall = (
+			manager as unknown as {
+				callToolWithMetadata: (
+					name: string,
+					args: Record<string, unknown>,
+				) => Promise<unknown>;
+			}
+		).callToolWithMetadata("memory_recall", { query: "hello" });
+		const timeoutExpectation = expect(pendingCall).rejects.toThrow(/timed out/i);
+
+		await vi.advanceTimersByTimeAsync(30_001);
+		await timeoutExpectation;
+		vi.useRealTimers();
+	});
+
 	it("connects to OmniMem and maps MCP tools into local Tool definitions", async () => {
 		const manager = new MCPClientManager();
 

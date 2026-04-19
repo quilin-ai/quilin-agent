@@ -14,6 +14,7 @@ import { jsonSchemaToZod } from "./schema-converter.js";
 import type { Tool } from "./types.js";
 
 const CONNECT_TIMEOUT_MS = 5_000;
+const DEFAULT_TOOL_TIMEOUT_MS = 30_000;
 const ALLOWED_PATH_COMMANDS = new Set(["bun", "node", "npx", "python", "python3", "uv"]);
 const ALLOWED_ABSOLUTE_COMMAND_PREFIXES = [
 	"/bin/",
@@ -102,13 +103,15 @@ export function createMCPSpawnEnv(
 	};
 }
 
-function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
+function withTimeout<T>(
+	promise: Promise<T>,
+	label: string,
+	timeoutMs: number,
+): Promise<T> {
 	return new Promise<T>((resolvePromise, rejectPromise) => {
 		const timeout = setTimeout(() => {
-			rejectPromise(
-				new Error(`${label} timed out after ${CONNECT_TIMEOUT_MS}ms`),
-			);
-		}, CONNECT_TIMEOUT_MS);
+			rejectPromise(new Error(`${label} timed out after ${timeoutMs}ms`));
+		}, timeoutMs);
 
 		promise.then(
 			(value) => {
@@ -229,8 +232,12 @@ export class MCPClientManager {
 		};
 
 		try {
-			await withTimeout(client.connect(transport), "MCP connect");
-			const { tools } = await withTimeout(client.listTools(), "MCP listTools");
+			await withTimeout(client.connect(transport), "MCP connect", CONNECT_TIMEOUT_MS);
+			const { tools } = await withTimeout(
+				client.listTools(),
+				"MCP listTools",
+				CONNECT_TIMEOUT_MS,
+			);
 
 			this.client = client;
 			this.transport = transport;
@@ -286,12 +293,23 @@ export class MCPClientManager {
 		}
 
 		try {
-			const result = await this.client.callTool({
-				name,
-				arguments: args,
-			});
+			const result = await withTimeout(
+				this.client.callTool({
+					name,
+					arguments: args,
+				}),
+				`MCP tool ${name}`,
+				DEFAULT_TOOL_TIMEOUT_MS,
+			);
 			return formatCallToolResult(result);
 		} catch (error) {
+			if (
+				error instanceof Error &&
+				error.message.includes(`timed out after ${DEFAULT_TOOL_TIMEOUT_MS}ms`)
+			) {
+				throw error;
+			}
+
 			const message =
 				error instanceof Error ? error.message : "MCP tool call failed";
 			return createDisconnectedResult(message);
