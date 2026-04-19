@@ -93,8 +93,8 @@ Hero 下方，三个高信号数据，克制铭牌风格：
 
 3-4 张卡片，每张一个核心差异化能力：
 
-1. **自进化引擎** — 监控 12 领域 × Top 10 上游，自动缝合最强实践
-2. **4 层分级记忆** — OmniMem SHORT/MID/LONG/ULTRA + 向量 + KG + 自反思
+1. **自进化引擎** — 监控 12 领域 × Top 10 上游，AI 辅助融合 PR 由人审通过
+2. **4 层分级记忆** — OmniMem working/episodic/semantic/skill + 向量 + KG + 自反思
 3. **三语言架构** — TS 核心 + Python ML + Rust 基础设施，各取所长
 4. **Agent Mesh** — 内置去中心化 Agent 通信网络
 

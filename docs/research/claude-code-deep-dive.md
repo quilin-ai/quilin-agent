@@ -473,7 +473,7 @@ Phase 2 (checkResponseForCacheBreak): API 调用后
 |--------|-------------------|-----------------|------|
 | Agent Loop 实现 | ADR-001 已确认 < 200 行 TS 核心循环 | queryLoop 实际 1,488 行 | **不冲突但需警惕**：保持核心循环精简，将压缩、恢复、权限等拆分为独立 Phase 模块。200 行只是核心调度逻辑，不含所有功能 |
 | 工具安全模型 | 07-Safety 设计 4 层验证 | permissions.ts 1,486 行单文件 + yoloClassifier.ts 1,495 行 | **架构一致，实现要拆分**：Quilin 应按层拆分权限逻辑，避免 Claude Code 的巨文件问题 |
-| 上下文管理 | OmniMem 4 层 (short/mid/long/ultra) | 5 层压缩流水线（粒度不同） | **互补**：OmniMem 是记忆分层，5 层流水线是压缩分层。两者正交，可组合使用 |
+| 上下文管理 | OmniMem 4 层 (working/episodic/semantic/skill) | 5 层压缩流水线（粒度不同） | **互补**：OmniMem 是记忆分层，5 层流水线是压缩分层。两者正交，可组合使用 |
 | 记忆系统 | 4 层 + vector + KG | CLAUDE.md 文件 + session memory + memory prefetch | **Quilin 远超**：Claude Code 的记忆系统简陋。Quilin 无需参考其记忆实现，只参考 prefetch 策略 |
 | 多 Agent | 同构 spawn + 异构 mesh | fork 子进程 + agentId 隔离 | **不同层次**：Claude Code 是进程内子 agent，Quilin 是跨进程/跨机器 mesh。不冲突 |
 

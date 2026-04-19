@@ -295,7 +295,7 @@ git commit -m "feat(site): add CSS foundation with custom properties and base st
         <div class="feature-card">
           <div class="feature-icon">◆</div>
           <h3>4-Tier Memory</h3>
-          <p>OmniMem SHORT / MID / LONG / ULTRA with vector + knowledge graph retrieval and auto-reflection.</p>
+          <p>OmniMem working / episodic / semantic / skill with vector + knowledge graph retrieval and auto-reflection.</p>
         </div>
 
         <div class="feature-card">

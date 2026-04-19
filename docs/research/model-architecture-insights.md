@@ -40,7 +40,7 @@ GLM-5.1 的补充策略：
 ```
 
 **对 Harness 的启示**：
-- OmniMem 的 SHORT/MID/LONG/ULTRA 四层已经对了方向
+- OmniMem 的 working/episodic/semantic/skill 四层已经对了方向
 - 但需要加入 **Keep-recent-k 策略**：短时记忆保留最近 k 轮完整内容
 - 需要加入 **阈值丢弃策略**：上下文超过阈值时主动丢弃而非压缩
 - Working Memory 和 Episodic Memory 的区分比简单的时间衰减更有效
