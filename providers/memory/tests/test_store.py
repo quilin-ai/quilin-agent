@@ -99,7 +99,7 @@ async def test_reset_clears_all_records() -> None:
     results = await store.recall("")
     assert len(results) == 2
 
-    store.reset()
+    await store.reset()
     results_after = await store.recall("")
     assert len(results_after) == 0
 
@@ -231,7 +231,30 @@ async def test_store_closes_via_async_context_manager() -> None:
         await store.store("alpha")
 
     with pytest.raises(Exception):
-        store.reset()
+        await store.reset()
+
+
+async def test_reset_offloads_blocking_db_work_from_event_loop(
+    monkeypatch: object,
+) -> None:
+    store = OmniMemStore(db_path=":memory:")
+    original_reset_sync = store._reset_sync  # type: ignore[attr-defined]
+
+    def slow_reset_sync() -> None:
+        time.sleep(0.05)
+        original_reset_sync()
+
+    monkeypatch.setattr(store, "_reset_sync", slow_reset_sync)  # type: ignore[attr-defined]
+
+    observed: list[str] = []
+
+    async def heartbeat() -> None:
+        await asyncio.sleep(0.01)
+        observed.append("tick")
+
+    await asyncio.gather(store.reset(), heartbeat())
+
+    assert observed == ["tick"]
 
 
 async def test_store_keeps_main_and_fts_counts_aligned_under_concurrency() -> None:

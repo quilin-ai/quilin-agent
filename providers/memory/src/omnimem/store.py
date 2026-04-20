@@ -136,7 +136,10 @@ class OmniMemStore:
     async def __aexit__(self, *_args: object) -> None:
         await self.close()
 
-    def reset(self) -> None:
+    async def reset(self) -> None:
+        await asyncio.to_thread(self._reset_sync)
+
+    def _reset_sync(self) -> None:
         with self._lock:
             self._conn.execute("BEGIN IMMEDIATE")
             with self._conn:
