@@ -2,13 +2,20 @@ import { lookup } from "node:dns/promises";
 import { createRequire } from "node:module";
 import { BlockList, isIP } from "node:net";
 import { z } from "zod";
+import { logger } from "../../logger.js";
 import type { ToolWithMetadata } from "../tool-metadata.js";
 import type { ToolResult } from "../types.js";
 
 const DEFAULT_MAX_BODY_CHARS = 16_384;
+const DEFAULT_MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_REDIRECTS = 3;
 const ALLOWED_DNS_HOSTNAME = /^[a-z][a-z0-9.-]*$/i;
+const SENSITIVE_HEADER_NAMES = new Set([
+	"authorization",
+	"cookie",
+	"proxy-authorization",
+]);
 
 const require = createRequire(import.meta.url);
 
@@ -253,10 +260,135 @@ function getRedirectRequest(
 	return { method, body };
 }
 
+function normalizeAuthHost(hostname: string): string {
+	return normalizeHostname(hostname);
+}
+
+function sanitizeHeaders(
+	headers: Record<string, string> | undefined,
+	url: URL,
+	allowedAuthHosts: readonly string[] | undefined,
+): Record<string, string> | undefined {
+	if (headers == null) {
+		return undefined;
+	}
+
+	const normalizedAllowedHosts = new Set(
+		(allowedAuthHosts ?? []).map((hostname) => normalizeAuthHost(hostname)),
+	);
+	const requestHost = normalizeAuthHost(url.hostname);
+	const shouldStripSensitiveHeaders = !normalizedAllowedHosts.has(requestHost);
+
+	if (!shouldStripSensitiveHeaders) {
+		return { ...headers };
+	}
+
+	const sanitizedHeaders: Record<string, string> = {};
+	let strippedHeader = false;
+
+	for (const [name, value] of Object.entries(headers)) {
+		if (SENSITIVE_HEADER_NAMES.has(name.toLowerCase())) {
+			strippedHeader = true;
+			continue;
+		}
+
+		sanitizedHeaders[name] = value;
+	}
+
+	if (strippedHeader) {
+		logger.warn(
+			{ host: requestHost, allowedAuthHosts: [...normalizedAllowedHosts] },
+			"Stripped sensitive auth headers for non-allowlisted web_fetch host",
+		);
+	}
+
+	return sanitizedHeaders;
+}
+
+function validateResponseContentType(response: Response): string {
+	const contentType = response.headers.get("content-type") ?? "";
+	const normalizedContentType = contentType.split(";")[0]?.trim().toLowerCase() ?? "";
+
+	if (
+		normalizedContentType === "" ||
+		normalizedContentType.startsWith("text/") ||
+		normalizedContentType === "application/json"
+	) {
+		return contentType;
+	}
+
+	throw new Error(`Unsupported content type: ${contentType}`);
+}
+
+function validateResponseLength(
+	response: Response,
+	maxResponseBytes: number,
+): void {
+	const contentLengthHeader = response.headers.get("content-length");
+	if (contentLengthHeader == null) {
+		return;
+	}
+
+	const contentLength = Number.parseInt(contentLengthHeader, 10);
+	if (Number.isNaN(contentLength) || contentLength <= maxResponseBytes) {
+		return;
+	}
+
+	throw new Error(
+		`Response exceeds max size: ${contentLength} > ${maxResponseBytes} bytes`,
+	);
+}
+
+async function readResponseText(
+	response: Response,
+	maxResponseBytes: number,
+): Promise<string> {
+	if (response.body == null) {
+		const text = await response.text();
+		const textBytes = Buffer.byteLength(text, "utf8");
+		if (textBytes > maxResponseBytes) {
+			throw new Error(
+				`Response exceeds max size: ${textBytes} > ${maxResponseBytes} bytes`,
+			);
+		}
+		return text;
+	}
+
+	const reader = response.body.getReader();
+	const decoder = new TextDecoder();
+	const chunks: string[] = [];
+	let totalBytes = 0;
+
+	try {
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) {
+				break;
+			}
+
+			totalBytes += value.byteLength;
+			if (totalBytes > maxResponseBytes) {
+				throw new Error(
+					`Response exceeds max size: ${totalBytes} > ${maxResponseBytes} bytes`,
+				);
+			}
+
+			chunks.push(decoder.decode(value, { stream: true }));
+		}
+	} finally {
+		reader.releaseLock();
+	}
+
+	chunks.push(decoder.decode());
+	return chunks.join("");
+}
+
 export interface WebFetchToolOptions {
+	readonly allowedAuthHosts?: readonly string[];
 	readonly dispatcherFactory?: DispatcherFactory;
 	readonly fetcher?: Fetcher;
 	readonly maxBodyChars?: number;
+	readonly maxResponseBytes?: number;
 	readonly resolver?: IPResolver;
 	readonly timeoutMs?: number;
 	readonly maxRedirects?: number;
@@ -307,6 +439,8 @@ export function createWebFetchTool(
 				(options.fetcher == null ? createDefaultDispatcherFactory() : undefined);
 			const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 			const maxRedirects = options.maxRedirects ?? DEFAULT_MAX_REDIRECTS;
+			const maxResponseBytes =
+				options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
 
 			let currentUrl = parsedUrl;
 			let currentMethod = method;
@@ -319,10 +453,15 @@ export function createWebFetchTool(
 
 					let response: Response;
 					try {
+						const requestHeaders = sanitizeHeaders(
+							headers,
+							currentUrl,
+							options.allowedAuthHosts,
+						);
 						response = await fetcher(currentUrl.toString(), {
 							method: currentMethod,
 							body: currentBody,
-							headers,
+							headers: requestHeaders,
 							signal: AbortSignal.timeout(timeoutMs),
 							redirect: "manual",
 							dispatcher,
@@ -362,7 +501,9 @@ export function createWebFetchTool(
 						continue;
 					}
 
-					const responseBody = await response.text();
+					const contentType = validateResponseContentType(response);
+					validateResponseLength(response, maxResponseBytes);
+					const responseBody = await readResponseText(response, maxResponseBytes);
 					const truncatedBody = truncateText(
 						responseBody,
 						options.maxBodyChars ?? DEFAULT_MAX_BODY_CHARS,
@@ -379,7 +520,7 @@ export function createWebFetchTool(
 					return createSuccessResult("builtin-web-fetch", {
 						url: currentUrl.toString(),
 						status: response.status,
-						contentType: response.headers.get("content-type") ?? "",
+						contentType,
 						body: truncatedBody.value,
 						truncated: truncatedBody.truncated,
 					});

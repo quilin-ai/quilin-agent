@@ -251,4 +251,91 @@ describe("builtin web_fetch tool", () => {
 			}),
 		);
 	});
+
+	it("strips sensitive auth headers when target host is not allowlisted", async () => {
+		const fetcher = vi.fn(async () =>
+			new Response("ok", {
+				status: 200,
+				headers: {
+					"content-type": "text/plain",
+				},
+			}),
+		);
+		const tool = createWebFetchTool({
+			fetcher,
+			allowedAuthHosts: ["api.example.com"],
+		} as never);
+
+		const result = await tool.execute({
+			url: "https://evil.example/data",
+			headers: {
+				Authorization: "Bearer top-secret",
+				Cookie: "session=abc",
+				"Proxy-Authorization": "Basic dGVzdA==",
+				"x-test": "1",
+			},
+		});
+
+		expect(result.isError).toBe(false);
+		expect(fetcher).toHaveBeenCalledWith(
+			"https://evil.example/data",
+			expect.objectContaining({
+				headers: {
+					"x-test": "1",
+				},
+			}),
+		);
+	});
+
+	it("rejects oversized responses before reading the full body", async () => {
+		const text = vi.fn(async () => "should not be read");
+		const fetcher = vi.fn(async () => ({
+			ok: true,
+			status: 200,
+			headers: new Headers({
+				"content-type": "text/plain",
+				"content-length": String(6 * 1024 * 1024),
+			}),
+			text,
+		}));
+		const tool = createWebFetchTool({
+			fetcher: fetcher as never,
+			maxResponseBytes: 5 * 1024 * 1024,
+		} as never);
+
+		const result = await tool.execute({
+			url: "https://example.com/too-large",
+		});
+
+		expect(result.isError).toBe(true);
+		expect(JSON.parse(result.content)).toEqual({
+			error: expect.stringContaining("Response exceeds max size"),
+		});
+		expect(text).not.toHaveBeenCalled();
+	});
+
+	it("rejects non-text response types before reading the body", async () => {
+		const text = vi.fn(async () => "should not be read");
+		const fetcher = vi.fn(async () => ({
+			ok: true,
+			status: 200,
+			headers: new Headers({
+				"content-type": "application/octet-stream",
+			}),
+			text,
+		}));
+		const tool = createWebFetchTool({
+			fetcher: fetcher as never,
+		});
+
+		const result = await tool.execute({
+			url: "https://example.com/archive.tar",
+		});
+
+		expect(result.isError).toBe(true);
+		expect(JSON.parse(result.content)).toEqual({
+			error: expect.stringContaining("Unsupported content type"),
+		});
+		expect(text).not.toHaveBeenCalled();
+	});
 });
