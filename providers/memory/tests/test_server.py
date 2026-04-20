@@ -187,7 +187,10 @@ async def test_create_server_rejects_invalid_tier_enum() -> None:
         )
 
 
-async def test_default_server_instances_do_not_share_state() -> None:
+async def test_default_server_instances_do_not_share_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("QUILIN_ENV", "test")
     left_server = create_server()
     right_server = create_server()
 
