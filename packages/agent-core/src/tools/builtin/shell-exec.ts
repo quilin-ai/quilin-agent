@@ -25,6 +25,23 @@ const ALLOWED_ENV_KEYS = new Set([
 ]);
 
 const CONTROL_OPERATOR_TOKENS = new Set(["|", "||", "&", "&&", ";", "<", ">", ">>"]);
+const SHELL_WRAPPER_EXECUTABLES = new Set([
+	"bash",
+	"csh",
+	"cmd",
+	"dash",
+	"fish",
+	"ksh",
+	"powershell",
+	"pwsh",
+	"sh",
+	"tcsh",
+	"zsh",
+]);
+const SHELL_WRAPPER_ARGS = new Set(["-c", "/c"]);
+const FORK_BOMB_PATTERN = /:\(\)\s*\{\s*:\|:&\s*\}\s*;:/;
+const DISK_WIPE_PATTERN =
+	/\bdd\s+if=\/dev\/(?:zero|random|urandom)\s+of=\/dev\/(?:sd|nvme|disk)\w*/i;
 
 interface ShellRunnerResult {
 	readonly stdout: string;
@@ -93,17 +110,51 @@ function clampTimeoutMs(timeoutMs: number): number {
 }
 
 function findBlockedCommandReason(
+	command: string,
 	executable: string,
 	args: readonly string[],
 ): string | undefined {
-	if (/^eval$/i.test(executable)) {
-		return "eval execution is not allowed";
+	const executableBase = executable.split(/[\\/]/).pop()?.toLowerCase() ?? executable.toLowerCase();
+
+	if (FORK_BOMB_PATTERN.test(command)) {
+		return "fork bomb patterns are not allowed";
+	}
+
+	if (DISK_WIPE_PATTERN.test(command)) {
+		return "disk wipe patterns are not allowed";
 	}
 
 	if (
-		/^rm$/i.test(executable) &&
-		args.includes("-rf") &&
-		args.some((arg) => arg === "/" || arg.startsWith("/"))
+		SHELL_WRAPPER_EXECUTABLES.has(executableBase) &&
+		args.some((arg) => SHELL_WRAPPER_ARGS.has(arg.toLowerCase()))
+	) {
+		return "shell wrapper -c not allowed";
+	}
+
+	if (/^eval$/i.test(executableBase)) {
+		return "eval execution is not allowed";
+	}
+
+	const hasRecursiveForceFlag = args.some((arg) =>
+		/^-[^-]*r[^-]*f[^-]*$/i.test(arg) || /^-[^-]*f[^-]*r[^-]*$/i.test(arg),
+	);
+	const targetsDangerousLocation = args.some((arg) => {
+		return (
+			arg === "/" ||
+			arg === "~" ||
+			arg === "$HOME" ||
+			arg.startsWith("~/") ||
+			arg.startsWith("$HOME/") ||
+			arg.startsWith("/Users") ||
+			arg.startsWith("/home") ||
+			arg.startsWith("/")
+		);
+	});
+
+	if (
+		/^rm$/i.test(executableBase) &&
+		hasRecursiveForceFlag &&
+		targetsDangerousLocation
 	) {
 		return "destructive filesystem wipe patterns are not allowed";
 	}
@@ -252,6 +303,7 @@ export interface ShellExecToolOptions {
 	readonly runner?: ShellRunner;
 	readonly defaultTimeoutMs?: number;
 	readonly maxOutputChars?: number;
+	readonly executableAllowlist?: readonly string[];
 	readonly env?: NodeJS.ProcessEnv;
 	readonly authority?: WriteAuthority;
 	readonly origin?: WriteOrigin;
@@ -304,16 +356,28 @@ export function createShellExecTool(
 				});
 			}
 
-			if (tokens.some((token) => CONTROL_OPERATOR_TOKENS.has(token))) {
+			const normalizedAllowlist =
+				options.executableAllowlist?.map((item) => item.trim()).filter(Boolean) ??
+				[];
+			if (
+				normalizedAllowlist.length > 0 &&
+				!normalizedAllowlist.includes(executable)
+			) {
 				return createErrorResult("builtin-shell-exec", {
-					error: "Command blocked: shell control operators are not allowed",
+					error: `Command blocked: executable '${executable}' not in executable allowlist`,
 				});
 			}
 
-			const blockedReason = findBlockedCommandReason(executable, argv);
+			const blockedReason = findBlockedCommandReason(command, executable, argv);
 			if (blockedReason != null) {
 				return createErrorResult("builtin-shell-exec", {
 					error: `Command blocked: ${blockedReason}`,
+				});
+			}
+
+			if (tokens.some((token) => CONTROL_OPERATOR_TOKENS.has(token))) {
+				return createErrorResult("builtin-shell-exec", {
+					error: "Command blocked: shell control operators are not allowed",
 				});
 			}
 

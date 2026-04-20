@@ -111,6 +111,49 @@ describe("builtin shell_exec tool", () => {
 		expect(runner).not.toHaveBeenCalled();
 	});
 
+	it("blocks shell wrapper executables that use -c", async () => {
+		const runner = vi.fn();
+		const tool = createShellExecTool({
+			runner,
+			authority: createPermissiveAuthority(),
+		});
+
+		const bashResult = await tool.execute({
+			command: "bash -c 'echo hi'",
+		});
+		const absoluteBashResult = await tool.execute({
+			command: "/bin/bash -c 'echo hi'",
+		});
+
+		expect(bashResult.isError).toBe(true);
+		expect(JSON.parse(bashResult.content)).toEqual({
+			error: expect.stringContaining("shell wrapper -c"),
+		});
+		expect(absoluteBashResult.isError).toBe(true);
+		expect(JSON.parse(absoluteBashResult.content)).toEqual({
+			error: expect.stringContaining("shell wrapper -c"),
+		});
+		expect(runner).not.toHaveBeenCalled();
+	});
+
+	it("blocks fork bomb payloads before invoking the runner", async () => {
+		const runner = vi.fn();
+		const tool = createShellExecTool({
+			runner,
+			authority: createPermissiveAuthority(),
+		});
+
+		const result = await tool.execute({
+			command: ":(){ :|:& };:",
+		});
+
+		expect(result.isError).toBe(true);
+		expect(JSON.parse(result.content)).toEqual({
+			error: expect.stringContaining("fork bomb"),
+		});
+		expect(runner).not.toHaveBeenCalled();
+	});
+
 	it("clamps timeoutMs into the safe execution window", async () => {
 		const runner = vi.fn(async () => ({
 			stdout: "ok",
@@ -274,6 +317,44 @@ describe("builtin shell_exec tool", () => {
 					TEST_OVERRIDE: "1",
 				}),
 			}),
+		);
+	});
+
+	it("enforces executableAllowlist only when configured", async () => {
+		const runner = vi.fn(async () => ({
+			stdout: "ok\n",
+			stderr: "",
+			exitCode: 0,
+			timedOut: false,
+		}));
+		const tool = createShellExecTool({
+			runner,
+			executableAllowlist: ["ls", "git"],
+			authority: createPermissiveAuthority(),
+		});
+
+		const lsResult = await tool.execute({
+			command: "ls -la",
+		});
+		const gitResult = await tool.execute({
+			command: "git status",
+		});
+		const echoResult = await tool.execute({
+			command: "echo blocked",
+		});
+
+		expect(lsResult.isError).toBe(false);
+		expect(gitResult.isError).toBe(false);
+		expect(echoResult.isError).toBe(true);
+		expect(JSON.parse(echoResult.content)).toEqual({
+			error: expect.stringContaining("not in executable allowlist"),
+		});
+		expect(runner).toHaveBeenNthCalledWith(1, "ls", ["-la"], expect.any(Object));
+		expect(runner).toHaveBeenNthCalledWith(
+			2,
+			"git",
+			["status"],
+			expect.any(Object),
 		);
 	});
 
