@@ -51,6 +51,228 @@ Claude Code 的 CLAUDE.md 是一种创新——把项目级知识写成文件让
 
 ## 二、设计方案
 
+> **D-20（2026-04-20） — OmniMem v2 融合架构（supersedes D-12）**
+>
+> 本节的 §二·A "OmniMem v2 融合架构" 为 Iter C 目标设计，**取代 D-12**（默认 Graphiti）。下方 §二·B "Layer 1–4 基线 spec" 保留为 v1 参考，将在 D-20 M0/M1/M2 迭代中局部重写。
+
+### 二·A  OmniMem v2 融合架构（D-20）
+
+#### A.1  问题重述：为什么推翻 D-12
+
+D-12（2026-04-20 早期）定的 "默认 Graphiti 作为 KG 后端" 基于两条前提：(1) Graphiti 在 LongMemEval 上 +15 pts 领先 Mem0；(2) 时序 KG 是 agent 记忆的核心能力。
+
+截至 2026-04-20，两条前提都站不住：
+
+- **前提 1 已失效**：Mem0 v2 算法（2026-04）将 LongMemEval 从 49% 提到 93.4%，反超 Graphiti 的 71.2% 约 22 pts。Mastra Observational Memory 达 94.87%，MemPalace 96.6%。Graphiti 跌出 SOTA 前 5。
+- **前提 2 存疑**：Hindsight/Vectorize 2026-03 提出 LongMemEval 本身已过时；"时序 KG" 只是记忆系统的一个**轴**，不是核心。真正的竞争维度变成 **accuracy / speed / cost / usability (AMB)** 四轴。
+- **工程阻塞**：Graphiti dependency spike（Task #93，2026-04-20 Codex 独立验证）证明 `graphiti-core==0.28.2` 在 Python 3.14 + embedded Kuzu 上不 zero-config（需源码编译 Kuzu + 手动 bootstrap FTS 索引），`Graphiti()` 默认需要 Neo4j URI。直接作为 Iter C 默认不成立。
+
+结论：**放弃"押注单一库"思路**，改为**融合 2026 开源 SOTA 的思想，构建多轴最优的 OmniMem v2**。
+
+#### A.2  设计原则
+
+1. **吸收思想，不抄代码**：03-memory spec 不出现任何 `import graphiti_core` / `import mastra`。我们读上游的论文、架构、源码，写自己的实现。
+2. **每层必须三段式论证**：原思想（来自谁、解决什么）→ 原思想的局限（我们分析出的弱点）→ 我们的转化 + 升级（怎么改、为什么改、判决指标）。
+3. **License 干净**：只参考 Apache-2.0 项目的公开架构与论文。NOTICE 文件致谢，代码自写。
+4. **证据驱动**：每层 M 阶段必须跑 AMB 四轴 benchmark（accuracy / speed / cost / usability）。未达门槛的层被回滚。
+5. **上游跟思想不跟代码**：不把上游 git submodule 化；每条研究线程维护 `docs/research/memory-watchlist/<name>.md`，上游升级时我们写 digest → human review → 对应迭代我们自己的代码。
+
+#### A.3  2026-04 开源 SOTA 参考
+
+| 系统 | LongMemEval | 架构流派 | 最强轴 | License |
+|------|-------------|---------|--------|---------|
+| MemPalace | 96.6% (raw mode) | Verbatim + palace metaphor | 保真度（无信息损失） | Apache-2.0 |
+| Mastra Observational Memory | 94.87% (gpt-5-mini) | Observer + Reflector 双后台 agent | 推理成本 / prompt 可缓存 | Apache-2.0（`ee/` 部分除外） |
+| Mem0 v2 | 93.4% | Hybrid retrieval（vector + graph + BM25 + entity linking） | 通用检索质量 | Apache-2.0 |
+| Graphiti (Zep) | 71.2% | 时序 KG（bi-temporal edges） | 时序推理 | Apache-2.0 |
+| OpenViking (volcengine) | — | Filesystem-hierarchical（L0/L1/L2） | 规模 / 冷热分层 | Apache-2.0 |
+
+**核心洞察**：五家在**不同轴上占优且轴互相正交** —— 融合不是堆叠，而是**分工**。
+
+#### A.4  五流派 → OmniMem v2 分层分工
+
+| OmniMem v2 组件 | 职责 | 灵感来源 |
+|---------------|------|---------|
+| **Working Memory**（L1） | 最近 k 轮原文，零压缩 | 保留现有 |
+| **Verbatim Episodic Store**（L2） | 原文全留 + 冷热分层归档 | MemPalace + OpenViking |
+| **Observation Layer**（L3a） | rule-first + LLM 兜底的 dated observations；append-only prompt 前缀 | Mastra OM |
+| **Temporal KG Layer**（L3b） | bi-temporal edges，**仅对 temporal intent 查询做 lazy 抽取** | Graphiti |
+| **Hybrid Retrieval & Fusion**（L3c） | 向量 + BM25 + KG 子图 + entity linking 并行召回 + RRF rerank | Mem0 v2 |
+| **Procedural / Skill Stats**（L4） | skill usage counter，指向 13-skills SSoT | 保留现有（D-11） |
+| **Consolidator**（元层） | idle-time reflection、KG 剪枝、verbatim 差分压缩 | Mastra Reflector + MemOS feedback |
+
+#### A.5  写路径（异步多源 ingestion）
+
+```
+[turn]
+   │
+   ▼
+┌───────────────────────────────────────┐
+│ L1 Working Memory（sync, deque, k=5） │  ← 同步，主流程不阻塞
+└────────────────┬──────────────────────┘
+                 │ FIFO 溢出 → enqueue
+                 ▼
+    ┌────────────────────────┐
+    │ Async Ingestion Queue  │
+    └───┬────────────────┬───┘
+        │                │
+        ▼                ▼
+┌──────────────┐  ┌───────────────────────────────┐
+│ L2 Verbatim  │  │ Observer（rule-first + LLM）  │
+│ Episodic     │  │   ↓ dated observations         │
+│ (SQLite WAL) │  │ L3a Observation Layer          │
+└──────────────┘  │   ↓ entity signals             │
+                  │ L3b Temporal KG (lazy)         │
+                  │   ↓ vector embed + metadata    │
+                  │ L3c Hybrid Retrieval Index     │
+                  └───────────────────────────────┘
+```
+
+**关键约束**：
+- **同步**只做 L1 写入 + L2 verbatim 落盘。observer / KG / 向量化都**异步**。
+- **Eventual consistency**：L3a/b/c 与 L2 的延迟对齐在 O(秒) 级可接受。
+- **失败不阻塞**：异步路径任一环失败，verbatim 仍完整，下次 idle 时重放。
+
+#### A.6  读路径（并行召回 + 融合 rerank + 可缓存 prompt）
+
+```
+query
+   │
+   ▼
+┌──────────────────────────────────┐
+│ Intent classifier                │  ← 快速规则 + LLM 兜底
+│   factual / temporal /           │
+│   preference / procedural        │
+└────────┬─────────────────────────┘
+         │
+         ▼  （按 intent 加权 fan-out）
+┌────────────────────────────────────────────┐
+│ 并行召回：                                  │
+│   ├─ L2 Verbatim FTS5 (exact phrase)       │
+│   ├─ L3a Observation vector (semantic)     │
+│   ├─ L3b KG 子图遍历（temporal intent 才走） │
+│   └─ L3c Hybrid index（BM25 + 向量）        │
+└────────────┬───────────────────────────────┘
+             │
+             ▼
+┌──────────────────────────────────┐
+│ Fusion reranker                   │
+│   RRF + optional LLM rerank       │
+└────────────┬─────────────────────┘
+             │
+             ▼
+┌──────────────────────────────────┐
+│ Append-only prompt assembly      │  ← 稳定前缀 → prompt cache 命中
+│  [systemPrompt, stable context,  │
+│   recent-turn diff only]         │
+└──────────────────────────────────┘
+```
+
+prompt cache 的稳定前缀是 Mastra OM 的核心创新点；**我们保留并升级为 "block-level invalidation"**：前缀拆成 N 个 block，只让真正变更的 block 失效，其余 block 复用 cache。
+
+#### A.7  每层升级（思想吸收 + 转化 + 升级）
+
+##### L2 Verbatim Episodic Store
+
+- **原思想（MemPalace）**：全保留、不压缩，靠 FTS + 向量检索找。
+- **原思想的局限**：无上限增长，30 天后存储爆炸；palace metaphor（Wing/Hall/Room）是人类心智隐喻，对检索没有工程收益。
+- **Quilin 升级**：
+  1. **冷热分层归档**：`age > N 天` 的 verbatim 迁到冷区，用 zstd 字典压缩（对话文本压缩比 ~8x）；检索命中时按需解压。
+  2. **不用 palace 隐喻**：直接 SQLite 表 + metadata index，按 `user_id / session_id / age_tier` 分区。
+
+##### L3a Observation Layer
+
+- **原思想（Mastra OM）**：后台 Observer 每轮用 LLM 压缩成 dated observations；后台 Reflector 定期重结构化。
+- **原思想的局限**：
+  - 每轮都烧 LLM token，成本随对话轮数线性增长
+  - Reflector 按时间/数量阈值触发，可能做无意义的重排
+- **Quilin 升级**（"rule-first observer"，验证中 Task #97）：
+  1. **两级 Observer**：
+     - Tier 1（零 LLM）：spaCy/regex + dateutil 抽 `entity / time / event`，对结构化 turn（工具结果、短回应、明确时间）直接产出 observation
+     - Tier 2（LLM）：仅在 Tier 1 confidence 低时 escalate（模糊指代、隐含意图、跨轮综合）
+     - 预期：70% 的 turn 走 Tier 1，LLM 成本砍 70%
+  2. **Info-gain-gated Reflector**：只在新 observation 与旧 observation **冲突 / 显著扩展**（Δentropy > ε）时触发重结构化，不按时间/数量。
+  3. **判决门槛**：Tier 1 hit rate ≥ 40% 且 observation 精度不降 → 保留，否则回退纯 LLM observer。
+
+##### L3b Temporal KG Layer
+
+- **原思想（Graphiti）**：每条 episode eagerly 抽实体 + 关系，bi-temporal edges 带 valid_from/valid_to。
+- **原思想的局限**：
+  - 90% 的事实从未被时序查询用到 —— eager 抽取浪费 token
+  - Entity resolution（同一人多种称呼）精度不稳
+  - 上游 `build_indices_and_constraints()` 在 embedded 后端是 no-op（spike 证据）
+- **Quilin 升级**：
+  1. **Lazy extraction**：KG 默认不抽。Intent classifier 识别 `temporal` intent 时才对相关 episode 做即时抽取（抽取结果缓存入 KG，下次命中免抽）。
+  2. **Entity canonicalization**：抽取时强制通过 User Profile Store 中的 canonical entity table 归一化。
+  3. **不用 Kuzu**：直接 SQLite 表存边 + valid_from/valid_to（两列），加索引；不引入 graph DB 依赖。查询用递归 CTE 做 hop-N 遍历。
+
+##### L3c Hybrid Retrieval Index
+
+- **原思想（Mem0 v2）**：单次 extraction pass + entity linking + multi-signal retrieval（vector + BM25 + graph）。
+- **原思想的局限**：上游对 "single-pass extraction" 闭源；权重是固定的。
+- **Quilin 升级**：
+  1. **Learnable reranker**：记录 "哪些召回条目最终被 agent 在 response 中引用"，作为正样本，训练轻量 reranker（logistic regression on feature vector: source/recency/semantic_sim/graph_distance）。
+  2. **Weight tuning per user**：为每用户维护召回权重 profile（某用户更依赖 temporal 召回，某用户更依赖 semantic 召回）。
+
+##### Filesystem Hierarchy（借鉴 OpenViking，不单独立层）
+
+- **原思想（OpenViking）**：L0/L1/L2 物理文件分层按访问频度。
+- **原思想的局限**：需要 Python + Go + C++ 多语言基建。
+- **Quilin 升级**：
+  1. **不引入多语言**：在 SQLite 内做分层（热表常驻 WAL、冷表按访问 entropy 分区到独立文件）。
+  2. **Entropy-based tiering**：tiering 依据不是 LRU，而是访问分布的信息熵 —— 稳定被访问的条目升 hot，访问集中在特定时期的条目降 cold。
+
+##### Consolidator（元层）
+
+- **原思想（Mastra Reflector + MemOS feedback loop）**：周期性整合 + 用户反馈。
+- **Quilin 升级**：
+  1. **Idle-budget gated**：只在 `10-self-evolution` 的 idle 预算内跑；不抢主流程资源。
+  2. **三件事做**：深度 reflection / KG 过期边剪枝 / 旧 verbatim 差分再压缩。
+  3. **Human-in-loop**：reflection 产出的新 "insight" 经 07 §2.6.4 WriteAuthority 落盘，不自动合入。
+
+#### A.8  迭代规划（M0 → M1 → M2）
+
+| Milestone | 范围 | 判决指标 | 预估工作量 |
+|-----------|------|---------|-----------|
+| **M0**（Iter C Sprint 1） | L1 + L2 verbatim + L3a Observation（rule-first + LLM 兜底） + L3c 基础向量/BM25 召回 + 融合 rerank（无 KG） | AMB 四轴基线；LongMemEval ≥ 85% | 3-4 周 |
+| **M1**（Iter C Sprint 2） | 加 L3b Lazy Temporal KG + Learnable Reranker + prompt cache block-level invalidation | LongMemEval ≥ 92%；成本比 M0 ≤ 1.3x | 2-3 周 |
+| **M2**（Iter C Sprint 3） | 加 L2 冷热分层归档 + Consolidator idle loop + per-user weight profile | LongMemEval ≥ 95%；容量 ≥ 10 万条 / 用户；p95 召回 < 300ms | 2 周 |
+
+**每个 M 都必须**：
+- 通过 AMB 四轴量化验证
+- 若某层升级未达门槛，回滚该层（写 digest 到 watchlist）
+- 不 regress 前一 M 的 benchmark
+
+#### A.9  上游跟进机制（跟思想不跟代码）
+
+在 `docs/research/memory-watchlist/` 为每家维护研究线程：
+
+```
+docs/research/memory-watchlist/
+├── README.md         # 索引 + watchlist 运作规则
+├── mastra-om.md      # 原架构、关键论点、digest 历史
+├── graphiti.md
+├── mem0.md
+├── mempalace.md
+└── openviking.md
+```
+
+**运作规则**：
+1. 上游发新 version / blog / paper → 读 → 写 digest（"他们改了什么 / 为什么 / 对我们启示"）
+2. digest 被 human review → 若启示成立，起 ADR-slug 或 spec delta PR
+3. PR 通过后再动代码；**不合入上游 git**
+
+这条机制与 10-self-evolution "human-in-loop propose patch" 同构：**没有上游自动合入**。
+
+#### A.10  与现有实现的对齐
+
+- 已实现（`providers/memory/`）：SQLite + FTS5 integration tests 31/31 绿 —— 对应 D-20 L2 verbatim + L3c BM25 部分。**继续沿用**。
+- 不需丢弃：D-11 Skill SSoT 原则、D-05 跨域 contract、R-07/R-12 工厂重构 —— **全部保留**，D-20 叠加在上面。
+
+---
+
+### 二·B  Layer 1–4 基线 spec（v1，将按 D-20 M0/M1/M2 局部重写）
+
 ### OmniMem 4 层架构图
 
 ```
@@ -135,9 +357,9 @@ Claude Code 的 CLAUDE.md 是一种创新——把项目级知识写成文件让
 
 **知识图谱（Knowledge Graph）**：
 - 存储内容：实体-关系-实体三元组，如 `(Python, is_language_of, FastAPI)`
-- **后端（D-12 2026-04-20）**：**默认 Graphiti（Zep 开源版，Apache-2.0）**——温度时序 KG，LongMemEval 基准上比 mem0 / RAG +15 pts，sub-second GraphRAG 检索。本地开发可退化为 NetworkX；Graphiti 可选 Neo4j 或 FalkorDB 作为后端存储
-- 三元组来源：Reflector 从 Episodic Memory 中自动抽取；Graphiti 自带 entity extraction 默认提示词，我们薄封装
-- 时序标注：每条关系携带生效时间和失效时间（Graphiti 原生能力，支持 point-in-time 回溯查询）
+- **后端（~~D-12~~ **已被 D-20 取代**，见 §二·A）**：~~默认 Graphiti（Zep 开源版）~~。D-20 基于 Codex spike (Task #93) 证据 + 2026-04 SOTA 格局变化（Mem0 v2 反超 Graphiti 22 pts、LongMemEval 被 Hindsight 论证已过时），**改为 Lazy Temporal KG 自研实现（SQLite + bi-temporal 列 + 递归 CTE）**；不引入 Kuzu/Neo4j/FalkorDB 依赖，不 lock in 任何单一库。详见 §二·A.7 L3b。
+- 三元组来源：Intent classifier 识别 temporal intent 时才对相关 episode 做 lazy 抽取（Quilin 自研，思想借鉴 Graphiti 但不依赖其包）；Entity canonicalization 走 User Profile Store。
+- 时序标注：每条关系携带 `valid_from` / `valid_to` 两列，支持 point-in-time 查询（SQL `WHERE ts BETWEEN valid_from AND COALESCE(valid_to, 'infinity')`）。
 - 查询能力：子图检索、关系路径查询、实体邻居查询
 
 **Agent-facing 接口（Letta 启发）**：除了被动 Reflector 自动抽取外，额外暴露以下工具让 agent 主动自编辑语义 tier：
