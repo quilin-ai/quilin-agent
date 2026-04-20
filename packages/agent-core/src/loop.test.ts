@@ -1083,4 +1083,235 @@ describe("runAgentLoop", () => {
 			},
 		]);
 	});
+
+	it("在 tool chain 中途崩溃时保存增量 checkpoint 并允许从中间状态恢复", async () => {
+		vi.mocked(getLoggerRuntimeMode).mockReturnValue("repl");
+
+		const savedStates: Array<{
+			messages: readonly unknown[];
+			turnCount: number;
+			isTerminal: boolean;
+			createdAt: string;
+			lastActiveAt: string;
+		}> = [];
+		const checkpoint = {
+			save: vi.fn(async (state) => {
+				savedStates.push(state);
+			}),
+			load: vi.fn(),
+			list: vi.fn(),
+		};
+		const crashingChat = vi
+			.fn()
+			.mockResolvedValueOnce({
+				content: "",
+				toolCalls: [
+					{
+						id: "call-1",
+						name: "memory_recall",
+						arguments: { query: "resume me" },
+					},
+				],
+				usage: {
+					inputTokens: 10,
+					outputTokens: 20,
+				},
+				finishReason: "tool_calls",
+			})
+			.mockRejectedValueOnce(new Error("provider crashed"));
+		const execute = vi.fn().mockResolvedValue({
+			toolCallId: "ignored-by-router",
+			content: JSON.stringify({ records: [{ id: "mem-1", content: "resume me" }] }),
+			isError: false,
+		});
+
+		await expect(
+			runAgentLoop(
+				{
+					llm: { chat: crashingChat },
+					checkpoint,
+					state: {
+						messages: [{ role: "user", content: "resume me" }],
+						isTerminal: false,
+						turnCount: 0,
+						createdAt: "2026-04-20T00:00:00.000Z",
+						lastActiveAt: "2026-04-20T00:00:00.000Z",
+					},
+					tools: [
+						{
+							name: "memory_recall",
+							description: "Recall memory",
+							parameters: {
+								safeParse: vi.fn().mockImplementation((input) => ({
+									success: true,
+									data: input,
+								})),
+							} as never,
+							execute,
+						},
+					],
+					inferenceConfig: {
+						temperature: 0.7,
+						maxTokens: 1024,
+						thinkingMode: "disabled",
+					},
+				},
+				[{ role: "user", content: "resume me" }],
+			),
+		).rejects.toThrow("provider crashed");
+
+		const resumedState = savedStates.at(-1);
+		expect(resumedState).toBeDefined();
+		expect(resumedState?.messages).toEqual([
+			{ role: "user", content: "resume me" },
+			{
+				role: "assistant",
+				content: "",
+				toolCalls: [
+					{
+						id: "call-1",
+						name: "memory_recall",
+						arguments: { query: "resume me" },
+					},
+				],
+			},
+			{
+				role: "tool",
+				toolCallId: "call-1",
+				name: "memory_recall",
+				content: JSON.stringify({
+					records: [{ id: "mem-1", content: "resume me" }],
+				}),
+			},
+		]);
+
+		const resumedChat = vi.fn().mockResolvedValue({
+			content: "resumed successfully",
+			usage: {
+				inputTokens: 15,
+				outputTokens: 25,
+			},
+			finishReason: "stop",
+		});
+
+		await expect(
+			runAgentLoop(
+				{
+					llm: { chat: resumedChat },
+					checkpoint,
+					state: resumedState as never,
+					tools: [
+						{
+							name: "memory_recall",
+							description: "Recall memory",
+							parameters: {
+								safeParse: vi.fn().mockImplementation((input) => ({
+									success: true,
+									data: input,
+								})),
+							} as never,
+							execute,
+						},
+					],
+					inferenceConfig: {
+						temperature: 0.7,
+						maxTokens: 1024,
+						thinkingMode: "disabled",
+					},
+				},
+				resumedState?.messages as never,
+			),
+		).resolves.toBe("resumed successfully");
+	});
+
+	it("在关键 loop 节点触发 observability hooks", async () => {
+		vi.mocked(getLoggerRuntimeMode).mockReturnValue("repl");
+
+		const spans: Array<{ name: string; attributes?: Record<string, unknown> }> = [];
+		const chat = vi
+			.fn()
+			.mockResolvedValueOnce({
+				content: "",
+				toolCalls: [
+					{
+						id: "call-1",
+						name: "memory_recall",
+						arguments: { query: "hook me" },
+					},
+				],
+				usage: {
+					inputTokens: 10,
+					outputTokens: 20,
+				},
+				finishReason: "tool_calls",
+			})
+			.mockResolvedValueOnce({
+				content: "hooked",
+				usage: {
+					inputTokens: 15,
+					outputTokens: 25,
+				},
+				finishReason: "stop",
+			});
+		const execute = vi.fn().mockResolvedValue({
+			toolCallId: "ignored-by-router",
+			content: JSON.stringify({ records: [] }),
+			isError: false,
+		});
+
+		await runAgentLoop(
+			{
+				llm: { chat },
+				hooks: {
+					recordSpan: async (name, attributes) => {
+						spans.push({ name, attributes });
+					},
+				},
+				checkpoint: {
+					save: vi.fn(async () => undefined),
+					load: vi.fn(),
+					list: vi.fn(),
+				},
+				tools: [
+					{
+						name: "memory_recall",
+						description: "Recall memory",
+						parameters: {
+							safeParse: vi.fn().mockImplementation((input) => ({
+								success: true,
+								data: input,
+							})),
+						} as never,
+						execute,
+					},
+				],
+				inferenceConfig: {
+					temperature: 0.7,
+					maxTokens: 1024,
+					thinkingMode: "disabled",
+				},
+			} as never,
+			[{ role: "user", content: "hook me" }],
+		);
+
+		expect(spans.map((span) => span.name)).toEqual(
+			expect.arrayContaining([
+				"loop.turn.start",
+				"loop.llm.chat",
+				"loop.tool.execute",
+				"loop.checkpoint.save",
+			]),
+		);
+		expect(spans).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					name: "loop.tool.execute",
+					attributes: expect.objectContaining({
+						toolName: "memory_recall",
+						toolCallId: "call-1",
+					}),
+				}),
+			]),
+		);
+	});
 });

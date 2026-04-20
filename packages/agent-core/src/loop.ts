@@ -23,18 +23,55 @@ export class AgentLoopError extends Error {
 
 function buildCheckpointState(
 	messages: readonly Message[],
-	responseContent: string,
+	turnCount: number,
 	state?: AgentState,
 ): AgentState {
 	const now = new Date().toISOString();
+	const accumulatedTurnCount = (state?.turnCount ?? 0) + turnCount;
 
 	return {
-		messages: [...messages, { role: "assistant", content: responseContent }],
+		messages: [...messages],
 		isTerminal: false,
-		turnCount: (state?.turnCount ?? 0) + 1,
+		turnCount: accumulatedTurnCount,
 		createdAt: state?.createdAt ?? now,
 		lastActiveAt: now,
 	};
+}
+
+export interface LoopHooks {
+	readonly recordSpan?: (
+		name: string,
+		attributes?: Record<string, unknown>,
+	) => void | Promise<void>;
+}
+
+async function recordLoopSpan(
+	hooks: LoopHooks | undefined,
+	name: string,
+	attributes?: Record<string, unknown>,
+): Promise<void> {
+	await hooks?.recordSpan?.(name, attributes);
+}
+
+async function saveCheckpointState(
+	checkpoint: Checkpoint | undefined,
+	hooks: LoopHooks | undefined,
+	messages: readonly Message[],
+	turnCount: number,
+	state?: AgentState,
+	phase?: string,
+): Promise<void> {
+	if (checkpoint == null) {
+		return;
+	}
+
+	const checkpointState = buildCheckpointState(messages, turnCount, state);
+	await checkpoint.save(checkpointState);
+	await recordLoopSpan(hooks, "loop.checkpoint.save", {
+		turnCount,
+		phase,
+		messageCount: checkpointState.messages.length,
+	});
 }
 
 function isWithinWorkspace(filePath: string): boolean {
@@ -112,6 +149,18 @@ export async function runAgentLoop(
 		}
 
 		turnCount += 1;
+		await recordLoopSpan(config.hooks, "loop.turn.start", {
+			turnCount,
+			messageCount: workingMessages.length,
+		});
+		await saveCheckpointState(
+			config.checkpoint,
+			config.hooks,
+			workingMessages,
+			turnCount,
+			config.state,
+			"turn_start",
+		);
 
 		if (shouldLogDebug) {
 			logger.debug(
@@ -125,6 +174,12 @@ export async function runAgentLoop(
 			config.tools ?? [],
 			inferenceConfig,
 		);
+		await recordLoopSpan(config.hooks, "loop.llm.chat", {
+			turnCount,
+			finishReason: response.finishReason,
+			inputTokens: response.usage.inputTokens,
+			outputTokens: response.usage.outputTokens,
+		});
 
 		if (shouldLogDebug) {
 			logger.debug(
@@ -147,11 +202,14 @@ export async function runAgentLoop(
 		}
 
 		if (response.finishReason !== "tool_calls") {
-			if (config.checkpoint != null) {
-				await config.checkpoint.save(
-					buildCheckpointState(workingMessages, response.content, config.state),
-				);
-			}
+			await saveCheckpointState(
+				config.checkpoint,
+				config.hooks,
+				[...workingMessages, { role: "assistant", content: response.content }],
+				turnCount,
+				config.state,
+				"assistant_response",
+			);
 
 			return response.content;
 		}
@@ -171,10 +229,24 @@ export async function runAgentLoop(
 			content: response.content,
 			toolCalls: response.toolCalls,
 		});
+		await saveCheckpointState(
+			config.checkpoint,
+			config.hooks,
+			workingMessages,
+			turnCount,
+			config.state,
+			"assistant_tool_calls",
+		);
 
 		// TODO: 在明确工具副作用/顺序语义后，将独立 tool calls 改为并行执行。
 		for (const toolCall of response.toolCalls) {
 			const toolResult = await router.execute(toolCall);
+			await recordLoopSpan(config.hooks, "loop.tool.execute", {
+				turnCount,
+				toolName: toolCall.name,
+				toolCallId: toolCall.id,
+				isError: toolResult.isError,
+			});
 			const trustedToolOutput = shouldTrustToolOutput(
 				toolCall.name,
 				toolCall.arguments,
@@ -205,6 +277,14 @@ export async function runAgentLoop(
 				name: toolCall.name,
 				content: scanResult.sanitizedContent,
 			});
+			await saveCheckpointState(
+				config.checkpoint,
+				config.hooks,
+				workingMessages,
+				turnCount,
+				config.state,
+				"tool_result",
+			);
 
 			if (consecutiveBlockedToolOutputs >= 3) {
 				throw new AgentLoopError(
@@ -225,5 +305,6 @@ export interface AgentLoopConfig {
 	readonly maxTurns?: number;
 	/** Defaults to 200_000 if omitted; counts inputTokens + outputTokens across the whole loop. */
 	readonly maxTotalTokens?: number;
+	readonly hooks?: LoopHooks;
 	readonly inferenceConfig: InferenceConfig;
 }
