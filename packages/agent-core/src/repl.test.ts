@@ -277,6 +277,50 @@ describe("startRepl", () => {
 		expect(stderrWriteSpy).toHaveBeenCalledWith("Conversation cleared.\n\n");
 	});
 
+	it("resets stream render state on /clear", async () => {
+		mockQuestion
+			.mockResolvedValueOnce("hello")
+			.mockResolvedValueOnce("/clear")
+			.mockResolvedValueOnce("after clear")
+			.mockResolvedValueOnce("/exit");
+		mockRunAgentLoop
+			.mockImplementationOnce(async () => {
+				capturedStreamCallback?.({
+					type: "tool-call-start",
+					toolCallId: "call-1",
+					toolName: "search",
+				});
+				capturedStreamCallback?.({
+					type: "tool-call-args-delta",
+					toolCallId: "call-1",
+					toolName: "search",
+					delta: '{"q":"stale"}',
+				});
+				return "first reply";
+			})
+			.mockImplementationOnce(async () => {
+				capturedStreamCallback?.({
+					type: "tool-call-end",
+					toolCallId: "call-1",
+					toolName: "search",
+					inputText: "",
+				});
+				return "second reply";
+			});
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: vi.fn().mockReturnValue("model-instance"),
+			modelId: "deepseek-chat",
+		});
+
+		expect(stderrWriteSpy).toHaveBeenCalledWith("\n🔧 calling search()\n");
+		expect(stderrWriteSpy).not.toHaveBeenCalledWith(
+			'\n🔧 calling search({"q":"stale"})\n',
+		);
+	});
+
 	it("rolls back the failed user message", async () => {
 		mockQuestion
 			.mockResolvedValueOnce("first")
@@ -309,6 +353,49 @@ describe("startRepl", () => {
 			"\n[Error: LLM call failed. Check logs for details.]\n\n",
 		);
 		expect(mockRegistryDisconnectAll).toHaveBeenCalledTimes(1);
+	});
+
+	it("resets stream render state after a failed turn", async () => {
+		mockQuestion
+			.mockResolvedValueOnce("first")
+			.mockResolvedValueOnce("second")
+			.mockResolvedValueOnce("/exit");
+		mockRunAgentLoop
+			.mockImplementationOnce(async () => {
+				capturedStreamCallback?.({
+					type: "tool-call-start",
+					toolCallId: "call-1",
+					toolName: "search",
+				});
+				capturedStreamCallback?.({
+					type: "tool-call-args-delta",
+					toolCallId: "call-1",
+					toolName: "search",
+					delta: '{"q":"stale"}',
+				});
+				throw new Error("boom");
+			})
+			.mockImplementationOnce(async () => {
+				capturedStreamCallback?.({
+					type: "tool-call-end",
+					toolCallId: "call-1",
+					toolName: "search",
+					inputText: "",
+				});
+				return "ok";
+			});
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: vi.fn().mockReturnValue("model-instance"),
+			modelId: "deepseek-chat",
+		});
+
+		expect(stderrWriteSpy).toHaveBeenCalledWith("\n🔧 calling search()\n");
+		expect(stderrWriteSpy).not.toHaveBeenCalledWith(
+			'\n🔧 calling search({"q":"stale"})\n',
+		);
 	});
 
 	it("restores a saved session when sessionId is provided", async () => {
@@ -450,6 +537,83 @@ describe("startRepl", () => {
 		expect(stderrWriteSpy).toHaveBeenCalledWith("Thinking mode: enabled.\n");
 		expect(stderrWriteSpy).toHaveBeenCalledWith("Thinking mode: disabled.\n");
 		expect(stderrWriteSpy).toHaveBeenCalledWith("Thinking mode: auto.\n");
+	});
+
+	it("shows base and effective model in /status", async () => {
+		mockQuestion
+			.mockResolvedValueOnce("/think on")
+			.mockResolvedValueOnce("/verbose")
+			.mockResolvedValueOnce("/status")
+			.mockResolvedValueOnce("/exit");
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: vi.fn((requestedModelId: string) => ({
+				provider: "deepseek",
+				modelId: requestedModelId,
+			})),
+			modelId: "deepseek-chat",
+		});
+
+		expect(stderrWriteSpy).toHaveBeenCalledWith(
+			"Status: model=deepseek-chat | effective=deepseek-reasoner | thinking=enabled | reasoning=verbose\n",
+		);
+	});
+
+	it("queues slash commands entered during WriteAuthority confirmation", async () => {
+		mockQuestion
+			.mockResolvedValueOnce("trigger write")
+			.mockResolvedValueOnce("/think on")
+			.mockResolvedValueOnce("y")
+			.mockResolvedValueOnce("follow up")
+			.mockResolvedValueOnce("/exit");
+		mockRunAgentLoop
+			.mockImplementationOnce(async () => {
+				const writeAuthority = mockCreateBuiltinTools.mock.calls[0]?.[0]
+					?.writeAuthority as
+					| {
+							authorize: (request: {
+								tool: string;
+								riskLevel: "low" | "medium" | "high" | "critical";
+								summary: string;
+								origin: "user" | "agent" | "idle";
+							}) => Promise<unknown>;
+					  }
+					| undefined;
+				expect(writeAuthority).toBeDefined();
+				await writeAuthority?.authorize({
+					tool: "shell_exec",
+					riskLevel: "high",
+					summary: "write file",
+					origin: "agent",
+				});
+				return "first reply";
+			})
+			.mockImplementationOnce(async () => "second reply");
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: vi.fn((requestedModelId: string) => ({
+				provider: "deepseek",
+				modelId: requestedModelId,
+			})),
+			modelId: "deepseek-chat",
+		});
+
+		expect(stderrWriteSpy).toHaveBeenCalledWith(
+			"Command queued for next turn: /think on\n",
+		);
+		expect(mockRunAgentLoop).toHaveBeenNthCalledWith(
+			2,
+			expect.objectContaining({
+				inferenceConfig: expect.objectContaining({
+					thinkingMode: "enabled",
+				}),
+			}),
+			expect.any(Array),
+		);
 	});
 
 	it("toggles reasoning display between verbose and collapsed", async () => {

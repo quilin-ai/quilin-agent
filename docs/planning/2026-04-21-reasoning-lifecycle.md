@@ -81,6 +81,27 @@ last_updated: 2026-04-21
   - `pnpm --filter @quilin/agent-core test` → `245/246`，唯一失败保持为 `src/tools/builtin/web-fetch.test.ts`
   - `pnpm --filter @quilin/agent-core exec tsc --noEmit` 当前被本地环境阻塞：`Cannot find type definition file for 'bun-types'`
 
+#### Phase 2 second-batch status (2026-04-21)
+
+- **已修 / 已缓解**：`H-04 / H-05 / H-06 / H-07(partial) / M-01 / M-02 / M-04 / M-05 / L-02`
+  - `H-04`：`StreamingLLMClient` 现在对 `fullStream` 的 `error` chunk 直接抛错，不再把截断响应当成功
+  - `H-05`：DeepSeek thinking 导致 effective model 切到 `deepseek-reasoner` 时会 `console.warn`，REPL 也新增 `/status` 可见 base/effective model
+  - `H-06`：OpenAI 路径在 `thinkingBudget` 无法精确映射时会 warn，一次性说明已退化为 `reasoningEffort`
+  - `H-07`：WriteAuthority confirm 期间输入的 slash-command 现在会排队到下一轮，不再被确认提示吞掉；**但无 active prompt 的原始 TTY 预缓冲仍未单独拦截**
+  - `M-01`：REPL 出错后会 reset `streamRenderState`
+  - `M-02`：tool-name 未知时先缓冲 `tool-input-delta`，拿到真实 toolName 后再补发，不再冒名 `tool`
+  - `M-04`：`buildProviderOptions` 收紧成 typed result（`providerOptions + warnings`），不再裸回 `Record<string, unknown>`
+  - `M-05`：`/clear` 会一起 reset `streamRenderState`
+  - `L-02`：`summarizeToolOutput` 改为 `isRecord` 守卫，不再靠裸断言
+- **仍留给后续**：`L-01 / L-03`
+  - `L-01`：stderr 多通道区分（reasoning / error / normal chrome）还没拆
+  - `L-03`：`startRepl` 结构化拆分还没做，这轮优先修 correctness / UX race
+- **验证快照**：
+  - `pnpm --filter @quilin/agent-core exec vitest run src/llm/client.test.ts src/repl.test.ts src/loop.test.ts src/state/checkpoint.test.ts src/llm/cache-adapter.test.ts src/context/injection-scanner.test.ts` → `85/85`
+  - `pnpm --filter @quilin/agent-core test` → `255/256`，唯一失败保持为 `src/tools/builtin/web-fetch.test.ts`
+  - `pnpm --filter @quilin/agent-core exec biome check ...` → green
+  - `pnpm --filter @quilin/agent-core exec tsc --noEmit` 仍被本地环境 `bun-types` 缺失阻塞，未纳入通过证据
+
 ### Phase 3 — Reasoning carry-over via cache-adapter ⏳
 
 - **做什么**：

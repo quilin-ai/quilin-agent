@@ -27,7 +27,41 @@ type ModelHandle = LanguageModel | ResolvableModelHandle;
 interface PreparedInvocation {
 	readonly model: LanguageModel;
 	readonly messages: ReturnType<typeof adaptMessagesForModel>["messages"];
-	readonly providerOptions?: Record<string, unknown>;
+	readonly providerOptions?: InvocationProviderOptions;
+	readonly warnings: readonly InvocationWarning[];
+}
+
+type InvocationWarning =
+	| "deepseek-reasoner-upgrade"
+	| "openai-thinking-budget-ignored";
+
+interface AnthropicProviderOptions {
+	readonly anthropic: {
+		readonly thinking: {
+			readonly type: "enabled";
+			readonly budgetTokens: number;
+		};
+	};
+}
+
+interface OpenAIProviderOptions {
+	readonly openai: {
+		readonly reasoningEffort: "medium" | "high";
+	};
+}
+
+type InvocationProviderOptions =
+	| AnthropicProviderOptions
+	| OpenAIProviderOptions;
+
+interface ProviderOptionsBuildResult {
+	readonly providerOptions?: InvocationProviderOptions;
+	readonly warnings: readonly InvocationWarning[];
+}
+
+interface ResolvedInvocationModel {
+	readonly model: LanguageModel;
+	readonly warnings: readonly InvocationWarning[];
 }
 
 type GenerateTextReasoningPart = Awaited<
@@ -40,11 +74,12 @@ type NativeReasoningPart = GenerateTextReasoningPart | StreamTextReasoningPart;
 type NativeProviderMetadata = NativeReasoningPart["providerMetadata"];
 
 interface ToolCallStreamState {
-	toolName: string;
+	toolName?: string;
 	inputText: string;
 	input?: unknown;
 	started: boolean;
 	ended: boolean;
+	pendingInputDeltas: string[];
 }
 
 interface ReasoningAccumulatorState {
@@ -144,39 +179,49 @@ function mapOpenAIReasoningEffort(
 function buildProviderOptions(
 	provider: string | undefined,
 	config: InferenceConfig,
-): Record<string, unknown> | undefined {
+): ProviderOptionsBuildResult {
 	switch (normalizeProviderName(provider)) {
 		case "anthropic":
 			return config.thinkingMode === "enabled"
 				? {
-						anthropic: {
-							thinking: {
-								type: "enabled" as const,
-								budgetTokens: config.thinkingBudget ?? 1024,
+						providerOptions: {
+							anthropic: {
+								thinking: {
+									type: "enabled",
+									budgetTokens: config.thinkingBudget ?? 1024,
+								},
 							},
 						},
+						warnings: [],
 					}
-				: undefined;
+				: { warnings: [] };
 		case "openai": {
 			const reasoningEffort = mapOpenAIReasoningEffort(config.thinkingMode);
+			const warnings =
+				config.thinkingBudget == null
+					? []
+					: (["openai-thinking-budget-ignored"] as const);
 			return reasoningEffort == null
-				? undefined
+				? { warnings }
 				: {
-						openai: {
-							reasoningEffort,
+						providerOptions: {
+							openai: {
+								reasoningEffort,
+							},
 						},
+						warnings,
 					};
 		}
 		case "deepseek":
 		case "unknown":
-			return undefined;
+			return { warnings: [] };
 	}
 }
 
 function resolveInvocationModel(
 	modelHandle: ModelHandle,
 	config: InferenceConfig,
-): LanguageModel {
+): ResolvedInvocationModel {
 	const baseModel = getBaseModel(modelHandle);
 	if (
 		normalizeProviderName(baseModel.provider) === "deepseek" &&
@@ -184,10 +229,17 @@ function resolveInvocationModel(
 		isResolvableModelHandle(modelHandle) &&
 		modelHandle.resolveModel != null
 	) {
-		return modelHandle.resolveModel("deepseek-reasoner");
+		const resolvedModel = modelHandle.resolveModel("deepseek-reasoner");
+		return {
+			model: resolvedModel,
+			warnings:
+				resolvedModel.modelId === baseModel.modelId
+					? []
+					: ["deepseek-reasoner-upgrade"],
+		};
 	}
 
-	return baseModel;
+	return { model: baseModel, warnings: [] };
 }
 
 function prepareInvocation(
@@ -196,17 +248,22 @@ function prepareInvocation(
 	config: InferenceConfig,
 	prompt?: AssembledPrompt,
 ): PreparedInvocation {
-	const model = resolveInvocationModel(modelHandle, config);
+	const resolvedModel = resolveInvocationModel(modelHandle, config);
 	const adaptedPrompt = adaptMessagesForModel({
 		messages,
 		prompt,
-		provider: model.provider,
+		provider: resolvedModel.model.provider,
 	});
+	const providerOptions = buildProviderOptions(
+		resolvedModel.model.provider,
+		config,
+	);
 
 	return {
-		model,
+		model: resolvedModel.model,
 		messages: adaptedPrompt.messages,
-		providerOptions: buildProviderOptions(model.provider, config),
+		providerOptions: providerOptions.providerOptions,
+		warnings: [...resolvedModel.warnings, ...providerOptions.warnings],
 	};
 }
 
@@ -408,10 +465,11 @@ function ensureToolCallState(
 	}
 
 	const created: ToolCallStreamState = {
-		toolName: toolName ?? "tool",
+		toolName,
 		inputText: "",
 		started: false,
 		ended: false,
+		pendingInputDeltas: [],
 	};
 	states.set(toolCallId, created);
 	return created;
@@ -422,7 +480,7 @@ function emitToolCallStart(
 	toolCallId: string,
 	onEvent: ((event: LLMStreamEvent) => void) | undefined,
 ): void {
-	if (state.started) {
+	if (state.started || state.toolName == null) {
 		return;
 	}
 
@@ -434,12 +492,57 @@ function emitToolCallStart(
 	});
 }
 
+function flushBufferedToolCallInput(
+	state: ToolCallStreamState,
+	toolCallId: string,
+	onEvent: ((event: LLMStreamEvent) => void) | undefined,
+): void {
+	if (state.toolName == null || state.pendingInputDeltas.length === 0) {
+		return;
+	}
+
+	for (const delta of state.pendingInputDeltas) {
+		onEvent?.({
+			type: "tool-call-args-delta",
+			toolCallId,
+			toolName: state.toolName,
+			delta,
+		});
+	}
+	state.pendingInputDeltas = [];
+}
+
+function emitInvocationWarnings(
+	warnings: readonly InvocationWarning[],
+	seenWarnings: Set<InvocationWarning>,
+): void {
+	for (const warning of warnings) {
+		if (seenWarnings.has(warning)) {
+			continue;
+		}
+
+		seenWarnings.add(warning);
+		switch (warning) {
+			case "deepseek-reasoner-upgrade":
+				console.warn(
+					"Effective model upgraded to deepseek-reasoner because thinking mode is enabled.",
+				);
+				break;
+			case "openai-thinking-budget-ignored":
+				console.warn(
+					"OpenAI does not expose token-precise thinking budgets; thinkingBudget is ignored and mapped to reasoningEffort.",
+				);
+				break;
+		}
+	}
+}
+
 function emitToolCallEnd(
 	state: ToolCallStreamState,
 	toolCallId: string,
 	onEvent: ((event: LLMStreamEvent) => void) | undefined,
 ): void {
-	if (state.ended) {
+	if (state.ended || state.toolName == null) {
 		return;
 	}
 
@@ -459,6 +562,8 @@ function emitToolCallEnd(
  * 直接传 LanguageModel 给 generateText()。
  */
 export class VercelLLMClient implements LLMClient {
+	private readonly seenWarnings = new Set<InvocationWarning>();
+
 	constructor(private readonly model: ModelHandle) {}
 
 	async chat(
@@ -468,6 +573,7 @@ export class VercelLLMClient implements LLMClient {
 		prompt?: AssembledPrompt,
 	): Promise<LLMResponse> {
 		const prepared = prepareInvocation(this.model, messages, config, prompt);
+		emitInvocationWarnings(prepared.warnings, this.seenWarnings);
 
 		const result = await generateText({
 			model: prepared.model,
@@ -500,6 +606,8 @@ export class VercelLLMClient implements LLMClient {
  * 逐事件调用 onEvent 回调，用于 REPL 逐字输出与 thinking/tool 进度展示。
  */
 export class StreamingLLMClient implements LLMClient {
+	private readonly seenWarnings = new Set<InvocationWarning>();
+
 	constructor(
 		private readonly model: ModelHandle,
 		private readonly onEvent?: (event: LLMStreamEvent) => void,
@@ -512,6 +620,7 @@ export class StreamingLLMClient implements LLMClient {
 		prompt?: AssembledPrompt,
 	): Promise<LLMResponse> {
 		const prepared = prepareInvocation(this.model, messages, config, prompt);
+		emitInvocationWarnings(prepared.warnings, this.seenWarnings);
 
 		const result = streamText({
 			model: prepared.model,
@@ -574,12 +683,17 @@ export class StreamingLLMClient implements LLMClient {
 						chunk.toolName,
 					);
 					emitToolCallStart(state, chunk.id, this.onEvent);
+					flushBufferedToolCallInput(state, chunk.id, this.onEvent);
 					break;
 				}
 				case "tool-input-delta": {
 					const state = ensureToolCallState(toolCallStates, chunk.id);
-					emitToolCallStart(state, chunk.id, this.onEvent);
 					state.inputText += chunk.delta;
+					if (state.toolName == null) {
+						state.pendingInputDeltas.push(chunk.delta);
+						break;
+					}
+					emitToolCallStart(state, chunk.id, this.onEvent);
 					this.onEvent?.({
 						type: "tool-call-args-delta",
 						toolCallId: chunk.id,
@@ -603,6 +717,7 @@ export class StreamingLLMClient implements LLMClient {
 						state.inputText = stringifyJson(chunk.input);
 					}
 					emitToolCallStart(state, chunk.toolCallId, this.onEvent);
+					flushBufferedToolCallInput(state, chunk.toolCallId, this.onEvent);
 					emitToolCallEnd(state, chunk.toolCallId, this.onEvent);
 					break;
 				}
@@ -625,6 +740,10 @@ export class StreamingLLMClient implements LLMClient {
 						isError: true,
 					});
 					break;
+				case "error":
+					throw chunk.error instanceof Error
+						? chunk.error
+						: new Error(String(chunk.error));
 				default:
 					break;
 			}
@@ -653,3 +772,11 @@ export class StreamingLLMClient implements LLMClient {
 		};
 	}
 }
+
+export const __test__ = {
+	isResolvableModelHandle,
+	getBaseModel,
+	normalizeProviderName,
+	mapOpenAIReasoningEffort,
+	buildProviderOptions,
+};

@@ -118,6 +118,10 @@ function stringifyJson(value: unknown): string {
 	return serialized ?? String(value);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value != null;
+}
+
 function summarizeInlineText(text: string, maxLength = 120): string {
 	const singleLine = text.replace(/\s+/gu, " ").trim();
 	if (singleLine.length <= maxLength) {
@@ -128,13 +132,13 @@ function summarizeInlineText(text: string, maxLength = 120): string {
 }
 
 function summarizeToolOutput(output: unknown): string {
-	if (output != null && typeof output === "object") {
-		const result = (output as { result?: unknown }).result;
+	if (isRecord(output)) {
+		const result = output.result;
 		if (typeof result === "string") {
 			return summarizeInlineText(result);
 		}
 
-		const content = (output as { content?: unknown }).content;
+		const content = output.content;
 		if (typeof content === "string") {
 			return summarizeInlineText(content.split(/\r?\n/u, 1)[0] ?? content);
 		}
@@ -194,6 +198,17 @@ function renderStreamEvent(
 	}
 }
 
+function getEffectiveModelId(
+	baseProvider: string | undefined,
+	baseModelId: string,
+	thinkingMode: InferenceConfig["thinkingMode"],
+): string {
+	return baseProvider?.split(".")[0]?.toLowerCase() === "deepseek" &&
+		thinkingMode !== "disabled"
+		? "deepseek-reasoner"
+		: baseModelId;
+}
+
 export async function startRepl(options: ReplOptions): Promise<void> {
 	const {
 		provider,
@@ -211,6 +226,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 	const resolvedSessionId = sessionId ?? crypto.randomUUID();
 	const checkpoint = new SQLiteCheckpoint({ sessionId: resolvedSessionId });
 	let rl: readline.Interface | undefined;
+	const queuedCommands: string[] = [];
 	const writeAuthority = new WriteAuthority({
 		actor: resolvedSessionId,
 		confirm: async (request) => {
@@ -218,25 +234,33 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 				return false;
 			}
 
-			const answer = (
-				await rl.question(
-					`[WriteAuthority] ${request.tool} (${request.riskLevel.toUpperCase()}): ${request.summary}\nAllow? [y/N/always-low/always-medium]: `,
-				)
-			)
-				.trim()
-				.toLowerCase();
+			while (true) {
+				const answer = (
+					await rl.question(
+						`[WriteAuthority] ${request.tool} (${request.riskLevel.toUpperCase()}): ${request.summary}\nAllow? [y/N/always-low/always-medium]: `,
+					)
+				).trim();
 
-			if (answer === "always-low") {
-				writeAuthority.setMode("auto-low");
-				return true;
+				if (answer.startsWith("/")) {
+					queuedCommands.push(answer);
+					stderr.write(`Command queued for next turn: ${answer}\n`);
+					continue;
+				}
+
+				const normalizedAnswer = answer.toLowerCase();
+
+				if (normalizedAnswer === "always-low") {
+					writeAuthority.setMode("auto-low");
+					return true;
+				}
+
+				if (normalizedAnswer === "always-medium") {
+					writeAuthority.setMode("auto-medium");
+					return true;
+				}
+
+				return normalizedAnswer === "y" || normalizedAnswer === "yes";
 			}
-
-			if (answer === "always-medium") {
-				writeAuthority.setMode("auto-medium");
-				return true;
-			}
-
-			return answer === "y" || answer === "yes";
 		},
 	});
 
@@ -281,6 +305,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 		}
 
 		const messages: Message[] = [...state.messages];
+		const baseModel = provider(modelId);
 		const sessionAssembler = createPromptSessionAssembler(
 			modelId,
 			registry,
@@ -295,7 +320,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 		let streamRenderState = createStreamRenderState();
 		const llm = new StreamingLLMClient(
 			{
-				model: provider(modelId),
+				model: baseModel,
 				resolveModel: provider,
 			},
 			(event) => {
@@ -304,7 +329,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 		);
 
 		while (true) {
-			const input = await rl.question("quilin> ");
+			const input = queuedCommands.shift() ?? (await rl.question("quilin> "));
 			const trimmed = input.trim();
 
 			if (!trimmed) {
@@ -324,6 +349,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 
 			if (trimmed === "/clear") {
 				messages.length = 0;
+				streamRenderState = createStreamRenderState();
 				sessionAssembler.resetSession();
 				state = createState([...messages], {
 					...state,
@@ -332,6 +358,13 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 					lastActiveAt: new Date().toISOString(),
 				});
 				stderr.write("Conversation cleared.\n\n");
+				continue;
+			}
+
+			if (trimmed === "/status") {
+				stderr.write(
+					`Status: model=${modelId} | effective=${getEffectiveModelId(baseModel.provider, modelId, inferenceConfig.thinkingMode)} | thinking=${inferenceConfig.thinkingMode} | reasoning=${reasoningDisplay}\n`,
+				);
 				continue;
 			}
 
@@ -423,6 +456,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 				stderr.write("\n\n");
 			} catch (err) {
 				logger.error({ err }, "REPL: LLM call failed");
+				streamRenderState = createStreamRenderState();
 				stderr.write("\n[Error: LLM call failed. Check logs for details.]\n\n");
 				messages.pop();
 				state = createState([...messages], {
