@@ -168,4 +168,38 @@ describe("PromptBuilder", () => {
 
 		expect(r1.staticPrefix).toBe(r2.staticPrefix);
 	});
+
+	test("returns structured segments and a default system-tail breakpoint", () => {
+		const builder = new PromptBuilder();
+		builder.register({
+			name: "identity",
+			order: 10,
+			compute: () => "Identity",
+			updateFrequency: "static",
+		});
+		builder.register({
+			name: "tool-guidance",
+			order: 40,
+			compute: () => "Tools",
+			updateFrequency: "per_session",
+		});
+
+		const result = builder.build(mockCtx);
+
+		expect(result.segments).toEqual([
+			expect.objectContaining({
+				id: "identity",
+				role: "system",
+				stability: "static",
+			}),
+			expect.objectContaining({
+				id: "tool-guidance",
+				role: "system",
+				stability: "per_session",
+			}),
+		]);
+		expect(result.recommendedBreakpoints).toEqual([
+			{ segmentIndex: 1, reason: "system-tail" },
+		]);
+	});
 });

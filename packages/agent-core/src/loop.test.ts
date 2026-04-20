@@ -47,6 +47,7 @@ describe("runAgentLoop", () => {
 				maxTokens: 1024,
 				thinkingMode: "disabled",
 			},
+			undefined,
 		);
 		expect(result).toBe("assistant reply");
 		expect(logger.debug).toHaveBeenCalledTimes(2);
@@ -329,6 +330,7 @@ describe("runAgentLoop", () => {
 				maxTokens: 1024,
 				thinkingMode: "disabled",
 			},
+			undefined,
 		);
 		expect(execute).toHaveBeenCalledWith({ query: "我叫什么" });
 		expect(logger.debug).toHaveBeenCalledTimes(4);
@@ -428,6 +430,7 @@ describe("runAgentLoop", () => {
 			],
 			expect.any(Array),
 			expect.any(Object),
+			undefined,
 		);
 		expect(chat).toHaveBeenNthCalledWith(
 			2,
@@ -456,6 +459,7 @@ describe("runAgentLoop", () => {
 			],
 			expect.any(Array),
 			expect.any(Object),
+			undefined,
 		);
 	});
 
@@ -758,6 +762,7 @@ describe("runAgentLoop", () => {
 			]),
 			expect.any(Array),
 			expect.any(Object),
+			undefined,
 		);
 	});
 
@@ -835,6 +840,7 @@ describe("runAgentLoop", () => {
 			]),
 			expect.any(Array),
 			expect.any(Object),
+			undefined,
 		);
 		expect(logger.warn).toHaveBeenCalledWith(
 			expect.objectContaining({
@@ -920,6 +926,7 @@ describe("runAgentLoop", () => {
 			]),
 			expect.any(Array),
 			expect.any(Object),
+			undefined,
 		);
 	});
 
@@ -994,6 +1001,7 @@ describe("runAgentLoop", () => {
 			]),
 			expect.any(Array),
 			expect.any(Object),
+			undefined,
 		);
 		expect(logger.warn).not.toHaveBeenCalledWith(
 			expect.objectContaining({
@@ -1006,23 +1014,21 @@ describe("runAgentLoop", () => {
 	it("连续三次 block 级工具输出后中止 loop", async () => {
 		vi.mocked(getLoggerRuntimeMode).mockReturnValue("repl");
 
-		const chat = vi
-			.fn()
-			.mockResolvedValue({
-				content: "",
-				toolCalls: [
-					{
-						id: crypto.randomUUID(),
-						name: "web_fetch",
-						arguments: { url: "https://example.com" },
-					},
-				],
-				usage: {
-					inputTokens: 10,
-					outputTokens: 20,
+		const chat = vi.fn().mockResolvedValue({
+			content: "",
+			toolCalls: [
+				{
+					id: crypto.randomUUID(),
+					name: "web_fetch",
+					arguments: { url: "https://example.com" },
 				},
-				finishReason: "tool_calls",
-			});
+			],
+			usage: {
+				inputTokens: 10,
+				outputTokens: 20,
+			},
+			finishReason: "tool_calls",
+		});
 
 		const execute = vi.fn().mockResolvedValue({
 			toolCallId: "ignored-by-router",
@@ -1065,37 +1071,35 @@ describe("runAgentLoop", () => {
 		vi.mocked(getLoggerRuntimeMode).mockReturnValue("repl");
 
 		let callIndex = 0;
-		const chat = vi
-			.fn()
-			.mockImplementation(async () => {
-				callIndex += 1;
-				if (callIndex <= 4) {
-					return {
-						content: "",
-						toolCalls: [
-							{
-								id: `call-${callIndex}`,
-								name: "web_fetch",
-								arguments: { url: "https://example.com" },
-							},
-						],
-						usage: {
-							inputTokens: 10,
-							outputTokens: 20,
-						},
-						finishReason: "tool_calls" as const,
-					};
-				}
-
+		const chat = vi.fn().mockImplementation(async () => {
+			callIndex += 1;
+			if (callIndex <= 4) {
 				return {
-					content: "finished",
+					content: "",
+					toolCalls: [
+						{
+							id: `call-${callIndex}`,
+							name: "web_fetch",
+							arguments: { url: "https://example.com" },
+						},
+					],
 					usage: {
 						inputTokens: 10,
 						outputTokens: 20,
 					},
-					finishReason: "stop" as const,
+					finishReason: "tool_calls" as const,
 				};
-			});
+			}
+
+			return {
+				content: "finished",
+				usage: {
+					inputTokens: 10,
+					outputTokens: 20,
+				},
+				finishReason: "stop" as const,
+			};
+		});
 
 		const execute = vi
 			.fn()
@@ -1324,7 +1328,9 @@ describe("runAgentLoop", () => {
 			.mockRejectedValueOnce(new Error("provider crashed"));
 		const execute = vi.fn().mockResolvedValue({
 			toolCallId: "ignored-by-router",
-			content: JSON.stringify({ records: [{ id: "mem-1", content: "resume me" }] }),
+			content: JSON.stringify({
+				records: [{ id: "mem-1", content: "resume me" }],
+			}),
 			isError: false,
 		});
 
@@ -1430,7 +1436,8 @@ describe("runAgentLoop", () => {
 	it("在关键 loop 节点触发 observability hooks", async () => {
 		vi.mocked(getLoggerRuntimeMode).mockReturnValue("repl");
 
-		const spans: Array<{ name: string; attributes?: Record<string, unknown> }> = [];
+		const spans: Array<{ name: string; attributes?: Record<string, unknown> }> =
+			[];
 		const chat = vi
 			.fn()
 			.mockResolvedValueOnce({
@@ -1508,6 +1515,12 @@ describe("runAgentLoop", () => {
 		expect(spans).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({
+					name: "loop.llm.chat",
+					attributes: expect.objectContaining({
+						inputTokens: 10,
+					}),
+				}),
+				expect.objectContaining({
 					name: "loop.tool.execute",
 					attributes: expect.objectContaining({
 						toolName: "memory_recall",
@@ -1516,5 +1529,127 @@ describe("runAgentLoop", () => {
 				}),
 			]),
 		);
+	});
+
+	it("includes cache usage in observability hooks when available", async () => {
+		vi.mocked(getLoggerRuntimeMode).mockReturnValue("repl");
+
+		const spans: Array<{ name: string; attributes?: Record<string, unknown> }> =
+			[];
+		const chat = vi.fn().mockResolvedValue({
+			content: "cached",
+			usage: {
+				inputTokens: 10,
+				outputTokens: 20,
+				cache: {
+					readTokens: 7,
+					writeTokens: 3,
+					source: "native",
+				},
+			},
+			finishReason: "stop",
+		});
+
+		await runAgentLoop(
+			{
+				llm: { chat },
+				hooks: {
+					recordSpan: async (name, attributes) => {
+						spans.push({ name, attributes });
+					},
+				},
+				inferenceConfig: {
+					temperature: 0.7,
+					maxTokens: 1024,
+					thinkingMode: "disabled",
+				},
+			} as never,
+			[{ role: "user", content: "hook cache" }],
+		);
+
+		expect(spans).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					name: "loop.llm.chat",
+					attributes: expect.objectContaining({
+						cacheReadTokens: 7,
+						cacheWriteTokens: 3,
+						cacheSource: "native",
+					}),
+				}),
+			]),
+		);
+	});
+
+	it("materializes outbound messages through PromptSessionAssembler without mutating raw transcript", async () => {
+		vi.mocked(getLoggerRuntimeMode).mockReturnValue("repl");
+
+		const chat = vi.fn().mockResolvedValue({
+			content: "assembled",
+			usage: {
+				inputTokens: 10,
+				outputTokens: 20,
+			},
+			finishReason: "stop",
+		});
+		const buildOutboundRequest = vi.fn().mockReturnValue({
+			messages: [
+				{ role: "system", content: "assembled system" },
+				{ role: "user", content: "[时间上下文]\nhello" },
+			],
+			prompt: {
+				segments: [
+					{
+						id: "identity",
+						role: "system",
+						text: "<!-- identity -->\nassembled system",
+						stability: "static",
+						source: "prompt-section",
+						cacheEligible: true,
+					},
+				],
+				recommendedBreakpoints: [{ segmentIndex: 0, reason: "system-tail" }],
+				staticPrefix: "<!-- identity -->\nassembled system",
+				dynamicSuffix: "",
+				sectionTokens: { identity: 4 },
+				totalTokens: 4,
+			},
+		});
+		const transcript = [{ role: "user", content: "hello" }] as const;
+
+		await runAgentLoop(
+			{
+				llm: { chat },
+				sessionAssembler: {
+					buildOutboundRequest,
+				},
+				modelId: "deepseek-chat",
+				lastMessageTime: "2026-04-21T09:58:00.000Z",
+				inferenceConfig: {
+					temperature: 0.7,
+					maxTokens: 1024,
+					thinkingMode: "disabled",
+				},
+			} as never,
+			transcript,
+		);
+
+		expect(buildOutboundRequest).toHaveBeenCalledWith({
+			transcript: [{ role: "user", content: "hello" }],
+			turnKind: "user-turn",
+			lastMessageTime: "2026-04-21T09:58:00.000Z",
+		});
+		expect(chat).toHaveBeenCalledWith(
+			[
+				{ role: "system", content: "assembled system" },
+				{ role: "user", content: "[时间上下文]\nhello" },
+			],
+			[],
+			expect.any(Object),
+			expect.objectContaining({
+				recommendedBreakpoints: [{ segmentIndex: 0, reason: "system-tail" }],
+			}),
+		);
+		expect(transcript).toEqual([{ role: "user", content: "hello" }]);
 	});
 });

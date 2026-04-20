@@ -19,6 +19,7 @@ export class SkillsManager {
 	private readonly roots: readonly RootEntry[];
 	private descriptorByName: Map<string, SkillDescriptor> = new Map();
 	private discoveryOrder: readonly string[] = [];
+	private readonly changeListeners = new Set<() => void>();
 
 	constructor(options: SkillsManagerOptions) {
 		const roots: RootEntry[] = [];
@@ -38,6 +39,15 @@ export class SkillsManager {
 	}
 
 	async discover(): Promise<readonly SkillDescriptor[]> {
+		const previousOrder = this.discoveryOrder.join(",");
+		const previousDescriptors = this.discoveryOrder
+			.map((name) => {
+				const descriptor = this.descriptorByName.get(name);
+				return descriptor == null
+					? name
+					: `${descriptor.name}:${descriptor.path}:${descriptor.source}`;
+			})
+			.join(",");
 		const byName = new Map<string, SkillDescriptor>();
 		const order: string[] = [];
 
@@ -75,6 +85,18 @@ export class SkillsManager {
 
 		this.descriptorByName = byName;
 		this.discoveryOrder = order;
+		const nextOrder = order.join(",");
+		const nextDescriptors = order
+			.map((name) => {
+				const descriptor = byName.get(name) as SkillDescriptor;
+				return `${descriptor.name}:${descriptor.path}:${descriptor.source}`;
+			})
+			.join(",");
+		if (previousOrder !== nextOrder || previousDescriptors !== nextDescriptors) {
+			for (const listener of this.changeListeners) {
+				listener();
+			}
+		}
 		return order.map((name) => byName.get(name) as SkillDescriptor);
 	}
 
@@ -100,6 +122,13 @@ export class SkillsManager {
 			descriptor,
 			body,
 			tokenEstimate: Math.max(1, Math.ceil(body.length / 4)),
+		};
+	}
+
+	onCatalogChange(listener: () => void): () => void {
+		this.changeListeners.add(listener);
+		return () => {
+			this.changeListeners.delete(listener);
 		};
 	}
 }

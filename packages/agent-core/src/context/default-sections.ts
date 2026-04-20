@@ -73,7 +73,7 @@ export function createToolGuidanceSection(): PromptSection {
 	return {
 		name: "tool-guidance",
 		order: 40,
-		updateFrequency: "static",
+		updateFrequency: "per_session",
 		compute: (ctx: BuildContext) =>
 			[
 				"Memory guidelines:",

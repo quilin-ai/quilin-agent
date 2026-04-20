@@ -48,6 +48,7 @@ export class MCPRegistry {
 	private readonly serverTools = new Map<string, ToolWithMetadata>();
 	private readonly builtinTools = new Map<string, ToolWithMetadata>();
 	private readonly shortNameIndex = new Map<string, ToolWithMetadata | null>();
+	private readonly changeListeners = new Set<() => void>();
 
 	constructor(
 		private readonly createClient: () => MCPClientConnection = () =>
@@ -113,6 +114,7 @@ export class MCPRegistry {
 			this.serverTools.set(toolName, tool);
 		});
 		this.rebuildShortNameIndex();
+		this.emitChange();
 	}
 
 	private clearServerTools(serverId: string): void {
@@ -124,6 +126,7 @@ export class MCPRegistry {
 			this.serverTools.delete(toolName);
 		});
 		this.rebuildShortNameIndex();
+		this.emitChange();
 	}
 
 	private rebuildShortNameIndex(): void {
@@ -136,6 +139,12 @@ export class MCPRegistry {
 			}
 
 			this.shortNameIndex.set(shortName, null);
+		}
+	}
+
+	private emitChange(): void {
+		for (const listener of this.changeListeners) {
+			listener();
 		}
 	}
 
@@ -206,6 +215,14 @@ export class MCPRegistry {
 			this.builtinTools.set(tool.name, tool);
 		});
 		this.rebuildShortNameIndex();
+		this.emitChange();
+	}
+
+	onChange(listener: () => void): () => void {
+		this.changeListeners.add(listener);
+		return () => {
+			this.changeListeners.delete(listener);
+		};
 	}
 
 	getAllTools(): ToolWithMetadata[] {

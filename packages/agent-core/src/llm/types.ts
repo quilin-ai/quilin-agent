@@ -1,3 +1,4 @@
+import type { AssembledPrompt } from "../context/prompt-types.js";
 import type { Message } from "../state/types.js";
 import type { Tool, ToolCall } from "../tools/types.js";
 
@@ -23,10 +24,18 @@ export interface LLMResponse {
 	readonly finishReason: "stop" | "tool_calls" | "length" | "error";
 }
 
+export type CacheUsageSource = "native" | "wall-clock" | "unknown";
+
+export interface CacheUsage {
+	readonly readTokens?: number;
+	readonly writeTokens?: number;
+	readonly source: CacheUsageSource;
+}
+
 export interface TokenUsage {
 	readonly inputTokens: number;
 	readonly outputTokens: number;
-	readonly cacheHitTokens?: number;
+	readonly cache?: CacheUsage;
 }
 
 /** LLMClient 接口 — Agent Loop 唯一的 LLM 交互点 */
@@ -35,5 +44,6 @@ export interface LLMClient {
 		messages: readonly Message[],
 		tools: readonly Tool[],
 		config: InferenceConfig,
+		prompt?: AssembledPrompt,
 	): Promise<LLMResponse>;
 }

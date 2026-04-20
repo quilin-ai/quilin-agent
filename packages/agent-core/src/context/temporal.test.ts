@@ -1,6 +1,10 @@
 import { describe, expect, test } from "vitest";
 import type { BuildContext } from "./prompt-types.js";
-import { classifyGap, createTemporalSection } from "./temporal.js";
+import {
+	classifyGap,
+	createTemporalBucketSection,
+	decoratePreciseTemporalUserInput,
+} from "./temporal.js";
 
 const mockBuildCtx: BuildContext = {
 	userInput: "你好",
@@ -32,9 +36,9 @@ describe("classifyGap", () => {
 	});
 });
 
-describe("createTemporalSection", () => {
-	test("输出包含当前时间", () => {
-		const section = createTemporalSection(() => ({
+describe("createTemporalBucketSection", () => {
+	test("输出桶化时间信息而不是精确时间戳", () => {
+		const section = createTemporalBucketSection(() => ({
 			currentTime: new Date("2026-04-15T12:00:00.000Z"),
 			lastMessageTime: null,
 			sessionStartTime: new Date("2026-04-15T11:30:00.000Z"),
@@ -43,30 +47,34 @@ describe("createTemporalSection", () => {
 
 		const content = section.compute(mockBuildCtx);
 
-		expect(content).toContain("当前时间");
+		expect(content).toContain("时间桶");
+		expect(content).not.toContain("2026-04-15T12:00:00.000Z");
 	});
 
-	test("有上条消息时显示间隔", () => {
-		const section = createTemporalSection(() => ({
+	test("updateFrequency 是 per_session", () => {
+		const section = createTemporalBucketSection(() => ({
 			currentTime: new Date("2026-04-15T12:00:00.000Z"),
 			lastMessageTime: new Date("2026-04-15T11:50:00.000Z"),
 			sessionStartTime: new Date("2026-04-15T11:30:00.000Z"),
 			lastSessionEndTime: null,
 		}));
 
-		const content = section.compute(mockBuildCtx);
-
-		expect(content).toContain("距上条消息");
+		expect(section.updateFrequency).toBe("per_session");
 	});
+});
 
-	test("updateFrequency 是 per_turn", () => {
-		const section = createTemporalSection(() => ({
+describe("decoratePreciseTemporalUserInput", () => {
+	test("prefixes the latest user input with precise temporal context", () => {
+		const decorated = decoratePreciseTemporalUserInput("你好", {
 			currentTime: new Date("2026-04-15T12:00:00.000Z"),
-			lastMessageTime: null,
+			lastMessageTime: new Date("2026-04-15T11:50:00.000Z"),
 			sessionStartTime: new Date("2026-04-15T11:30:00.000Z"),
-			lastSessionEndTime: null,
-		}));
+			lastSessionEndTime: new Date("2026-04-15T10:00:00.000Z"),
+		});
 
-		expect(section.updateFrequency).toBe("per_turn");
+		expect(decorated).toContain("[时间上下文]");
+		expect(decorated).toContain("当前时间: 2026-04-15T12:00:00.000Z");
+		expect(decorated).toContain("距上条消息: 10 分钟");
+		expect(decorated).toContain("你好");
 	});
 });

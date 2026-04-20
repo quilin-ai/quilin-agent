@@ -22,6 +22,7 @@ const mockRegistryRegister = vi.fn();
 const mockRegistryGetAllTools = vi.fn();
 const mockRegistryGetToolDescriptors = vi.fn();
 const mockRegistryDisconnectAll = vi.fn();
+const mockRegistryOnChange = vi.fn(() => () => undefined);
 const mockRegistryConstructor = vi.fn();
 
 const registryBuiltinTools: ToolWithMetadata[] = [];
@@ -66,6 +67,7 @@ class MockMCPRegistry {
 	getAllTools = mockRegistryGetAllTools;
 	getToolDescriptors = mockRegistryGetToolDescriptors;
 	disconnectAll = mockRegistryDisconnectAll;
+	onChange = mockRegistryOnChange;
 
 	constructor(...args: unknown[]) {
 		mockRegistryConstructor(...args);
@@ -209,21 +211,14 @@ describe("startRepl", () => {
 				}),
 			]),
 		);
-		expect(mockRegistryDisconnectAll).toHaveBeenCalledTimes(1);
-		expect(mockCheckpointSave).toHaveBeenCalledWith({
-			messages: [
-				expect.objectContaining({
-					role: "system",
-					content: expect.stringMatching(
-						/You are Quilin Agent[\s\S]*## Programmatic Tools[\s\S]*file_read[\s\S]*memory_recall/,
-					),
-				}),
-			],
-			isTerminal: true,
-			turnCount: 0,
-			createdAt: expect.any(String),
-			lastActiveAt: expect.any(String),
-		});
+			expect(mockRegistryDisconnectAll).toHaveBeenCalledTimes(1);
+			expect(mockCheckpointSave).toHaveBeenCalledWith({
+				messages: [],
+				isTerminal: true,
+				turnCount: 0,
+				createdAt: expect.any(String),
+				lastActiveAt: expect.any(String),
+			});
 	});
 
 	it("clears history and sends only the fresh conversation", async () => {
@@ -246,38 +241,28 @@ describe("startRepl", () => {
 		});
 
 		expect(mockRunAgentLoop).toHaveBeenCalledTimes(2);
-		expect(mockRunAgentLoop).toHaveBeenNthCalledWith(
-			1,
-			expect.objectContaining({
-				context: expect.any(BasicContextManager),
-				tools: expect.arrayContaining([
-					expect.objectContaining({ name: "file_read" }),
-					expect.objectContaining({ name: "shell_exec" }),
+			expect(mockRunAgentLoop).toHaveBeenNthCalledWith(
+				1,
+				expect.objectContaining({
+					context: expect.any(BasicContextManager),
+					sessionAssembler: expect.any(Object),
+					modelId: "deepseek-chat",
+					tools: expect.arrayContaining([
+						expect.objectContaining({ name: "file_read" }),
+						expect.objectContaining({ name: "shell_exec" }),
 					expect.objectContaining({
 						name: "memory_recall",
 						category: "programmatic",
 						riskLevel: "read",
 					}),
 				]),
-			}),
-			expect.any(Array),
-		);
-		expect(capturedMessages[0]).toEqual([
-			expect.objectContaining({
-				role: "system",
-				content: expect.stringContaining("You are Quilin Agent"),
-			}),
-			{ role: "user", content: "hello" },
-		]);
-		expect(capturedMessages[1]).toEqual([
-			expect.objectContaining({
-				role: "system",
-				content: expect.stringContaining("You are Quilin Agent"),
-			}),
-			{ role: "user", content: "after clear" },
-		]);
-		expect(stderrWriteSpy).toHaveBeenCalledWith("Conversation cleared.\n\n");
-	});
+				}),
+				expect.any(Array),
+			);
+			expect(capturedMessages[0]).toEqual([{ role: "user", content: "hello" }]);
+			expect(capturedMessages[1]).toEqual([{ role: "user", content: "after clear" }]);
+			expect(stderrWriteSpy).toHaveBeenCalledWith("Conversation cleared.\n\n");
+		});
 
 	it("rolls back the failed user message", async () => {
 		mockQuestion
@@ -301,16 +286,12 @@ describe("startRepl", () => {
 			tools: [{ name: "memory_recall", description: "Recall memory" }] as never,
 		});
 
-		expect(capturedMessages[1]).toEqual([
-			expect.objectContaining({
-				role: "system",
-				content: expect.stringContaining("You are Quilin Agent"),
-			}),
-			{ role: "user", content: "first" },
-			{ role: "assistant", content: "ok" },
-			{ role: "user", content: "second" },
-		]);
-		expect(mockLoggerError).toHaveBeenCalled();
+			expect(capturedMessages[1]).toEqual([
+				{ role: "user", content: "first" },
+				{ role: "assistant", content: "ok" },
+				{ role: "user", content: "second" },
+			]);
+			expect(mockLoggerError).toHaveBeenCalled();
 		expect(stderrWriteSpy).toHaveBeenCalledWith(
 			"\n[Error: LLM call failed. Check logs for details.]\n\n",
 		);
@@ -351,25 +332,16 @@ describe("startRepl", () => {
 		expect(stderrWriteSpy).toHaveBeenCalledWith(
 			"Session: resume-session (restored)\n",
 		);
-		expect(stderrWriteSpy).toHaveBeenCalledWith(
-			"Messages: 3 | Last active: 2026-04-15T00:01:00.000Z\n",
-		);
-		expect(capturedMessages[0]).toEqual([
-			expect.objectContaining({
-				role: "system",
-				content: expect.stringContaining("memory_recall"),
-			}),
-			{ role: "user", content: "before" },
-			{ role: "assistant", content: "after" },
-			{ role: "user", content: "next" },
-		]);
-		expect(capturedMessages[0][0]).not.toEqual(
-			expect.objectContaining({
-				content: expect.stringContaining("obsolete_tool"),
-			}),
-		);
-		expect(mockRegistryDisconnectAll).toHaveBeenCalledTimes(1);
-	});
+			expect(stderrWriteSpy).toHaveBeenCalledWith(
+				"Messages: 2 | Last active: 2026-04-15T00:01:00.000Z\n",
+			);
+			expect(capturedMessages[0]).toEqual([
+				{ role: "user", content: "before" },
+				{ role: "assistant", content: "after" },
+				{ role: "user", content: "next" },
+			]);
+			expect(mockRegistryDisconnectAll).toHaveBeenCalledTimes(1);
+		});
 
 	it("registers configured MCP servers before starting the REPL", async () => {
 		mockQuestion.mockResolvedValueOnce("/exit");
@@ -405,17 +377,12 @@ describe("startRepl", () => {
 				args: ["run", "python", "-m", "omnimem"],
 			},
 		});
-		expect(mockCheckpointSave).toHaveBeenCalledWith({
-			messages: [
-				expect.objectContaining({
-					role: "system",
-					content: expect.stringContaining("omnimem/memory_store"),
-				}),
-			],
-			isTerminal: true,
-			turnCount: 0,
-			createdAt: expect.any(String),
-			lastActiveAt: expect.any(String),
-		});
+			expect(mockCheckpointSave).toHaveBeenCalledWith({
+				messages: [],
+				isTerminal: true,
+				turnCount: 0,
+				createdAt: expect.any(String),
+				lastActiveAt: expect.any(String),
+			});
 	});
 });

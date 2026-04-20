@@ -1,93 +1,15 @@
 import {
 	generateText,
 	type LanguageModel,
-	type ModelMessage,
 	tool as sdkTool,
 	streamText,
 } from "ai";
+import type { AssembledPrompt } from "../context/prompt-types.js";
 import type { Message } from "../state/types.js";
 import type { Tool } from "../tools/types.js";
+import { adaptMessagesForModel } from "./cache-adapter.js";
 import { normalizeTokenUsage } from "./token-usage.js";
 import type { InferenceConfig, LLMClient, LLMResponse } from "./types.js";
-
-function parseToolOutput(content: string) {
-	try {
-		return {
-			type: "json" as const,
-			value: JSON.parse(content) as unknown,
-		};
-	} catch {
-		return {
-			type: "text" as const,
-			value: content,
-		};
-	}
-}
-
-function toSdkMessages(messages: readonly Message[]): ModelMessage[] {
-	return messages.flatMap((message) => {
-		switch (message.role) {
-			case "system":
-			case "user":
-				return [
-					{
-						role: message.role,
-						content: message.content,
-					} satisfies ModelMessage,
-				];
-			case "assistant": {
-				if (message.toolCalls == null || message.toolCalls.length === 0) {
-					return [
-						{
-							role: "assistant",
-							content: message.content,
-						} satisfies ModelMessage,
-					];
-				}
-
-				const content = [
-					...(message.content === ""
-						? []
-						: [{ type: "text" as const, text: message.content }]),
-					...message.toolCalls.map((toolCall) => ({
-						type: "tool-call" as const,
-						toolCallId: toolCall.id,
-						toolName: toolCall.name,
-						input: toolCall.arguments,
-					})),
-				];
-
-				return [
-					{
-						role: "assistant",
-						content,
-					} satisfies ModelMessage,
-				];
-			}
-			case "tool": {
-				if (message.toolCallId == null || message.name == null) {
-					return [];
-				}
-
-				return [
-					{
-						role: "tool",
-						content: [
-							{
-								type: "tool-result",
-								toolCallId: message.toolCallId,
-								toolName: message.name,
-								output: parseToolOutput(message.content),
-							},
-						],
-					} satisfies ModelMessage,
-				];
-			}
-			default:
-				return [];
-		}
-	});
-}
 
 function toSdkTools(tools: readonly Tool[]) {
 	if (tools.length === 0) {
@@ -151,10 +73,17 @@ export class VercelLLMClient implements LLMClient {
 		messages: readonly Message[],
 		tools: readonly Tool[],
 		config: InferenceConfig,
+		prompt?: AssembledPrompt,
 	): Promise<LLMResponse> {
+		const adaptedPrompt = adaptMessagesForModel({
+			messages,
+			prompt,
+			provider: this.model.provider,
+		});
+
 		const result = await generateText({
 			model: this.model,
-			messages: toSdkMessages(messages),
+			messages: adaptedPrompt.messages,
 			tools: toSdkTools(tools),
 			maxOutputTokens: config.maxTokens,
 			temperature: config.temperature,
@@ -164,7 +93,7 @@ export class VercelLLMClient implements LLMClient {
 		return {
 			content: result.text,
 			toolCalls: mapToolCalls(result.toolCalls),
-			usage: normalizeTokenUsage(result.usage),
+			usage: normalizeTokenUsage(result.usage, result.providerMetadata),
 			finishReason: mapFinishReason(result.finishReason),
 		};
 	}
@@ -185,10 +114,17 @@ export class StreamingLLMClient implements LLMClient {
 		messages: readonly Message[],
 		tools: readonly Tool[],
 		config: InferenceConfig,
+		prompt?: AssembledPrompt,
 	): Promise<LLMResponse> {
+		const adaptedPrompt = adaptMessagesForModel({
+			messages,
+			prompt,
+			provider: this.model.provider,
+		});
+
 		const result = streamText({
 			model: this.model,
-			messages: toSdkMessages(messages),
+			messages: adaptedPrompt.messages,
 			tools: toSdkTools(tools),
 			maxOutputTokens: config.maxTokens,
 			temperature: config.temperature,
@@ -202,13 +138,14 @@ export class StreamingLLMClient implements LLMClient {
 		}
 
 		const usage = await result.usage;
+		const providerMetadata = await Promise.resolve(result.providerMetadata);
 		const finishReason = await result.finishReason;
 		const toolCalls = await Promise.resolve(result.toolCalls);
 
 		return {
 			content: fullText,
 			toolCalls: mapToolCalls(toolCalls),
-			usage: normalizeTokenUsage(usage),
+			usage: normalizeTokenUsage(usage, providerMetadata),
 			finishReason: mapFinishReason(finishReason),
 		};
 	}

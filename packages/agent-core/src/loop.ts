@@ -3,6 +3,7 @@ import {
 	createSystemContextSource,
 	DEFAULT_CONTEXT_BUDGET,
 } from "./context/manager.js";
+import type { PromptSessionAssembler } from "./context/prompt-session-assembler.js";
 import { scanExternalContext } from "./context/injection-scanner.js";
 import type { ContextManager } from "./context/types.js";
 import type { InferenceConfig, LLMClient } from "./llm/types.js";
@@ -131,11 +132,16 @@ export async function runAgentLoop(
 	const maxTotalTokens = config.maxTotalTokens ?? DEFAULT_MAX_TOTAL_TOKENS;
 	let turnCount = config.state?.turnCount ?? 0;
 	let totalTokens = 0;
+	let turnKind: "user-turn" | "tool-resume" = "user-turn";
 	// This counter spans turns and only resets after any non-blocked tool result.
 	let consecutiveBlockedToolOutputs = 0;
 
 	while (true) {
-		if (config.context != null && baseSystemPrompt != null) {
+		if (
+			config.context != null &&
+			baseSystemPrompt != null &&
+			config.sessionAssembler == null
+		) {
 			const systemPrompt = await config.context.buildContext(
 				[createSystemContextSource(baseSystemPrompt)],
 				DEFAULT_CONTEXT_BUDGET,
@@ -169,16 +175,34 @@ export async function runAgentLoop(
 			);
 		}
 
+		const outboundRequest =
+			config.sessionAssembler == null
+				? { messages: [...workingMessages] }
+				: config.sessionAssembler.buildOutboundRequest({
+						transcript: workingMessages,
+						turnKind,
+						lastMessageTime:
+							turnKind === "user-turn" ? config.lastMessageTime : undefined,
+					});
+
 		const response = await llm.chat(
-			[...workingMessages],
+			outboundRequest.messages,
 			config.tools ?? [],
 			inferenceConfig,
+			outboundRequest.prompt,
 		);
 		await recordLoopSpan(config.hooks, "loop.llm.chat", {
 			turnCount,
 			finishReason: response.finishReason,
 			inputTokens: response.usage.inputTokens,
 			outputTokens: response.usage.outputTokens,
+			...(response.usage.cache == null
+				? {}
+				: {
+						cacheReadTokens: response.usage.cache.readTokens,
+						cacheWriteTokens: response.usage.cache.writeTokens,
+						cacheSource: response.usage.cache.source,
+					}),
 		});
 
 		if (shouldLogDebug) {
@@ -286,15 +310,22 @@ export async function runAgentLoop(
 				);
 			}
 		}
+		turnKind = "tool-resume";
 	}
 }
 
 export interface AgentLoopConfig {
 	readonly llm: LLMClient;
 	readonly context?: ContextManager;
+	readonly sessionAssembler?: Pick<
+		PromptSessionAssembler,
+		"buildOutboundRequest"
+	>;
 	readonly tools?: readonly Tool[];
 	readonly checkpoint?: Checkpoint;
 	readonly state?: AgentState;
+	readonly modelId?: string;
+	readonly lastMessageTime?: string;
 	/** Defaults to 50 if omitted to prevent unbounded tool loops. */
 	readonly maxTurns?: number;
 	/** Defaults to 200_000 if omitted; counts inputTokens + outputTokens across the whole loop. */

@@ -1,14 +1,11 @@
 import { stderr, stdin } from "node:process";
 import * as readline from "node:readline/promises";
 import { createDefaultPromptSections } from "./context/default-sections.js";
-import {
-	BasicContextManager,
-	createSystemContextSource,
-	DEFAULT_CONTEXT_BUDGET,
-} from "./context/manager.js";
+import { BasicContextManager } from "./context/manager.js";
 import { PromptBuilder } from "./context/prompt-builder.js";
+import { PromptSessionAssembler } from "./context/prompt-session-assembler.js";
 import { createSkillsCatalogSection } from "./context/skills-catalog-section.js";
-import { createTemporalSection } from "./context/temporal.js";
+import { createTemporalBucketSection } from "./context/temporal.js";
 import type { SkillsManager } from "./skills/manager.js";
 import { StreamingLLMClient } from "./llm/client.js";
 import type { createProvider } from "./llm/provider.js";
@@ -21,7 +18,6 @@ import type { AgentState, Message } from "./state/types.js";
 import { createBuiltinTools } from "./tools/builtin/index.js";
 import { MCPRegistry, type MCPServerEntry } from "./tools/registry.js";
 import type {
-	ToolPromptDescriptor,
 	ToolWithMetadata,
 } from "./tools/tool-metadata.js";
 import type { Tool } from "./tools/types.js";
@@ -57,22 +53,13 @@ function createState(
 	};
 }
 
-function renderPromptText(prompt: {
-	staticPrefix: string;
-	dynamicSuffix: string;
-}): string {
-	return [prompt.staticPrefix, prompt.dynamicSuffix]
-		.filter((part) => part.length > 0)
-		.join("\n\n");
-}
-
-function buildDefaultSystemPrompt(
-	tools: readonly Tool[],
+function createPromptSessionAssembler(
 	modelId: string,
+	registry: MCPRegistry,
+	sessionStartedAt: string,
 	lastSessionEndTime?: string,
-	descriptors?: readonly ToolPromptDescriptor[],
 	skillsManager?: SkillsManager,
-): string {
+): PromptSessionAssembler {
 	const promptBuilder = new PromptBuilder();
 	for (const section of createDefaultPromptSections()) {
 		promptBuilder.register(section);
@@ -80,28 +67,30 @@ function buildDefaultSystemPrompt(
 	if (skillsManager != null) {
 		promptBuilder.register(createSkillsCatalogSection(skillsManager));
 	}
-	promptBuilder.register(
-		createTemporalSection(() => ({
-			currentTime: new Date(),
-			lastMessageTime: null,
-			sessionStartTime: new Date(),
-			lastSessionEndTime:
-				lastSessionEndTime == null ? null : new Date(lastSessionEndTime),
-		})),
-	);
+	promptBuilder.register(createTemporalBucketSection());
 
-	return renderPromptText(
-		promptBuilder.build({
-			userInput: "",
-			sessionState: {},
-			modelId,
-			availableTools: tools
+	const assembler = new PromptSessionAssembler({
+		promptBuilder,
+		modelId,
+		sessionStartedAt,
+		lastSessionEndedAt: lastSessionEndTime,
+		now: () => new Date(),
+		getAvailableTools: () =>
+			registry
+				.getAllTools()
 				.map((tool) => tool.name)
 				.filter((name): name is string => name != null),
-			availableToolDescriptors: descriptors,
-			profile: "full",
-		}),
-	);
+		getAvailableToolDescriptors: () => registry.getToolDescriptors(),
+	});
+
+	registry.onChange(() => {
+		assembler.invalidateSessionPrefix("tool-registry-changed");
+	});
+	skillsManager?.onCatalogChange(() => {
+		assembler.invalidateSessionPrefix("skills-catalog-changed");
+	});
+
+	return assembler;
 }
 
 function withDefaultMetadata(tools: readonly Tool[]): ToolWithMetadata[] {
@@ -163,62 +152,52 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 		for (const entry of mcpServers) {
 			await registry.register(entry);
 		}
-		if (tools.length > 0) {
-			registry.registerBuiltin(withDefaultMetadata(tools));
-		}
-
-		const allTools = registry.getAllTools();
-		const restoredState =
-			sessionId == null ? null : await checkpoint.load(resolvedSessionId);
-		const systemPrompt = await context.buildContext(
-			[
-				createSystemContextSource(
-					buildDefaultSystemPrompt(
-						allTools,
-						modelId,
-						restoredState?.lastActiveAt,
-						registry.getToolDescriptors(),
-						skillsManager,
-					),
-				),
-			],
-			DEFAULT_CONTEXT_BUDGET,
-		);
-
-		stderr.write("\n🐉 Quilin Agent v0.0.3 (DeepSeek)\n");
-		stderr.write(
-			`Session: ${resolvedSessionId} (${restoredState == null ? "new" : "restored"})\n`,
-		);
-		if (restoredState != null) {
-			stderr.write(
-				`Messages: ${restoredState.messages.length} | Last active: ${restoredState.lastActiveAt}\n`,
-			);
-		}
-		stderr.write("Type your message, or /exit to quit.\n\n");
-
-		rl = readline.createInterface({ input: stdin, output: stderr });
-
-		let state = restoredState;
-		if (state == null) {
-			state = createState([{ role: "system", content: systemPrompt }]);
-		} else {
-			const restoredMessages = [...state.messages];
-			if (restoredMessages[0]?.role === "system") {
-				restoredMessages[0] = { role: "system", content: systemPrompt };
-			} else {
-				restoredMessages.unshift({ role: "system", content: systemPrompt });
+			if (tools.length > 0) {
+				registry.registerBuiltin(withDefaultMetadata(tools));
 			}
 
-			state = createState(restoredMessages, {
-				...state,
-				messages: restoredMessages,
-			});
-		}
-		const messages: Message[] = [...state.messages];
+			const allTools = registry.getAllTools();
+			const restoredState =
+				sessionId == null ? null : await checkpoint.load(resolvedSessionId);
+			const restoredMessages =
+				restoredState?.messages[0]?.role === "system"
+					? restoredState.messages.slice(1)
+					: restoredState?.messages ?? [];
 
-		const llm = new StreamingLLMClient(provider(modelId), (chunk) => {
-			stderr.write(chunk);
-		});
+			stderr.write("\n🐉 Quilin Agent v0.0.3 (DeepSeek)\n");
+			stderr.write(
+				`Session: ${resolvedSessionId} (${restoredState == null ? "new" : "restored"})\n`,
+			);
+			if (restoredState != null) {
+				stderr.write(
+					`Messages: ${restoredMessages.length} | Last active: ${restoredState.lastActiveAt}\n`,
+				);
+			}
+			stderr.write("Type your message, or /exit to quit.\n\n");
+
+			rl = readline.createInterface({ input: stdin, output: stderr });
+
+			let state = restoredState;
+			if (state == null) {
+				state = createState([]);
+			} else {
+				state = createState(restoredMessages, {
+					...state,
+					messages: restoredMessages,
+				});
+			}
+			const messages: Message[] = [...state.messages];
+			const sessionAssembler = createPromptSessionAssembler(
+				modelId,
+				registry,
+				state.createdAt,
+				restoredState?.lastActiveAt,
+				skillsManager,
+			);
+
+			const llm = new StreamingLLMClient(provider(modelId), (chunk) => {
+				stderr.write(chunk);
+			});
 
 		while (true) {
 			const input = await rl.question("quilin> ");
@@ -239,36 +218,41 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 				break;
 			}
 
-			if (trimmed === "/clear") {
-				messages.length = 1;
-				state = createState([...messages], {
-					...state,
-					messages: [...messages],
-					isTerminal: false,
+				if (trimmed === "/clear") {
+					messages.length = 0;
+					sessionAssembler.resetSession();
+					state = createState([...messages], {
+						...state,
+						messages: [...messages],
+						isTerminal: false,
 					lastActiveAt: new Date().toISOString(),
 				});
 				stderr.write("Conversation cleared.\n\n");
 				continue;
-			}
+				}
 
-			messages.push({ role: "user", content: trimmed });
-			state = createState([...messages], {
-				...state,
-				messages: [...messages],
+				const previousLastActiveAt = state.lastActiveAt;
+				messages.push({ role: "user", content: trimmed });
+				state = createState([...messages], {
+					...state,
+					messages: [...messages],
 				lastActiveAt: new Date().toISOString(),
 			});
 			stderr.write("\n");
 
 			try {
 				const response = await runAgentLoop(
-					{
-						llm,
-						context,
-						checkpoint,
-						state,
-						tools: allTools,
-						inferenceConfig: DEFAULT_INFERENCE_CONFIG,
-					},
+						{
+							llm,
+							context,
+							sessionAssembler,
+							checkpoint,
+							state,
+							modelId,
+							lastMessageTime: previousLastActiveAt,
+							tools: allTools,
+							inferenceConfig: DEFAULT_INFERENCE_CONFIG,
+						},
 					messages,
 				);
 
