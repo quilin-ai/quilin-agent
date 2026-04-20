@@ -130,6 +130,19 @@ describe("WriteAuthority", () => {
 		]);
 	});
 
+	it("does not fail authorization when audit logging throws", async () => {
+		const authority = new WriteAuthority({
+			mode: "auto-low",
+			auditLog: () => {
+				throw new Error("disk full");
+			},
+		});
+
+		await expect(
+			authority.authorize(createRequest({ riskLevel: "low" })),
+		).resolves.toEqual({ kind: "allow" });
+	});
+
 	it("allows the session mode to be updated explicitly", () => {
 		const authority = new WriteAuthority({ mode: "ask" });
 

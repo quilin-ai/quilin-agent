@@ -342,9 +342,15 @@ export function createFileWriteTool(
 					"write",
 				);
 				const pathIsSensitive = await isSensitivePath(resolvedPath);
+				if (pathIsSensitive) {
+					return createErrorResult(
+						"builtin-file-write",
+						`Writing sensitive file is not allowed: ${basename(resolvedPath)}`,
+					);
+				}
 				const writeDecision = await authority.authorize({
 					tool: "file_write",
-					riskLevel: pathIsSensitive ? "critical" : "medium",
+					riskLevel: "medium",
 					summary: `Write ${absolutePath}`,
 					detail: resolvedPath,
 					origin: options.origin ?? "agent",
@@ -353,13 +359,6 @@ export function createFileWriteTool(
 					return createErrorResult("builtin-file-write", writeDecision.reason);
 				}
 				const bytesWritten = Buffer.byteLength(content, "utf8");
-
-				if (pathIsSensitive) {
-					return createErrorResult(
-						"builtin-file-write",
-						`Writing sensitive file is not allowed: ${basename(resolvedPath)}`,
-					);
-				}
 
 				const maxBytes = options.maxBytes ?? DEFAULT_MAX_WRITE_BYTES;
 				if (bytesWritten > maxBytes) {

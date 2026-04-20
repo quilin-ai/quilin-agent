@@ -1,3 +1,5 @@
+import { logger } from "../logger.js";
+
 export type WriteRiskLevel = "low" | "medium" | "high" | "critical";
 
 export type WriteOrigin = "user" | "agent" | "idle";
@@ -27,7 +29,7 @@ export interface AuditRecord {
 export interface WriteAuthorityOptions {
 	mode?: AuthorityMode;
 	confirm?: (request: WriteRequest) => Promise<boolean>;
-	auditLog?: (record: AuditRecord) => void;
+	auditLog?: (record: AuditRecord) => void | Promise<void>;
 	actor?: string;
 }
 
@@ -130,12 +132,30 @@ export class WriteAuthority {
 			}
 		}
 
-		this.auditLog?.({
+		const auditRecord: AuditRecord = {
 			timestamp: Date.now(),
 			request,
 			decision: finalDecision,
 			actor: this.actor,
-		});
+		};
+		if (this.auditLog != null) {
+			try {
+				const auditResult = this.auditLog(auditRecord);
+				if (auditResult instanceof Promise) {
+					void auditResult.catch((error: unknown) => {
+						logger.warn(
+							{ err: error, tool: request.tool, actor: this.actor },
+							"WriteAuthority audit logging failed",
+						);
+					});
+				}
+			} catch (error) {
+				logger.warn(
+					{ err: error, tool: request.tool, actor: this.actor },
+					"WriteAuthority audit logging failed",
+				);
+			}
+		}
 
 		return finalDecision;
 	}

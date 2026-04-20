@@ -161,6 +161,35 @@ describe("builtin file tools", () => {
 		});
 	});
 
+	it("file_write denies sensitive paths before prompting for confirmation", async () => {
+		const fakeHome = join(tempDir, "home");
+		const sshDir = join(fakeHome, ".ssh");
+		const authorizedKeysPath = join(sshDir, "authorized_keys");
+		const confirm = vi.fn(async () => true);
+
+		vi.stubEnv("HOME", fakeHome);
+		await mkdir(sshDir, { recursive: true });
+
+		const tool = createFileWriteTool({
+			allowedRoots: [fakeHome],
+			authority: new WriteAuthority({
+				mode: "ask",
+				confirm,
+			}),
+		});
+
+		const result = await tool.execute({
+			path: authorizedKeysPath,
+			content: "ssh-ed25519 AAAATEST user@example",
+		});
+
+		expect(result.isError).toBe(true);
+		expect(JSON.parse(result.content)).toEqual({
+			error: expect.stringContaining("authorized_keys"),
+		});
+		expect(confirm).not.toHaveBeenCalled();
+	});
+
 	it("file_write replaces files without leaving temporary artifacts", async () => {
 		const filePath = join(tempDir, "atomic.txt");
 		await writeFile(filePath, "before", "utf8");
