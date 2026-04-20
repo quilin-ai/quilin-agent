@@ -27,12 +27,11 @@ function buildCheckpointState(
 	state?: AgentState,
 ): AgentState {
 	const now = new Date().toISOString();
-	const accumulatedTurnCount = (state?.turnCount ?? 0) + turnCount;
 
 	return {
 		messages: [...messages],
 		isTerminal: false,
-		turnCount: accumulatedTurnCount,
+		turnCount,
 		createdAt: state?.createdAt ?? now,
 		lastActiveAt: now,
 	};
@@ -130,8 +129,9 @@ export async function runAgentLoop(
 	}
 	const maxTurns = config.maxTurns ?? DEFAULT_MAX_TURNS;
 	const maxTotalTokens = config.maxTotalTokens ?? DEFAULT_MAX_TOTAL_TOKENS;
-	let turnCount = 0;
+	let turnCount = config.state?.turnCount ?? 0;
 	let totalTokens = 0;
+	// This counter spans turns and only resets after any non-blocked tool result.
 	let consecutiveBlockedToolOutputs = 0;
 
 	while (true) {
@@ -216,12 +216,6 @@ export async function runAgentLoop(
 
 		if (response.toolCalls == null || response.toolCalls.length === 0) {
 			throw new Error("LLM returned finishReason=tool_calls without toolCalls");
-		}
-
-		if (turnCount >= maxTurns) {
-			throw new AgentLoopError(
-				`Agent loop exceeded maxTurns=${maxTurns} while awaiting final response`,
-			);
 		}
 
 		workingMessages.push({
