@@ -11,6 +11,15 @@ from .store import OmniMemStore
 from .types import MemoryTier
 
 
+class MemoryOperationError(RuntimeError):
+    """Sanitized tool error exposed over MCP."""
+
+
+def _raise_memory_operation_error(operation: str, exc: Exception) -> None:
+    logger.error(f"{operation} failed", error=str(exc))
+    raise MemoryOperationError(f"{operation} failed") from exc
+
+
 async def _memory_recall_with_store(store: OmniMemStore, query: str) -> str:
     """Recall memory records matching a query string (substring, case-insensitive).
 
@@ -19,8 +28,7 @@ async def _memory_recall_with_store(store: OmniMemStore, query: str) -> str:
     try:
         results = await store.recall(query)
     except Exception as exc:
-        logger.error("memory_recall failed", error=str(exc))
-        raise
+        _raise_memory_operation_error("memory_recall", exc)
 
     return json.dumps({"records": [r.to_dict() for r in results]})
 
@@ -39,8 +47,7 @@ async def _memory_store_with_store(
     try:
         record = await store.store(content, tier)
     except Exception as exc:
-        logger.error("memory_store failed", error=str(exc))
-        raise
+        _raise_memory_operation_error("memory_store", exc)
 
     return json.dumps({"id": record.id})
 

@@ -66,6 +66,18 @@ const CLIENT_INFO = {
 	version: "0.0.1",
 };
 
+export class MCPTimeoutError extends Error {
+	readonly label: string;
+	readonly timeoutMs: number;
+
+	constructor(label: string, timeoutMs: number) {
+		super(`${label} timed out after ${timeoutMs}ms`);
+		this.name = "MCPTimeoutError";
+		this.label = label;
+		this.timeoutMs = timeoutMs;
+	}
+}
+
 interface MCPToolCallResult {
 	readonly content: string;
 	readonly isError: boolean;
@@ -128,7 +140,7 @@ function withTimeout<T>(
 ): Promise<T> {
 	return new Promise<T>((resolvePromise, rejectPromise) => {
 		const timeout = setTimeout(() => {
-			rejectPromise(new Error(`${label} timed out after ${timeoutMs}ms`));
+			rejectPromise(new MCPTimeoutError(label, timeoutMs));
 		}, timeoutMs);
 
 		promise.then(
@@ -384,10 +396,7 @@ export class MCPClientManager {
 			const result = await pendingCall;
 			return formatCallToolResult(result);
 		} catch (error) {
-			if (
-				error instanceof Error &&
-				error.message.includes(`timed out after ${DEFAULT_TOOL_TIMEOUT_MS}ms`)
-			) {
+			if (error instanceof MCPTimeoutError) {
 				throw error;
 			}
 

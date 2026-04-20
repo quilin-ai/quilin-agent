@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from collections.abc import AsyncIterator
 
 import pytest
@@ -117,16 +118,18 @@ async def test_memory_recall_error_path(
     server: object,
     monkeypatch: object,
 ) -> None:
-    """memory_recall should surface an MCP error result when store.recall raises."""
+    """memory_recall should surface a sanitized MCP error result."""
 
     async def _raise_on_recall(query: str) -> list:
-        raise RuntimeError("database connection lost")
+        raise sqlite3.OperationalError("no such table: memories at /tmp/omnimem.db")
 
     monkeypatch.setattr(store, "recall", _raise_on_recall)  # type: ignore[attr-defined]
 
     result = await _call_tool_request(server, "memory_recall", {"query": "anything"})
     assert result.root.isError is True
-    assert "database connection lost" in result.root.content[0].text
+    assert "memory_recall failed" in result.root.content[0].text
+    assert "memories" not in result.root.content[0].text
+    assert "/tmp/omnimem.db" not in result.root.content[0].text
 
 
 async def test_memory_store_error_path(
@@ -134,16 +137,18 @@ async def test_memory_store_error_path(
     server: object,
     monkeypatch: object,
 ) -> None:
-    """memory_store should surface an MCP error result when store.store raises."""
+    """memory_store should surface a sanitized MCP error result."""
 
     async def _raise_on_store(content: str, tier: str = "working") -> None:
-        raise RuntimeError("disk full")
+        raise sqlite3.OperationalError("unable to open database file /tmp/private.db")
 
     monkeypatch.setattr(store, "store", _raise_on_store)  # type: ignore[attr-defined]
 
     result = await _call_tool_request(server, "memory_store", {"content": "test content"})
     assert result.root.isError is True
-    assert "disk full" in result.root.content[0].text
+    assert "memory_store failed" in result.root.content[0].text
+    assert "private.db" not in result.root.content[0].text
+    assert "/tmp/private.db" not in result.root.content[0].text
 
 
 async def test_create_server_uses_injected_store_isolation() -> None:

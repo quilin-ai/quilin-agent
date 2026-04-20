@@ -4,6 +4,7 @@ import { runAgentLoop } from "../loop.js";
 import {
 	createMCPSpawnEnv,
 	MCPClientManager,
+	MCPTimeoutError,
 	validateMCPServerConfig,
 	writeReplLogSeparatorIfNeeded,
 } from "./mcp-client.js";
@@ -119,11 +120,43 @@ describe.sequential("MCPClientManager", () => {
 				) => Promise<unknown>;
 			}
 		).callToolWithMetadata("memory_recall", { query: "hello" });
-		const timeoutExpectation = expect(pendingCall).rejects.toThrow(/timed out/i);
+		const errorPromise = pendingCall.catch((reason) => reason);
 
 		await vi.advanceTimersByTimeAsync(30_001);
-		await timeoutExpectation;
+		const error = await errorPromise;
+		expect(error).toBeInstanceOf(MCPTimeoutError);
+		expect(error).toBeInstanceOf(Error);
+		expect((error as Error).message).toMatch(/timed out/i);
 		vi.useRealTimers();
+	});
+
+	it("does not treat plain error messages that mention timeouts as typed MCP timeouts", async () => {
+		const manager = new MCPClientManager();
+		const timeoutLikeMessage = "MCP tool memory_recall timed out after 30000ms";
+		const client = {
+			callTool: vi.fn(async () => {
+				throw new Error(timeoutLikeMessage);
+			}),
+		};
+
+		Object.assign(manager as object, {
+			client,
+			isConnected: true,
+		});
+
+		const result = await (
+			manager as unknown as {
+				callToolWithMetadata: (
+					name: string,
+					args: Record<string, unknown>,
+				) => Promise<{ content: string; isError: boolean }>;
+			}
+		).callToolWithMetadata("memory_recall", { query: "hello" });
+
+		expect(result).toEqual({
+			content: JSON.stringify({ error: timeoutLikeMessage }),
+			isError: true,
+		});
 	});
 
 	it("waits for in-flight tool calls before disconnect resolves", async () => {
