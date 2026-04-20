@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import { basename, isAbsolute, resolve } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client";
 import {
@@ -16,12 +17,30 @@ import type { Tool } from "./types.js";
 const CONNECT_TIMEOUT_MS = 5_000;
 const DEFAULT_TOOL_TIMEOUT_MS = 30_000;
 const ALLOWED_PATH_COMMANDS = new Set(["bun", "node", "npx", "python", "python3", "uv"]);
-const ALLOWED_ABSOLUTE_COMMAND_PREFIXES = [
-	"/bin/",
-	"/opt/homebrew/bin/",
-	"/usr/bin/",
-	"/usr/local/bin/",
-] as const;
+const ALLOWED_ABSOLUTE_COMMANDS = new Set([
+	"/usr/bin/bun",
+	"/usr/bin/node",
+	"/usr/bin/npx",
+	"/usr/bin/python",
+	"/usr/bin/python3",
+	"/usr/bin/uv",
+	"/usr/local/bin/bun",
+	"/usr/local/bin/node",
+	"/usr/local/bin/npx",
+	"/usr/local/bin/python",
+	"/usr/local/bin/python3",
+	"/usr/local/bin/uv",
+	"/opt/homebrew/bin/bun",
+	"/opt/homebrew/bin/node",
+	"/opt/homebrew/bin/npx",
+	"/opt/homebrew/bin/python",
+	"/opt/homebrew/bin/python3",
+	"/opt/homebrew/bin/uv",
+	resolve(homedir(), ".bun", "bin", "bun"),
+	resolve(homedir(), ".local", "bin", "uv"),
+	resolve(process.execPath),
+	resolve(process.execPath.replace(/node(?:\.exe)?$/i, "npx")),
+]);
 const DISALLOWED_SHELL_EXECUTABLES = new Set([
 	"bash",
 	"cmd",
@@ -60,9 +79,7 @@ export interface MCPServerConfig {
 function isAllowedAbsoluteCommand(command: string): boolean {
 	return (
 		isAbsolute(command) &&
-		ALLOWED_ABSOLUTE_COMMAND_PREFIXES.some((prefix) =>
-			command.startsWith(prefix),
-		) &&
+		ALLOWED_ABSOLUTE_COMMANDS.has(resolve(command)) &&
 		!DISALLOWED_SHELL_EXECUTABLES.has(basename(command).toLowerCase())
 	);
 }

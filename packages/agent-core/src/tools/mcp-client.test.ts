@@ -61,6 +61,31 @@ describe.sequential("MCPClientManager", () => {
 		).toThrow(/not allowed/i);
 	});
 
+	it("rejects env and other absolute-path wrapper executables even under allowed prefixes", () => {
+		for (const command of [
+			"/usr/bin/env",
+			"/usr/bin/xargs",
+			"/usr/bin/perl",
+			"/usr/bin/timeout",
+		]) {
+			expect(() =>
+				validateMCPServerConfig({
+					command,
+					args: ["node", "x.js"],
+				}),
+			).toThrow(/not allowed/i);
+		}
+	});
+
+	it("allows explicitly whitelisted absolute command paths", () => {
+		expect(() =>
+			validateMCPServerConfig({
+				command: "/usr/bin/node",
+				args: ["server.js"],
+			}),
+		).not.toThrow();
+	});
+
 	it("only forwards the explicit MCP spawn env allowlist", () => {
 		vi.stubEnv("LOG_LEVEL", "info");
 		vi.stubEnv("QUILIN_ENV", "test");
