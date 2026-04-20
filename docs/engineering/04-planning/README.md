@@ -1,1107 +1,883 @@
 # 规划工程（Planning Engineering）
 
-> **实现状态（R-07，2026-04-18）**
+> **实现状态（Iter C，2026-04-20 Opus 4.7 revision）**
 > - ✅ **已实现**：无（Iter C 未启动）
-> - 🚧 **进行中**：无
-> - 💭 **未开始**：意图识别、任务分解、策略切换、Planner tool — 全部待 Iter C 启动
+> - 🚧 **进行中**：spec 撰写（本文件）
+> - 💭 **未开始**：Intent / Decomposition / Strategy / Replan / Planner tool — 全部待 Iter C 开工
+>
+> **本次修订要点**（相对 2026-04-18 骨架，基于 Opus 4.7 复查 + 2025-11~2026-04 外部研究）：
+> - ✘ **删除 LangGraph / Python 代码示例** —— 对齐 ADR-001 minimal TS core loop，Python 仅作 ML provider
+> - ✘ **反转"DAG 默认"为 Linear-first IR + optional dependency edges** —— 大多数任务本质线性，强制 DAG 过度建模
+> - ✘ **替换"四级修正"为显式 Replan 状态机** —— 4 类触发 + 3 级 replan，防 task drift
+> - ✓ **新增三段式 Intent 分类**：deterministic override → tiny classifier → main LLM ABSTAIN fallback
+> - ✓ **新增 Skills / Memory / Multi-Agent 接口章节** —— Planning 是 orchestration 层，不做 knowledge loading 或 自由 delegate
+> - ✓ **吸收 2025-11~2026-04 最新研究**：OpenHands V1 event-sourced state (arXiv 2511.03690)、BATS budget tracker (arXiv 2511.17006)、PALADIN recovery-as-first-class、RETO local repair (arXiv 2602.18968)、IntentGuard ABSTAIN class、Plan-Execute-Verify-Replan (arXiv 2603.11445)
+>
+> **ADR 对齐**：本 spec 的所有运行时实现遵循 [ADR-001](../../adr/adr-001-core-loop-and-language.md)（核心循环 TS、无 LangGraph）和 [ADR-002](../../adr/adr-002-project-skeleton.md)（packages/agent-core 结构）。
 
-> **ADR-001 对齐说明**：不使用 LangGraph 作为核心运行时（见 [ADR-001](../../adr/adr-001-core-loop-and-language.md)）。规划能力作为 LLM 可调用的工具暴露，而非固定状态图节点。本文档中 LangGraph 相关内容仅作为上游参考，不代表 Quilin 的实现方案。Python 代码示例仅表达设计意图，实施时将以 TS 重写。`quilin/` 路径为规划参考。
+---
 
 ## 一、问题定义
 
 ### 规划是 Agent 的核心大脑
 
-大多数人在接触 LLM 应用时，会误以为"调用 LLM 得到回答"就是 Agent。实际上，真正意义上的 Agent 与简单 LLM 调用的本质区别在于：**Agent 具备规划能力**——能够自主理解用户意图、分解任务、选择推理策略、动态修正偏差、并判断何时停止。
+大多数人以为"调用 LLM 得到回答"就是 Agent。实际上，真正的 Agent 与简单 LLM 调用的本质区别在于：**Agent 具备规划能力**——自主理解意图、分解任务、选择策略、动态修正偏差、判断终止。
 
-没有规划层的"Agent"本质上只是一个 stateless 的 LLM 调用包装，无法处理任何超过单轮的任务。而一旦引入规划，Agent 就从"问答机器"进化为"自主执行系统"。
+没有规划层的"Agent"只是 stateless LLM 调用的包装，无法处理超过单轮的任务。引入规划后，Agent 从"问答机器"进化为"自主执行系统"。
 
-### 核心挑战（五大难题）
+### 五大核心挑战
 
-**1. 意图识别（Intent Classification）**
+**1. 意图识别（Intent Recognition）** — 用户输入常模糊。"帮我查一下最新 Python 版本"和"帮我把这段代码用最新 Python 版本重写"，前者是纯问答，后者需多步执行。错误分类导致三种失败模式：过度规划（简单问题启动工具链）、规划不足（复杂任务直接 LLM 回答）、澄清缺失（信息不够强行推进）。
 
-用户输入往往是模糊的。"帮我查一下最新的 Python 版本"和"帮我把这段代码用最新 Python 版本重写"都是用户的日常表达，但一个是纯问答，一个需要多步执行。错误的意图分类会导致：
-- 过度规划：简单问题启动复杂工具链，浪费资源
-- 规划不足：复杂任务直接 LLM 回答，结果错误
-- 澄清缺失：关键信息不足时强行推进，导致失败
+**2. 任务分解（Task Decomposition）** — 复杂目标需拆解为可执行子任务。关键在**粒度控制**：分得太粗 replan 成本高，分得太细 planning overhead 爆炸。
 
-**2. 任务分解（Task Decomposition）**
+**3. 策略选择（Strategy Selection）** — 不同任务需不同推理策略：纯推理→CoT、工具交互→ReAct、长步骤→PlanAndExecute。单策略框架（只有 ReAct）无法覆盖所有场景。
 
-复杂目标需要被拆解为可执行的子任务序列。但子任务之间存在依赖关系（A 完成后才能执行 B），部分子任务可以并行，部分必须串行。如何正确建模这种 DAG 结构，并处理运行时的动态变化，是任务分解的核心难题。
+**4. 动态修正（Dynamic Replanning）** — 执行中现实与预期偏离：工具失败、结果异常、依赖变化。如何动态调整计划而非报错退出，是生产级 Agent 的核心能力。**关键发现（2026 Agent Drift study）**：长链条执行会发生 goal drift，必须主动对照原始 intent。
 
-**3. 策略选择（Strategy Selection）**
+**5. 终止判断（Termination Detection）** — Agent 需知道"何时停"。过早停=任务未完成；无法停=无限循环耗资源。
 
-不同任务类型需要不同的推理策略：
-- 纯推理类任务 → 链式思考（CoT）
-- 需要工具交互的任务 → ReAct 循环
-- 高度复杂、需要全局规划的任务 → PlanAndExecute
-- 无法一次完成、需要探索的任务 → 树搜索（LATS）
+### 业界现状与 Quilin 定位
 
-单一策略（绝大多数框架只有 ReAct）无法覆盖所有场景。
-
-**4. 动态修正（Dynamic Replanning）**
-
-计划执行过程中，现实往往与预期不符：工具调用失败、返回结果偏离预期、步骤超时、依赖数据发生变化。如何在这些情况下动态调整计划，而不是简单报错退出，是生产级 Agent 的核心能力。
-
-**5. 终止判断（Termination Detection）**
-
-Agent 需要知道"什么时候该停"。过早停止导致任务未完成；无法停止导致无限循环耗尽资源。成功判定、最大步数、死循环检测、用户中断、资源耗尽——每种终止条件都有独立的检测逻辑和处理策略。
-
-### 业界现状与不足
-
-当前主流 Agent 框架的规划能力评估：
-
-| 框架 | 意图识别 | 任务分解 | 多策略切换 | 动态重规划 | 检查点 |
-|------|---------|---------|-----------|-----------|--------|
-| LangGraph | 弱（条件边实现） | 弱 | 无 | 支持（需手动） | 支持 |
-| AutoGen | 无 | 弱 | 无 | 弱 | 无 |
-| CrewAI | 无 | 角色级别 | 无 | 无 | 无 |
-| DSPy | 无 | 无 | 支持（编译期） | 无 | 无 |
-| Pydantic AI | 无 | 无 | 无 | 无 | 无 |
-| **Quilin** | **4分类** | **DAG** | **3策略+手动** | **4级修正** | **支持** |
-
-绝大多数框架只有 ReAct 循环（think-act-observe），缺乏意图分类前置过滤、动态重规划机制和多策略切换能力。Quilin 的规划工程旨在填补这一空白。
+| 框架 | 意图识别 | 任务分解 | 多策略 | 动态重规划 | Checkpoint | Event-sourced |
+|------|---------|---------|--------|-----------|-----------|---------------|
+| LangGraph | 弱（条件边） | 弱 | 无 | 手动 | 支持 | 部分 |
+| AutoGen | 无 | 弱 | 无 | 弱 | 无 | 无 |
+| CrewAI | 无 | 角色级 | 无 | 无 | 无 | 无 |
+| DSPy | 无 | 无 | 编译期 | 无 | 无 | 无 |
+| OpenHands V1 | 无 | Dependency tree（大型迁移） | 无 | 有 | 支持 | ✓ |
+| Claude Code | 无（纯 LLM） | 纯 LLM 驱动 | 无 | 有 | 部分 | 无 |
+| **Quilin Iter C** | **三段式 + ABSTAIN** | **Linear-first + optional DAG** | **3 策略 + 用户 override** | **4 触发 + 3 级 replan** | **✓** | **✓ 借鉴 OpenHands V1** |
 
 ---
 
 ## 二、设计方案
 
-### 2.1 意图识别（Intent Classification）——核心特色
+### 2.1 意图识别（Intent Recognition）—— 三段式流水线
 
-意图识别是规划工程的第一道关卡，也是 Quilin 区别于其他框架的核心特色。每一个用户请求都必须经过意图分类，才能进入后续的规划流程。
+#### 四分类体系（保留）
 
-#### 四分类体系
+| 类别 | 特征 | 示例 | 处理路径 |
+|------|------|------|---------|
+| `SIMPLE_QA` | 无需工具，LLM 知识可答 | "Python GIL 是什么？" | 跳过工具，LLM 直出 |
+| `SINGLE_TOOL` | 一次工具调用完成 | "查今天 BTC 价格" | 单 tool call |
+| `MULTI_STEP` | 多步 / 多工具 / 结果依赖 | "拉代码，跑测试，发邮件" | 进入 Decompose → Strategy → Execute |
+| `CLARIFICATION` | 信息不足无法执行 | "帮我处理那个文件" | 生成追问 |
+| `ABSTAIN`（新增） | 分类器低置信度 | 歧义输入 | 升级到 L3 Main LLM |
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    用户输入（User Input）                 │
-└─────────────────────────┬───────────────────────────────┘
-                          │
-                          ▼
-            ┌─────────────────────────┐
-            │     规则快速通道         │
-            │  （关键词 + 启发式匹配）  │
-            └──────────┬──────────────┘
-                       │
-         ┌─────────────┼─────────────┐
-         │             │             │
-    命中规则        未命中规则      模糊情况
-         │             │             │
-         ▼             ▼             ▼
-    直接分类       LLM 判断       LLM 判断
-                       │
-                       ▼
-         ┌─────────────────────────────┐
-         │         意图分类器           │
-         │   IntentClassifier (LLM)    │
-         └──────────────┬──────────────┘
-                        │
-         ┌──────────────┼──────────────┬──────────────┐
-         ▼              ▼              ▼              ▼
-   SIMPLE_QA     SINGLE_TOOL     MULTI_STEP    CLARIFICATION
-   （直接回答）   （单工具调用）   （多步规划）   （信息不足）
-         │              │              │              │
-         ▼              ▼              ▼              ▼
-    LLM 直接        选工具         任务分解       向用户
-    生成答案        并执行         + 策略选择      追问
-```
-
-**SIMPLE_QA（简单问答）**
-
-特征：无需工具调用即可直接回答的问题。知识型、解释型、建议型。
-- 触发规则：无工具调用关键词、问题可以通过 LLM 知识直接回答
-- 示例："Python 中 GIL 是什么？" / "给我解释一下 CAP 定理"
-- 处理：跳过工具层，LLM 直接生成答案，一轮结束
-
-**SINGLE_TOOL（单步工具）**
-
-特征：需要且仅需要一次工具调用即可完成的任务。
-- 触发规则：明确的单一操作动词（搜索/查询/获取），对象和目标明确
-- 示例："查一下今天 BTC 的价格" / "搜索 LangGraph 的最新文档"
-- 处理：直接映射到对应工具，调用一次，返回结果
-
-**MULTI_STEP（多步任务）**
-
-特征：需要多次工具调用、多轮推理、中间结果依赖的复杂任务。
-- 触发规则：任务描述含有"然后/接着/并且/最后"等序列词，或目标复合
-- 示例："从 GitHub 拉取最新代码，运行测试，如果失败发邮件通知"
-- 处理：进入任务分解 → 策略选择 → 迭代执行
-
-**CLARIFICATION（澄清请求）**
-
-特征：信息严重不足，无法在不追问的情况下合理执行。
-- 触发规则：代词指代不明、缺少关键参数、任务目标模糊
-- 示例："帮我处理一下那个文件" / "按照之前说的方式做"
-- 处理：生成追问文本，等待用户补充，重新分类
-
-#### 分类策略：双通道架构
+#### 三段式分类流水线
 
 ```
-用户输入
-    │
-    ├──→ 规则通道（< 1ms）
-    │       ├── 关键词匹配（"搜索"/"查询"/"列出" → SINGLE_TOOL）
-    │       ├── 长度启发（< 20 词 + 问号 → SIMPLE_QA 候选）
-    │       ├── 指代词检测（"那个"/"之前"/"上面说的" → CLARIFICATION）
-    │       └── 复杂度词组（"然后"/"接着"/"并且" → MULTI_STEP 候选）
-    │
-    └──→ LLM 通道（100-500ms，规则通道不确定时触发）
-            ├── 分类 Prompt 含有 4 类定义 + 少样本示例
-            ├── 输出结构化 JSON：{intent, confidence, reason}
-            └── confidence < 0.7 时降级到 CLARIFICATION
+┌──────────────────────────────────────────────────────────────┐
+│  L1  规则快筛（Deterministic Override）                      │
+│  - 关键词 / 指代词 / 长度启发                                │
+│  - <1ms，~50% 请求在此分流                                   │
+│  - 高置信度命中 → 直接返回                                    │
+│  - 低置信度 / 未命中 → 传递到 L2                              │
+└──────────────────────────┬───────────────────────────────────┘
+                           │
+┌──────────────────────────▼───────────────────────────────────┐
+│  L2  Tiny Classifier（DeBERTa-xsmall ONNX 或本地 2B LLM）    │
+│  - 22M 参数级编码器 / 2B 级本地 LLM                          │
+│  - CPU <20ms，成本接近零                                     │
+│  - 输出 4 类 + ABSTAIN（共 5 维度概率）                      │
+│  - 置信度 ≥ threshold → 返回分类结果                         │
+│  - ABSTAIN 或低置信度 → 升级到 L3                            │
+│  - ⚠ Iter C M1 才接入，D-21 spike 通过后启用                 │
+└──────────────────────────┬───────────────────────────────────┘
+                           │
+┌──────────────────────────▼───────────────────────────────────┐
+│  L3  Main LLM Fallback（Sonnet / Opus）                      │
+│  - 仅对 ABSTAIN 样本触发（预期 ~5%）                         │
+│  - 包含少样本 + 解释性 prompt                                │
+│  - 输出：{intent, confidence, reason, extracted_entities}    │
+│  - 最坏情况 <500ms                                           │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-规则通道优先，命中则直接使用；LLM 通道作为兜底保障分类质量。两通道并不互斥，规则命中后 LLM 仍可以异步校验并更新置信度。
+**设计原则**：
+- **Cost asymmetry**：L1 几乎零成本，L2 本地推理几乎零成本，L3 贵但少用。端到端平均成本远低于"每请求都 LLM"方案（实测参考：Medium Hybrid Validation 2026-02 切 70% LLM cost）。
+- **ABSTAIN > 错分**（借鉴 IntentGuard 2026-03）：L2 不确定时主动升级，而非强行分类。
+- **L2 可选**：Iter C M0 不含 L2，M1 接入，M2 优化。
 
----
+#### Intent 分类器接口（TS）
 
-### 2.2 任务分解 DAG 设计
+```typescript
+// packages/agent-core/src/planning/intent.ts
 
-当意图分类为 MULTI_STEP 时，触发任务分解器。将复杂目标转换为有向无环图（DAG）结构。
+export type Intent =
+  | 'SIMPLE_QA'
+  | 'SINGLE_TOOL'
+  | 'MULTI_STEP'
+  | 'CLARIFICATION';
 
-> **Token 预算约束**：任务分解必须考虑 token 预算。每个 SubTask 需附带 `estimated_tokens` 预估，总和与用户剩余 token 对比。如果总预估超出余量，规划器应：
-> 1. 标记哪些子任务是可独立拆出的（无后续依赖）
-> 2. 向用户建议按优先级逐批执行，附带每批的预估消耗
-> 3. 绝不生成一个明知会中途断掉的执行计划
->
-> 这与 02-Context 的 Token 预估系统联动：Context 层提供余量和预估，Planning 层负责在预算内做任务编排。
+export type ClassificationPath = 'L1_rule' | 'L2_classifier' | 'L3_llm';
 
-#### DAG 节点结构
+export interface IntentClassification {
+  readonly intent: Intent;
+  readonly confidence: number;        // [0, 1]
+  readonly path: ClassificationPath;
+  readonly latencyMs: number;
+  readonly reason?: string;           // L3 才填
+}
 
-```python
-@dataclass
-class SubTask:
-    id: str                          # 唯一标识符
-    name: str                        # 简短名称
-    description: str                 # 详细描述
-    estimated_steps: int             # 预估执行步数
-    priority: int                    # 优先级（1=最高）
-    status: SubTaskStatus            # pending/running/done/failed
-    dependencies: list[str]          # 依赖的 subtask id 列表
-    result: dict[str, Any] | None    # 执行结果（done 后填充）
-    retry_count: int = 0             # 已重试次数
-    max_retries: int = 3             # 最大重试次数
-```
-
-#### DAG 示例（"从 GitHub 拉代码并运行测试"）
-
-```
-        ┌──────────────────┐
-        │ T1: clone_repo   │  依赖：无
-        │ 预估步数：1       │
-        └────────┬─────────┘
-                 │
-        ┌────────▼─────────┐
-        │ T2: install_deps │  依赖：T1
-        │ 预估步数：2       │
-        └────────┬─────────┘
-                 │
-       ┌─────────┴──────────┐
-       │                    │
-┌──────▼──────┐    ┌────────▼────────┐
-│ T3: run_    │    │ T4: run_        │  依赖：T2（并行）
-│ unit_tests  │    │ integration_    │
-│ 预估步数：3  │    │ tests           │
-└──────┬──────┘    │ 预估步数：5      │
-       │           └────────┬────────┘
-       │                    │
-       └─────────┬──────────┘
-                 │
-        ┌────────▼─────────┐
-        │ T5: notify_      │  依赖：T3 + T4
-        │ results          │  （汇聚节点）
-        │ 预估步数：1       │
-        └──────────────────┘
-```
-
-#### DAG 支持的动态操作
-
-- **添加子任务**：执行中发现遗漏的步骤，可插入 DAG
-- **删除子任务**：发现某步骤已由其他结果覆盖，可剪枝
-- **修改依赖**：执行路径变化时重新连接边
-- **优先级调整**：实时调整子任务的执行顺序
-
----
-
-### 2.3 推理策略切换器（Strategy Switcher）
-
-Quilin 支持三种内置推理策略，根据意图类型和任务复杂度自动选择，也支持用户手动指定。
-
-#### 三种推理策略
-
-**策略 A：ReAct（默认，覆盖 90% 场景）**
-
-```
-┌─────────┐
-│  Think  │ ← LLM 推理当前状态，决定下一步动作
-└────┬────┘
-     │
-┌────▼────┐
-│   Act   │ ← 调用工具（MCP 协议）
-└────┬────┘
-     │
-┌────▼────┐
-│ Observe │ ← 接收工具返回结果，更新状态
-└────┬────┘
-     │
-     └─── → Think（循环，直到终止条件）
-```
-
-适用：绝大多数有工具调用的任务，步骤数未知但不超过 20 步。
-
-**策略 B：PlanAndExecute（复杂长任务）**
-
-```
-┌──────────────────────────────┐
-│  Phase 1: Plan Generation    │
-│  LLM 一次性生成完整执行计划   │
-│  输出：步骤列表 + 预期结果    │
-└──────────────┬───────────────┘
-               │
-               ▼
-┌──────────────────────────────┐
-│  Phase 2: Step Execution     │  ← 逐步执行，每步对照计划
-│  execute step_1 → verify     │
-│  execute step_2 → verify     │
-│  ...                         │
-└──────────────┬───────────────┘
-               │
-               ▼
-┌──────────────────────────────┐
-│  Phase 3: Plan Comparison    │  ← 全部完成后对照原计划验收
-│  预期输出 vs 实际输出         │
-│  不符合 → 触发重规划          │
-└──────────────────────────────┘
-```
-
-适用：步骤数可预估（10-50 步）、有明确成功标准的复杂任务。
-
-**策略 C：CoT（纯推理，无工具调用）**
-
-```
-Question: [用户输入]
-           │
-           ▼
-Let me think step by step:
-  Step 1: [分析前提条件]
-  Step 2: [推导中间结论]
-  Step 3: [验证一致性]
-  ...
-  Conclusion: [最终答案]
-```
-
-适用：纯推理题、数学计算、逻辑分析，无需访问外部资源。
-
-#### 策略选择矩阵
-
-| 意图类型 | 复杂度 | 工具需求 | 选择策略 |
-|---------|--------|---------|---------|
-| SIMPLE_QA | 任意 | 无 | CoT |
-| SINGLE_TOOL | 低 | 1 个工具 | ReAct（1步） |
-| MULTI_STEP | 中（≤20步） | 多工具 | ReAct |
-| MULTI_STEP | 高（>20步） | 多工具 | PlanAndExecute |
-| MULTI_STEP | 探索性 | 不确定 | ReAct + 动态重规划 |
-| 用户指定 | — | — | 强制使用指定策略 |
-
----
-
-### 2.4 动态重规划（Dynamic Replanning）
-
-计划执行偏差不可避免，Quilin 实现四级修正策略，从轻到重依次升级。
-
-#### 偏差检测机制
-
-```
-每步执行后自动检查：
-  ├── 工具返回值格式是否符合预期 Schema
-  ├── 实际耗时 vs 预估耗时（超过 2x → 警告）
-  ├── 步骤计数 vs 预估步数（超过 2x → 触发重规划评估）
-  ├── 连续失败次数（≥3次 → 强制重规划）
-  └── 内容相似度检测（连续 N 步输出高度相似 → 死循环预警）
-```
-
-#### 四级修正策略（递进式）
-
-```
-偏差检测触发
-      │
-      ▼
-┌─────────────────────────────────────────────────────────┐
-│  Level 1：原地重试（Retry）                              │
-│  条件：工具偶发失败，retry_count < max_retries           │
-│  操作：使用相同参数重新调用，指数退避                    │
-│  成本：极低（无 LLM 调用）                               │
-└──────────────────────────┬──────────────────────────────┘
-                           │ 重试失败
-                           ▼
-┌─────────────────────────────────────────────────────────┐
-│  Level 2：计划局部调整（Patch）                          │
-│  条件：单个子任务失败，但其他步骤不受影响                │
-│  操作：LLM 生成替代方案（换工具/换参数/跳过）            │
-│  成本：低（1次 LLM 调用，局部 context）                 │
-└──────────────────────────┬──────────────────────────────┘
-                           │ 调整无效
-                           ▼
-┌─────────────────────────────────────────────────────────┐
-│  Level 3：检查点回滚（Rollback）                         │
-│  条件：多个步骤失败，当前路径不可行                      │
-│  操作：回退到最近的检查点，重新规划从检查点开始的子图    │
-│  成本：中（从检查点重新执行部分步骤）                    │
-└──────────────────────────┬──────────────────────────────┘
-                           │ 回滚后仍失败
-                           ▼
-┌─────────────────────────────────────────────────────────┐
-│  Level 4：完全重规划（Full Replan）                      │
-│  条件：根本假设错误，整体方案不可行                      │
-│  操作：基于完整执行历史，LLM 重新生成整个计划            │
-│  成本：高（全量 context，完整 LLM 推理）                │
-└─────────────────────────────────────────────────────────┘
-```
-
-#### 检查点机制
-
-```
-AgentState 检查点（每 N 步自动保存）：
-  checkpoint = {
-      "step": current_step,
-      "dag": current_dag_snapshot,
-      "variables": state.variables.copy(),
-      "completed_tasks": [t.id for t in done_tasks],
-      "timestamp": datetime.utcnow().isoformat()
-  }
-
-  保存策略：
-    - 每 5 步自动触发
-    - 子任务 done 时触发
-    - 用户中断前触发
-    - 最多保留最近 5 个检查点（滑动窗口）
+export interface IntentClassifier {
+  classify(input: string, ctx: PlanContext): Promise<IntentClassification>;
+}
 ```
 
 ---
 
-### 2.5 终止条件矩阵
+### 2.2 任务分解（Task Decomposition）—— Linear-first IR
 
-| 终止条件 | 触发机制 | 优先级 | 处理策略 |
-|---------|---------|-------|---------|
-| **成功判定** | LLM 判断任务目标已完成 | 最高 | 输出最终结果，正常退出 |
-| **用户中断** | 用户发送中断信号（Ctrl+C/API cancel） | 高 | 保存检查点，输出当前进度，安全退出 |
-| **最大步数** | `state.iteration >= max_iterations`（默认 50） | 中 | 输出部分结果 + 截断警告，标记 `partial_complete` |
-| **死循环检测** | 连续 5 步动作类型完全相同 | 中 | 强制终止 + 输出诊断报告 |
-| **资源耗尽** | Token 预算消耗 > 80%（可配置） | 中 | 生成摘要性输出，优雅退出 |
-| **不可恢复错误** | Level 4 重规划后仍失败 | 低 | 详细错误报告，建议用户干预 |
+> **重大修订**：本节反转了 2026-04-18 骨架的"DAG 默认"设计。理由见 §六·Open Questions 中的 Decomposition 讨论。
 
----
+#### 默认形态：Linear Plan
 
-### 2.6 AgentState 状态机设计
+MULTI_STEP 任务默认产出**线性子任务列表**（linear plan），不强制 DAG。
 
-AgentState 是规划层与 LangGraph 状态图的桥梁，扩展自 `Harness.py` 中的基础 `AgentState`。
-
-```
-                        ┌─────────┐
-                        │  start  │
-                        └────┬────┘
-                             │
-                        ┌────▼────────┐
-                        │verify_input │
-                        └────┬────────┘
-                             │ 通过
-                        ┌────▼────────┐
-                        │build_context│ ← Memory recall
-                        └────┬────────┘
-                             │
-                        ┌────▼────┐
-         ┌──── replan ──│  plan   │←────────────────┐
-         │              └────┬────┘                 │
-         │                   │                      │
-         │    ┌──────────────▼──────────────┐       │
-         │    │     intent_classify         │       │
-         │    │  SIMPLE_QA/SINGLE_TOOL/     │       │
-         │    │  MULTI_STEP/CLARIFICATION   │       │
-         │    └──────────────┬──────────────┘       │
-         │                   │ MULTI_STEP            │
-         │    ┌──────────────▼──────────────┐       │
-         │    │     task_decompose          │       │
-         │    │     strategy_select         │       │
-         │    └──────────────┬──────────────┘       │
-         │                   │                      │
-         │              ┌────▼─────────┐            │
-         │              │execute_tools │            │
-         │              └────┬─────────┘            │
-         │                   │                      │
-         │              ┌────▼─────────┐            │
-         │              │verify_output │            │
-         │              └────┬─────────┘            │
-         │                   │                      │
-         │              ┌────▼─────────┐            │
-         │              │   reflect    │            │
-         │              └────┬─────────┘            │
-         │                   │                      │
-         │              ┌────▼─────────┐            │
-         └──────────────│    decide    │────────────┘
-                        └────┬─────────┘
-                     完成/超时 │
-                        ┌────▼─────────┐
-                        │     end      │
-                        └──────────────┘
+```typescript
+export interface LinearPlan {
+  readonly kind: 'linear';
+  readonly subtasks: ReadonlyArray<SubTask>;
+}
 ```
 
-**`_node_plan` 决策逻辑：**
-1. 调用 `IntentClassifier.classify()` 获取意图类型
-2. 若为 SIMPLE_QA → 直接走 LLM 生成，跳过工具层
-3. 若为 CLARIFICATION → 生成追问，进入等待状态
-4. 若为 MULTI_STEP → 调用 `TaskDecomposer.decompose()`，再调用 `StrategyRunner.select()`
-5. 将规划结果存入 `state.variables["plan"]`，包含 `intent_type`、`dag`、`strategy`、`tool_calls`
+#### 升级为 DAG 的触发条件（严格）
 
-**`_node_decide` 终止/继续/重规划判断：**
-1. 检查 `plan.is_complete` — LLM 的完成判断
-2. 检查 `state.is_terminal` — 步数/状态机终止条件
-3. 检查 `deviation_detector.check()` — 偏差检测是否触发重规划
-4. 返回 `"end"`（正常结束）/ `"plan"`（继续循环）/ `"replan"`（重规划）
+**仅在满足以下任一条件**时，planner 才生成 DAG：
 
----
+1. LLM 在分解时**显式标注**子任务集合"可并行"（explicit parallel hint）
+2. 检测到多子任务读同一资源但写不同资源（独立写集）
+3. 用户通过 `--parallel` flag 要求并行
 
-### 2.7 核心接口定义（Protocol）
+```typescript
+export interface DagPlan {
+  readonly kind: 'dag';
+  readonly subtasks: ReadonlyArray<SubTask>;
+  readonly edges: ReadonlyArray<readonly [string, string]>;  // from → to
+}
 
-```python
-from __future__ import annotations
+export type Plan = LinearPlan | DagPlan;
+```
 
-from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any, Protocol, runtime_checkable
+#### 粒度硬上限（防膨胀）
 
+| 约束 | 值 | 理由 |
+|------|-----|------|
+| 递归深度 | **≤ 2 层** | Plan → SubTask → executable step；更深说明 prompt 或任务粒度不对 |
+| 单次分解 subtasks 数 | **≤ 10** | 超过 10 意味着需要分批，不是单 plan |
+| 总节点数 | **≤ 20** | 防 re-decompose 爆炸 |
+| 每个 leaf re-decompose 次数 | **≤ 1** | 避免递归分解循环 |
 
-# ---------------------------------------------------------------------------
-# 数据结构定义
-# ---------------------------------------------------------------------------
+超限即视为异常：planner 必须降级（拆多批 / 返 CLARIFICATION）而非违规产出。
 
-class IntentType(Enum):
-    SIMPLE_QA = "simple_qa"           # 直接回答，无需工具
-    SINGLE_TOOL = "single_tool"       # 单次工具调用
-    MULTI_STEP = "multi_step"         # 多步任务，需要规划
-    CLARIFICATION = "clarification"   # 信息不足，需要追问
+#### Atomic Action 原则
 
+每个 subtask 强制满足（借鉴 OpenHands V1 + oneuptime 2026-01）：
 
-class Strategy(Enum):
-    REACT = "react"                   # 默认：Think-Act-Observe 循环
-    PLAN_AND_EXECUTE = "plan_and_execute"  # 先生成完整计划，再执行
-    COT = "chain_of_thought"          # 纯推理，无工具调用
+- **单一目的**（do one thing）— 好：`clone_repo`；坏：`deploy_everything`
+- **显式 preconditions** — 必须满足的前置条件集合
+- **显式 effects** — 完成后对 world state 的影响
+- **estimated_tokens** — 与 02-Context 的 token 预估联动，防止生成明知超预算的 plan
 
+```typescript
+export interface SubTask {
+  readonly id: string;
+  readonly name: string;
+  readonly description: string;
+  readonly estimatedTokens: number;
+  readonly estimatedSteps: number;
+  readonly preconditions: ReadonlyArray<string>;   // 字符串化的状态断言
+  readonly effects: ReadonlyArray<string>;         // 完成后更新的 world state key
+  readonly skillHint?: string;                     // 可选：推荐使用的 SKILL.md name
+  status: 'pending' | 'running' | 'done' | 'failed';
+  retryCount: number;
+  decomposeCount: number;
+}
+```
 
-class SubTaskStatus(Enum):
-    PENDING = "pending"
-    RUNNING = "running"
-    DONE = "done"
-    FAILED = "failed"
+#### Token 预算联动
 
+Planner 在分解时必须调用 `ContextManager.estimateRemaining()`（02-Context 提供）：
 
-class TerminationReason(Enum):
-    SUCCESS = "success"
-    MAX_STEPS = "max_steps"
-    DEAD_LOOP = "dead_loop"
-    USER_INTERRUPT = "user_interrupt"
-    RESOURCE_EXHAUSTED = "resource_exhausted"
-    UNRECOVERABLE_ERROR = "unrecoverable_error"
+- 若 `sum(subtask.estimatedTokens) > remaining` → planner **不得**直接产出该 plan
+- 替代策略：
+  1. 生成"按优先级分批"建议，返给用户选择
+  2. 或产出简化 plan（丢弃低优先级 subtask）
+  3. **绝不生成明知会中途断掉的 plan**
 
+#### Decomposer 接口
 
-@dataclass
-class SubTask:
-    id: str
-    name: str
-    description: str
-    estimated_steps: int
-    priority: int
-    status: SubTaskStatus = SubTaskStatus.PENDING
-    dependencies: list[str] = field(default_factory=list)
-    result: dict[str, Any] | None = None
-    retry_count: int = 0
-    max_retries: int = 3
-
-
-@dataclass
-class TaskDAG:
-    tasks: dict[str, SubTask]         # task_id → SubTask
-    edges: list[tuple[str, str]]      # (from_id, to_id) 依赖边
-    root_tasks: list[str]             # 无依赖的起始任务
-
-    def get_ready_tasks(self) -> list[SubTask]:
-        """返回所有依赖已完成、状态为 pending 的子任务。"""
-        ...
-
-    def mark_done(self, task_id: str, result: dict[str, Any]) -> None:
-        """标记子任务完成并存储结果。"""
-        ...
-
-    def is_complete(self) -> bool:
-        """判断整个 DAG 是否全部完成。"""
-        ...
-
-
-@dataclass
-class Deviation:
-    """执行偏差描述。"""
-    step: int
-    expected: dict[str, Any]
-    actual: dict[str, Any]
-    error_type: str                   # tool_failure / unexpected_result / timeout / dead_loop
-    severity: int                     # 1=轻微, 2=中等, 3=严重, 4=不可恢复
-
-
-@dataclass
-class Plan:
-    """规划结果。"""
-    intent_type: IntentType
-    strategy: Strategy
-    dag: TaskDAG | None               # SIMPLE_QA / SINGLE_TOOL 时为 None
-    tool_calls: list[dict[str, Any]]  # 当前步骤的工具调用列表
-    is_complete: bool = False
-    checkpoint: dict[str, Any] | None = None
-
-
-@dataclass
-class Context:
-    """规划上下文。"""
-    task: str
-    history: list[dict[str, Any]]
-    memories: list[dict[str, Any]]
-    environment: dict[str, Any]
-    iteration: int
-    max_iterations: int
-
-
-# ---------------------------------------------------------------------------
-# Planner Protocol：规划层统一接口
-# ---------------------------------------------------------------------------
-
-@runtime_checkable
-class Planner(Protocol):
-    """
-    规划层核心接口。
-    所有规划实现（LangGraph/DSPy/PydanticAI 适配器）必须遵循此 Protocol。
-    """
-
-    async def classify_intent(
-        self,
-        user_input: str,
-        context: Context,
-    ) -> tuple[IntentType, float]:
-        """
-        意图识别。
-        返回：(意图类型, 置信度)
-        置信度 < 0.7 时建议降级为 CLARIFICATION。
-        """
-        ...
-
-    async def decompose(
-        self,
-        task: str,
-        context: Context,
-    ) -> TaskDAG:
-        """
-        任务分解，返回子任务 DAG。
-        仅在 intent_type == MULTI_STEP 时调用。
-        """
-        ...
-
-    async def select_strategy(
-        self,
-        intent: IntentType,
-        complexity: float,          # 0.0~1.0，由 LLM 或规则估算
-        user_override: str | None,  # 用户手动指定策略
-    ) -> Strategy:
-        """
-        推理策略选择。
-        complexity > 0.7 且 intent == MULTI_STEP → PlanAndExecute
-        否则默认 ReAct；SIMPLE_QA → CoT。
-        """
-        ...
-
-    async def replan(
-        self,
-        current_state: Any,         # AgentState
-        deviation: Deviation,
-    ) -> Plan:
-        """
-        动态重规划。
-        根据偏差严重程度选择 Level 1-4 修正策略。
-        返回修订后的 Plan。
-        """
-        ...
-
-    async def should_terminate(
-        self,
-        state: Any,                 # AgentState
-    ) -> tuple[bool, TerminationReason | None]:
-        """
-        终止判断。
-        返回：(是否终止, 终止原因)
-        """
-        ...
-
-    async def generate_clarification(
-        self,
-        user_input: str,
-        missing_info: list[str],
-    ) -> str:
-        """
-        生成追问文本。
-        仅在 intent_type == CLARIFICATION 时调用。
-        """
-        ...
+```typescript
+export interface TaskDecomposer {
+  decompose(task: string, intent: Intent, ctx: PlanContext): Promise<Plan>;
+}
 ```
 
 ---
 
-### 2.8 配置项设计
+### 2.3 策略选择（Strategy Selection）
 
-在 `quilin/config.yaml` 的 `planning` 节：
+#### 三策略（保留）
+
+| 策略 | 适用 | 核心循环 |
+|------|------|---------|
+| `CoT` | 纯推理，无工具 | 单次 LLM 调用，prompt 中含 "Let's think step by step" |
+| `ReAct` | 默认，≤20 步有工具 | Think → Act → Observe → 循环 |
+| `PlanAndExecute` | >20 步或 DAG | Plan-once → Step-execute-verify → Plan-compare |
+
+#### 选择矩阵（规则驱动，非 LLM）
+
+| Intent | Plan 类型 | 预估步数 | 用户 override | 选择 |
+|--------|----------|---------|--------------|------|
+| SIMPLE_QA | null | - | - | CoT |
+| SINGLE_TOOL | null | 1 | - | ReAct (1 步) |
+| MULTI_STEP | Linear | ≤ 20 | - | ReAct |
+| MULTI_STEP | Linear | > 20 | - | PlanAndExecute |
+| MULTI_STEP | DAG | - | - | PlanAndExecute |
+| * | * | * | 指定 | 强制使用用户指定 |
+
+```typescript
+export type Strategy = 'CoT' | 'ReAct' | 'PlanAndExecute';
+
+export interface StrategySelector {
+  select(intent: Intent, plan: Plan | null, userOverride?: Strategy): Strategy;
+}
+```
+
+---
+
+### 2.4 动态重规划（Dynamic Replanning）—— 显式状态机
+
+> **重大修订**：本节替换了 2026-04-18 骨架的"四级修正"设计。理由：原设计把触发条件散落在 loop 里的 if/else，运行时难追溯、难测试。现改为**显式状态机 + 4 类触发 + 3 级 replan**。
+
+#### Replan 状态机
+
+```
+                ┌──────────────────────────────────────────┐
+                │                                          │
+                ▼                                          │
+         ┌─────────────┐  tool_failure    ┌──────────────┐ │
+         │  Executing  ├─────────────────▶│ LocalRepair  │ │
+         └──────┬──────┘  (3 次内)        └──────┬───────┘ │
+                │                                │         │
+                │  ┌───── trigger ──────────────┘         │
+                │  │
+                │  ├─ ProgressFailure → LocalRearrange ──┤
+                │  ├─ WorldStateMismatch → LocalRedecompose
+                │  ├─ BudgetPressure → GlobalReplan OR   │
+                │  │  SummaryExit
+                │  └─ UserInterrupt → 抢占，进入 Clarify  │
+                │
+                ▼
+         ┌──────────────┐
+         │  Terminated  │
+         └──────────────┘
+```
+
+#### 4 类触发条件
+
+**1. ProgressFailure（进展失败）**
+- 单 leaf 连续 retry > **3** 次 → LocalRearrange
+- 连续 **2** 轮无 forward progress（state hash 不变）→ LocalRearrange
+
+**2. BudgetPressure（预算压力）**
+- Token budget ≥ **70%** → 准备 summary exit
+- Turn budget ≥ **80%** maxTurns → 强制 summary exit
+- Retry token > **15%** 基线预算（SRE retry budget 模式，参考 Tianpan 2026-04 blog）→ LocalRedecompose
+
+**3. WorldStateMismatch（世界状态失配）**
+- Tool 结果推翻 subtask precondition（file not found / server down / enum 值已过期）→ LocalRedecompose
+- 关键依赖变化（如主干 schema 更新）→ GlobalReplan
+
+**4. UserInterrupt（用户中断，最高优先级）**
+- Ctrl+C / API cancel / 显式 interrupt tool call
+- 立即抢占 currentLeaf，保存 checkpoint，进入 Clarification 模式等待新指令
+
+#### 3 级 Replan
+
+| 级别 | 作用域 | LLM 成本 | 何时触发 |
+|------|-------|---------|---------|
+| **L-Rearrange** | 只改当前 leaf 参数 / 工具，不动 plan 结构 | 1 次 LLM 局部调用 | ProgressFailure（默认尝试） |
+| **L-Redecompose** | 当前 leaf 重新分解（不超过 max_redecompose），其他 branch 保留 | 1 次 LLM decompose | L-Rearrange 失败 或 WorldStateMismatch |
+| **G-Replan** | 基于完整历史全量重新生成 plan | 全量 LLM 重推 | 前提被推翻 / 用户重定向 / 反复失败 |
+
+**纪律**：默认优先 L-Rearrange → L-Redecompose → G-Replan，不能直接跳 G-Replan（除非 UserInterrupt 指定）。
+
+#### Local Repair（子状态机）
+
+单 tool call 失败不直接触发 Replan，先本地修复（借鉴 RETO 2026 arXiv 2602.18968）：
+
+1. **Schema fix** — 按 JSON schema 修复格式错误
+2. **Param rewrite** — 用 LLM 根据错误信息改参数
+3. **Tool substitute** — 尝试替代工具（同 capability tag）
+
+三次尝试内成功 → 返回 Executing；超预算 → 升级到 Replan。
+
+#### Goal Drift 防御（新增）
+
+参考 2026 Agent Drift study / POMDP drift model：
+
+- 每 **5 步**强制对照原 `intent vector`
+- 当前 state embedding 与 intent embedding cosine similarity < **0.65** → 警告 task drift
+- 三次警告 → 强制 G-Replan 或进入 CLARIFICATION（问用户"还在做原任务吗？"）
+
+#### 接口
+
+```typescript
+export type ReplanTrigger =
+  | { kind: 'ProgressFailure'; leaf: string; retries: number; staleTurns: number }
+  | { kind: 'BudgetPressure'; tokenPct: number; turnPct: number; retryPct: number }
+  | { kind: 'WorldStateMismatch'; violated: ReadonlyArray<string>; severity: 'leaf' | 'global' }
+  | { kind: 'UserInterrupt'; userInput: string }
+  | { kind: 'GoalDrift'; similarity: number };
+
+export type PlanPatch =
+  | { level: 'L-Rearrange'; leafId: string; changes: LeafChange }
+  | { level: 'L-Redecompose'; leafId: string; newSubtasks: ReadonlyArray<SubTask> }
+  | { level: 'G-Replan'; newPlan: Plan };
+
+export interface Replanner {
+  repair(leafId: string, error: ToolError): Promise<RepairOutcome>;
+  replan(state: PlanningState, trigger: ReplanTrigger): Promise<PlanPatch>;
+}
+```
+
+---
+
+### 2.5 终止判断（Termination Detection）
+
+| 终止条件 | 触发机制 | 优先级 | 处理 |
+|---------|---------|-------|------|
+| **Success** | LLM 判定目标达成 | 最高 | 输出结果，正常退出 |
+| **UserInterrupt** | Ctrl+C / cancel | 高 | 保存 checkpoint，保留进度 |
+| **MaxSteps** | `iteration >= maxIterations`（默认 50） | 中 | 部分输出 + `partial_complete` 标记 |
+| **DeadLoop** | 连续 5 步动作类型完全相同 | 中 | 强制终止 + 诊断报告 |
+| **ResourceExhausted** | Token budget > **80%** | 中 | 摘要式输出，优雅退出 |
+| **UnrecoverableError** | G-Replan 后仍失败 | 低 | 详细错误报告，建议人工干预 |
+| **GoalDrift** | similarity 三次警告 | 低 | 暂停进入 CLARIFICATION |
+
+```typescript
+export type TerminationReason =
+  | 'Success' | 'UserInterrupt' | 'MaxSteps'
+  | 'DeadLoop' | 'ResourceExhausted' | 'UnrecoverableError' | 'GoalDrift';
+
+export interface TerminationDecision {
+  readonly terminate: boolean;
+  readonly reason?: TerminationReason;
+}
+```
+
+---
+
+### 2.6 PlanningState —— Event-sourced（借鉴 OpenHands V1）
+
+所有状态转换产生**不可变 event**，支持确定性回放 + pause/resume。
+
+```typescript
+// packages/agent-core/src/planning/state.ts
+
+export interface AgentEvent {
+  readonly seq: number;
+  readonly timestamp: number;
+  readonly kind:
+    | 'intent_classified'
+    | 'task_decomposed'
+    | 'subtask_started'
+    | 'subtask_done'
+    | 'tool_called'
+    | 'tool_returned'
+    | 'local_repair'
+    | 'replan'
+    | 'terminated';
+  readonly payload: unknown;
+}
+
+export interface BudgetLedger {
+  readonly tokenSpent: number;
+  readonly tokenBudget: number;
+  readonly turnSpent: number;
+  readonly turnBudget: number;
+  readonly retryTokenSpent: number;   // for SRE retry budget
+}
+
+export type PlanPhase =
+  | 'classifying'
+  | 'decomposing'
+  | 'executing'
+  | 'repairing'
+  | 'replanning'
+  | 'terminated';
+
+export interface PlanningState {
+  readonly runId: string;
+  readonly intent: IntentClassification | null;
+  readonly plan: Plan | null;
+  readonly currentLeafId: string | null;
+  readonly phase: PlanPhase;
+  readonly budget: BudgetLedger;
+  readonly events: ReadonlyArray<AgentEvent>;
+  readonly checkpoints: ReadonlyArray<Checkpoint>;
+}
+
+export interface Checkpoint {
+  readonly id: string;
+  readonly atEventSeq: number;
+  readonly stateSnapshot: PlanningState;
+  readonly storageRef: string;        // OmniMem episodic tier
+}
+```
+
+**不可变性约定**：
+- State transitions 通过纯函数 `applyEvent(state, event) → newState`
+- 历史回放：`events.reduce(applyEvent, initialState)` 重建任意时刻 state
+- Checkpoint = `{ atEventSeq, stateSnapshot }`，存 OmniMem episodic tier
+
+---
+
+### 2.7 Planner Protocol（统一接口）
+
+```typescript
+// packages/agent-core/src/planning/planner.ts
+
+export interface PlanContext {
+  readonly task: string;
+  readonly conversationHistory: ReadonlyArray<Message>;
+  readonly memoryRecall: ReadonlyArray<MemoryItem>;      // 从 OmniMem 拉
+  readonly skillCatalog: ReadonlyArray<SkillDescriptor>; // 从 SkillsManager 拉
+  readonly budget: BudgetLedger;
+  readonly iteration: number;
+}
+
+export interface Planner {
+  classifyIntent(input: string, ctx: PlanContext): Promise<IntentClassification>;
+  decompose(task: string, intent: Intent, ctx: PlanContext): Promise<Plan>;
+  selectStrategy(intent: Intent, plan: Plan | null, override?: Strategy): Strategy;
+  replan(state: PlanningState, trigger: ReplanTrigger): Promise<PlanPatch>;
+  shouldTerminate(state: PlanningState): TerminationDecision;
+  generateClarification(input: string, missing: ReadonlyArray<string>): Promise<string>;
+}
+```
+
+---
+
+### 2.8 配置（quilin/config.yaml `planning` 节）
 
 ```yaml
 planning:
-  # 意图识别
   intent:
-    use_rule_fast_path: true        # 启用关键词规则快速通道
-    llm_confidence_threshold: 0.7  # 低于此值降级为 CLARIFICATION
-    rule_keywords:
-      single_tool: ["搜索", "查询", "查找", "获取", "列出", "search", "fetch"]
-      clarification: ["那个", "之前", "上面说的", "the thing", "as before"]
+    l1_rule:
+      enabled: true
+      keywords:
+        single_tool: ["搜索", "查询", "查找", "获取", "列出", "search", "fetch", "get"]
+        clarification: ["那个", "之前", "上面说的", "the thing", "as before", "it"]
+        multi_step_hint: ["然后", "接着", "并且", "最后", "then", "after that"]
 
-  # 策略选择
+    l2_classifier:
+      enabled: false              # Iter C M0 不启用，M1 随 D-21 spike 结果启用
+      backend: "deberta_onnx"     # 或 "qwen_local_2b"
+      model_path: "<TBD, pending D-21 spike>"
+      confidence_threshold: 0.85
+      abstain_below: 0.65
+
+    l3_fallback:
+      enabled: true
+      model_ref: "llm.main"       # 引用 01-llm 主模型
+      trigger: "abstain_or_low_confidence"
+
+  decomposition:
+    default_ir: "linear"
+    max_depth: 2
+    max_subtasks_per_plan: 10
+    max_total_nodes: 20
+    max_redecompose_per_leaf: 1
+    upgrade_to_dag_on:
+      - "explicit_parallel_hint"
+      - "independent_writes"
+      - "user_parallel_flag"
+
   strategy:
-    default: "react"                # 默认策略
-    complexity_threshold: 0.7      # 超过此值切换到 PlanAndExecute
-    allow_user_override: true       # 允许用户手动指定策略
+    default: "react"
+    plan_and_execute_threshold_steps: 20
+    allow_user_override: true
 
-  # 执行控制
-  execution:
-    max_iterations: 50             # 最大循环步数
-    checkpoint_interval: 5        # 每 N 步保存检查点
-    max_checkpoints: 5            # 最多保留检查点数量
-    dead_loop_window: 5           # 连续 N 步相同动作触发死循环检测
+  replan:
+    triggers:
+      progress_failure:
+        max_leaf_retries: 3
+        max_stale_turns: 2
+      budget_pressure:
+        token_budget_exit_pct: 0.70
+        turn_budget_exit_pct: 0.80
+        retry_token_cap_pct: 0.15
+      world_state_mismatch:
+        leaf_severity_upgrade_to_g_replan: false
+      goal_drift:
+        check_every_n_steps: 5
+        similarity_threshold: 0.65
+        max_warnings: 3
 
-  # 动态重规划
-  replanning:
-    max_retries_per_task: 3        # 单任务最大重试次数
-    replan_on_step_overrun: 2.0   # 步数超过预估 2x 时评估重规划
-    token_budget_pct: 0.8         # token 预算使用 80% 时触发摘要退出
+    local_repair:
+      max_attempts: 3
+      strategies: ["schema_fix", "param_rewrite", "tool_substitute"]
+
+  termination:
+    max_iterations: 50
+    checkpoint_every_n_steps: 5
+    max_checkpoints: 5
+    dead_loop_window: 5
 ```
 
 ---
 
-## 三、Top 10 参考项目
+### 2.9 与 Skills / Memory / Multi-Agent 接口（新增章节）
 
-### 深入研究（前 5）
+Planning 是 **orchestration 层**，**不做**：
+- 自己读 SKILL.md 文件（不跨边界）
+- 把 live plan state 写 semantic memory（不污染长期知识）
+- 让 LLM 自由决定 delegate 对象（无 guardrail 风险）
 
-| # | 项目 | Stars（2026-04） | 核心规划特色 | GitHub |
-|---|------|----------------|-------------|--------|
-| 1 | LangGraph | ~126k | 状态机编排、条件路由、检查点持久化、中断/恢复 | [langchain-ai/langgraph](https://github.com/langchain-ai/langgraph) |
-| 2 | DSPy | ~16k | Signature/Module 编程范式、自动 prompt 优化、Optimizer | [stanfordnlp/dspy](https://github.com/stanfordnlp/dspy) |
-| 3 | OpenAI Agents SDK | ~20.7k | Runner 循环、Handoff 机制、Guardrails 集成 | [openai/openai-agents-python](https://github.com/openai/openai-agents-python) |
-| 4 | Pydantic AI | ~16k | 依赖注入、结构化结果、类型安全工具定义 | [pydantic/pydantic-ai](https://github.com/pydantic/pydantic-ai) |
-| 5 | AutoGen | ~56.8k | ConversableAgent、GroupChat、代码执行器 | [microsoft/autogen](https://github.com/microsoft/autogen) |
+#### 2.9.1 Skills 接口
 
-### 观察参考（后 5）
+```
+Planner 依赖 SkillsManager 的 descriptor-only 视图，不直接访问文件系统。
+```
 
-| # | 项目 | Stars（2026-04） | 核心规划特色 | GitHub |
-|---|------|----------------|-------------|--------|
-| 6 | CrewAI | ~48.4k | 角色+任务+流程编排、Role-based planning | [crewAIInc/crewAI](https://github.com/crewAIInc/crewAI) |
-| 7 | Semantic Kernel | ~27.5k | Planner + Stepwise 规划、Function Calling 抽象 | [microsoft/semantic-kernel](https://github.com/microsoft/semantic-kernel) |
-| 8 | LATS | ~1.5k | 蒙特卡洛树搜索规划、ICML 2024、探索性任务 | [lapisrocks/LanguageAgentTreeSearch](https://github.com/lapisrocks/LanguageAgentTreeSearch) |
-| 9 | HuggingGPT (JARVIS) | ~24k | 模型选择即规划、LLM 作为 Controller | [microsoft/JARVIS](https://github.com/microsoft/JARVIS) |
-| 10 | MetaGPT | ~61k | SOP 驱动规划、角色模拟软件公司流程 | [geekan/MetaGPT](https://github.com/geekan/MetaGPT) |
+```typescript
+export interface SkillDescriptor {
+  readonly name: string;
+  readonly description: string;
+  readonly whenToUse: string;
+  readonly estimatedTokens: number;
+  readonly tags: ReadonlyArray<string>;
+}
+
+export interface SkillsManager {
+  listCatalog(): Promise<ReadonlyArray<SkillDescriptor>>;        // 启动时拉
+  load(name: string): Promise<SkillContent>;                     // 按需加载全文
+}
+```
+
+**调用顺序**：
+1. `Planner.decompose()` 启动前先 `listCatalog()` 拉 descriptor（轻量，只含元数据）
+2. 对每个 subtask 匹配 `skillHint`（embedding similarity + rule）
+3. `subtask.status = running` 前，`SkillsManager.load(skillHint)` 拉全文注入 execution prompt
+4. Subtask 完成后，skill 用量 → OmniMem semantic tier（跨 session 学习"这个 skill 对这类任务有效"）
+
+#### 2.9.2 Memory 分层写入
+
+| 数据 | Tier | 生命周期 | 读取时机 |
+|------|------|---------|---------|
+| 当前 plan tree + currentLeaf + events | **working** | session 结束清空 | 每步 replan 判断 |
+| Final plan + replan history + failure causes | **episodic** | 持久化 | 相似任务召回、debug 回看 |
+| 复盘提炼的稳定策略（"这类任务适合 PlanAndExecute"） | **semantic** | 长期，需显式沉淀 | 下次 classifyIntent / selectStrategy 时召回 |
+
+**纪律**（针对 2026-04-18 骨架反转）：
+- ❌ live plan state **不进** semantic tier
+- ❌ 失败 plan **不立刻**进 semantic（需复盘后人工/LLM 提炼）
+- ✅ 仅稳定策略 + 跨任务通用经验进 semantic
+
+#### 2.9.3 Multi-Agent Delegation（规则路由）
+
+> Delegation 决策 **不给 LLM 自由发挥**，Iter C 阶段走规则路由。
+
+**触发条件**（必须**全部**满足）：
+1. Subtask 独立（`preconditions` 不依赖其他运行中 subtask 的 `effects`）
+2. 剩余步骤 ≥ **3** 步（overhead 摊销下限）
+3. 无共享写集（`writeScope` 不与其他 running subtask 冲突）
+4. 风险级别 ≤ main Agent tier（不下放高风险写操作）
+
+**选择器优先级**（全部通过 06-multi-agent 的 `AgentPool.select(criteria)`）：
+1. Capability match — subtask 需要的 tool capability 集合
+2. Skill / tag match — 历史上处理过类似任务的 sub-agent
+3. Affinity — CPU-bound / IO-bound / 独立 context 需求
+4. Risk level — 写权限层级
+
+```typescript
+export interface DelegationCriteria {
+  readonly subtaskId: string;
+  readonly requiredCapabilities: ReadonlyArray<string>;
+  readonly skillTags: ReadonlyArray<string>;
+  readonly affinity: 'cpu' | 'io' | 'isolated_context';
+  readonly riskLevel: 'low' | 'medium' | 'high';
+}
+
+export interface DelegationPolicy {
+  shouldDelegate(subtask: SubTask, state: PlanningState): boolean;
+  buildCriteria(subtask: SubTask): DelegationCriteria;
+}
+```
+
+**Main Agent 不执行**（契合 CLAUDE.md 的"非阻塞 Supervisor"设计）：
+- 所有 subtask 要么 delegate，要么标记 inline 但由 Executor 独立 coroutine 跑
+- Main Agent 永远可接新用户输入 / 中断 / 监控
 
 ---
 
-## 四、吸收内化方案
+## 三、参考项目
 
-### 4.1 LangGraph → AgentState 状态机设计
+### 核心参考（必看，Iter C 实现直接引用）
 
-**吸收点：** StateGraph + 条件边 + 检查点持久化
+| # | 项目 / 论文 | 为何看 | 引用点 |
+|---|-----------|--------|--------|
+| 1 | **OpenHands V1** (arXiv:2511.03690) | Event-sourced state + 模块化 SDK + 多 Agent DAG 执行 | §2.6 event-sourced state, §2.9.3 delegation |
+| 2 | **Claude Code sub-agent 架构** (Prafull Salunke 2026-02) | Main Agent orchestrator + 独立 context subagent pool | §2.9.3 non-blocking main agent |
+| 3 | **IntentGuard** (HuggingFace 2026-03, perfecXion/intentguard) | DeBERTa-v3-xsmall (22M) + ABSTAIN class，生产级分类器 | §2.1 L2 classifier candidate |
+| 4 | **BATS** (arXiv:2511.17006) | Budget-aware test-time scaling tracker | §2.4 BudgetPressure trigger |
+| 5 | **RETO** (arXiv:2602.18968) | Local repair before global replan | §2.4 Local Repair 子状态机 |
+| 6 | **PALADIN** (OpenReview 2025) | Failure recovery as first-class learning objective | §2.4 Replan 纪律 |
+| 7 | **Plan-Execute-Verify-Replan** (arXiv:2603.11445) | DAG + verification + adaptive replan | §2.4 G-Replan 触发 |
+| 8 | **Agent Drift study** (2026 POMDP drift model) | Task drift 形式化 + plan-ahead > step-by-step | §2.4 Goal Drift 防御 |
+| 9 | **Hybrid Validation Pattern** (Medium 2026-02) | 规则 + LLM fallback，切 70% cost | §2.1 三段式设计依据 |
+| 10 | **Retry Budget for LLM Agents** (Tianpan 2026-04) | SRE retry budget 模式 | §2.4 retry_token_cap_pct |
 
-LangGraph 的核心创新是将 Agent 循环建模为**显式状态图**，而非隐式的 while 循环。每个节点是一个函数，每条边是一个条件路由。这使得状态转换完全可追溯、可调试、可回放。
+### 观察参考（按需）
 
-Quilin 的 `AgentState` 直接继承这一思想，`_build_graph()` 方法构建的字典结构正是 LangGraph StateGraph 的简化实现。重点吸收：
-
-1. **检查点持久化**：LangGraph 的 `MemorySaver` / `SqliteSaver` 机制启发了 Quilin 的检查点设计。每 N 步将 `AgentState.variables` 快照到 OmniMem 的 long tier，用于 Level 3 回滚重规划。
-2. **条件边路由**：`_node_decide` 的三路分支（end/plan/replan）直接对应 LangGraph 的 `add_conditional_edges`，决策逻辑完全内化在节点函数中。
-3. **中断/恢复**：LangGraph 的 `interrupt_before/interrupt_after` 机制启发了用户中断时的安全保存逻辑。
-
-### 4.2 DSPy → 推理策略的可编程优化
-
-**吸收点：** Module 编程范式 + Optimizer 自动调优
-
-DSPy 的核心思想是：不要手写 prompt，而是定义 `Signature`（输入输出规范），让编译器自动优化 prompt。这与传统"精心设计 prompt"的范式完全相反。
-
-Quilin 的吸收体现在两个层面：
-
-1. **策略选择的可编程化**：`StrategyRunner` 的策略不是硬编码在 if-else 中，而是通过 `Strategy` 枚举 + 配置矩阵驱动，类似 DSPy 的 Module 组合方式，未来可以接入 DSPy Optimizer 自动调优 `select_strategy` 的 prompt。
-2. **意图分类的 Signature 化**：`classify_intent` 的 LLM 调用可以包装为 DSPy `Predict` 模块，使意图分类的 prompt 可以通过少样本优化（BootstrapFewShot）自动改进，无需人工调整。
-
-### 4.3 OpenAI Agents SDK → Handoff 机制与 Runner 循环
-
-**吸收点：** Handoff 任务转交 + Runner 简洁实现
-
-OpenAI Agents SDK 的 `Runner.run()` 循环极为简洁，其核心是：LLM 决定下一步动作，执行工具，将结果追加到对话历史，循环直到没有更多工具调用。这种实现简洁优雅，适合单 Agent 场景。
-
-`Handoff` 机制允许一个 Agent 将任务转交给另一个专业 Agent，这是多 Agent 场景下任务分配的核心模式。
-
-Quilin 的吸收：
-
-1. **Runner 循环简洁性**：`Quilin.run()` 的主循环结构参考了 Runner 的简洁设计，while + state transition 的模式与 SDK 内核一致。
-2. **Handoff 启发的任务转交**：当某个子任务需要特殊能力时（例如需要视觉模型处理图片），TaskDAG 中的子任务可以通过 MCP 消息转交给对应的 Perception 层 Provider，这正是 Handoff 思想的体现。
-
-### 4.4 Pydantic AI → 类型安全与依赖注入
-
-**吸收点：** 工具定义类型安全 + 依赖注入模式
-
-Pydantic AI 的最大创新是将 Python 类型系统深度融入 Agent 工具定义，所有工具的输入输出都有明确的 Pydantic 模型约束，在开发时即可发现类型错误。
-
-依赖注入（`RunContext[Dependencies]`）让 Agent 可以在不同环境下注入不同的实现（测试时注入 Mock，生产时注入真实服务）。
-
-Quilin 的吸收：
-
-1. **Protocol + 类型注解**：`Planner Protocol` 的所有方法均有完整类型注解，`SubTask`/`TaskDAG`/`Plan` 等数据结构使用 `@dataclass` 而非裸 dict。
-2. **依赖注入模式**：`Planner` 的具体实现（LangGraph adapter / DSPy adapter）通过 `PluginRegistry` 注入，与 Pydantic AI 的 `RunContext` 设计思路一致，便于测试替换。
-
-### 4.5 AutoGen → 多轮对话规划模式
-
-**吸收点：** ConversableAgent 循环 + 代码执行验证
-
-AutoGen 的 `ConversableAgent.generate_reply()` 循环是多轮对话规划的经典实现：每个 Agent 根据对话历史生成回复，多个 Agent 通过 GroupChat 协作完成任务。
-
-代码执行器（`LocalCommandLineCodeExecutor`）允许 Agent 生成代码并立即执行验证结果，这是"规划即代码"模式的核心。
-
-Quilin 的吸收：
-
-1. **多轮对话历史**：`AgentState.history` 保存完整的节点转换历史，每次 `_node_plan` 都将历史传递给规划器，类似 AutoGen 的对话历史管理。
-2. **执行验证循环**：PlanAndExecute 策略的 Phase 3（对照检查）直接受 AutoGen 代码执行器验证模式启发，每步执行后对照预期验证，不符合则触发重规划。
+LangGraph / DSPy / OpenAI Agents SDK / Pydantic AI / AutoGen / CrewAI / Semantic Kernel / LATS / HuggingGPT / MetaGPT —— 详见 2026-04-18 骨架，不再复述。注意：**Iter C 不引入任何以上作为运行时依赖**（ADR-001）。
 
 ---
 
-## 五、与 Harness 组件映射
+## 四、验证标准
 
-### 组件目录结构
+### 4.1 单元测试（vitest）
 
-```
-quilin/
-├── core/
-│   └── Harness.py                   # AgentState / Quilin 主循环
-└── planning/
-    ├── __init__.py
-    ├── planner.py                   # Planner Protocol + 默认实现
-    ├── classifier.py                # IntentClassifier（意图识别）
-    ├── decomposer.py                # TaskDecomposer（任务分解 DAG）
-    ├── strategies.py                # StrategyRunner（ReAct/PlanAndExecute/CoT）
-    └── correction.py                # DynamicReplanner（偏差检测 + 重规划）
-```
+#### Intent 分类（每类 ≥ 5 用例，共 20 基础 + 20 边界 = 40）
 
-### 组件接口映射表
+```typescript
+// packages/agent-core/src/planning/__tests__/intent.test.ts
 
-| 组件 | 文件路径 | 核心接口 | 关联节点 |
-|------|---------|---------|---------|
-| `IntentClassifier` | `quilin/planning/classifier.py` | `classify(user_input, context) → (IntentType, float)` | `_node_plan` |
-| `TaskDecomposer` | `quilin/planning/decomposer.py` | `decompose(task, context) → TaskDAG` | `_node_plan` |
-| `StrategyRunner` | `quilin/planning/strategies.py` | `select(intent, complexity) → Strategy` / `run(strategy, dag)` | `_node_plan` / `_node_execute_tools` |
-| `DynamicReplanner` | `quilin/planning/correction.py` | `check_deviation(step_result) → Deviation | None` / `replan(state, deviation) → Plan` | `_node_decide` |
-| `AgentState` | `quilin/core/Harness.py` | `transition(next_node)` / `is_terminal` | 所有节点 |
+describe('IntentClassifier L1 规则通道', () => {
+  it.each([
+    ['Python GIL 是什么？', 'SIMPLE_QA', 0.7],
+    ['搜索最新 GPT-5 新闻', 'SINGLE_TOOL', 0.9],
+    ['帮我处理那个文件', 'CLARIFICATION', 0.9],
+    ['拉代码然后跑测试', 'MULTI_STEP', 0.8],
+  ])('classifies %s as %s', async (input, expected, minConf) => {
+    const result = await classifier.classify(input, ctx);
+    expect(result.intent).toBe(expected);
+    expect(result.confidence).toBeGreaterThanOrEqual(minConf);
+    expect(result.path).toBe('L1_rule');
+  });
+});
 
-### 完整 Provider 适配器接口
-
-```python
-# quilin/planning/planner.py
-
-from quilin.core.Harness import LayerProvider, MCPMessage
-from quilin.planning.types import (
-    Plan, Context, Deviation, IntentType, Strategy
-)
-
-
-class PlanningProvider(LayerProvider):
-    """
-    规划层 Provider 适配器基类。
-    具体实现：LangGraphPlanningProvider / DSPyPlanningProvider 等。
-    """
-
-    @property
-    def name(self) -> str: ...
-
-    @property
-    def layer(self) -> str:
-        return "planning"
-
-    async def initialize(self, config: dict) -> None:
-        """加载模型、初始化分类器和策略引擎。"""
-        ...
-
-    async def execute(self, payload: dict) -> dict:
-        """
-        通过 MCP 协议接收规划请求。
-        payload 包含：
-          - method: "generate_plan" | "replan" | "classify_intent" | "reflect"
-          - task: str
-          - context: dict
-          - state: dict（序列化的 AgentState）
-        """
-        method = payload.get("method")
-        if method == "generate_plan":
-            return await self._handle_generate_plan(payload)
-        elif method == "replan":
-            return await self._handle_replan(payload)
-        elif method == "classify_intent":
-            return await self._handle_classify(payload)
-        elif method == "reflect":
-            return await self._handle_reflect(payload)
-        return {"error": f"unknown method: {method}"}
-
-    async def healthcheck(self) -> bool:
-        """检查 LLM 连接是否正常。"""
-        ...
-
-    async def shutdown(self) -> None: ...
+describe('IntentClassifier L3 fallback', () => {
+  it('escalates to L3 on ambiguous input', async () => {
+    const result = await classifier.classify('update it', ctx);
+    expect(result.path).toBe('L3_llm');
+  });
+});
 ```
 
-### 性能约束
+#### Decomposer（linear-first + DAG upgrade）
 
-| 操作 | SLA | 备注 |
-|------|-----|------|
-| 规则快速通道（意图分类） | < 5ms | 纯内存操作，无 LLM 调用 |
-| LLM 意图分类 | < 800ms | 使用 haiku 级别模型 |
-| 任务分解（DAG 生成） | < 2s | 复杂任务允许延长到 5s |
-| 策略选择 | < 50ms | 规则矩阵匹配，无 LLM |
-| 单步 ReAct 循环 | < 3s | 包含工具调用等待 |
-| Level 1-2 重规划 | < 1s | 局部调整，少量 LLM 调用 |
-| Level 3-4 重规划 | < 10s | 完整重规划，接受延迟 |
+```typescript
+describe('TaskDecomposer', () => {
+  it('produces linear plan by default', async () => {
+    const plan = await decomposer.decompose(
+      '搜索竞品，整理表格，给出建议',
+      'MULTI_STEP',
+      ctx,
+    );
+    expect(plan.kind).toBe('linear');
+    expect(plan.subtasks.length).toBeLessThanOrEqual(10);
+  });
+
+  it('upgrades to DAG on explicit parallel hint', async () => {
+    const plan = await decomposer.decompose(
+      '并行跑单元测试和集成测试',
+      'MULTI_STEP',
+      ctx,
+    );
+    expect(plan.kind).toBe('dag');
+  });
+
+  it('enforces depth ≤ 2', async () => {
+    // re-decompose 同一 leaf 2 次应失败
+    const plan = await decomposer.decompose(complexTask, 'MULTI_STEP', ctx);
+    const leafId = plan.subtasks[0].id;
+    await decomposer.redecompose(leafId, plan);
+    await expect(decomposer.redecompose(leafId, plan)).rejects.toThrow(/max_redecompose/);
+  });
+
+  it('refuses plan exceeding token budget', async () => {
+    ctx.budget.tokenBudget = 1000;
+    // mock subtasks summing to 2000 tokens
+    await expect(decomposer.decompose(hugeTask, 'MULTI_STEP', ctx))
+      .rejects.toThrow(/token_budget_exceeded/);
+  });
+});
+```
+
+#### Replanner 状态机
+
+```typescript
+describe('Replanner', () => {
+  it('triggers LocalRearrange on 3 consecutive leaf retries', async () => {
+    const trigger: ReplanTrigger = {
+      kind: 'ProgressFailure',
+      leaf: 'T3',
+      retries: 3,
+      staleTurns: 0,
+    };
+    const patch = await replanner.replan(state, trigger);
+    expect(patch.level).toBe('L-Rearrange');
+  });
+
+  it('escalates to G-Replan on WorldStateMismatch with global severity', async () => {
+    const trigger: ReplanTrigger = {
+      kind: 'WorldStateMismatch',
+      violated: ['api_schema_changed'],
+      severity: 'global',
+    };
+    const patch = await replanner.replan(state, trigger);
+    expect(patch.level).toBe('G-Replan');
+  });
+
+  it('respects UserInterrupt as highest priority', async () => {
+    // even during executing, UserInterrupt preempts
+    const trigger: ReplanTrigger = { kind: 'UserInterrupt', userInput: 'stop' };
+    const patch = await replanner.replan(state, trigger);
+    expect(patch.level).toBe('G-Replan');
+  });
+});
+```
+
+#### Goal Drift 检测
+
+```typescript
+describe('GoalDriftDetector', () => {
+  it('warns when similarity drops below 0.65', async () => {
+    const state = makeStateWithDriftedActions();
+    const warnings = driftDetector.check(state);
+    expect(warnings.length).toBeGreaterThan(0);
+  });
+
+  it('forces G-Replan after 3 warnings', async () => {
+    // 连续 3 个 check point 都低于 threshold
+    const trigger = driftDetector.accumulate(3);
+    expect(trigger.kind).toBe('GoalDrift');
+  });
+});
+```
+
+### 4.2 集成测试
+
+- **E2E SIMPLE_QA 直答**：跳过工具，< 5s
+- **E2E MULTI_STEP Linear**：至少 3 subtasks，ReAct 循环，< 60s
+- **E2E Local Repair 成功**：首次 tool 失败，3 次内修复，不触发 replan
+- **E2E L-Redecompose**：precondition 失败后局部重分解，保留其他 branch
+- **E2E G-Replan on UserInterrupt**：执行中用户中断 → 抢占 → clarification → 新指令
+- **E2E Checkpoint Resume**：5 步后中断，从 checkpoint 恢复，事件回放一致
+
+### 4.3 验收指标
+
+| 指标 | 目标 | 方法 |
+|------|------|------|
+| Intent 分类准确率（4 类）L1+L2 | ≥ 90% | 40 标注用例 |
+| L1 规则通道命中率 | ≥ 50% | 统计 path 分布 |
+| L2 分类器（M1 启用后）recall / FPR / p95 | 等 D-21 spike 完成后定 | 外部 gate |
+| Decomposer DAG 正确率（依赖顺序） | ≥ 85% | 20 手造任务 |
+| Replan 成功率（故障场景） | ≥ 80% | 注入 tool 失败 |
+| Checkpoint 恢复无数据丢失 | 100% | event replay 幂等性 |
+| 单元测试覆盖率 | ≥ 80% | `bun run test --coverage` |
 
 ---
 
-## 六、验证标准
+## 五、Iter C 交付范围 + 阶段划分
 
-### 6.1 单元测试
+### M0 — Linear Planning MVP（2-3 周）
 
-#### 意图识别（4 类各提供测试用例）
+- **Intent**: L1 规则 + L3 LLM fallback（**无 L2**）
+- **Decomposition**: Linear-first，硬上限约束
+- **Strategy**: ReAct + CoT（**无 PlanAndExecute**）
+- **Replan**: L-Rearrange + Local Repair（**无 L-Redecompose / G-Replan**）
+- **Termination**: Success + MaxSteps + UserInterrupt + DeadLoop
+- **Event-sourced state**: ✓（minimal subset）
+- **Skills 接口**: descriptor-only catalog
+- **Memory**: working + episodic（**无 semantic 写入**）
+- **Multi-Agent**: **不启用 delegation**（main Agent 内联执行）
 
-```python
-import pytest
-from quilin.planning.classifier import IntentClassifier
-from quilin.planning.types import IntentType, Context
+**验收**：MULTI_STEP 任务端到端跑通（搜索竞品 → 整理表格 → 生成建议），≤ 20 步，Replan 只支持 L-Rearrange。
 
-# 测试用例覆盖矩阵（每类至少 5 个用例）
+### M1 — Tiny Classifier + L-Redecompose（+ 1-2 周，D-21 spike 通过后）
 
-SIMPLE_QA_CASES = [
-    ("Python 中的 GIL 是什么？", IntentType.SIMPLE_QA),
-    ("解释一下 CAP 定理", IntentType.SIMPLE_QA),
-    ("比较 REST 和 GraphQL 的优缺点", IntentType.SIMPLE_QA),
-    ("什么是向量数据库？", IntentType.SIMPLE_QA),
-    ("ReAct 和 CoT 有什么区别？", IntentType.SIMPLE_QA),
-]
+- **Intent**: + L2 DeBERTa-xsmall ONNX 或本地 Qwen2.5-1.5B（D-21 gate 通过后）
+- **Replan**: + L-Redecompose + Goal Drift 检测
+- **Memory**: + 复盘沉淀到 semantic（opt-in）
 
-SINGLE_TOOL_CASES = [
-    ("搜索最新的 GPT-5 新闻", IntentType.SINGLE_TOOL),
-    ("查询今天 BTC 的价格", IntentType.SINGLE_TOOL),
-    ("获取 LangGraph 的最新版本号", IntentType.SINGLE_TOOL),
-    ("列出当前目录下的所有 Python 文件", IntentType.SINGLE_TOOL),
-    ("fetch the README of langchain-ai/langgraph", IntentType.SINGLE_TOOL),
-]
+**验收**：L2 分类器 recall ≥ 85%，Goal Drift 检测覆盖率 100%。
 
-MULTI_STEP_CASES = [
-    ("从 GitHub 拉取代码，运行测试，然后发邮件", IntentType.MULTI_STEP),
-    ("分析这份报告，找出关键指标，然后生成可视化图表", IntentType.MULTI_STEP),
-    ("搜索竞品信息，整理成表格，并给出建议", IntentType.MULTI_STEP),
-    ("读取 CSV 文件，清洗数据，然后训练一个分类模型", IntentType.MULTI_STEP),
-    ("check the API status, if down send alert, else log success", IntentType.MULTI_STEP),
-]
+### M2 — DAG + PlanAndExecute + Multi-Agent（+ 2-3 周）
 
-CLARIFICATION_CASES = [
-    ("帮我处理一下那个文件", IntentType.CLARIFICATION),
-    ("按照之前说的方式做", IntentType.CLARIFICATION),
-    ("继续", IntentType.CLARIFICATION),
-    ("做那件事", IntentType.CLARIFICATION),
-    ("update it", IntentType.CLARIFICATION),
-]
+- **Decomposition**: + DAG 升级（explicit parallel / independent writes）
+- **Strategy**: + PlanAndExecute（> 20 步任务）
+- **Replan**: + G-Replan
+- **Multi-Agent**: + 规则 delegation（06-multi-agent 联动）
 
-
-@pytest.mark.unit
-@pytest.mark.parametrize("user_input,expected_intent", SIMPLE_QA_CASES)
-async def test_classify_simple_qa(classifier: IntentClassifier, ctx: Context, user_input, expected_intent):
-    intent, confidence = await classifier.classify(user_input, ctx)
-    assert intent == expected_intent
-    assert confidence >= 0.7
-
-
-@pytest.mark.unit
-@pytest.mark.parametrize("user_input,expected_intent", CLARIFICATION_CASES)
-async def test_classify_clarification(classifier: IntentClassifier, ctx: Context, user_input, expected_intent):
-    intent, confidence = await classifier.classify(user_input, ctx)
-    assert intent == expected_intent
-```
-
-#### 任务分解 DAG 正确性
-
-```python
-@pytest.mark.unit
-async def test_dag_dependency_order(decomposer: TaskDecomposer, ctx: Context):
-    """验证 DAG 依赖关系正确，ready_tasks 不包含未完成依赖的任务。"""
-    dag = await decomposer.decompose("拉代码、安装依赖、运行测试", ctx)
-
-    # T2 依赖 T1，T1 未完成时 T2 不应在 ready_tasks 中
-    ready = dag.get_ready_tasks()
-    ready_ids = {t.id for t in ready}
-
-    for task in dag.tasks.values():
-        if task.dependencies:
-            for dep_id in task.dependencies:
-                if dep_id not in [t.id for t in dag.tasks.values() if t.status == SubTaskStatus.DONE]:
-                    assert task.id not in ready_ids
-
-
-@pytest.mark.unit
-async def test_dag_parallel_execution(decomposer: TaskDecomposer, ctx: Context):
-    """验证并行任务同时出现在 ready_tasks 中。"""
-    dag = await decomposer.decompose("并行执行单元测试和集成测试", ctx)
-    ready = dag.get_ready_tasks()
-    assert len(ready) >= 2, "并行任务应同时可执行"
-```
-
-#### 终止条件判断逻辑
-
-```python
-@pytest.mark.unit
-async def test_terminate_on_max_steps(planner: Planner):
-    """验证超过最大步数时触发终止。"""
-    state = AgentState(iteration=51, max_iterations=50)
-    should_stop, reason = await planner.should_terminate(state)
-    assert should_stop is True
-    assert reason == TerminationReason.MAX_STEPS
-
-
-@pytest.mark.unit
-async def test_terminate_on_dead_loop(planner: Planner):
-    """验证连续相同动作触发死循环终止。"""
-    state = AgentState()
-    # 模拟连续 5 步调用相同工具
-    state.variables["recent_actions"] = ["search"] * 5
-    should_stop, reason = await planner.should_terminate(state)
-    assert should_stop is True
-    assert reason == TerminationReason.DEAD_LOOP
-```
+**验收**：长任务（50+ 步）端到端跑通，至少 1 次 delegation 到 sub-agent。
 
 ---
 
-### 6.2 集成测试
+## 六、Open Questions / 待后续决策
 
-#### ReAct 循环端到端（Think→Act→Observe 多轮）
+### Q1. Linear-first vs DAG-first 之争的收敛记录
 
-```python
-@pytest.mark.integration
-async def test_react_multi_round(harness: Quilin):
-    """
-    测试 ReAct 循环的多轮执行：
-    任务：搜索 LangGraph 最新版本，然后搜索其 changelog
-    预期：至少 2 次工具调用，结果包含版本信息
-    """
-    ctx = await harness.run(
-        task="搜索 LangGraph 最新版本号，然后找到对应的 changelog 内容"
-    )
+2026-04-20 revision 反转为 Linear-first。理由：
+- 大多数任务本质线性（oneuptime 2026-01 研究）
+- 强制 DAG 让 planner 过度建模，token + bug 面增加
+- Linear 是 DAG 的退化形式，不损失表达力；按需升级零成本
 
-    assert ctx.status == "completed"
-    tool_calls_total = sum(
-        trace_item.get("tool_count", 0)
-        for trace_item in ctx.trace
-        if trace_item["node"] == "execute_tools"
-    )
-    assert tool_calls_total >= 2, "多步任务应至少有 2 次工具调用"
-    assert ctx.outputs.get("tool_results"), "应有工具调用结果"
-```
+**残留风险**：Linear 执行引擎是否需要额外支持"软并发"（声明独立但不强依赖 DAG）？M2 决定。
 
-#### 动态重规划触发（故意让工具失败 → 触发重规划）
+### Q2. L2 Tiny Classifier 落地 —— DeBERTa vs 本地 2B LLM
 
-```python
-@pytest.mark.integration
-async def test_replan_on_tool_failure(harness: Quilin, mock_failing_tool):
-    """
-    测试工具失败触发重规划：
-    前 3 次工具调用强制失败，验证 Level 1 重试 → Level 2 调整发生
-    """
-    mock_failing_tool.fail_count = 3  # 前 3 次调用失败
+D-21 spike（Task #97 follow-up）正在跑对比实验。候选：
+- DeBERTa-v3-xsmall (22M, ONNX INT8) — IntentGuard 同款
+- Qwen2.5-1.5B-Instruct (本地 ollama)
+- Haiku 4.5（云端对照臂）
 
-    ctx = await harness.run(task="搜索最新 AI 新闻并总结")
+**Gate**（Codex 挑战后拆分）：
+- 本地路径：recall ≥85% + FPR ≤5% + p95 ≤50ms + cost ~$0
+- 云端路径：recall ≥85% + FPR ≤5% + p95 relaxed + cost cap $X / 1k calls
 
-    replan_events = [t for t in ctx.trace if t.get("node") == "decide" and t.get("action") == "replan"]
-    assert len(replan_events) >= 1, "工具失败后应触发重规划"
-    assert ctx.status == "completed", "重规划后应成功完成任务"
-```
+### Q3. Goal Drift threshold 的校准
 
-#### 检查点保存 / 恢复
+`similarity_threshold: 0.65` 是默认值，需在 M1 上线后收集真实数据校准。校准数据源：用户手动标注的"偏离"事件 + episodic memory 中标记为 "drift" 的 session。
 
-```python
-@pytest.mark.integration
-async def test_checkpoint_save_and_restore(harness: Quilin):
-    """
-    测试检查点机制：
-    执行 10 步后中断，从检查点恢复，验证状态一致性
-    """
-    # 执行前 5 步后获取检查点
-    checkpoint = await harness.get_latest_checkpoint(run_id="test-run")
-    assert checkpoint is not None
+### Q4. Replan 成本 vs 收益
 
-    # 从检查点恢复
-    restored_ctx = await harness.resume_from_checkpoint(checkpoint)
-    assert restored_ctx.status in ("completed", "running")
-    assert restored_ctx.outputs.get("iterations", 0) > 0
-```
+G-Replan 成本高（全量 LLM 重推）但生产中发生率应 <5%。M2 上线后需监控：
+- Replan 占总 LLM token 的百分比（目标 <10%）
+- L-Rearrange → L-Redecompose → G-Replan 的升级比例（目标金字塔形，大部分在 L-Rearrange 解决）
+
+### Q5. Skills descriptor 的 token 成本
+
+假设 100 skills × 200 tokens = 20k tokens 注入 Planner context。M2 前需评估：
+- 是否需要 skill catalog 的二次筛选（embedding-based pre-filter）？
+- 或者 descriptor 精简到 50 tokens 以内？
 
 ---
 
-### 6.3 端到端测试
+## 七、与其他工程领域的关联
 
-#### E2E-1：简单问答直接回答（不调工具）
+| 领域 | 关联点 |
+|------|--------|
+| [01 LLM Integration](../01-llm-integration/README.md) | Planner 用 `llm.main` 做 L3 fallback 和 decompose |
+| [02 Context](../02-context/README.md) | `ContextManager.estimateRemaining()` 用于 token 预算约束 |
+| [03 Memory](../03-memory/README.md) | Plan 状态按 working/episodic/semantic 三层写入 |
+| [05 Tools](../05-tool/README.md) | Subtask execute 通过 tool registry，tool_call 产生 AgentEvent |
+| [06 Multi-Agent](../06-multi-agent/README.md) | M2 delegation 调用 `AgentPool.select(criteria)` |
+| [07 Safety](../07-safety-guardrails/README.md) | Delegation risk level 由 07 提供；UserInterrupt 对齐 07 的抢占协议 |
+| [08 Observability](../08-observability/README.md) | AgentEvent 序列即天然的 trace 流，`recordSpan(event)` 注入 OTel |
+| [13 Skills](../13-skills/README.md) | `SkillsManager.listCatalog() / load(name)` 是 Planning 唯一入口 |
 
-```
-输入：Python 中的装饰器是什么？
-预期行为：
-  ✓ 意图分类 → SIMPLE_QA（< 800ms）
-  ✓ 跳过工具层（tool_count = 0）
-  ✓ LLM 直接输出答案（< 3s）
-  ✓ 回答包含"装饰器"核心概念解释
-  ✓ 整体耗时 < 5s
-```
+---
 
-#### E2E-2：复杂任务自动分解 + 逐步执行
+## 八、变更历史
 
-```
-输入：帮我搜索最新的 3 个 Python Web 框架，
-      然后对比它们的 GitHub stars 和主要特性，
-      最后生成一个 Markdown 对比表格
-预期行为：
-  ✓ 意图分类 → MULTI_STEP
-  ✓ 任务分解为 ≥ 3 个子任务（搜索×3 + 对比 + 生成）
-  ✓ 策略选择 → PlanAndExecute（复杂度高）
-  ✓ 工具调用 ≥ 4 次
-  ✓ 最终输出包含 Markdown 表格
-  ✓ 整体耗时 < 60s
-```
-
-#### E2E-3：执行偏差时自动修正计划
-
-```
-输入：获取 example.com 的内容并分析其 SEO 结构
-      （注：第一次请求超时，模拟网络不稳定）
-预期行为：
-  ✓ 首次工具调用失败 → Level 1 重试
-  ✓ 重试成功 → 继续执行（无感知）
-      或
-  ✓ 重试失败 → Level 2 调整（换镜像源/换工具）
-  ✓ 最终完成分析，状态为 completed
-  ✓ trace 中包含重试/重规划事件记录
-```
-
-#### 验收指标汇总
-
-| 指标 | 目标值 | 测试覆盖 |
-|------|--------|---------|
-| 意图分类准确率（4类） | ≥ 90% | 20 个标注测试用例 |
-| 规则通道命中率 | ≥ 60% | 节省 LLM 调用 |
-| 任务分解 DAG 正确率 | ≥ 85% | 依赖顺序验证 |
-| 动态重规划成功率 | ≥ 80% | 工具失败场景 |
-| 检查点恢复无数据丢失 | 100% | 幂等性验证 |
-| 单元测试覆盖率 | ≥ 80% | pytest --cov |
-| SIMPLE_QA 平均耗时 | < 5s | 性能基准测试 |
-| MULTI_STEP 平均耗时 | < 60s | 端到端基准 |
+| 日期 | 版本 | 修订人 | 要点 |
+|------|------|--------|------|
+| 2026-04-17 | v0.1 | Codex + Claude | 初版骨架：4 分类 + DAG-default + 四级修正 + Python 示例 |
+| 2026-04-18 | v0.2 | Claude | 加入 ADR-001 对齐说明 + Token 预算约束 |
+| **2026-04-20** | **v1.0** | **Claude (Opus 4.7 revision)** | **基于外部研究全量重写**：反转 Linear-first / 三段式 Intent / 状态机 Replan / TS Protocol / Skills-Memory-MultiAgent 接口章节 |
