@@ -1,10 +1,12 @@
 # Quilin Agent 实现规划
 
-> **状态**：Iter A 已完成（v0.1.0-iter-a），**Iter B 进行中（B1 工具基座 ✓ / B2 安全策略 review / B3a Skills Core pending）**
+> **状态**：Iter A 已完成（v0.1.0-iter-a），**Iter B 进行中（B1 ✓ / B2 ✓ 合并 + 持续加固 / B3a M0 ✓ Gateway 接入 / B3b 待排）**
 >
 > **语言架构（当前）**：TS（核心）+ Python（ML Provider）。**Rust**（基础设施 / mesh / WASM）延后到 Iter D 引入，详见 [ADR-001](./adr/adr-001-core-loop-and-language.md)。
 >
 > **2026-04-17 架构复查**：Opus 4.7 ultra-review 完成，决策已回写，详见 [docs/review/2026-04-17-ultra-review.md](./review/2026-04-17-ultra-review.md)。
+>
+> **2026-04-20 Opus 4.7 revisit**：26 findings（3 CRITICAL / 10 HIGH / 8 MEDIUM / 5 LOW）Wave-3 批次已全部合并（H-01..10 / M-01..08 / L-01..05，见 `docs/review/2026-04-20-opus-4-7-revisit.md`）；Planning spec 同步升级到 v1.1（main-LLM-direct + Gateway Skills + 可选 audit layer）；B2 tiny-classifier spike 因 Codex 额度 blocker 从 Iter C gate 降级为 Iter D 研究实验。
 
 ## Context
 
@@ -15,7 +17,7 @@
 - 核心架构决策已定稿（ADR-001）
 - Phase 0 已完成（v0.0.3）：Agent Loop + OmniMem MCP + REPL + 78 tests
 - Iter A 已完成（v0.1.0-iter-a）：上下文工程 + 提示词工程（PromptBuilder, ContextAssembler, InjectionScanner, TemporalAwareness, MemoryBridge）+ 91 tests
-- Iter B 进行中：B1 tool substrate 已合并；B2 Safety spec 审核中；B3a Skills Core 紧随其后
+- Iter B 进行中：B1 tool substrate ✅；B2 Safety Policy ✅（WriteAuthority + pre/post hooks + Two-Strike + classifier 均已合并）；B3a Skills Core ✅ M0（catalog + `skill_view` + Gateway 接入 system prompt，commit `d617e32` / `16f3868`）；B3b Activation 待排
 
 ---
 
@@ -95,7 +97,7 @@ Iter A: Grounded Context ✅ — v0.1.0-iter-a
     │
     ▼
 Iter B: Useful Tools + Skills + Safety（进行中）
-    │  B1 工具基座 ✅ / B2 安全策略 📝 / B3a Skills Core ⏳
+    │  B1 工具基座 ✅ / B2 安全策略 ✅ / B3a Skills Core ✅ M0 / B3b ⏳
     │
     ▼
 Iter C: Planning Core
@@ -185,7 +187,7 @@ Iter F: Scale-Out + Memory Depth + Self-Evolution
 
 **主轴**：`05-Tool` + `13-Skills`　**搭配**：`07-Safety-lite`
 
-**为什么绑定推进**：工具和安全必须一起推——更强的工具没有安全分层 = 风险放大器。Skills（第 13 领域）借用 05 的 ToolRouter 作为 host（但 Skill ≠ Tool），时序上紧贴 B2。
+**为什么绑定推进**：工具和安全必须一起推——更强的工具没有安全分层 = 风险放大器。Skills（第 13 领域）借用 05 的 ToolRouter 作为 host（但 Skill ≠ Tool），B3a 已在 B2 合并后紧跟落地。
 
 **子阶段**：
 
@@ -195,21 +197,24 @@ Iter F: Scale-Out + Memory Depth + Self-Evolution
 - 工具分类体系：`read` / `write` / `exec` / `high-risk`
 - Tool 描述符注入 context 系统
 
-#### B2 — Safety Policy 📝（spec 审核中）
-- 权限分级：**READ-ONLY 默认 / AUTO opt-in（`--trust auto`）/ CRITICAL 强制确认**
-- 工具执行前 pre-hook（检查分类 + 决定是否确认）
-- 工具执行后 post-hook（记录执行结果 + 异常检测）
-- 超时保护 + 错误恢复
-- Two-Strike Rule（连续失败升级确认）
-- 2-stage Classifier（意图识别层 + 影响评估层）
+#### B2 — Safety Policy ✅（已合并，持续加固）
+- ✅ 权限分级：**READ-ONLY 默认 / AUTO opt-in（`--trust auto`）/ CRITICAL 强制确认**
+- ✅ 工具执行前 pre-hook（检查分类 + 决定是否确认）
+- ✅ 工具执行后 post-hook（记录执行结果 + 异常检测）
+- ✅ 超时保护 + 错误恢复
+- ✅ Two-Strike Rule（连续失败升级确认）
+- ✅ 2-stage Classifier（意图识别层 + 影响评估层）
+- ✅ WriteAuthority 单入口（shell_exec / file_write / scaffold patch / skill_create / idle evolution 统一路由；`85b898a` / `dc2e611` / `35f4c8d`）
 - **⚠️ D-01 约束**：不建"God Mode 超级权限通道"；所有账号走同一条授权链路
+- 🧪 Tiny-classifier spike：因 Codex 额度 blocker 降级到 Iter D 研究实验（`docs/research/tiny-llm-baseline/` 保留 baseline）
 
-#### B3a — Skills Core ⏳（窄收口）
-- SKILL.md + YAML frontmatter（name/description/type/version）
-- 三源发现：`bundled/` / `user/` / `project/`
-- Catalog（启动期建索引，不 eager 全量加载）
-- `skill_view` tool（按需拉取 body，Tool host 但 Skill ≠ Tool）
-- 路径 / 体积硬 guard（symlink 拒绝 / 绝对路径锁定 / 单文件 max size）
+#### B3a — Skills Core ✅ M0（Gateway 接入 Main LLM）
+- ✅ SKILL.md + YAML frontmatter（name/description/type/version）
+- ✅ 三源发现：`bundled/` / `user/` / `project/`
+- ✅ Catalog（启动期建索引，不 eager 全量加载）
+- ✅ `skill_view` tool（按需拉取 body，Tool host 但 Skill ≠ Tool）
+- ✅ 路径 / 体积硬 guard（symlink 拒绝 / 绝对路径锁定 / 单文件 max size）
+- ✅ Gateway 接入：`createSkillsCatalogSection` 注入 system prompt，REPL 已接线（`d617e32`）
 
 > **B3b Activation**（条件激活 + post-compact + CRUD + skills_guard）被推到 Iter B 后期或 Iter C 过渡期。
 
@@ -217,11 +222,12 @@ Iter F: Scale-Out + Memory Depth + Self-Evolution
 - [x] B1 同时连接 ≥2 个 MCP Server
 - [x] B1 内置工具 file_read / shell_exec / web_fetch 可用
 - [x] B1 工具按 read/write/exec/high-risk 分类
-- [ ] B2 READ-ONLY 默认下 write 工具触发确认；`--trust auto` opt-in 后自动放行
-- [ ] B2 工具超时后 agent loop 正常恢复
-- [ ] B2 MCP spawn 命令白名单 + argv sanitization + cwd 沙箱 ⚠️ P0 修复项
-- [ ] B3a catalog 启动期建成 + `skill_view` 按需加载生效
-- [ ] B3a 恶意 symlink / oversize skill 被安全栈拒绝
+- [x] B2 READ-ONLY 默认下 write 工具触发确认；`--trust auto` opt-in 后自动放行
+- [x] B2 工具超时后 agent loop 正常恢复
+- [x] B2 MCP spawn 命令白名单 + argv sanitization + cwd 沙箱（`e574338` / `1fe0cc1`）
+- [x] B3a catalog 启动期建成 + `skill_view` 按需加载生效
+- [x] B3a 恶意 symlink / oversize skill 被安全栈拒绝
+- [ ] B3b 条件激活 / post-compact / skills_guard（待排）
 
 **涉及工程领域**：05-Tool（主）、13-Skills（主）、07-Safety（基础）
 
@@ -235,11 +241,13 @@ Iter F: Scale-Out + Memory Depth + Self-Evolution
 
 **为什么第三**：Planning 的价值建立在 context（A）和 tool space（B）之上。
 
+> **Spec v1.1（2026-04-20）**：见 [04-planning/README.md](./engineering/04-planning/README.md)。核心变更：放弃三段式 L1/L2/L3 默认方案，改为 **Main LLM Direct 推理 + Gateway Skills descriptor + 可选 structured audit layer**；`IntentClassifier.dispatch()` 从 LLM response shape 推导 intent；local tiny classifier 降级为 Iter D 研究实验。
+
 **范围**：
 
 规划引擎（04）：
-- 意图识别：简单问答直接回答；多步任务走 plan
-- 任务分解：将复杂任务拆成可执行的 step 序列
+- 意图识别：Main LLM direct（response shape → structural dispatch）；Gateway Skills 按需展开
+- 任务分解：将复杂任务拆成可执行的 step 序列（event-sourced PlanningState）
 - Step / Retry budget
 - 进度跟踪：每步执行后更新 state，支持中断恢复
 
@@ -442,7 +450,7 @@ Benchmark 验证层（Iter E 独立 iter）
 
 ## 12 活跃工程领域 × 迭代映射
 
-| # | 领域 | Phase 0 ✅ | Iter A ✅ | Iter B 📝 | Iter C | Iter D | Iter E | Iter F |
+| # | 领域 | Phase 0 ✅ | Iter A ✅ | Iter B 🚧 | Iter C | Iter D | Iter E | Iter F |
 |---|------|-----------|--------|--------|--------|--------|--------|--------|
 | 01 | LLM 接入 | LLMClient + Streaming | — | — | 动态 InferenceConfig + ThinkingMode | — | cost tracking 集成 | — |
 | 02 | 上下文 | BasicContextManager（单源） | **多源组装 + budget + temporal** | tool descriptor 注入 | planning context 注入 | — | — | memory context 增强 |
@@ -450,12 +458,12 @@ Benchmark 验证层（Iter E 独立 iter）
 | 04 | 规划 | — | — | — | **意图识别 + 任务分解 + budget** | — | — | 动态重规划 |
 | 05 | 工具 | ToolRouter + MCP Client | — | **B1 多 MCP + 内置工具 + 分类** | — | — | — | 浏览器 + CLI-Anything |
 | 06 | 多 Agent | — | — | — | — | — | — | **同构 spawn + Supervisor** |
-| 07 | 安全护栏 | — | — | **B2 READ-ONLY 默认 + hook + classifier** | 步骤验证器 | — | — | 红队自动化 |
+| 07 | 安全护栏 | — | — | **B2 ✅ READ-ONLY 默认 + hook + classifier + WriteAuthority 单入口** | 步骤验证器 | — | — | 红队自动化 |
 | 08 | 可观测性 | pino JSON 日志 | — | — | — | **OTel + metrics + request ID** | cost/latency tracking | Dashboard + 进度面板 |
 | 09 | 部署运行时 | justfile + REPL CLI | — | — | — | **配置管理 + CI 三语言** | — | 热更新 + 主动通知 |
 | 10 | 自进化 | — | — | — | — | — | — | **轨迹分析 + human-in-loop patch + Insight + Idle(opt-in)** |
 | 11 | Agent Mesh | — | — | — | — | **crates/ 骨架** | — | **mesh-sdk 填肉 + discover/send/receive** |
-| 13 | 技能工程 ★ | — | — | **B3a Skills Core（窄收口）**：SKILL.md + frontmatter + 三源发现 + catalog + `skill_view` + 路径/体积硬 guard | B3b: 条件激活 + CRUD + skills_guard | — | — | M2+: plugin + background nudge（默认 OFF） |
+| 13 | 技能工程 ★ | — | — | **B3a ✅ M0**：SKILL.md + frontmatter + 三源发现 + catalog + `skill_view` + 路径/体积硬 guard + Gateway 接入 system prompt | B3b: 条件激活 + CRUD + skills_guard | — | — | M2+: plugin + background nudge（默认 OFF） |
 
 ### Parked (sub-module under 02-context)
 

@@ -36,7 +36,7 @@ Quilin Agent（麒麟）is a self-evolving Agent framework that tracks **curated
 
 ## Current Status
 
-**Iter B running** — B1 tool substrate landed; B2 safety policy spec in review; B3a Skills Core opens after B2. Active scope = **12 engineering domain specs** (01..11 + 13-skills). Domain 12 (Conversation Engineering) is parked as a research note until the core loop proves stable on benchmarks.
+**Iter B running** — B1 tool substrate ✅; B2 safety policy ✅ merged (WriteAuthority single-gate + pre/post hooks + two-strike + 2-stage classifier); B3a Skills Core ✅ M0 (catalog + `skill_view` + Gateway 接入 system prompt, commits `16f3868` / `d617e32`); B3b Activation pending. Planning spec 升级到 v1.1（main-LLM-direct + Gateway Skills，详见 `docs/engineering/04-planning/README.md`）. B2 tiny-classifier spike 因 Codex 额度 blocker 降级到 Iter D 研究。Active scope = **12 engineering domain specs** (01..11 + 13-skills). Domain 12 (Conversation Engineering) is parked as a research note until the core loop proves stable on benchmarks.
 
 ## Documentation Map
 
