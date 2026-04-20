@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 import time
 import uuid
 from pathlib import Path
@@ -273,3 +274,89 @@ async def test_store_keeps_main_and_fts_counts_aligned_under_concurrency() -> No
 
     assert main_count == 100
     assert fts_count == main_count
+
+
+async def test_store_rebuilds_fts_once_for_legacy_db_without_schema_version(
+    monkeypatch: object,
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "legacy.db"
+    legacy = sqlite3.connect(db_path)
+    legacy.execute(
+        """
+        CREATE TABLE memory_records (
+            id TEXT PRIMARY KEY,
+            content TEXT NOT NULL,
+            tier TEXT NOT NULL CHECK (
+                tier IN ('working', 'episodic', 'semantic', 'skill')
+            )
+        )
+        """
+    )
+    legacy.execute(
+        """
+        CREATE VIRTUAL TABLE memory_records_fts USING fts5(
+            id UNINDEXED,
+            content,
+            keywords,
+            tokenize = 'unicode61'
+        )
+        """
+    )
+    legacy.execute(
+        "INSERT INTO memory_records (id, content, tier) VALUES (?, ?, ?)",
+        ("legacy-1", "remember me", "working"),
+    )
+    legacy.commit()
+    legacy.close()
+
+    rebuild_calls: list[str] = []
+    original_rebuild = store_module.OmniMemStore._rebuild_fts_index
+
+    def tracking_rebuild(self: OmniMemStore) -> None:
+        rebuild_calls.append("rebuild")
+        original_rebuild(self)
+
+    monkeypatch.setattr(store_module.OmniMemStore, "_rebuild_fts_index", tracking_rebuild)  # type: ignore[attr-defined]
+
+    first = OmniMemStore(db_path=str(db_path))
+    version_row = first._conn.execute(  # type: ignore[attr-defined]
+        "SELECT version FROM schema_version WHERE component = ?",
+        (store_module.FTS_SCHEMA_COMPONENT,),
+    ).fetchone()
+    assert version_row[0] == store_module.FTS_SCHEMA_VERSION
+    await first.close()
+
+    second = OmniMemStore(db_path=str(db_path))
+    await second.close()
+
+    assert rebuild_calls == ["rebuild"]
+
+
+async def test_close_commits_before_closing_connection(tmp_path: Path) -> None:
+    db_path = tmp_path / "close-commit.db"
+    store = OmniMemStore(db_path=str(db_path))
+    await store.store("persist me")
+    real_conn = store._conn  # type: ignore[attr-defined]
+
+    class TrackingConnection:
+        def __init__(self, conn: sqlite3.Connection) -> None:
+            self._conn = conn
+            self.commit_calls = 0
+            self.close_calls = 0
+
+        def commit(self) -> None:
+            self.commit_calls += 1
+            self._conn.commit()
+
+        def close(self) -> None:
+            self.close_calls += 1
+            self._conn.close()
+
+    tracking = TrackingConnection(real_conn)
+    store._conn = tracking  # type: ignore[attr-defined]
+
+    await store.close()
+
+    assert tracking.commit_calls == 1
+    assert tracking.close_calls == 1

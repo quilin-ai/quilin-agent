@@ -23,6 +23,8 @@ RECALL_QUERY_EXPANSIONS = (
         {"名字", "称呼", "身份", "用户"},
     ),
 )
+FTS_SCHEMA_COMPONENT = "memory_records_fts"
+FTS_SCHEMA_VERSION = 1
 
 
 def _extract_cjk_terms(text: str) -> set[str]:
@@ -127,7 +129,15 @@ class OmniMemStore:
             )
             """
         )
-        self._rebuild_fts_index()
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS schema_version (
+                component TEXT PRIMARY KEY,
+                version INTEGER NOT NULL
+            )
+            """
+        )
+        self._ensure_fts_schema()
         self._conn.commit()
 
     async def __aenter__(self) -> OmniMemStore:
@@ -154,6 +164,7 @@ class OmniMemStore:
             return
 
         with self._lock:
+            self._conn.commit()
             self._conn.close()
             self._closed = True
 
@@ -235,6 +246,30 @@ class OmniMemStore:
                 """,
                 (_build_keywords(row["content"]), row["id"]),
             )
+
+    def _ensure_fts_schema(self) -> None:
+        if self._get_schema_version(FTS_SCHEMA_COMPONENT) >= FTS_SCHEMA_VERSION:
+            return
+
+        self._rebuild_fts_index()
+        self._conn.execute(
+            """
+            INSERT INTO schema_version (component, version)
+            VALUES (?, ?)
+            ON CONFLICT(component) DO UPDATE SET version = excluded.version
+            """,
+            (FTS_SCHEMA_COMPONENT, FTS_SCHEMA_VERSION),
+        )
+
+    def _get_schema_version(self, component: str) -> int:
+        row = self._conn.execute(
+            "SELECT version FROM schema_version WHERE component = ?",
+            (component,),
+        ).fetchone()
+        if row is None:
+            return 0
+
+        return int(row["version"])
 
     def _recall_with_fts(self, query: str) -> list[sqlite3.Row]:
         match_query = _build_match_query(query)
