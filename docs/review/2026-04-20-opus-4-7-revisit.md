@@ -45,19 +45,19 @@
 | **B. MCP transport** | stdio 优先 | ✅ 保留 stdio（官方 roadmap 2026-06 仅保留 stdio + Streamable HTTP；SSE 废弃） | 11-agent-mesh 保持 stdio；未来 remote 场景用 Streamable HTTP |
 | **B. Mesh 协议** | 自建 gRPC schema | ⚠️ 调整：A2A v1.0 已进 Linux Foundation，官方提供 gRPC binding + Signed Agent Cards | **ADR-003 新增**：A2A subset + Quilin extensions（Option C），Iter D 前必须定稿 |
 | **C. Core loop** | 自建 <200 LOC | ✅ 保留；但**纳入 OpenHands SDK 的 event-sourced 模式作为 prior-art**（SWE-bench 72% / GAIA 67.9%） | research 笔记 + ADR-001 D-19 补充；Iter C spike |
-| **D. Memory** | 4-tier 自建 KG | ⚠️ 调整：Graphiti（Zep 开源）LongMemEval +15pts，Apache-2.0 | **D-12**：03-memory KG 后端默认 Graphiti；加 Letta 风格 agent-facing `memory_replace / memory_append / archival_insert` 接口 |
+| **D. Memory** | 4-tier 自建 KG | ⚠️ 调整：2026-04 SOTA 已迁移；Graphiti 71.2% 被 Mem0 v2 93.4% / Mastra OM 94.87% / MemPalace 96.6% 反超；Codex spike (#93) 证实 Graphiti embedded 路径不 zero-config | ~~**D-12**：默认 Graphiti~~ → **D-20 取代**：OmniMem v2 融合架构，吸收 5 家开源 SOTA 思想（Mastra OM / MemPalace / Mem0 / Graphiti / OpenViking），自写实现不做依赖；Letta 风格 `memory_replace / memory_append / archival_insert` 接口保留 |
 | **E. Skills** | SKILL.md + frontmatter | ✅ 保留；Anthropic 官方 `anthropics/skills` 2025-10 已发布，设计一致 | **D-17**：13-skills frontmatter 解析器加 kebab-case 别名（`allowed-tools` ↔ `allowedTools`），支持社区 skill 零翻译落盘 |
 | **F. Benchmark** | SWE-bench / GAIA / BFCL 3 pinned | ⚠️ 调整：Berkeley RDI 审计揭示前 3 榜可被 gaming | **D-16**：加 **τ2-bench** 第 4 pinned（Opus 4.6 telecom 99.3%，唯一多轮工具+用户交互榜单） |
 | **G. Runtime** | Bun 1.x | ✅ 保留；但 `--inspect` debugger 阻塞 bug | Iter D Sprint 0 加 Node 22 CI job + CONTRIBUTING 记录 caveat |
 
 ---
 
-## 三、D 编号表（D-11..D-19）
+## 三、D 编号表（D-11..D-20）
 
 | D-# | 名称 | 落地位置 |
 |----|------|---------|
 | D-11 | Skill 单写方原则（Layer 4 重命名） | `03-memory/README.md`、`10-self-evolution/README.md` |
-| D-12 | Graphiti 作为 KG 默认后端 + Letta self-editing 接口 | `03-memory/README.md` |
+| ~~D-12~~ | ~~Graphiti 作为 KG 默认后端 + Letta self-editing 接口~~ **已被 D-20 取代** | ~~`03-memory/README.md`~~ |
 | D-13 | Skill catalog KV-cache 稳定前缀约束 | `13-skills/README.md` |
 | D-14 | Iter D CI 矩阵统一（cargo check 强制 / cargo test noop） | `implementation-plan.md` |
 | D-15 | Iter E2 前置补 03-memory Phase 0 | `implementation-plan.md` |
@@ -65,6 +65,7 @@
 | D-17 | 13-skills frontmatter 官方 alias 支持 | `13-skills/README.md` |
 | D-18 | `memory_tier_transition` span + 3 metrics | `08-observability/README.md` |
 | D-19 | Event-sourced state 延后到 Iter C | `adr-001-core-loop-and-language.md` |
+| **D-20** | **OmniMem v2 融合架构（5 流派思想吸收 + 转化升级，supersedes D-12）** | `03-memory/README.md`、`docs/research/memory-watchlist/` |
 
 ---
 
