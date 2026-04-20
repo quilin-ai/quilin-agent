@@ -56,6 +56,10 @@ data/
 # === Local agent config ===
 .agentbridge/
 .claude/settings.local.json
+.claude/briefs/
+
+# === Spike / scratch work ===
+.spike/
 
 # Added by code-review-graph
 .code-review-graph/
