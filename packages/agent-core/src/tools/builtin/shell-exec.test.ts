@@ -35,6 +35,7 @@ describe("builtin shell_exec tool", () => {
 			expect.objectContaining({
 				cwd: "/tmp",
 				timeoutMs: 5_000,
+				maxBufferBytes: 8 * 1024 * 1024,
 				env: expect.objectContaining({
 					PATH: expect.any(String),
 				}),
@@ -216,8 +217,10 @@ describe("builtin shell_exec tool", () => {
 		});
 	});
 
-	it("filters inherited secrets from the child environment while preserving PATH", async () => {
+	it("filters inherited secrets and shell metadata while preserving PATH and TERM", async () => {
 		vi.stubEnv("FAKE_SECRET", "hunter2");
+		vi.stubEnv("SHELL", "/bin/zsh");
+		vi.stubEnv("TERM", "xterm-256color");
 		const tool = createShellExecTool({
 			authority: createPermissiveAuthority(),
 		});
@@ -231,7 +234,9 @@ describe("builtin shell_exec tool", () => {
 			stdout: string;
 		};
 		expect(payload.stdout).not.toContain("FAKE_SECRET=hunter2");
+		expect(payload.stdout).not.toContain("SHELL=/bin/zsh");
 		expect(payload.stdout).toContain("PATH=");
+		expect(payload.stdout).toContain("TERM=xterm-256color");
 	});
 
 	it("allows quoted semicolons in arguments without treating them as control operators", async () => {

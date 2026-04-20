@@ -47,6 +47,7 @@ export class MCPRegistry {
 	private readonly serverToolNames = new Map<string, readonly string[]>();
 	private readonly serverTools = new Map<string, ToolWithMetadata>();
 	private readonly builtinTools = new Map<string, ToolWithMetadata>();
+	private readonly shortNameIndex = new Map<string, ToolWithMetadata | null>();
 
 	constructor(
 		private readonly createClient: () => MCPClientConnection = () =>
@@ -111,6 +112,7 @@ export class MCPRegistry {
 		state.serverTools.forEach((tool, toolName) => {
 			this.serverTools.set(toolName, tool);
 		});
+		this.rebuildShortNameIndex();
 	}
 
 	private clearServerTools(serverId: string): void {
@@ -121,6 +123,20 @@ export class MCPRegistry {
 		toolNames.forEach((toolName) => {
 			this.serverTools.delete(toolName);
 		});
+		this.rebuildShortNameIndex();
+	}
+
+	private rebuildShortNameIndex(): void {
+		this.shortNameIndex.clear();
+		for (const tool of [...this.builtinTools.values(), ...this.serverTools.values()]) {
+			const shortName = getShortName(tool);
+			if (!this.shortNameIndex.has(shortName)) {
+				this.shortNameIndex.set(shortName, tool);
+				continue;
+			}
+
+			this.shortNameIndex.set(shortName, null);
+		}
 	}
 
 	async register(entry: MCPServerEntry): Promise<ToolWithMetadata[]> {
@@ -189,6 +205,7 @@ export class MCPRegistry {
 		tools.forEach((tool) => {
 			this.builtinTools.set(tool.name, tool);
 		});
+		this.rebuildShortNameIndex();
 	}
 
 	getAllTools(): ToolWithMetadata[] {
@@ -213,11 +230,7 @@ export class MCPRegistry {
 			return exactMatch;
 		}
 
-		const shortNameMatches = this.getAllTools().filter(
-			(tool) => getShortName(tool) === name,
-		);
-
-		return shortNameMatches.length === 1 ? shortNameMatches[0] : undefined;
+		return this.shortNameIndex.get(name) ?? undefined;
 	}
 
 	async disconnectAll(): Promise<void> {

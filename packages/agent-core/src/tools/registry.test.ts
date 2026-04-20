@@ -303,4 +303,20 @@ describe("MCPRegistry", () => {
 			previousToolNames,
 		);
 	});
+
+	it("finds unique short names without rescanning getAllTools", async () => {
+		const fakeClient = createFakeClient([createTool("memory_recall")]);
+		const registry = new MCPRegistry(() => fakeClient);
+
+		await registry.register({
+			id: "memory",
+			config: createServerConfig(),
+			namespace: "memory",
+		});
+
+		const getAllToolsSpy = vi.spyOn(registry, "getAllTools");
+
+		expect(registry.findTool("memory_recall")?.name).toBe("memory/memory_recall");
+		expect(getAllToolsSpy).not.toHaveBeenCalled();
+	});
 });

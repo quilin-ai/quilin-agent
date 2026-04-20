@@ -103,6 +103,22 @@ describe("builtin file tools", () => {
 		expect(payload.content.length).toBeLessThanOrEqual(5_000);
 	});
 
+	it("file_read stops early when streamed content exceeds maxBytes", async () => {
+		const filePath = join(tempDir, "huge.log");
+		await writeFile(filePath, "0123456789\n".repeat(200_000), "utf8");
+		const tool = createFileReadTool({
+			allowedRoots: [tempDir],
+			maxBytes: 1024,
+		} as never);
+
+		const result = await tool.execute({ path: filePath });
+
+		expect(result.isError).toBe(true);
+		expect(JSON.parse(result.content)).toEqual({
+			error: expect.stringContaining("maxBytes"),
+		});
+	});
+
 	it("file_write writes utf-8 content and reports written bytes", async () => {
 		const filePath = join(tempDir, "output.txt");
 		const tool = createFileWriteTool({
@@ -226,6 +242,56 @@ describe("builtin file tools", () => {
 				{
 					name: "b.ts",
 					path: join(tempDir, "b.ts"),
+					type: "file",
+				},
+			],
+		});
+	});
+
+	it("file_list supports recursive ** glob patterns", async () => {
+		await mkdir(join(tempDir, "src", "nested"), { recursive: true });
+		await mkdir(join(tempDir, "docs", "guide"), { recursive: true });
+		await writeFile(join(tempDir, "src", "main.ts"), "export {};\n", "utf8");
+		await writeFile(
+			join(tempDir, "src", "nested", "deep.ts"),
+			"export const deep = true;\n",
+			"utf8",
+		);
+		await writeFile(join(tempDir, "docs", "guide", "intro.md"), "# intro\n", "utf8");
+		const tool = createFileListTool({ allowedRoots: [tempDir] });
+
+		const tsResult = await tool.execute({
+			path: tempDir,
+			pattern: "src/**/*.ts",
+		});
+		const mdResult = await tool.execute({
+			path: tempDir,
+			pattern: "**/*.md",
+		});
+
+		expect(tsResult.isError).toBe(false);
+		expect(JSON.parse(tsResult.content)).toEqual({
+			path: tempDir,
+			entries: [
+				{
+					name: "src/main.ts",
+					path: join(tempDir, "src", "main.ts"),
+					type: "file",
+				},
+				{
+					name: "src/nested/deep.ts",
+					path: join(tempDir, "src", "nested", "deep.ts"),
+					type: "file",
+				},
+			],
+		});
+		expect(mdResult.isError).toBe(false);
+		expect(JSON.parse(mdResult.content)).toEqual({
+			path: tempDir,
+			entries: [
+				{
+					name: "docs/guide/intro.md",
+					path: join(tempDir, "docs", "guide", "intro.md"),
 					type: "file",
 				},
 			],

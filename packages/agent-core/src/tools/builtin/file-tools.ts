@@ -1,6 +1,6 @@
+import { createReadStream } from "node:fs";
 import {
 	mkdir,
-	readFile,
 	readdir,
 	realpath,
 	rename,
@@ -16,6 +16,7 @@ import {
 	relative,
 	resolve,
 } from "node:path";
+import { createInterface } from "node:readline";
 import { z } from "zod";
 import {
 	WriteAuthority,
@@ -25,6 +26,7 @@ import type { ToolWithMetadata } from "../tool-metadata.js";
 import type { ToolResult } from "../types.js";
 
 const DEFAULT_MAX_CHARS = 32_768;
+const DEFAULT_MAX_READ_BYTES = 2 * 1024 * 1024;
 const DEFAULT_MAX_WRITE_BYTES = 2 * 1024 * 1024;
 const ACCESS_DENIED_MESSAGE = "Path not accessible";
 const BASENAME_SENSITIVE_FILE_PATTERNS = [
@@ -140,39 +142,77 @@ function toAbsolutePath(filePath: string): string {
 	return resolve(filePath);
 }
 
-function formatNumberedLines(content: string, offset = 0, limit?: number): string[] {
-	const rawLines = content.replace(/\r\n/g, "\n").split("\n");
-	const lines = rawLines.at(-1) === "" ? rawLines.slice(0, -1) : rawLines;
-	const sliced = lines.slice(offset, limit == null ? undefined : offset + limit);
-
-	return sliced.map((line, index) => `${offset + index + 1}: ${line}`);
+function globToRegExp(pattern: string): RegExp {
+	const normalizedPattern = pattern
+		.replaceAll("\\", "/")
+		.replace(/\*\*\//g, "<<GLOBSTAR_DIR>>")
+		.replace(/\*\*/g, "<<GLOBSTAR>>");
+	const escaped = normalizedPattern.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+	const regex = escaped
+		.replace(/\*/g, "[^/]*")
+		.replace(/\?/g, "[^/]")
+		.replace(/<<GLOBSTAR_DIR>>/g, "(?:.*/)?")
+		.replace(/<<GLOBSTAR>>/g, ".*");
+	return new RegExp(`^${regex}$`);
 }
 
-function truncateFormattedLines(
-	lines: readonly string[],
+function shouldRecurseForPattern(pattern: string | undefined): boolean {
+	return pattern?.includes("/") === true || pattern?.includes("**") === true;
+}
+
+async function readNumberedLines(
+	filePath: string,
+	offset: number,
+	limit: number | undefined,
 	maxChars: number,
-	offset = 0,
-): { readonly content: string; readonly truncated: boolean } {
-	let renderedBudget = 0;
+	maxBytes: number,
+): Promise<{ readonly content: string; readonly truncated: boolean }> {
+	const stream = createReadStream(filePath, { encoding: "utf8" });
+	const lineReader = createInterface({
+		input: stream,
+		crlfDelay: Infinity,
+	});
 	const kept: string[] = [];
+	let bytesRead = 0;
+	let lineNumber = 0;
+	let renderedBudget = 0;
 
-	for (let index = 0; index < lines.length; index += 1) {
-		const formattedLine = lines[index];
-		const renderedLength = formattedLine.length + (kept.length === 0 ? 0 : 1);
+	try {
+		for await (const line of lineReader) {
+			bytesRead += Buffer.byteLength(line, "utf8") + 1;
+			if (bytesRead > maxBytes) {
+				throw new Error(`File exceeds maxBytes limit: ${bytesRead} > ${maxBytes}`);
+			}
 
-		if (renderedBudget + renderedLength > maxChars) {
-			const nextLineNumber = offset + index + 1;
-			const ellipsisLine = `${nextLineNumber}: ...`;
-			const content =
-				kept.length === 0 ? ellipsisLine : `${kept.join("\n")}\n${ellipsisLine}`;
-			return {
-				content: content.slice(0, maxChars),
-				truncated: true,
-			};
+			lineNumber += 1;
+			if (lineNumber <= offset) {
+				continue;
+			}
+
+			if (limit != null && kept.length >= limit) {
+				break;
+			}
+
+			const formattedLine = `${lineNumber}: ${line}`;
+			const renderedLength = formattedLine.length + (kept.length === 0 ? 0 : 1);
+			if (renderedBudget + renderedLength > maxChars) {
+				const ellipsisLine = `${lineNumber}: ...`;
+				const content =
+					kept.length === 0
+						? ellipsisLine
+						: `${kept.join("\n")}\n${ellipsisLine}`;
+				return {
+					content: content.slice(0, maxChars),
+					truncated: true,
+				};
+			}
+
+			kept.push(formattedLine);
+			renderedBudget += renderedLength;
 		}
-
-		kept.push(formattedLine);
-		renderedBudget += renderedLength;
+	} finally {
+		lineReader.close();
+		stream.destroy();
 	}
 
 	return {
@@ -181,10 +221,41 @@ function truncateFormattedLines(
 	};
 }
 
-function globToRegExp(pattern: string): RegExp {
-	const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&");
-	const regex = escaped.replace(/\*/g, ".*").replace(/\?/g, ".");
-	return new RegExp(`^${regex}$`);
+async function listEntriesRecursively(
+	rootPath: string,
+	currentPath: string,
+	prefix = "",
+): Promise<
+	Array<{ readonly name: string; readonly path: string; readonly type: "file" | "directory" }>
+> {
+	const entries = await readdir(currentPath, { withFileTypes: true });
+	const collected: Array<{
+		readonly name: string;
+		readonly path: string;
+		readonly type: "file" | "directory";
+	}> = [];
+
+	for (const entry of entries) {
+		const relativeName = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
+		const entryPath = join(rootPath, relativeName);
+		collected.push({
+			name: relativeName,
+			path: entryPath,
+			type: entry.isDirectory() ? "directory" : "file",
+		});
+
+		if (entry.isDirectory()) {
+			collected.push(
+				...(await listEntriesRecursively(
+					rootPath,
+					join(currentPath, entry.name),
+					relativeName,
+				)),
+			);
+		}
+	}
+
+	return collected;
 }
 
 async function resolveAllowedRoots(
@@ -248,6 +319,7 @@ async function resolveSandboxedPath(
 
 export interface FileReadToolOptions {
 	readonly maxChars?: number;
+	readonly maxBytes?: number;
 	readonly allowedRoots?: readonly string[];
 }
 
@@ -285,12 +357,12 @@ export function createFileReadTool(
 					);
 				}
 
-				const fileContent = await readFile(resolvedPath, "utf8");
-				const numberedLines = formatNumberedLines(fileContent, offset, limit);
-				const { content, truncated } = truncateFormattedLines(
-					numberedLines,
-					options.maxChars ?? DEFAULT_MAX_CHARS,
+				const { content, truncated } = await readNumberedLines(
+					resolvedPath,
 					offset,
+					limit,
+					options.maxChars ?? DEFAULT_MAX_CHARS,
+					options.maxBytes ?? DEFAULT_MAX_READ_BYTES,
 				);
 
 				return createSuccessResult("builtin-file-read", {
@@ -413,6 +485,7 @@ export function createFileListTool(
 				pattern?: string;
 			};
 			const matcher = pattern == null ? null : globToRegExp(pattern);
+			const recurse = shouldRecurseForPattern(pattern);
 
 			try {
 				const { absolutePath, resolvedPath } = await resolveSandboxedPath(
@@ -428,14 +501,15 @@ export function createFileListTool(
 					);
 				}
 
-				const entries = await readdir(resolvedPath, { withFileTypes: true });
+				const entries = recurse
+					? await listEntriesRecursively(absolutePath, resolvedPath)
+					: (await readdir(resolvedPath, { withFileTypes: true })).map((entry) => ({
+							name: entry.name,
+							path: join(absolutePath, entry.name),
+							type: entry.isDirectory() ? "directory" : "file",
+						}));
 				const filtered = entries
 					.filter((entry) => matcher == null || matcher.test(entry.name))
-					.map((entry) => ({
-						name: entry.name,
-						path: join(absolutePath, entry.name),
-						type: entry.isDirectory() ? "directory" : "file",
-					}))
 					.sort((left, right) => left.name.localeCompare(right.name));
 
 				return createSuccessResult("builtin-file-list", {

@@ -12,6 +12,7 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const MIN_TIMEOUT_MS = 1_000;
 const MAX_TIMEOUT_MS = 60_000;
 const DEFAULT_MAX_OUTPUT_CHARS = 10_240;
+const DEFAULT_MAX_BUFFER_BYTES = 8 * 1024 * 1024;
 const execFileAsync = promisify(execFile);
 const ALLOWED_ENV_KEYS = new Set([
 	"PATH",
@@ -20,7 +21,6 @@ const ALLOWED_ENV_KEYS = new Set([
 	"LC_ALL",
 	"TERM",
 	"USER",
-	"SHELL",
 	"PWD",
 ]);
 
@@ -53,6 +53,7 @@ interface ShellRunnerResult {
 export interface ShellRunnerOptions {
 	readonly cwd?: string;
 	readonly timeoutMs: number;
+	readonly maxBufferBytes: number;
 	readonly env?: NodeJS.ProcessEnv;
 }
 
@@ -260,7 +261,7 @@ async function defaultShellRunner(
 		const { stdout, stderr } = await execFileAsync(executable, [...args], {
 			cwd: options.cwd,
 			timeout: options.timeoutMs,
-			maxBuffer: 1024 * 1024,
+			maxBuffer: options.maxBufferBytes,
 			env: options.env,
 		});
 
@@ -398,6 +399,10 @@ export function createShellExecTool(
 			const result = await runner(executable, argv, {
 				cwd,
 				env: buildShellExecEnv(options.env),
+				maxBufferBytes: Math.max(
+					DEFAULT_MAX_BUFFER_BYTES,
+					(options.maxOutputChars ?? DEFAULT_MAX_OUTPUT_CHARS) * 2,
+				),
 				timeoutMs: clampTimeoutMs(
 					timeoutMs ?? options.defaultTimeoutMs ?? DEFAULT_TIMEOUT_MS,
 				),
