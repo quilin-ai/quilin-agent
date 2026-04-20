@@ -1,17 +1,25 @@
 # 规划工程（Planning Engineering）
 
-> **实现状态（Iter C，2026-04-20 Opus 4.7 revision）**
+> **实现状态（Iter C，2026-04-20 Opus 4.7 revision v1.1）**
 > - ✅ **已实现**：无（Iter C 未启动）
 > - 🚧 **进行中**：spec 撰写（本文件）
 > - 💭 **未开始**：Intent / Decomposition / Strategy / Replan / Planner tool — 全部待 Iter C 开工
 >
-> **本次修订要点**（相对 2026-04-18 骨架，基于 Opus 4.7 复查 + 2025-11~2026-04 外部研究）：
-> - ✘ **删除 LangGraph / Python 代码示例** —— 对齐 ADR-001 minimal TS core loop，Python 仅作 ML provider
-> - ✘ **反转"DAG 默认"为 Linear-first IR + optional dependency edges** —— 大多数任务本质线性，强制 DAG 过度建模
-> - ✘ **替换"四级修正"为显式 Replan 状态机** —— 4 类触发 + 3 级 replan，防 task drift
-> - ✓ **新增三段式 Intent 分类**：deterministic override → tiny classifier → main LLM ABSTAIN fallback
-> - ✓ **新增 Skills / Memory / Multi-Agent 接口章节** —— Planning 是 orchestration 层，不做 knowledge loading 或 自由 delegate
-> - ✓ **吸收 2025-11~2026-04 最新研究**：OpenHands V1 event-sourced state (arXiv 2511.03690)、BATS budget tracker (arXiv 2511.17006)、PALADIN recovery-as-first-class、RETO local repair (arXiv 2602.18968)、IntentGuard ABSTAIN class、Plan-Execute-Verify-Replan (arXiv 2603.11445)
+> **v1.1 本次修订要点**（基于 2026-04-20 "意图识别 Top 10 方案" 调研，对齐 Claude Code / Cursor / OpenHands / Anthropic Agent SDK 主流做法）：
+> - ✘ **废弃 Tier-1 规则前筛 + Tier-2 tiny classifier 默认方案** —— 开放域 Agent 的 intent 不是闭集分类，主 LLM 直接推理就是 SOTA
+> - ✓ **Intent 默认路径 = Main LLM 直接推理**（零额外延迟，与 tool-use / JSON mode 统一走同一条调用）
+> - ✓ **可选结构化输出审计层**：单次 LLM call 同时产出 `{intent_hint, plan_sketch, confidence}`，纯粹用于 observability / policy routing，不阻塞主推理
+> - ✓ **Skills 发现走 Gateway Skills 模式**：Planner 在 system prompt 注入 descriptor catalog（name + when_to_use + 64 char desc），主 LLM 自己判断 `skill_view(name)` 拉全文 —— 参考 Anthropic Agent SDK + Praetorian Gateway
+> - ✓ **Clarification 升格为一等分支**：不是 intent 分类的一个 label，而是主 LLM 产出 plan 时的显式决策点（参考 IntentRL 产品形态）
+> - ✓ **规则只留给 Safety（07）pre-filter**：Planning 层不做关键词规则；07 做 guardrail 正则/黑名单
+> - ✓ **B2 本地 tiny classifier spike 重定位**：从 Iter C Tier-1 gate 降级为 Iter D 研究实验（面向"离线 / 低成本部署模式"可选加速）
+>
+> **v1.0 继承要点**（2026-04-20 早先修订，保留）：
+> - ✘ 删除 LangGraph / Python 代码示例（ADR-001 minimal TS core loop）
+> - ✘ 反转"DAG 默认"为 Linear-first IR + optional dependency edges
+> - ✘ 替换"四级修正"为显式 Replan 状态机（4 类触发 + 3 级 replan）
+> - ✓ 新增 Skills / Memory / Multi-Agent 接口章节
+> - ✓ 吸收 OpenHands V1 event-sourced state、BATS budget tracker、PALADIN、RETO、Plan-Execute-Verify-Replan
 >
 > **ADR 对齐**：本 spec 的所有运行时实现遵循 [ADR-001](../../adr/adr-001-core-loop-and-language.md)（核心循环 TS、无 LangGraph）和 [ADR-002](../../adr/adr-002-project-skeleton.md)（packages/agent-core 结构）。
 
@@ -47,60 +55,74 @@
 | DSPy | 无 | 无 | 编译期 | 无 | 无 | 无 |
 | OpenHands V1 | 无 | Dependency tree（大型迁移） | 无 | 有 | 支持 | ✓ |
 | Claude Code | 无（纯 LLM） | 纯 LLM 驱动 | 无 | 有 | 部分 | 无 |
-| **Quilin Iter C** | **三段式 + ABSTAIN** | **Linear-first + optional DAG** | **3 策略 + 用户 override** | **4 触发 + 3 级 replan** | **✓** | **✓ 借鉴 OpenHands V1** |
+| **Quilin Iter C (v1.1)** | **Main LLM direct + structural dispatch + optional audit** | **Linear-first + optional DAG** | **3 策略 + 用户 override** | **4 触发 + 3 级 replan** | **✓** | **✓ 借鉴 OpenHands V1** |
 
 ---
 
 ## 二、设计方案
 
-### 2.1 意图识别（Intent Recognition）—— 三段式流水线
+### 2.1 意图识别（Intent Recognition）—— Main LLM Direct + Optional Structured Audit
 
-#### 四分类体系（保留）
+> **v1.1 重大修订（2026-04-20）**：基于"意图识别 Top 10 方案"调研，废弃三段式规则+tiny classifier 默认方案。
+> **理由**：开放域 Agent 场景下 intent 不是闭集分类问题（对比 Alexa / 客服的闭集 TOD）。Claude Code / Cursor / OpenHands V1 / Devin / Anthropic Agent SDK 全部让主 LLM 在 tool-use 调用里直接推理 intent，没有前置 classifier。三段式规则的 1039-sample 基准测的是 extraction，不是 agent intent，方向错了。
 
-| 类别 | 特征 | 示例 | 处理路径 |
+#### 设计原则
+
+1. **主 LLM 直接推理 intent**：intent 不作为独立调用，而是主 LLM 产出 `{plan_sketch, tool_calls, clarification}` 时自然携带的决策信号。零额外延迟。
+2. **可选结构化输出审计层**（observability-only）：同一次 LLM call 除了产出工具调用外，用 JSON/structured-output 再携带 `{intent_hint, confidence, reasoning_digest}`，写入 08-Observability trace，**不阻塞主路径**。
+3. **Skills 发现 = Gateway Skills 模式**：Planner 在 system prompt 注入 descriptor catalog（name + when_to_use + 64 字符描述），主 LLM 自己决定 `skill_view(name)` 拉全文。参考 Anthropic Agent SDK progressive disclosure + Praetorian "Gateway Skills" (2026-03)。
+4. **Clarification 是一等分支，不是一个 intent label**：主 LLM 产出 plan 时可选择 `need_clarification` 分支（参考 IntentRL 2026-02 产品形态，我们不训 RL，只用产品形态）。
+5. **规则 ≠ Planning 层责任**：Planning 不做关键词规则；07-Safety 的 pre-filter 做 guardrail 正则/黑名单（例如 prompt injection 拦截）。
+6. **本地 tiny classifier 是 Iter D 可选加速器**：面向离线 / 低成本部署模式（如 edge / 企业 on-prem）。B2 spike（Task #97 follow-up）降级为 Iter D 研究实验，不是 Iter C gate。
+
+#### Intent 四分类（保留作为 observability 标签 + replan 决策输入）
+
+| 类别 | 特征 | 示例 | 产出路径 |
 |------|------|------|---------|
-| `SIMPLE_QA` | 无需工具，LLM 知识可答 | "Python GIL 是什么？" | 跳过工具，LLM 直出 |
-| `SINGLE_TOOL` | 一次工具调用完成 | "查今天 BTC 价格" | 单 tool call |
-| `MULTI_STEP` | 多步 / 多工具 / 结果依赖 | "拉代码，跑测试，发邮件" | 进入 Decompose → Strategy → Execute |
-| `CLARIFICATION` | 信息不足无法执行 | "帮我处理那个文件" | 生成追问 |
-| `ABSTAIN`（新增） | 分类器低置信度 | 歧义输入 | 升级到 L3 Main LLM |
+| `SIMPLE_QA` | 主 LLM 无 tool_calls + 无 plan | "Python GIL 是什么？" | 直接回复 |
+| `SINGLE_TOOL` | 主 LLM 产出 1 个 tool_call | "查今天 BTC 价格" | 单步 ReAct |
+| `MULTI_STEP` | 主 LLM 产出 `plan_sketch` 或多个顺序 tool_call | "拉代码，跑测试，发邮件" | Decompose → Strategy → Execute |
+| `CLARIFICATION` | 主 LLM 产出 `need_clarification: true` + 追问文本 | "帮我处理那个文件" | 追问并暂停 |
 
-#### 三段式分类流水线
+**关键差异 vs v1.0**：intent 不再由前置 classifier 决定，而是**从主 LLM 的响应结构反推**（structural dispatch）。Loop 层看到的是主 LLM 的工具调用/文本输出，planner 只是给响应打 intent 标签用于 trace 和 replan 判断。
+
+#### 数据流（v1.1）
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│  L1  规则快筛（Deterministic Override）                      │
-│  - 关键词 / 指代词 / 长度启发                                │
-│  - <1ms，~50% 请求在此分流                                   │
-│  - 高置信度命中 → 直接返回                                    │
-│  - 低置信度 / 未命中 → 传递到 L2                              │
-└──────────────────────────┬───────────────────────────────────┘
-                           │
-┌──────────────────────────▼───────────────────────────────────┐
-│  L2  Tiny Classifier（DeBERTa-xsmall ONNX 或本地 2B LLM）    │
-│  - 22M 参数级编码器 / 2B 级本地 LLM                          │
-│  - CPU <20ms，成本接近零                                     │
-│  - 输出 4 类 + ABSTAIN（共 5 维度概率）                      │
-│  - 置信度 ≥ threshold → 返回分类结果                         │
-│  - ABSTAIN 或低置信度 → 升级到 L3                            │
-│  - ⚠ Iter C M1 才接入，D-21 spike 通过后启用                 │
-└──────────────────────────┬───────────────────────────────────┘
-                           │
-┌──────────────────────────▼───────────────────────────────────┐
-│  L3  Main LLM Fallback（Sonnet / Opus）                      │
-│  - 仅对 ABSTAIN 样本触发（预期 ~5%）                         │
-│  - 包含少样本 + 解释性 prompt                                │
-│  - 输出：{intent, confidence, reason, extracted_entities}    │
-│  - 最坏情况 <500ms                                           │
-└──────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────┐
+│  User input + ConversationHistory + SkillsCatalog + MemoryRecall  │
+│                     (assembled by 02-Context)                     │
+└────────────────────────────────┬──────────────────────────────────┘
+                                 │
+                                 ▼
+┌───────────────────────────────────────────────────────────────────┐
+│  Main LLM call (single)                                           │
+│  - tools = [skill_view, decompose_hint, <all runtime tools>]      │
+│  - response_format = optional structured audit envelope           │
+│  - Output shape:                                                   │
+│    {                                                               │
+│      text?: string,                                                │
+│      tool_calls?: ToolCall[],                                      │
+│      plan_sketch?: LinearPlan | DagPlan,                           │
+│      need_clarification?: { question, missing_fields },            │
+│      audit?: { intent_hint, confidence, reasoning_digest }        │
+│    }                                                               │
+└────────────────────────────────┬──────────────────────────────────┘
+                                 │
+              ┌──────────────────┼──────────────────┬──────────────┐
+              ▼                  ▼                  ▼              ▼
+       (no tool + no plan)  (tool_calls.len==1) (plan_sketch)  (need_clarification)
+         SIMPLE_QA           SINGLE_TOOL         MULTI_STEP      CLARIFICATION
+              │                  │                  │              │
+              ▼                  ▼                  ▼              ▼
+         输出回复             ReAct 单步       Decompose → Strategy   追问并等待
 ```
 
-**设计原则**：
-- **Cost asymmetry**：L1 几乎零成本，L2 本地推理几乎零成本，L3 贵但少用。端到端平均成本远低于"每请求都 LLM"方案（实测参考：Medium Hybrid Validation 2026-02 切 70% LLM cost）。
-- **ABSTAIN > 错分**（借鉴 IntentGuard 2026-03）：L2 不确定时主动升级，而非强行分类。
-- **L2 可选**：Iter C M0 不含 L2，M1 接入，M2 优化。
+**Observability**：
+- `audit.intent_hint` 和 structural dispatch 的真实 intent **可能不一致**（LLM 自述 vs LLM 行为）
+- 08-Observability 同时记录两者，用于监控 "LLM 自我意识 drift"（参考 2026 Agent Drift study）
 
-#### Intent 分类器接口（TS）
+#### Intent 分类器接口（TS，v1.1 简化）
 
 ```typescript
 // packages/agent-core/src/planning/intent.ts
@@ -111,20 +133,75 @@ export type Intent =
   | 'MULTI_STEP'
   | 'CLARIFICATION';
 
-export type ClassificationPath = 'L1_rule' | 'L2_classifier' | 'L3_llm';
-
 export interface IntentClassification {
-  readonly intent: Intent;
-  readonly confidence: number;        // [0, 1]
-  readonly path: ClassificationPath;
-  readonly latencyMs: number;
-  readonly reason?: string;           // L3 才填
+  readonly intent: Intent;                 // 由 response shape 反推（structural dispatch）
+  readonly confidence: number;             // [0, 1]，来自 audit 层或默认 1.0
+  readonly source: 'structural' | 'audit'; // structural = 从工具调用/plan 反推；audit = 结构化输出自报
+  readonly latencyMs: number;              // 主 LLM call 延迟（非独立 classifier 延迟）
+  readonly reasoningDigest?: string;       // 可选 audit 字段
+}
+
+export interface LLMPlannerResponse {
+  readonly text?: string;
+  readonly toolCalls?: ReadonlyArray<ToolCall>;
+  readonly planSketch?: LinearPlan | DagPlan;
+  readonly needClarification?: { readonly question: string; readonly missing: ReadonlyArray<string> };
+  readonly audit?: {
+    readonly intentHint: Intent;
+    readonly confidence: number;
+    readonly reasoningDigest?: string;
+  };
 }
 
 export interface IntentClassifier {
-  classify(input: string, ctx: PlanContext): Promise<IntentClassification>;
+  // v1.1: classify 不再触发独立 LLM call，而是对主 LLM response 做结构分派
+  dispatch(response: LLMPlannerResponse): IntentClassification;
 }
 ```
+
+**注意**：`IntentClassifier.dispatch()` 是**纯函数**（同步，无 IO），不消耗 token。主 LLM 的推理成本是 Planner 唯一 LLM 成本来源。
+
+#### 可选结构化输出审计（Optional Audit Layer）
+
+Audit 层通过 Vercel AI SDK v6 的 `generateObject` / tool-use JSON mode 实现，**与主推理共用同一次 LLM call**：
+
+```typescript
+// 伪代码，落地见 packages/agent-core/src/planning/audit.ts
+import { generateText } from 'ai';
+import { z } from 'zod';
+
+const auditSchema = z.object({
+  intentHint: z.enum(['SIMPLE_QA', 'SINGLE_TOOL', 'MULTI_STEP', 'CLARIFICATION']),
+  confidence: z.number().min(0).max(1),
+  reasoningDigest: z.string().max(280).optional(),
+});
+
+// 主 prompt 末尾追加："After producing your plan, emit an <audit>...</audit> block
+// containing a JSON object matching this schema: { intentHint, confidence, reasoningDigest? }"
+```
+
+**配置开关**：`planning.intent.audit_layer.enabled` 默认 `false`（零成本默认），开启后仅加约 50-80 output tokens，无额外 latency。
+
+#### 为什么不用独立 tiny classifier？（外部研究对齐）
+
+| 方案 | 适用场景 | Quilin Iter C 判定 |
+|------|--------|-------------------|
+| **主 LLM 直接推理**（Claude Code / Cursor / Anthropic Agent SDK） | 开放域 agent，tool-use native | ✅ 默认 |
+| **Arch-Router-1.5B / vLLM Semantic Router "Iris"** | 多 LLM provider 路由决策 | ⏸ 仅在 01-LLM 引入多 provider mix 时考虑 |
+| **aurelio-labs/semantic-router（embedding-based）** | 闭集 intent 且分类边界稳定 | ✘ 不适配开放域 |
+| **RouteLLM（成本/质量 tradeoff router）** | cost-sensitive routing，主 LLM call 之前决定用 weak 还是 strong | ⏸ Iter E benchmark 阶段评估（需要真实成本数据） |
+| **NormStat / VecStat（embedding distance threshold）** | 新 intent detection，开放集合 | ✘ 对比 LLM 推理没有额外价值 |
+| **IntentRL（RL 产品形态）** | clarification branch 作为一等分支 | ✅ 只借产品形态，不训 RL |
+| **Prism / REIC**（意图演化追踪） | 长 session 的 intent drift 监控 | ✓ 复用于 §2.4 Goal Drift 防御 |
+| **Praetorian Gateway Skills**（descriptor catalog + on-demand load） | Agent 技能按需发现 | ✅ 13-Skills 对齐，Planner 消费 descriptor |
+| **本地 Qwen2.5-1.5B / DeBERTa-xsmall ONNX** | 离线部署、zero-cost 推理 | ⏸ Iter D 可选加速器（B2 spike 重定位） |
+
+#### Iter C 阶段的 intent 处理路径（v1.1）
+
+- **M0**：主 LLM 直接推理 + structural dispatch，**不启用 audit 层**
+- **M1**：启用 audit 层（observability-only），开始收集 intent_hint vs structural intent 的一致性数据
+- **M2**：根据 M1 数据评估是否引入 RouteLLM 样式的 cost router（主 LLM call 前的轻量决策 "这题需要 Opus 还是 Haiku"）—— 不是 intent classifier，而是 cost router
+- **Iter D**：评估是否为离线/低成本部署引入本地 tiny classifier（B2 spike 真正落地时机）
 
 ---
 
@@ -436,7 +513,7 @@ export interface Checkpoint {
 
 ---
 
-### 2.7 Planner Protocol（统一接口）
+### 2.7 Planner Protocol（统一接口，v1.1）
 
 ```typescript
 // packages/agent-core/src/planning/planner.ts
@@ -445,20 +522,33 @@ export interface PlanContext {
   readonly task: string;
   readonly conversationHistory: ReadonlyArray<Message>;
   readonly memoryRecall: ReadonlyArray<MemoryItem>;      // 从 OmniMem 拉
-  readonly skillCatalog: ReadonlyArray<SkillDescriptor>; // 从 SkillsManager 拉
+  readonly skillCatalog: ReadonlyArray<SkillDescriptor>; // 从 SkillsManager 拉（Gateway 注入）
   readonly budget: BudgetLedger;
   readonly iteration: number;
 }
 
 export interface Planner {
-  classifyIntent(input: string, ctx: PlanContext): Promise<IntentClassification>;
-  decompose(task: string, intent: Intent, ctx: PlanContext): Promise<Plan>;
+  // v1.1: 一次主 LLM 调用同时产出 plan / tool_calls / clarification / audit
+  //       intent 由 IntentClassifier.dispatch(response) 反推，不再是独立方法
+  deliberate(ctx: PlanContext): Promise<LLMPlannerResponse>;
+
+  // 由 deliberate() 的响应反推 intent（纯函数，零成本）
+  classifyIntent(response: LLMPlannerResponse): IntentClassification;
+
+  // 若 response.planSketch 存在则直接复用，否则按需二次分解
+  decompose(response: LLMPlannerResponse, ctx: PlanContext): Promise<Plan>;
+
   selectStrategy(intent: Intent, plan: Plan | null, override?: Strategy): Strategy;
   replan(state: PlanningState, trigger: ReplanTrigger): Promise<PlanPatch>;
   shouldTerminate(state: PlanningState): TerminationDecision;
-  generateClarification(input: string, missing: ReadonlyArray<string>): Promise<string>;
 }
 ```
+
+**关键变化 vs v1.0**：
+- ❌ 移除 `classifyIntent(input, ctx)` 形式（原来需要独立 LLM call 或 classifier 模型）
+- ❌ 移除 `generateClarification(input, missing)` 独立方法 —— clarification 由 `deliberate()` 直接产出 `needClarification` 字段
+- ✅ 新增 `deliberate()` 作为主入口，一次 LLM call 解决 intent/plan/clarification/audit
+- ✅ `classifyIntent(response)` 改为纯函数，接受 response 对象而非原始 input
 
 ---
 
@@ -467,24 +557,31 @@ export interface Planner {
 ```yaml
 planning:
   intent:
-    l1_rule:
-      enabled: true
-      keywords:
-        single_tool: ["搜索", "查询", "查找", "获取", "列出", "search", "fetch", "get"]
-        clarification: ["那个", "之前", "上面说的", "the thing", "as before", "it"]
-        multi_step_hint: ["然后", "接着", "并且", "最后", "then", "after that"]
+    # v1.1: 主 LLM 直接推理 = 默认且唯一的 intent 来源
+    #       intent 不再是前置分类器的产物，而是主 LLM response 结构的反推
+    mode: "main_llm_direct"       # 唯一合法值（Iter C）；Iter D 可能新增 "local_tiny_classifier"
 
-    l2_classifier:
-      enabled: false              # Iter C M0 不启用，M1 随 D-21 spike 结果启用
-      backend: "deberta_onnx"     # 或 "qwen_local_2b"
-      model_path: "<TBD, pending D-21 spike>"
-      confidence_threshold: 0.85
-      abstain_below: 0.65
+    audit_layer:
+      enabled: false              # M0 默认关闭；M1 打开用于 observability
+      # audit 与主推理共用同一次 LLM call，通过 structured-output 或 JSON tag 回带
+      # 输出 schema: { intentHint, confidence, reasoningDigest? }
+      schema_version: 1
+      extra_output_tokens_budget: 80  # 最多允许的附加 output token
 
-    l3_fallback:
-      enabled: true
-      model_ref: "llm.main"       # 引用 01-llm 主模型
-      trigger: "abstain_or_low_confidence"
+    structural_dispatch:
+      enabled: true               # 从 response.toolCalls / planSketch / needClarification 反推
+      simple_qa_when: "no_tool_calls_and_no_plan_sketch"
+      single_tool_when: "tool_calls_len_equals_1_and_no_plan_sketch"
+      multi_step_when: "plan_sketch_present_or_tool_calls_len_gt_1"
+      clarification_when: "need_clarification_field_present"
+
+    # B2 spike 重定位：本地 tiny classifier 仅 Iter D 面向离线/低成本部署时评估
+    # 相关字段保留为文档化 stub（不启用）
+    local_tiny_classifier:
+      enabled: false
+      status: "deferred_to_iter_d"
+      candidates: ["qwen2.5-1.5b-instruct", "deberta-v3-xsmall-onnx"]
+      use_cases: ["offline_deployment", "cost_sensitive_batch"]
 
   decomposition:
     default_ir: "linear"
@@ -538,16 +635,15 @@ Planning 是 **orchestration 层**，**不做**：
 - 把 live plan state 写 semantic memory（不污染长期知识）
 - 让 LLM 自由决定 delegate 对象（无 guardrail 风险）
 
-#### 2.9.1 Skills 接口
+#### 2.9.1 Skills 接口（v1.1 — Gateway 模式）
 
-```
-Planner 依赖 SkillsManager 的 descriptor-only 视图，不直接访问文件系统。
-```
+> **v1.1 修订**：对齐 Anthropic Agent SDK progressive disclosure + Praetorian "Gateway Skills" 模式。
+> Planner **不做** skill-to-subtask 匹配；由主 LLM 根据 descriptor catalog 自己决定何时 `skill_view(name)`。
 
 ```typescript
 export interface SkillDescriptor {
   readonly name: string;
-  readonly description: string;
+  readonly description: string;      // 64-char 截断后注入 catalog
   readonly whenToUse: string;
   readonly estimatedTokens: number;
   readonly tags: ReadonlyArray<string>;
@@ -555,15 +651,21 @@ export interface SkillDescriptor {
 
 export interface SkillsManager {
   listCatalog(): Promise<ReadonlyArray<SkillDescriptor>>;        // 启动时拉
-  load(name: string): Promise<SkillContent>;                     // 按需加载全文
+  load(name: string): Promise<SkillContent>;                     // 按需加载全文（由 skill_view tool 触发）
 }
 ```
 
-**调用顺序**：
-1. `Planner.decompose()` 启动前先 `listCatalog()` 拉 descriptor（轻量，只含元数据）
-2. 对每个 subtask 匹配 `skillHint`（embedding similarity + rule）
-3. `subtask.status = running` 前，`SkillsManager.load(skillHint)` 拉全文注入 execution prompt
-4. Subtask 完成后，skill 用量 → OmniMem semantic tier（跨 session 学习"这个 skill 对这类任务有效"）
+**Gateway 调用顺序**：
+1. 启动时 `SkillsManager.listCatalog()` 拉所有 descriptor（元数据）
+2. `02-Context` 的 assembler 把 catalog 渲染为 `<available_skills>` XML 注入 system prompt（`packages/agent-core/src/skills/catalog-renderer.ts` 已落地）
+3. 主 LLM 在 `deliberate()` 过程中自己判断需要时调用 `skill_view({ name })` tool
+4. `skill_view` tool 背后调用 `SkillsManager.load(name)` 返回全文
+5. Subtask 完成后，skill 用量（命中/未命中）→ OmniMem episodic tier（跨 session 观察哪些 skill 有效）
+
+**关键**：
+- ❌ Planner **不做** embedding similarity + rule 的 skill-to-subtask 匹配（v1.0 的做法）
+- ✅ 主 LLM 作为"带 catalog 的 intelligent retriever"，自己决定 skill 选择
+- ✅ 如果未来 catalog 太大（> 100 skills × 200 tokens = 20k），在 §六 Q5 评估 embedding-based pre-filter（Context-level 截断而非 Planner-level 决策）
 
 #### 2.9.2 Memory 分层写入
 
@@ -629,8 +731,16 @@ export interface DelegationPolicy {
 | 6 | **PALADIN** (OpenReview 2025) | Failure recovery as first-class learning objective | §2.4 Replan 纪律 |
 | 7 | **Plan-Execute-Verify-Replan** (arXiv:2603.11445) | DAG + verification + adaptive replan | §2.4 G-Replan 触发 |
 | 8 | **Agent Drift study** (2026 POMDP drift model) | Task drift 形式化 + plan-ahead > step-by-step | §2.4 Goal Drift 防御 |
-| 9 | **Hybrid Validation Pattern** (Medium 2026-02) | 规则 + LLM fallback，切 70% cost | §2.1 三段式设计依据 |
+| 9 | ~~Hybrid Validation Pattern (Medium 2026-02)~~ | ~~规则 + LLM fallback 切 70% cost~~ | **v1.1 移除**：闭集 TOD 场景的优化，不适用开放域 Agent |
 | 10 | **Retry Budget for LLM Agents** (Tianpan 2026-04) | SRE retry budget 模式 | §2.4 retry_token_cap_pct |
+| 11 | **Anthropic Agent SDK — Skills progressive disclosure** (2026-04 docs) | Gateway Skills 模式：descriptor catalog + on-demand `skill_view` | §2.1 Skills 发现策略、§2.9.1 SkillsManager 接口 |
+| 12 | **Praetorian "Gateway Skills" pattern** (2026-03 blog) | Skills catalog 作为 LLM 的可用能力索引，主 LLM 自己决策拉取 | §2.1 Gateway Skills 模式 |
+| 13 | **IntentRL** (arXiv 2602.03468, 2026-02) | Clarification 作为 RL 一等动作（产品形态） | §2.1 clarification 一等分支（仅借产品形态，不训 RL） |
+| 14 | **Prism / REIC**（intent evolution tracking） | 长 session 内 intent drift 建模 | §2.4 Goal Drift 防御复用 |
+| 15 | **vLLM Semantic Router v0.1 "Iris"** (2026-03) + **Arch-Router-1.5B** | Router 模型（intent/LLM 选择） | §2.1 判定表：仅多 provider 场景才考虑 |
+| 16 | **RouteLLM** (ICLR 2025) | Cost/quality tradeoff 路由（不是 intent 路由） | §2.1 M2 阶段评估候选 |
+| 17 | **aurelio-labs/semantic-router** (开源 embedding router) | 闭集 intent 低延迟分类 | §2.1 判定表：不适配开放域 |
+| 18 | **Claude Code / Cursor / OpenHands V1 / Devin 公开行为** (2026-04 观察) | 主流 agent 都让主 LLM 直接推理 intent，不走前置 classifier | §2.1 默认路径依据 |
 
 ### 观察参考（按需）
 
@@ -642,32 +752,49 @@ LangGraph / DSPy / OpenAI Agents SDK / Pydantic AI / AutoGen / CrewAI / Semantic
 
 ### 4.1 单元测试（vitest）
 
-#### Intent 分类（每类 ≥ 5 用例，共 20 基础 + 20 边界 = 40）
+#### Intent structural dispatch（纯函数，零 LLM 调用）
 
 ```typescript
-// packages/agent-core/src/planning/__tests__/intent.test.ts
+// packages/agent-core/src/planning/__tests__/intent-dispatch.test.ts
 
-describe('IntentClassifier L1 规则通道', () => {
-  it.each([
-    ['Python GIL 是什么？', 'SIMPLE_QA', 0.7],
-    ['搜索最新 GPT-5 新闻', 'SINGLE_TOOL', 0.9],
-    ['帮我处理那个文件', 'CLARIFICATION', 0.9],
-    ['拉代码然后跑测试', 'MULTI_STEP', 0.8],
-  ])('classifies %s as %s', async (input, expected, minConf) => {
-    const result = await classifier.classify(input, ctx);
+describe('IntentClassifier.dispatch (structural)', () => {
+  it.each<[LLMPlannerResponse, Intent]>([
+    [{ text: 'GIL 是 Python 的全局解释器锁...' }, 'SIMPLE_QA'],
+    [{ toolCalls: [{ name: 'web_search', args: {} }] }, 'SINGLE_TOOL'],
+    [{ planSketch: { kind: 'linear', subtasks: [/* ... */] } }, 'MULTI_STEP'],
+    [{ toolCalls: [{ name: 'a' }, { name: 'b' }] }, 'MULTI_STEP'],
+    [{ needClarification: { question: '哪个文件？', missing: ['file'] } }, 'CLARIFICATION'],
+  ])('dispatches %j to %s', (response, expected) => {
+    const result = classifier.dispatch(response);
     expect(result.intent).toBe(expected);
-    expect(result.confidence).toBeGreaterThanOrEqual(minConf);
-    expect(result.path).toBe('L1_rule');
+    expect(result.source).toBe('structural');
   });
 });
 
-describe('IntentClassifier L3 fallback', () => {
-  it('escalates to L3 on ambiguous input', async () => {
-    const result = await classifier.classify('update it', ctx);
-    expect(result.path).toBe('L3_llm');
+describe('IntentClassifier.dispatch (audit-aware)', () => {
+  it('prefers audit intentHint when source=audit and confidence>=0.85', () => {
+    const response: LLMPlannerResponse = {
+      text: 'done',
+      audit: { intentHint: 'SIMPLE_QA', confidence: 0.92 },
+    };
+    const result = classifier.dispatch(response);
+    expect(result.source).toBe('audit');
+    expect(result.confidence).toBeGreaterThanOrEqual(0.85);
+  });
+
+  it('falls back to structural dispatch when audit confidence is low', () => {
+    const response: LLMPlannerResponse = {
+      toolCalls: [{ name: 'search' }],
+      audit: { intentHint: 'MULTI_STEP', confidence: 0.4 },
+    };
+    const result = classifier.dispatch(response);
+    expect(result.intent).toBe('SINGLE_TOOL');   // structural 胜出
+    expect(result.source).toBe('structural');
   });
 });
 ```
+
+> **注**：v1.1 移除了 `IntentClassifier L1 规则通道` / `L3 fallback` 测试。Planner 不再有独立 classify LLM call；intent 由主 LLM response 反推。主 LLM 推理质量由 02-Context / 01-LLM 的测试覆盖。
 
 #### Decomposer（linear-first + DAG upgrade）
 
@@ -774,9 +901,9 @@ describe('GoalDriftDetector', () => {
 
 | 指标 | 目标 | 方法 |
 |------|------|------|
-| Intent 分类准确率（4 类）L1+L2 | ≥ 90% | 40 标注用例 |
-| L1 规则通道命中率 | ≥ 50% | 统计 path 分布 |
-| L2 分类器（M1 启用后）recall / FPR / p95 | 等 D-21 spike 完成后定 | 外部 gate |
+| Structural dispatch 一致性（response shape → intent label） | 100% | 纯函数单测 40 用例 |
+| Audit intent vs structural intent 一致率（M1 启用后） | ≥ 85% | 200 真实 session log 对比，低于此阈值触发 drift 调查 |
+| 主 LLM 在开放域 intent 判断上的端到端成功率 | ≥ 90% | 40 标注用例跑端到端（非独立 classifier 测） |
 | Decomposer DAG 正确率（依赖顺序） | ≥ 85% | 20 手造任务 |
 | Replan 成功率（故障场景） | ≥ 80% | 注入 tool 失败 |
 | Checkpoint 恢复无数据丢失 | 100% | event replay 幂等性 |
@@ -788,34 +915,42 @@ describe('GoalDriftDetector', () => {
 
 ### M0 — Linear Planning MVP（2-3 周）
 
-- **Intent**: L1 规则 + L3 LLM fallback（**无 L2**）
-- **Decomposition**: Linear-first，硬上限约束
+- **Intent**: 主 LLM 直接推理 + structural dispatch（**无 audit 层、无 classifier**）
+- **Decomposition**: Linear-first，硬上限约束；优先复用主 LLM 产出的 `planSketch`
 - **Strategy**: ReAct + CoT（**无 PlanAndExecute**）
 - **Replan**: L-Rearrange + Local Repair（**无 L-Redecompose / G-Replan**）
 - **Termination**: Success + MaxSteps + UserInterrupt + DeadLoop
 - **Event-sourced state**: ✓（minimal subset）
-- **Skills 接口**: descriptor-only catalog
+- **Skills 接口**: Gateway 模式 — descriptor catalog 注入 system prompt，主 LLM 通过 `skill_view(name)` tool 按需拉全文
 - **Memory**: working + episodic（**无 semantic 写入**）
 - **Multi-Agent**: **不启用 delegation**（main Agent 内联执行）
 
-**验收**：MULTI_STEP 任务端到端跑通（搜索竞品 → 整理表格 → 生成建议），≤ 20 步，Replan 只支持 L-Rearrange。
+**验收**：MULTI_STEP 任务端到端跑通（搜索竞品 → 整理表格 → 生成建议），≤ 20 步，Replan 只支持 L-Rearrange；Skills 通过 `skill_view` 按需加载验证。
 
-### M1 — Tiny Classifier + L-Redecompose（+ 1-2 周，D-21 spike 通过后）
+### M1 — Audit Layer + L-Redecompose（+ 1-2 周）
 
-- **Intent**: + L2 DeBERTa-xsmall ONNX 或本地 Qwen2.5-1.5B（D-21 gate 通过后）
-- **Replan**: + L-Redecompose + Goal Drift 检测
+- **Intent**: + audit 层启用（observability-only，主 LLM 结构化输出同时携带 `{intentHint, confidence}`）
+- **Replan**: + L-Redecompose + Goal Drift 检测（复用 Prism/REIC 思路）
 - **Memory**: + 复盘沉淀到 semantic（opt-in）
 
-**验收**：L2 分类器 recall ≥ 85%，Goal Drift 检测覆盖率 100%。
+**验收**：audit.intentHint 与 structural intent 一致率收集到 baseline（目标 ≥ 85%，作为后续 drift 监控基线）；Goal Drift 检测覆盖率 100%。
 
-### M2 — DAG + PlanAndExecute + Multi-Agent（+ 2-3 周）
+### M2 — DAG + PlanAndExecute + Multi-Agent + Cost Router（+ 2-3 周）
 
 - **Decomposition**: + DAG 升级（explicit parallel / independent writes）
 - **Strategy**: + PlanAndExecute（> 20 步任务）
 - **Replan**: + G-Replan
 - **Multi-Agent**: + 规则 delegation（06-multi-agent 联动）
+- **Cost Router（探索）**：参考 RouteLLM，在主 LLM call 之前做轻量 weak/strong 模型路由决策（不等于 intent classifier）
 
-**验收**：长任务（50+ 步）端到端跑通，至少 1 次 delegation 到 sub-agent。
+**验收**：长任务（50+ 步）端到端跑通，至少 1 次 delegation 到 sub-agent；Cost Router 上线后单位任务 LLM 成本下降 ≥ 20%（对比 M1 baseline）。
+
+### Iter D — 离线/低成本部署的 Local Tiny Classifier（研究实验）
+
+- **定位**：B2 spike（Task #97 follow-up）的真正落地时机
+- **触发**：仅在"离线部署 / 成本敏感批量任务"场景启用
+- **候选**：Qwen2.5-1.5B-Instruct / DeBERTa-v3-xsmall ONNX INT8
+- **验收 gate**：recall ≥ 85%、FPR ≤ 5%、p95 ≤ 50ms、cost ~$0；**在线/低延迟默认部署仍走主 LLM 直接推理**
 
 ---
 
@@ -830,16 +965,18 @@ describe('GoalDriftDetector', () => {
 
 **残留风险**：Linear 执行引擎是否需要额外支持"软并发"（声明独立但不强依赖 DAG）？M2 决定。
 
-### Q2. L2 Tiny Classifier 落地 —— DeBERTa vs 本地 2B LLM
+### Q2. Local Tiny Classifier 何时落地（Iter D 研究实验）
 
-D-21 spike（Task #97 follow-up）正在跑对比实验。候选：
+**v1.1 修订**：v1.0 曾把 DeBERTa-v3-xsmall / Qwen2.5-1.5B / Haiku 作为 Tier-1 gate 候选。外部 Top 10 研究证明此方向错误（主流开放域 Agent 都让主 LLM 直接推理）。本 Q 降级为 Iter D 研究题，仅面向"离线/低成本部署"场景。
+
+B2 spike（Task #97 follow-up）候选：
 - DeBERTa-v3-xsmall (22M, ONNX INT8) — IntentGuard 同款
 - Qwen2.5-1.5B-Instruct (本地 ollama)
-- Haiku 4.5（云端对照臂）
+- ~~Haiku 4.5 云端对照臂~~（已确认：在线部署下主 LLM 直接推理 > 独立 Haiku classifier）
 
-**Gate**（Codex 挑战后拆分）：
-- 本地路径：recall ≥85% + FPR ≤5% + p95 ≤50ms + cost ~$0
-- 云端路径：recall ≥85% + FPR ≤5% + p95 relaxed + cost cap $X / 1k calls
+**Iter D Gate**（仅离线/低成本场景启用）：
+- recall ≥ 85% + FPR ≤ 5% + p95 ≤ 50ms + cost ~$0
+- **在线/低延迟默认部署仍走主 LLM 直接推理**，不启用本分支
 
 ### Q3. Goal Drift threshold 的校准
 
@@ -880,4 +1017,5 @@ G-Replan 成本高（全量 LLM 重推）但生产中发生率应 <5%。M2 上�
 |------|------|--------|------|
 | 2026-04-17 | v0.1 | Codex + Claude | 初版骨架：4 分类 + DAG-default + 四级修正 + Python 示例 |
 | 2026-04-18 | v0.2 | Claude | 加入 ADR-001 对齐说明 + Token 预算约束 |
-| **2026-04-20** | **v1.0** | **Claude (Opus 4.7 revision)** | **基于外部研究全量重写**：反转 Linear-first / 三段式 Intent / 状态机 Replan / TS Protocol / Skills-Memory-MultiAgent 接口章节 |
+| 2026-04-20 (AM) | v1.0 | Claude (Opus 4.7 revision) | 基于外部研究全量重写：反转 Linear-first / 三段式 Intent / 状态机 Replan / TS Protocol / Skills-Memory-MultiAgent 接口章节 |
+| **2026-04-20 (PM)** | **v1.1** | **Claude (Opus 4.7, Top 10 intent research)** | **废弃三段式 Intent 默认方案**：基于 Claude Code / Cursor / OpenHands / Anthropic Agent SDK / Praetorian / IntentRL / Prism / REIC / vLLM SR / RouteLLM 等 Top 10 方案调研，改为主 LLM 直接推理 + structural dispatch + 可选 audit 层；Skills 发现走 Gateway 模式；Clarification 升格为一等分支；B2 本地 tiny classifier spike 重定位到 Iter D |
