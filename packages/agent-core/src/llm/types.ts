@@ -1,5 +1,5 @@
 import type { AssembledPrompt } from "../context/prompt-types.js";
-import type { Message } from "../state/types.js";
+import type { Message, ReasoningPart } from "../state/types.js";
 import type { Tool, ToolCall } from "../tools/types.js";
 
 /** 思考模式控制 — 来自 01-LLM spec §ThinkingMode */
@@ -19,10 +19,45 @@ export interface InferenceConfig {
 export interface LLMResponse {
 	readonly content: string;
 	readonly toolCalls?: readonly ToolCall[];
-	readonly thinking?: string;
+	readonly thinking?: readonly ReasoningPart[];
 	readonly usage: TokenUsage;
 	readonly finishReason: "stop" | "tool_calls" | "length" | "error";
 }
+
+export type LLMStreamEvent =
+	| {
+			readonly type: "text";
+			readonly delta: string;
+	  }
+	| {
+			readonly type: "reasoning";
+			readonly delta: string;
+	  }
+	| {
+			readonly type: "tool-call-start";
+			readonly toolCallId: string;
+			readonly toolName: string;
+	  }
+	| {
+			readonly type: "tool-call-args-delta";
+			readonly toolCallId: string;
+			readonly toolName: string;
+			readonly delta: string;
+	  }
+	| {
+			readonly type: "tool-call-end";
+			readonly toolCallId: string;
+			readonly toolName: string;
+			readonly inputText: string;
+			readonly input?: unknown;
+	  }
+	| {
+			readonly type: "tool-result";
+			readonly toolCallId: string;
+			readonly toolName: string;
+			readonly output: unknown;
+			readonly isError?: boolean;
+	  };
 
 export type CacheUsageSource = "native" | "wall-clock" | "unknown";
 

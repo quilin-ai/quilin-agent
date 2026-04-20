@@ -194,6 +194,272 @@ describe("VercelLLMClient", () => {
 		});
 	});
 
+	it("switches DeepSeek to deepseek-reasoner when thinking is enabled", async () => {
+		const deepseekChatModel = {
+			provider: "deepseek",
+			modelId: "deepseek-chat",
+		} as LanguageModel;
+		const deepseekReasonerModel = {
+			provider: "deepseek",
+			modelId: "deepseek-reasoner",
+		} as LanguageModel;
+		const resolveModel = vi.fn((modelId: string) =>
+			modelId === "deepseek-reasoner"
+				? deepseekReasonerModel
+				: deepseekChatModel,
+		);
+		vi.mocked(generateText).mockResolvedValue({
+			text: "reasoned",
+			usage: {
+				promptTokens: 9,
+				completionTokens: 3,
+			},
+			finishReason: "stop",
+		} as Awaited<ReturnType<typeof generateText>>);
+
+		// @ts-expect-error Phase 2 upgrades the client to accept a resolver-backed model handle.
+		const client = new VercelLLMClient({
+			model: deepseekChatModel,
+			resolveModel,
+		});
+
+		await client.chat([{ role: "user", content: "solve it" }], [], {
+			temperature: 0.1,
+			maxTokens: 256,
+			thinkingMode: "enabled",
+		});
+
+		expect(resolveModel).toHaveBeenCalledWith("deepseek-reasoner");
+		expect(generateText).toHaveBeenCalledWith(
+			expect.objectContaining({
+				model: deepseekReasonerModel,
+			}),
+		);
+	});
+
+	it("enables Anthropic thinking when thinking mode is enabled", async () => {
+		const anthropicModel = {
+			provider: "anthropic",
+			modelId: "claude-3-7-sonnet-latest",
+		} as LanguageModel;
+		vi.mocked(generateText).mockResolvedValue({
+			text: "thinking",
+			usage: {
+				promptTokens: 7,
+				completionTokens: 5,
+			},
+			finishReason: "stop",
+		} as Awaited<ReturnType<typeof generateText>>);
+
+		const client = new VercelLLMClient(anthropicModel);
+
+		await client.chat([{ role: "user", content: "analyze" }], [], {
+			temperature: 0.1,
+			maxTokens: 256,
+			thinkingMode: "enabled",
+			thinkingBudget: 2048,
+		});
+
+		expect(generateText).toHaveBeenCalledWith(
+			expect.objectContaining({
+				model: anthropicModel,
+				providerOptions: {
+					anthropic: {
+						thinking: {
+							type: "enabled",
+							budgetTokens: 2048,
+						},
+					},
+				},
+			}),
+		);
+	});
+
+	it("extracts ordered reasoning parts from generateText for non-stream calls", async () => {
+		const anthropicModel = {
+			provider: "anthropic",
+			modelId: "claude-3-7-sonnet-latest",
+		} as LanguageModel;
+		vi.mocked(generateText).mockResolvedValue({
+			text: "final answer",
+			reasoning: [
+				{
+					type: "reasoning",
+					text: "step one",
+					providerMetadata: {
+						anthropic: {
+							signature: "sig-1",
+						},
+					},
+				},
+				{
+					type: "reasoning",
+					text: "step two",
+					providerMetadata: {
+						anthropic: {
+							signature: "sig-2",
+						},
+					},
+				},
+			],
+			reasoningText: "step onestep two",
+			usage: {
+				promptTokens: 7,
+				completionTokens: 5,
+			},
+			finishReason: "stop",
+		} as Awaited<ReturnType<typeof generateText>>);
+
+		const client = new VercelLLMClient(anthropicModel);
+
+		const result = await client.chat(
+			[{ role: "user", content: "analyze" }],
+			[],
+			{
+				temperature: 0.1,
+				maxTokens: 256,
+				thinkingMode: "enabled",
+			},
+		);
+
+		expect(result).toEqual({
+			content: "final answer",
+			thinking: [
+				{ provider: "anthropic", text: "step one", signature: "sig-1" },
+				{ provider: "anthropic", text: "step two", signature: "sig-2" },
+			],
+			usage: {
+				inputTokens: 7,
+				outputTokens: 5,
+			},
+			finishReason: "stop",
+		});
+	});
+
+	it("drops Anthropic reasoning blocks without signatures", async () => {
+		const anthropicModel = {
+			provider: "anthropic",
+			modelId: "claude-3-7-sonnet-latest",
+		} as LanguageModel;
+		vi.mocked(generateText).mockResolvedValue({
+			text: "final answer",
+			reasoning: [
+				{
+					type: "reasoning",
+					text: "unsigned block",
+				},
+			],
+			usage: {
+				promptTokens: 7,
+				completionTokens: 5,
+			},
+			finishReason: "stop",
+		} as Awaited<ReturnType<typeof generateText>>);
+
+		const client = new VercelLLMClient(anthropicModel);
+
+		const result = await client.chat(
+			[{ role: "user", content: "analyze" }],
+			[],
+			{
+				temperature: 0.1,
+				maxTokens: 256,
+				thinkingMode: "enabled",
+			},
+		);
+
+		expect(result).toEqual({
+			content: "final answer",
+			usage: {
+				inputTokens: 7,
+				outputTokens: 5,
+			},
+			finishReason: "stop",
+		});
+	});
+
+	it("falls back to openai-chat reasoning when Responses metadata is incomplete", async () => {
+		const openaiModel = {
+			provider: "openai",
+			modelId: "o4-mini",
+		} as LanguageModel;
+		vi.mocked(generateText).mockResolvedValue({
+			text: "final answer",
+			reasoning: [
+				{
+					type: "reasoning",
+					text: "summary block",
+					providerMetadata: {
+						openai: {
+							itemId: "item-1",
+						},
+					},
+				},
+			],
+			usage: {
+				promptTokens: 7,
+				completionTokens: 5,
+			},
+			finishReason: "stop",
+		} as Awaited<ReturnType<typeof generateText>>);
+
+		const client = new VercelLLMClient(openaiModel);
+
+		const result = await client.chat(
+			[{ role: "user", content: "analyze" }],
+			[],
+			{
+				temperature: 0.1,
+				maxTokens: 256,
+				thinkingMode: "enabled",
+			},
+		);
+
+		expect(result).toEqual({
+			content: "final answer",
+			thinking: [{ provider: "openai-chat", text: "summary block" }],
+			usage: {
+				inputTokens: 7,
+				outputTokens: 5,
+			},
+			finishReason: "stop",
+		});
+	});
+
+	it("maps OpenAI auto thinking mode to medium reasoning effort", async () => {
+		const openaiModel = {
+			provider: "openai",
+			modelId: "o4-mini",
+		} as LanguageModel;
+		vi.mocked(generateText).mockResolvedValue({
+			text: "reasoned",
+			usage: {
+				promptTokens: 7,
+				completionTokens: 5,
+			},
+			finishReason: "stop",
+		} as Awaited<ReturnType<typeof generateText>>);
+
+		const client = new VercelLLMClient(openaiModel);
+
+		await client.chat([{ role: "user", content: "analyze" }], [], {
+			temperature: 0.1,
+			maxTokens: 256,
+			thinkingMode: "auto",
+		});
+
+		expect(generateText).toHaveBeenCalledWith(
+			expect.objectContaining({
+				model: openaiModel,
+				providerOptions: {
+					openai: {
+						reasoningEffort: "medium",
+					},
+				},
+			}),
+		);
+	});
+
 	it("maps non-stop finish reasons to length", async () => {
 		vi.mocked(generateText).mockResolvedValue({
 			text: "truncated",
@@ -352,15 +618,38 @@ describe("StreamingLLMClient", () => {
 		vi.clearAllMocks();
 	});
 
-	it("streams chunks and returns the accumulated response", async () => {
-		const chunks = ["hel", "lo"];
-		const onChunk = vi.fn();
+	it("maps fullStream events and returns accumulated text plus reasoning", async () => {
+		const events: unknown[] = [];
+		const streamingModel = {
+			provider: "deepseek",
+			modelId: "deepseek-reasoner",
+		} as LanguageModel;
 
 		vi.mocked(streamText).mockReturnValue({
-			textStream: (async function* () {
-				for (const chunk of chunks) {
-					yield chunk;
-				}
+			fullStream: (async function* () {
+				yield { type: "reasoning-start", id: "r-1" };
+				yield { type: "reasoning-delta", id: "r-1", delta: "step " };
+				yield { type: "reasoning-delta", id: "r-1", delta: "one" };
+				yield { type: "tool-input-start", id: "call-1", toolName: "search" };
+				yield { type: "tool-input-delta", id: "call-1", delta: '{"q":' };
+				yield { type: "tool-input-delta", id: "call-1", delta: '"hi"}' };
+				yield { type: "tool-input-end", id: "call-1" };
+				yield {
+					type: "tool-call",
+					toolCallId: "call-1",
+					toolName: "search",
+					input: { q: "hi" },
+				};
+				yield {
+					type: "tool-result",
+					toolCallId: "call-1",
+					toolName: "search",
+					output: { answer: "ok" },
+				};
+				yield { type: "text-start", id: "t-1" };
+				yield { type: "text-delta", id: "t-1", delta: "hel" };
+				yield { type: "text-delta", id: "t-1", delta: "lo" };
+				yield { type: "text-end", id: "t-1" };
 			})(),
 			usage: Promise.resolve({
 				promptTokens: 5,
@@ -369,7 +658,9 @@ describe("StreamingLLMClient", () => {
 			finishReason: Promise.resolve("stop"),
 		} as ReturnType<typeof streamText>);
 
-		const client = new StreamingLLMClient(model, onChunk);
+		const client = new StreamingLLMClient(streamingModel, (event) => {
+			events.push(event);
+		});
 
 		const result = await client.chat([{ role: "user", content: "hi" }], [], {
 			temperature: 0.2,
@@ -378,17 +669,113 @@ describe("StreamingLLMClient", () => {
 		});
 
 		expect(streamText).toHaveBeenCalledWith({
-			model,
+			model: streamingModel,
 			messages: [{ role: "user", content: "hi" }],
 			maxOutputTokens: 64,
 			temperature: 0.2,
 			topP: undefined,
 		});
-		expect(onChunk).toHaveBeenCalledTimes(2);
-		expect(onChunk).toHaveBeenNthCalledWith(1, "hel");
-		expect(onChunk).toHaveBeenNthCalledWith(2, "lo");
+		expect(events).toEqual([
+			{ type: "reasoning", delta: "step " },
+			{ type: "reasoning", delta: "one" },
+			{ type: "tool-call-start", toolCallId: "call-1", toolName: "search" },
+			{
+				type: "tool-call-args-delta",
+				toolCallId: "call-1",
+				toolName: "search",
+				delta: '{"q":',
+			},
+			{
+				type: "tool-call-args-delta",
+				toolCallId: "call-1",
+				toolName: "search",
+				delta: '"hi"}',
+			},
+			{
+				type: "tool-call-end",
+				toolCallId: "call-1",
+				toolName: "search",
+				inputText: '{"q":"hi"}',
+				input: { q: "hi" },
+			},
+			{
+				type: "tool-result",
+				toolCallId: "call-1",
+				toolName: "search",
+				output: { answer: "ok" },
+			},
+			{ type: "text", delta: "hel" },
+			{ type: "text", delta: "lo" },
+		]);
 		expect(result).toEqual({
 			content: "hello",
+			thinking: [{ provider: "deepseek", text: "step one" }],
+			usage: {
+				inputTokens: 5,
+				outputTokens: 7,
+			},
+			finishReason: "stop",
+		});
+	});
+
+	it("preserves multiple reasoning blocks in order from fullStream", async () => {
+		const anthropicModel = {
+			provider: "anthropic",
+			modelId: "claude-3-7-sonnet-latest",
+		} as LanguageModel;
+
+		vi.mocked(streamText).mockReturnValue({
+			fullStream: (async function* () {
+				yield { type: "reasoning-start", id: "r-1" };
+				yield { type: "reasoning-delta", id: "r-1", delta: "step one" };
+				yield {
+					type: "reasoning-delta",
+					id: "r-1",
+					delta: "",
+					providerMetadata: {
+						anthropic: {
+							signature: "sig-1",
+						},
+					},
+				};
+				yield { type: "reasoning-end", id: "r-1" };
+				yield { type: "text-delta", id: "t-1", delta: "partial " };
+				yield { type: "reasoning-start", id: "r-2" };
+				yield { type: "reasoning-delta", id: "r-2", delta: "step two" };
+				yield {
+					type: "reasoning-delta",
+					id: "r-2",
+					delta: "",
+					providerMetadata: {
+						anthropic: {
+							signature: "sig-2",
+						},
+					},
+				};
+				yield { type: "reasoning-end", id: "r-2" };
+				yield { type: "text-delta", id: "t-1", delta: "answer" };
+			})(),
+			usage: Promise.resolve({
+				promptTokens: 5,
+				completionTokens: 7,
+			}),
+			finishReason: Promise.resolve("stop"),
+		} as ReturnType<typeof streamText>);
+
+		const client = new StreamingLLMClient(anthropicModel);
+
+		const result = await client.chat([{ role: "user", content: "hi" }], [], {
+			temperature: 0.2,
+			maxTokens: 64,
+			thinkingMode: "enabled",
+		});
+
+		expect(result).toEqual({
+			content: "partial answer",
+			thinking: [
+				{ provider: "anthropic", text: "step one", signature: "sig-1" },
+				{ provider: "anthropic", text: "step two", signature: "sig-2" },
+			],
 			usage: {
 				inputTokens: 5,
 				outputTokens: 7,
@@ -399,8 +786,8 @@ describe("StreamingLLMClient", () => {
 
 	it("maps streamed provider metadata cache usage", async () => {
 		vi.mocked(streamText).mockReturnValue({
-			textStream: (async function* () {
-				yield "hi";
+			fullStream: (async function* () {
+				yield { type: "text-delta", id: "t-1", delta: "hi" };
 			})(),
 			usage: Promise.resolve({
 				promptTokens: 5,
@@ -437,7 +824,7 @@ describe("StreamingLLMClient", () => {
 
 	it("maps tool calls from streamText", async () => {
 		vi.mocked(streamText).mockReturnValue({
-			textStream: (async function* () {})(),
+			fullStream: (async function* () {})(),
 			usage: Promise.resolve({
 				promptTokens: 3,
 				completionTokens: 4,

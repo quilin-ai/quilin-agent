@@ -1,7 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { logger } from "../logger.js";
 import { MigrationError, SQLiteCheckpoint } from "./checkpoint.js";
-import type { AgentState } from "./types.js";
+import type { AgentState, ReasoningPart } from "./types.js";
 
 interface StoredSession {
 	readonly stateJson: string;
@@ -138,6 +138,13 @@ function seedSession(
 		createdAt: "2026-04-15T00:00:00.000Z",
 		lastActiveAt: "2026-04-15T00:00:00.000Z",
 	});
+}
+
+function getStoredStateJson(dbPath: string, sessionId: string): string {
+	const stored = databases.get(dbPath)?.get(sessionId);
+	expect(stored).toBeDefined();
+
+	return stored?.stateJson ?? "";
 }
 
 describe("SQLiteCheckpoint", () => {
@@ -282,6 +289,53 @@ describe("SQLiteCheckpoint", () => {
 		await expect(resumed.load("resume-session")).resolves.toEqual(state);
 	});
 
+	it("serializes v2 checkpoints without persisting reasoning secrets", async () => {
+		const dbPath = makeMemoryDbPath("checkpoint-strips-reasoning");
+		const checkpoint = new SQLiteCheckpoint({
+			sessionId: "session-with-reasoning",
+			dbPath,
+		});
+		const state = makeState({
+			messages: [
+				{ role: "system", content: "system prompt" },
+				{
+					role: "assistant",
+					content: "answer",
+					reasoning: [
+						{
+							provider: "anthropic",
+							text: "private chain",
+							signature: "sig-secret",
+						},
+						{
+							provider: "openai-responses",
+							itemId: "resp-item-1",
+							encryptedContent: "ciphertext-secret",
+							text: "summary",
+						},
+					],
+				},
+			],
+		});
+
+		await checkpoint.save(state);
+
+		const stateJson = getStoredStateJson(dbPath, "session-with-reasoning");
+		const parsed = JSON.parse(stateJson) as {
+			readonly schemaVersion: number;
+			readonly payload: AgentState;
+		};
+
+		expect(parsed.schemaVersion).toBe(2);
+		expect(stateJson).not.toContain("reasoning");
+		expect(stateJson).not.toContain("sig-secret");
+		expect(stateJson).not.toContain("ciphertext-secret");
+		expect(parsed.payload.messages).toEqual([
+			{ role: "system", content: "system prompt" },
+			{ role: "assistant", content: "answer" },
+		]);
+	});
+
 	it("preserves createdAt when saving an existing session", async () => {
 		const dbPath = makeMemoryDbPath("checkpoint-preserve-created-at");
 		const checkpoint = new SQLiteCheckpoint({
@@ -310,6 +364,87 @@ describe("SQLiteCheckpoint", () => {
 		);
 	});
 
+	it("loads v1 checkpoints by migrating away stored reasoning", async () => {
+		const dbPath = makeMemoryDbPath("checkpoint-v1-migration");
+		const v1State = makeState({
+			messages: [
+				{ role: "system", content: "system prompt" },
+				{
+					role: "assistant",
+					content: "legacy answer",
+					reasoning: [
+						{
+							provider: "deepseek",
+							text: "old stored reasoning",
+						},
+					],
+				},
+			],
+		});
+
+		seedSession(
+			dbPath,
+			"legacy-v1-session",
+			JSON.stringify({
+				schemaVersion: 1,
+				createdAt: v1State.createdAt,
+				updatedAt: v1State.lastActiveAt,
+				payload: v1State,
+			}),
+		);
+		const checkpoint = new SQLiteCheckpoint({ dbPath });
+
+		await expect(checkpoint.load("legacy-v1-session")).resolves.toEqual(
+			makeState({
+				messages: [
+					{ role: "system", content: "system prompt" },
+					{ role: "assistant", content: "legacy answer" },
+				],
+			}),
+		);
+	});
+
+	it("loads v2 checkpoints and sanitizes any persisted reasoning fields", async () => {
+		const dbPath = makeMemoryDbPath("checkpoint-v2-migration");
+		const v2State = makeState({
+			messages: [
+				{ role: "system", content: "system prompt" },
+				{
+					role: "assistant",
+					content: "resume answer",
+					reasoning: [
+						{
+							provider: "anthropic",
+							text: "should be stripped",
+							signature: "legacy-signature",
+						},
+					],
+				},
+			],
+		});
+
+		seedSession(
+			dbPath,
+			"legacy-v2-session",
+			JSON.stringify({
+				schemaVersion: 2,
+				createdAt: v2State.createdAt,
+				updatedAt: v2State.lastActiveAt,
+				payload: v2State,
+			}),
+		);
+		const checkpoint = new SQLiteCheckpoint({ dbPath });
+
+		await expect(checkpoint.load("legacy-v2-session")).resolves.toEqual(
+			makeState({
+				messages: [
+					{ role: "system", content: "system prompt" },
+					{ role: "assistant", content: "resume answer" },
+				],
+			}),
+		);
+	});
+
 	it("returns null and warns when a stored checkpoint contains invalid JSON", async () => {
 		const dbPath = makeMemoryDbPath("checkpoint-invalid-json");
 		seedSession(dbPath, "broken-session", "{not valid json");
@@ -323,6 +458,34 @@ describe("SQLiteCheckpoint", () => {
 			}),
 			"Checkpoint load skipped invalid JSON payload",
 		);
+	});
+
+	it("defines provider-specific reasoning part shapes", () => {
+		const anthropicPart = {
+			provider: "anthropic",
+			text: "thinking",
+			signature: "sig",
+		} satisfies ReasoningPart;
+		const responsesPart = {
+			provider: "openai-responses",
+			itemId: "resp-item-1",
+			encryptedContent: "cipher",
+			text: "summary",
+		} satisfies ReasoningPart;
+		const deepseekPart = {
+			provider: "deepseek",
+			text: "step one",
+		} satisfies ReasoningPart;
+
+		expectTypeOf(anthropicPart.signature).toEqualTypeOf<string>();
+		expectTypeOf(responsesPart.itemId).toEqualTypeOf<string>();
+		expectTypeOf(responsesPart.encryptedContent).toEqualTypeOf<string>();
+		expect(deepseekPart).toEqual({
+			provider: "deepseek",
+			text: "step one",
+		});
+		expect(anthropicPart.signature).toBe("sig");
+		expect(responsesPart.encryptedContent).toBe("cipher");
 	});
 
 	it("throws MigrationError for unsupported schemaVersion values", async () => {

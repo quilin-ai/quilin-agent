@@ -1,10 +1,10 @@
 import { isAbsolute, relative, resolve } from "node:path";
+import { scanExternalContext } from "./context/injection-scanner.js";
 import {
 	createSystemContextSource,
 	DEFAULT_CONTEXT_BUDGET,
 } from "./context/manager.js";
 import type { PromptSessionAssembler } from "./context/prompt-session-assembler.js";
-import { scanExternalContext } from "./context/injection-scanner.js";
 import type { ContextManager } from "./context/types.js";
 import type { InferenceConfig, LLMClient } from "./llm/types.js";
 import { getLoggerRuntimeMode, logger } from "./logger.js";
@@ -43,6 +43,7 @@ export interface LoopHooks {
 		name: string,
 		attributes?: Record<string, unknown>,
 	) => void | Promise<void>;
+	readonly onAssistantMessage?: (message: Message) => void | Promise<void>;
 }
 
 async function recordLoopSpan(
@@ -51,6 +52,65 @@ async function recordLoopSpan(
 	attributes?: Record<string, unknown>,
 ): Promise<void> {
 	await hooks?.recordSpan?.(name, attributes);
+}
+
+function createAssistantMessage(
+	response: Pick<Message, "content"> & {
+		readonly toolCalls?: Message["toolCalls"];
+		readonly reasoning?: Message["reasoning"];
+	},
+): Message {
+	return {
+		role: "assistant",
+		content: response.content,
+		...(response.toolCalls == null ? {} : { toolCalls: response.toolCalls }),
+		...(response.reasoning == null ? {} : { reasoning: response.reasoning }),
+	};
+}
+
+function sanitizeReasoningParts(
+	reasoning: Message["reasoning"],
+): Message["reasoning"] {
+	if (reasoning == null || reasoning.length === 0) {
+		return reasoning;
+	}
+
+	return reasoning.map((part, partIndex) => {
+		if (part.text == null || part.text.length === 0) {
+			return part;
+		}
+
+		const source = `reasoning:${part.provider}`;
+		const scanResult = scanExternalContext(part.text, source);
+		if (!scanResult.safe) {
+			logger.warn(
+				{
+					provider: part.provider,
+					source,
+					partIndex,
+					threats: scanResult.threats,
+				},
+				"Reasoning scan detected threats",
+			);
+		}
+
+		return scanResult.sanitizedContent === part.text
+			? part
+			: { ...part, text: scanResult.sanitizedContent };
+	});
+}
+
+function stripReasoningFromMessage(message: Message): Message {
+	if (message.reasoning == null) {
+		return message;
+	}
+
+	const { reasoning: _reasoning, ...messageWithoutReasoning } = message;
+	return messageWithoutReasoning;
+}
+
+function stripReasoningFromMessages(messages: readonly Message[]): Message[] {
+	return messages.map((message) => stripReasoningFromMessage(message));
 }
 
 async function saveCheckpointState(
@@ -175,18 +235,22 @@ export async function runAgentLoop(
 			);
 		}
 
+		const outboundTranscript = stripReasoningFromMessages(workingMessages);
 		const outboundRequest =
 			config.sessionAssembler == null
-				? { messages: [...workingMessages] }
+				? { messages: outboundTranscript }
 				: config.sessionAssembler.buildOutboundRequest({
-						transcript: workingMessages,
+						transcript: outboundTranscript,
 						turnKind,
 						lastMessageTime:
 							turnKind === "user-turn" ? config.lastMessageTime : undefined,
 					});
+		const outboundMessages = stripReasoningFromMessages(
+			outboundRequest.messages,
+		);
 
 		const response = await llm.chat(
-			outboundRequest.messages,
+			outboundMessages,
 			config.tools ?? [],
 			inferenceConfig,
 			outboundRequest.prompt,
@@ -224,12 +288,18 @@ export async function runAgentLoop(
 				`token budget exceeded: ${totalTokens} / ${maxTotalTokens}`,
 			);
 		}
+		const storedThinking = sanitizeReasoningParts(response.thinking);
 
 		if (response.finishReason !== "tool_calls") {
+			const assistantMessage = createAssistantMessage({
+				content: response.content,
+				reasoning: storedThinking,
+			});
+			await config.hooks?.onAssistantMessage?.(assistantMessage);
 			await saveCheckpointState(
 				config.checkpoint,
 				config.hooks,
-				[...workingMessages, { role: "assistant", content: response.content }],
+				[...workingMessages, assistantMessage],
 				turnCount,
 				config.state,
 				"assistant_response",
@@ -242,11 +312,13 @@ export async function runAgentLoop(
 			throw new Error("LLM returned finishReason=tool_calls without toolCalls");
 		}
 
-		workingMessages.push({
-			role: "assistant",
+		const assistantToolCallMessage = createAssistantMessage({
 			content: response.content,
 			toolCalls: response.toolCalls,
+			reasoning: storedThinking,
 		});
+		await config.hooks?.onAssistantMessage?.(assistantToolCallMessage);
+		workingMessages.push(assistantToolCallMessage);
 		await saveCheckpointState(
 			config.checkpoint,
 			config.hooks,

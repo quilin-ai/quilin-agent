@@ -2,7 +2,7 @@ import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { logger } from "../logger.js";
-import type { AgentState, Checkpoint } from "./types.js";
+import type { AgentState, Checkpoint, Message } from "./types.js";
 
 interface SQLiteCheckpointOptions {
 	readonly dbPath?: string;
@@ -34,6 +34,17 @@ interface CheckpointEnvelopeV1 {
 	readonly payload: AgentState;
 }
 
+interface CheckpointEnvelopeV2 {
+	readonly schemaVersion: 2;
+	readonly createdAt: string;
+	readonly updatedAt: string;
+	readonly payload: AgentState;
+}
+
+type CheckpointEnvelope = CheckpointEnvelopeV1 | CheckpointEnvelopeV2;
+
+const CHECKPOINT_SCHEMA_VERSION = 2;
+
 export class MigrationError extends Error {
 	constructor(message: string) {
 		super(message);
@@ -41,12 +52,38 @@ export class MigrationError extends Error {
 	}
 }
 
-function createEnvelope(state: AgentState): CheckpointEnvelopeV1 {
+function stripReasoningFromMessage(message: Message): Message {
+	if (message.reasoning == null) {
+		return message;
+	}
+
+	const { reasoning: _reasoning, ...sanitizedMessage } = message;
+	return sanitizedMessage;
+}
+
+function sanitizeState(state: AgentState): AgentState {
 	return {
-		schemaVersion: 1,
-		createdAt: state.createdAt,
-		updatedAt: state.lastActiveAt,
-		payload: state,
+		...state,
+		messages: state.messages.map(stripReasoningFromMessage),
+	};
+}
+
+function extractEnvelopePayload(payload: unknown, version: number): AgentState {
+	if (!isPlainObject(payload)) {
+		throw new MigrationError(`Checkpoint v${version} payload is invalid`);
+	}
+
+	return sanitizeState(payload as AgentState);
+}
+
+function createEnvelope(state: AgentState): CheckpointEnvelopeV2 {
+	const sanitizedState = sanitizeState(state);
+
+	return {
+		schemaVersion: CHECKPOINT_SCHEMA_VERSION,
+		createdAt: sanitizedState.createdAt,
+		updatedAt: sanitizedState.lastActiveAt,
+		payload: sanitizedState,
 	};
 }
 
@@ -60,21 +97,24 @@ function migrateEnvelope(parsed: unknown): AgentState {
 	}
 
 	if (!("schemaVersion" in parsed)) {
-		return parsed as AgentState;
+		return sanitizeState(parsed as AgentState);
 	}
 
-	switch (parsed.schemaVersion) {
-		case 1: {
-			const payload = parsed.payload;
-			if (!isPlainObject(payload)) {
-				throw new MigrationError("Checkpoint v1 payload is invalid");
-			}
+	const envelope = parsed as Partial<CheckpointEnvelope>;
 
-			return payload as AgentState;
+	switch (envelope.schemaVersion) {
+		case 1: {
+			return extractEnvelopePayload(envelope.payload, 1);
+		}
+		case CHECKPOINT_SCHEMA_VERSION: {
+			return extractEnvelopePayload(
+				envelope.payload,
+				CHECKPOINT_SCHEMA_VERSION,
+			);
 		}
 		default:
 			throw new MigrationError(
-				`Unsupported checkpoint schemaVersion: ${String(parsed.schemaVersion)}`,
+				`Unsupported checkpoint schemaVersion: ${String(envelope.schemaVersion)}`,
 			);
 	}
 }

@@ -24,6 +24,9 @@ const mockRegistryGetToolDescriptors = vi.fn();
 const mockRegistryDisconnectAll = vi.fn();
 const mockRegistryOnChange = vi.fn(() => () => undefined);
 const mockRegistryConstructor = vi.fn();
+let capturedStreamCallback:
+	| ((event: Record<string, unknown>) => void)
+	| undefined;
 
 const registryBuiltinTools: ToolWithMetadata[] = [];
 const registryServerTools: ToolWithMetadata[] = [];
@@ -48,6 +51,10 @@ class MockStreamingLLMClient {
 
 	constructor(...args: unknown[]) {
 		mockStreamingClient(...args);
+		capturedStreamCallback = args.find(
+			(arg): arg is (event: Record<string, unknown>) => void =>
+				typeof arg === "function",
+		);
 	}
 }
 
@@ -112,6 +119,7 @@ describe("startRepl", () => {
 
 	beforeEach(() => {
 		vi.clearAllMocks();
+		capturedStreamCallback = undefined;
 		capturedMessages.length = 0;
 		registryBuiltinTools.length = 0;
 		registryServerTools.length = 0;
@@ -175,7 +183,10 @@ describe("startRepl", () => {
 			output: process.stderr,
 		});
 		expect(mockStreamingClient).toHaveBeenCalledWith(
-			"model-instance",
+			{
+				model: "model-instance",
+				resolveModel: expect.any(Function),
+			},
 			expect.any(Function),
 		);
 		expect(stderrWriteSpy).toHaveBeenCalledWith(
@@ -211,14 +222,14 @@ describe("startRepl", () => {
 				}),
 			]),
 		);
-			expect(mockRegistryDisconnectAll).toHaveBeenCalledTimes(1);
-			expect(mockCheckpointSave).toHaveBeenCalledWith({
-				messages: [],
-				isTerminal: true,
-				turnCount: 0,
-				createdAt: expect.any(String),
-				lastActiveAt: expect.any(String),
-			});
+		expect(mockRegistryDisconnectAll).toHaveBeenCalledTimes(1);
+		expect(mockCheckpointSave).toHaveBeenCalledWith({
+			messages: [],
+			isTerminal: true,
+			turnCount: 0,
+			createdAt: expect.any(String),
+			lastActiveAt: expect.any(String),
+		});
 	});
 
 	it("clears history and sends only the fresh conversation", async () => {
@@ -241,28 +252,30 @@ describe("startRepl", () => {
 		});
 
 		expect(mockRunAgentLoop).toHaveBeenCalledTimes(2);
-			expect(mockRunAgentLoop).toHaveBeenNthCalledWith(
-				1,
-				expect.objectContaining({
-					context: expect.any(BasicContextManager),
-					sessionAssembler: expect.any(Object),
-					modelId: "deepseek-chat",
-					tools: expect.arrayContaining([
-						expect.objectContaining({ name: "file_read" }),
-						expect.objectContaining({ name: "shell_exec" }),
+		expect(mockRunAgentLoop).toHaveBeenNthCalledWith(
+			1,
+			expect.objectContaining({
+				context: expect.any(BasicContextManager),
+				sessionAssembler: expect.any(Object),
+				modelId: "deepseek-chat",
+				tools: expect.arrayContaining([
+					expect.objectContaining({ name: "file_read" }),
+					expect.objectContaining({ name: "shell_exec" }),
 					expect.objectContaining({
 						name: "memory_recall",
 						category: "programmatic",
 						riskLevel: "read",
 					}),
 				]),
-				}),
-				expect.any(Array),
-			);
-			expect(capturedMessages[0]).toEqual([{ role: "user", content: "hello" }]);
-			expect(capturedMessages[1]).toEqual([{ role: "user", content: "after clear" }]);
-			expect(stderrWriteSpy).toHaveBeenCalledWith("Conversation cleared.\n\n");
-		});
+			}),
+			expect.any(Array),
+		);
+		expect(capturedMessages[0]).toEqual([{ role: "user", content: "hello" }]);
+		expect(capturedMessages[1]).toEqual([
+			{ role: "user", content: "after clear" },
+		]);
+		expect(stderrWriteSpy).toHaveBeenCalledWith("Conversation cleared.\n\n");
+	});
 
 	it("rolls back the failed user message", async () => {
 		mockQuestion
@@ -286,12 +299,12 @@ describe("startRepl", () => {
 			tools: [{ name: "memory_recall", description: "Recall memory" }] as never,
 		});
 
-			expect(capturedMessages[1]).toEqual([
-				{ role: "user", content: "first" },
-				{ role: "assistant", content: "ok" },
-				{ role: "user", content: "second" },
-			]);
-			expect(mockLoggerError).toHaveBeenCalled();
+		expect(capturedMessages[1]).toEqual([
+			{ role: "user", content: "first" },
+			{ role: "assistant", content: "ok" },
+			{ role: "user", content: "second" },
+		]);
+		expect(mockLoggerError).toHaveBeenCalled();
 		expect(stderrWriteSpy).toHaveBeenCalledWith(
 			"\n[Error: LLM call failed. Check logs for details.]\n\n",
 		);
@@ -302,7 +315,10 @@ describe("startRepl", () => {
 		mockQuestion.mockResolvedValueOnce("next").mockResolvedValueOnce("/exit");
 		mockCheckpointLoad.mockResolvedValue({
 			messages: [
-				{ role: "system", content: "restored system prompt with obsolete_tool" },
+				{
+					role: "system",
+					content: "restored system prompt with obsolete_tool",
+				},
 				{ role: "user", content: "before" },
 				{ role: "assistant", content: "after" },
 			],
@@ -332,16 +348,16 @@ describe("startRepl", () => {
 		expect(stderrWriteSpy).toHaveBeenCalledWith(
 			"Session: resume-session (restored)\n",
 		);
-			expect(stderrWriteSpy).toHaveBeenCalledWith(
-				"Messages: 2 | Last active: 2026-04-15T00:01:00.000Z\n",
-			);
-			expect(capturedMessages[0]).toEqual([
-				{ role: "user", content: "before" },
-				{ role: "assistant", content: "after" },
-				{ role: "user", content: "next" },
-			]);
-			expect(mockRegistryDisconnectAll).toHaveBeenCalledTimes(1);
-		});
+		expect(stderrWriteSpy).toHaveBeenCalledWith(
+			"Messages: 2 | Last active: 2026-04-15T00:01:00.000Z\n",
+		);
+		expect(capturedMessages[0]).toEqual([
+			{ role: "user", content: "before" },
+			{ role: "assistant", content: "after" },
+			{ role: "user", content: "next" },
+		]);
+		expect(mockRegistryDisconnectAll).toHaveBeenCalledTimes(1);
+	});
 
 	it("registers configured MCP servers before starting the REPL", async () => {
 		mockQuestion.mockResolvedValueOnce("/exit");
@@ -377,12 +393,141 @@ describe("startRepl", () => {
 				args: ["run", "python", "-m", "omnimem"],
 			},
 		});
-			expect(mockCheckpointSave).toHaveBeenCalledWith({
-				messages: [],
-				isTerminal: true,
-				turnCount: 0,
-				createdAt: expect.any(String),
-				lastActiveAt: expect.any(String),
+		expect(mockCheckpointSave).toHaveBeenCalledWith({
+			messages: [],
+			isTerminal: true,
+			turnCount: 0,
+			createdAt: expect.any(String),
+			lastActiveAt: expect.any(String),
+		});
+	});
+
+	it("applies /think on off auto to the per-session inference config", async () => {
+		mockQuestion
+			.mockResolvedValueOnce("/think on")
+			.mockResolvedValueOnce("first")
+			.mockResolvedValueOnce("/think off")
+			.mockResolvedValueOnce("second")
+			.mockResolvedValueOnce("/think auto")
+			.mockResolvedValueOnce("third")
+			.mockResolvedValueOnce("/exit");
+		mockRunAgentLoop.mockResolvedValue("ok");
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: vi.fn().mockReturnValue("model-instance"),
+			modelId: "deepseek-chat",
+		});
+
+		expect(mockRunAgentLoop).toHaveBeenNthCalledWith(
+			1,
+			expect.objectContaining({
+				inferenceConfig: expect.objectContaining({
+					thinkingMode: "enabled",
+				}),
+			}),
+			expect.any(Array),
+		);
+		expect(mockRunAgentLoop).toHaveBeenNthCalledWith(
+			2,
+			expect.objectContaining({
+				inferenceConfig: expect.objectContaining({
+					thinkingMode: "disabled",
+				}),
+			}),
+			expect.any(Array),
+		);
+		expect(mockRunAgentLoop).toHaveBeenNthCalledWith(
+			3,
+			expect.objectContaining({
+				inferenceConfig: expect.objectContaining({
+					thinkingMode: "auto",
+				}),
+			}),
+			expect.any(Array),
+		);
+		expect(stderrWriteSpy).toHaveBeenCalledWith("Thinking mode: enabled.\n");
+		expect(stderrWriteSpy).toHaveBeenCalledWith("Thinking mode: disabled.\n");
+		expect(stderrWriteSpy).toHaveBeenCalledWith("Thinking mode: auto.\n");
+	});
+
+	it("toggles reasoning display between verbose and collapsed", async () => {
+		mockQuestion
+			.mockResolvedValueOnce("/verbose")
+			.mockResolvedValueOnce("show work")
+			.mockResolvedValueOnce("/collapse")
+			.mockResolvedValueOnce("show work again")
+			.mockResolvedValueOnce("/exit");
+		mockRunAgentLoop
+			.mockImplementationOnce(async () => {
+				capturedStreamCallback?.({ type: "reasoning", delta: "step 1" });
+				return "done";
+			})
+			.mockImplementationOnce(async () => {
+				capturedStreamCallback?.({ type: "reasoning", delta: "step 2" });
+				return "done";
 			});
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: vi.fn().mockReturnValue("model-instance"),
+			modelId: "deepseek-chat",
+		});
+
+		expect(stderrWriteSpy).toHaveBeenCalledWith(
+			"Reasoning display: verbose.\n",
+		);
+		expect(stderrWriteSpy).toHaveBeenCalledWith(
+			"Reasoning display: collapsed.\n",
+		);
+		expect(stderrWriteSpy).toHaveBeenCalledWith("step 1");
+		expect(stderrWriteSpy).toHaveBeenCalledWith("💭 [thinking...]\n");
+	});
+
+	it("renders tool progress lines from streaming events", async () => {
+		mockQuestion
+			.mockResolvedValueOnce("use tools")
+			.mockResolvedValueOnce("/exit");
+		mockRunAgentLoop.mockImplementation(async () => {
+			capturedStreamCallback?.({
+				type: "tool-call-start",
+				toolCallId: "call-1",
+				toolName: "search",
+			});
+			capturedStreamCallback?.({
+				type: "tool-call-args-delta",
+				toolCallId: "call-1",
+				toolName: "search",
+				delta: '{"q":"cache"}',
+			});
+			capturedStreamCallback?.({
+				type: "tool-call-end",
+				toolCallId: "call-1",
+				toolName: "search",
+				inputText: '{"q":"cache"}',
+				input: { q: "cache" },
+			});
+			capturedStreamCallback?.({
+				type: "tool-result",
+				toolCallId: "call-1",
+				toolName: "search",
+				output: { result: "ok" },
+			});
+			return "done";
+		});
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: vi.fn().mockReturnValue("model-instance"),
+			modelId: "deepseek-chat",
+		});
+
+		expect(stderrWriteSpy).toHaveBeenCalledWith(
+			'\n🔧 calling search({"q":"cache"})\n',
+		);
+		expect(stderrWriteSpy).toHaveBeenCalledWith("\n✅ search → ok\n");
 	});
 });

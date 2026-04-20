@@ -24,8 +24,8 @@ last_updated: 2026-04-21
 |---|---|---|---|---|---|
 | 0 | Reasoning carry-over probe | ✅ completed | Codex | `487d146` | DeepSeek live + Anthropic/OpenAI 文档；DeepSeek runtime 证据推翻 "strip reasoning" 假设 |
 | 1 | Temporal boundary fix (方案 B) | ✅ completed | Codex | `487d146` | 日期桶冻结 sessionStartTime，时段移到 precise decoration |
-| 2 | Thinking enablement + streaming display | ⏳ pending | Codex | — | 不碰 replay，只做 enable + 展示 |
-| 3 | Reasoning carry-over via cache-adapter | ⏳ pending (blocked by #2) | Codex | — | provider-tagged ReasoningPart + adapter 出站分派 |
+| 2 | Thinking enablement + streaming display | ✅ completed | Codex | — | provider-aware thinking enablement + `fullStream` REPL display；不碰 replay |
+| 3 | Reasoning carry-over via cache-adapter | ⏳ pending | Codex | — | provider-tagged ReasoningPart + adapter 出站分派 |
 | 3.1 | OpenAI Responses API adapter | ⏳ pending (deferred) | Codex | — | 单独起一批，不混入 Phase 3 v1 |
 | 4 | Reasoning lifecycle tests + docs | ⏳ pending (blocked by #2, #3) | Codex | — | 每 provider 独立 spec + E2E + 01-llm-integration 补 §Reasoning Lifecycle |
 
@@ -42,7 +42,7 @@ last_updated: 2026-04-21
 - **产出**：`packages/agent-core/src/context/temporal.ts` + test
 - **验证**：`bunx vitest run src/context/temporal.test.ts src/context/prompt-session-assembler.test.ts` → 12/12 pass
 
-### Phase 2 — Thinking enablement + streaming display ⏳
+### Phase 2 — Thinking enablement + streaming display ✅
 
 - **做什么**：
   1. `llm/client.ts` 按 provider 下发 thinking 配置（DeepSeek 切 `deepseek-reasoner` model id；Anthropic `providerOptions.anthropic.thinking`；OpenAI `reasoningEffort`）
@@ -58,6 +58,28 @@ last_updated: 2026-04-21
   - ❌ OpenAI Responses API 支持（Phase 3.1）
 - **依赖**：Phase 0 完成（provider policy 已决定）
 - **验证**：REPL 开 `/think on` 跑 DeepSeek-R1 能看到 thinking + tool call 过程
+  - 单测：`src/llm/client.test.ts`、`src/repl.test.ts`、`src/loop.test.ts` 已补 Phase 2 coverage
+  - 2026-04-21 review fix 后：`src/state/checkpoint.test.ts`、`src/llm/cache-adapter.test.ts`、`src/context/injection-scanner.test.ts` 追加 blocker coverage
+  - 包级：`pnpm --filter @quilin/agent-core test` 当前是 `245/246`，唯一红灯保持为 `src/tools/builtin/web-fetch.test.ts`
+  - Live probe：
+    - `/think on` + DeepSeek-R1：折叠态 `💭 [thinking...]` 出现
+    - `/verbose`：reasoning 文本实际流出
+    - tool progress：`🔧 calling ...` / `✅ ... → ...` 在真实会话出现
+
+#### Phase 2 post-review status (2026-04-21)
+
+- **已关闭 blocker**：`C-01 / C-02 / C-03 / H-01 / H-02 / H-03`
+  - `C-01`：loop 出站前先 strip reasoning，`cache-adapter` 也有契约测试兜底
+  - `C-02`：checkpoint 升 `schemaVersion: 2`，保存/加载都 sanitize reasoning，Phase 2 不持久化 signature / encryptedContent
+  - `C-03`：reasoning 进入 message state 前也走 `scanExternalContext`
+  - `H-01`：非流路径优先消费 AI SDK `result.reasoning`，`reasoningText` 仅作 fallback
+  - `H-02`：streaming reasoning 改为按 block 保序累积，不再把多 block 压扁成一条 string
+  - `H-03`：`ReasoningPart` 改为 strict discriminated union，运行时也不再 materialize 半残 Anthropic / OpenAI Responses part
+- **本批不处理，留给后续 commit**：`H-04 / H-05 / H-06 / H-07 / M-01 / M-02 / M-03 / M-04 / M-05 / L-01 / L-02 / L-03`
+- **验证快照**：
+  - `pnpm --filter @quilin/agent-core exec vitest run src/state/checkpoint.test.ts src/llm/client.test.ts src/loop.test.ts src/llm/cache-adapter.test.ts src/context/injection-scanner.test.ts` → `67/67`
+  - `pnpm --filter @quilin/agent-core test` → `245/246`，唯一失败保持为 `src/tools/builtin/web-fetch.test.ts`
+  - `pnpm --filter @quilin/agent-core exec tsc --noEmit` 当前被本地环境阻塞：`Cannot find type definition file for 'bun-types'`
 
 ### Phase 3 — Reasoning carry-over via cache-adapter ⏳
 
@@ -74,7 +96,12 @@ last_updated: 2026-04-21
   - [ ] intact signature replay 成功
   - [ ] missing signature 触发预期 error body（记录实际错误码 + 字段名）
   - [ ] 二轮 thinking usage 下降
-- **依赖**：Phase 2 完成
+- **Phase 2 review 追加前置门禁**（来自 [`docs/review/2026-04-21-phase-2-review.md`](../review/2026-04-21-phase-2-review.md)）：
+  - [x] **C-01**：`cache-adapter` 有契约测试断言 `Message.reasoning` 不进 outbound `ModelMessage`
+  - [x] **C-02**：checkpoint 序列化不含 Anthropic `signature` / `encryptedContent`（Phase 2 直接 strip `reasoning`）
+  - [x] **H-02**：多 reasoning block 保持顺序 + 每 block 独立 `ReasoningPart`（per-block signature 可恢复）
+  - [x] **H-03**：`ReasoningPart` 改为真正 discriminated union（provider narrow → 字段 required）
+- **依赖**：Phase 2 完成 + 上述 4 条前置门禁绿
 - **验证**：集成测试 + 每 provider spec
 
 ### Phase 3.1 — OpenAI Responses API adapter ⏳ (deferred)
@@ -109,15 +136,13 @@ last_updated: 2026-04-21
 - **Before**：`Message.reasoning?: string`（单一字段）
 - **After**：
   ```ts
-  interface ReasoningPart {
-    readonly provider: "deepseek" | "anthropic" | "openai-chat" | "openai-responses";
-    readonly text?: string;              // DeepSeek reasoning_content / Anthropic thinking / OpenAI summary
-    readonly signature?: string;         // Anthropic only
-    readonly encryptedContent?: string;  // OpenAI Responses only
-    readonly itemId?: string;            // OpenAI Responses only
-  }
+  type ReasoningPart =
+    | { readonly provider: "deepseek"; readonly text: string }
+    | { readonly provider: "anthropic"; readonly text: string; readonly signature: string }
+    | { readonly provider: "openai-chat"; readonly text: string }
+    | { readonly provider: "openai-responses"; readonly itemId: string; readonly encryptedContent: string; readonly text?: string };
   ```
-- **理由**：避免 Anthropic signature / OpenAI encrypted_content / itemId 在 round-trip 中有损
+- **理由**：避免 Anthropic signature / OpenAI encrypted_content / itemId 在 round-trip 中有损；同时让 provider narrowing 真正收紧到 required 字段，Phase 3 adapter 不需要靠 `!` 非空断言
 - **对应 Phase**：Phase 2 定义 + Phase 3 使用
 
 ### 2026-04-21 — OpenAI Responses API 拆到 Phase 3.1
@@ -132,12 +157,26 @@ last_updated: 2026-04-21
 - **After**：方案 B（日期桶冻结 sessionStartTime；时段在 precise decoration 每轮实时）
 - **理由**：长 session 跨 00:00 概率高，"now 是什么时段"应是事实不应冻结；日期桶冻结则语义诚实
 
+### 2026-04-21 — OpenAI Chat `thinkingMode` 映射到 `reasoningEffort`
+
+- **After**：
+  - `thinkingMode: "enabled"` → `providerOptions.openai.reasoningEffort = "high"`
+  - `thinkingMode: "auto"` → `providerOptions.openai.reasoningEffort = "medium"`
+  - `thinkingMode: "disabled"` → 不下发 `reasoningEffort`
+- **理由**：
+  - OpenAI Chat 没有与 `thinkingBudget` 一一对应的公开预算语义，Phase 2 不做伪精确映射
+  - `enabled` 表示用户显式要 reasoning，默认给最强档；`auto` 表示平衡延迟与质量，给中档
+  - 预算映射如果要做，应在后续拿到真实 usage/latency 数据后单独校准
+
 ## Open Questions
 
 - [ ] DeepSeek doc/runtime drift：当前 runtime 宽松是否是 model-version 或 region-specific？需监控
 - [ ] Phase 3 Anthropic：malformed-signature 的具体 error body 是什么（凭证到位后补）
+- [ ] Phase 3 Anthropic：AI SDK / provider metadata 是否还会暴露 `redactedData` 或等价字段，需在 live probe 时锁定最终 shape，避免 replay adapter 误删 provider 保留位
 - [ ] OpenAI Chat 对注入 reasoning-like 字段是 400 还是静默忽略（凭证到位后补）
 - [ ] REPL `/verbose` 应该是 per-session 还是 per-invocation？
+- [ ] Live REPL 曾观测到一次 `/verbose` 会话首个 reasoning delta 前仍出现折叠占位；直接 `StreamingLLMClient` probe 未复现，需在 Phase 3 前再做一次交互复核
+- [ ] 本地 `tsc --noEmit` 因缺 `bun-types` 失败；需要在后续 CI / dev env 对齐后再把 typecheck 纳入 reasoning lifecycle 的完成证据
 
 ## Blockers
 
@@ -145,5 +184,7 @@ last_updated: 2026-04-21
 
 ## Next Action
 
-- **Codex**：开干 Phase 2（#107）
-- **Claude**：起草 02-context README 增补（8-13 落盘 + 1-13 重新分组），独立小 PR 交 Codex 执行
+- **Claude**：基于 Phase 2 first-batch fix 落独立 commit / PR，描述引用本 tracking doc + [`docs/review/2026-04-21-phase-2-review.md`](../review/2026-04-21-phase-2-review.md)
+- **Codex**：等待 merge 后选择下一步
+  - Option A：继续 Phase 2 second batch（`H-04..H-07 + M-01..M-05`，倾向）
+  - Option B：切到 B3b Phase 0（见 [`docs/planning/2026-04-21-skills-b3b-activation.md`](./2026-04-21-skills-b3b-activation.md)）

@@ -6,20 +6,18 @@ import { PromptBuilder } from "./context/prompt-builder.js";
 import { PromptSessionAssembler } from "./context/prompt-session-assembler.js";
 import { createSkillsCatalogSection } from "./context/skills-catalog-section.js";
 import { createTemporalBucketSection } from "./context/temporal.js";
-import type { SkillsManager } from "./skills/manager.js";
 import { StreamingLLMClient } from "./llm/client.js";
 import type { createProvider } from "./llm/provider.js";
-import type { InferenceConfig } from "./llm/types.js";
+import type { InferenceConfig, LLMStreamEvent } from "./llm/types.js";
 import { logger } from "./logger.js";
 import { runAgentLoop } from "./loop.js";
 import { WriteAuthority } from "./safety/write-authority.js";
+import type { SkillsManager } from "./skills/manager.js";
 import { SQLiteCheckpoint } from "./state/checkpoint.js";
 import type { AgentState, Message } from "./state/types.js";
 import { createBuiltinTools } from "./tools/builtin/index.js";
 import { MCPRegistry, type MCPServerEntry } from "./tools/registry.js";
-import type {
-	ToolWithMetadata,
-} from "./tools/tool-metadata.js";
+import type { ToolWithMetadata } from "./tools/tool-metadata.js";
 import type { Tool } from "./tools/types.js";
 
 const DEFAULT_INFERENCE_CONFIG: InferenceConfig = {
@@ -101,6 +99,101 @@ function withDefaultMetadata(tools: readonly Tool[]): ToolWithMetadata[] {
 	}));
 }
 
+type ReasoningDisplayMode = "collapsed" | "verbose";
+
+interface ReplStreamRenderState {
+	thinkingShown: boolean;
+	toolInputs: Map<string, string>;
+}
+
+function createStreamRenderState(): ReplStreamRenderState {
+	return {
+		thinkingShown: false,
+		toolInputs: new Map(),
+	};
+}
+
+function stringifyJson(value: unknown): string {
+	const serialized = JSON.stringify(value);
+	return serialized ?? String(value);
+}
+
+function summarizeInlineText(text: string, maxLength = 120): string {
+	const singleLine = text.replace(/\s+/gu, " ").trim();
+	if (singleLine.length <= maxLength) {
+		return singleLine;
+	}
+
+	return `${singleLine.slice(0, Math.max(0, maxLength - 3))}...`;
+}
+
+function summarizeToolOutput(output: unknown): string {
+	if (output != null && typeof output === "object") {
+		const result = (output as { result?: unknown }).result;
+		if (typeof result === "string") {
+			return summarizeInlineText(result);
+		}
+
+		const content = (output as { content?: unknown }).content;
+		if (typeof content === "string") {
+			return summarizeInlineText(content.split(/\r?\n/u, 1)[0] ?? content);
+		}
+	}
+
+	const raw =
+		typeof output === "string" ? output : stringifyJson(output ?? "undefined");
+	return summarizeInlineText(raw.split(/\r?\n/u, 1)[0] ?? raw);
+}
+
+function renderStreamEvent(
+	event: LLMStreamEvent,
+	reasoningDisplay: ReasoningDisplayMode,
+	renderState: ReplStreamRenderState,
+): void {
+	switch (event.type) {
+		case "text":
+			stderr.write(event.delta);
+			break;
+		case "reasoning":
+			if (reasoningDisplay === "verbose") {
+				stderr.write(event.delta);
+				return;
+			}
+
+			if (!renderState.thinkingShown) {
+				renderState.thinkingShown = true;
+				stderr.write("💭 [thinking...]\n");
+			}
+			break;
+		case "tool-call-start":
+			renderState.toolInputs.set(event.toolCallId, "");
+			break;
+		case "tool-call-args-delta":
+			renderState.toolInputs.set(
+				event.toolCallId,
+				`${renderState.toolInputs.get(event.toolCallId) ?? ""}${event.delta}`,
+			);
+			break;
+		case "tool-call-end": {
+			const inputText =
+				event.inputText.length > 0
+					? event.inputText
+					: (renderState.toolInputs.get(event.toolCallId) ??
+						(event.input == null ? "" : stringifyJson(event.input)));
+			renderState.toolInputs.delete(event.toolCallId);
+			stderr.write(
+				`\n🔧 calling ${event.toolName}(${summarizeInlineText(inputText)})\n`,
+			);
+			break;
+		}
+		case "tool-result":
+			stderr.write(
+				`\n${event.isError === true ? "⚠️" : "✅"} ${event.toolName} → ${summarizeToolOutput(event.output)}\n`,
+			);
+			break;
+	}
+}
+
 export async function startRepl(options: ReplOptions): Promise<void> {
 	const {
 		provider,
@@ -152,52 +245,63 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 		for (const entry of mcpServers) {
 			await registry.register(entry);
 		}
-			if (tools.length > 0) {
-				registry.registerBuiltin(withDefaultMetadata(tools));
-			}
+		if (tools.length > 0) {
+			registry.registerBuiltin(withDefaultMetadata(tools));
+		}
 
-			const allTools = registry.getAllTools();
-			const restoredState =
-				sessionId == null ? null : await checkpoint.load(resolvedSessionId);
-			const restoredMessages =
-				restoredState?.messages[0]?.role === "system"
-					? restoredState.messages.slice(1)
-					: restoredState?.messages ?? [];
+		const allTools = registry.getAllTools();
+		const restoredState =
+			sessionId == null ? null : await checkpoint.load(resolvedSessionId);
+		const restoredMessages =
+			restoredState?.messages[0]?.role === "system"
+				? restoredState.messages.slice(1)
+				: (restoredState?.messages ?? []);
 
-			stderr.write("\n🐉 Quilin Agent v0.0.3 (DeepSeek)\n");
+		stderr.write("\n🐉 Quilin Agent v0.0.3 (DeepSeek)\n");
+		stderr.write(
+			`Session: ${resolvedSessionId} (${restoredState == null ? "new" : "restored"})\n`,
+		);
+		if (restoredState != null) {
 			stderr.write(
-				`Session: ${resolvedSessionId} (${restoredState == null ? "new" : "restored"})\n`,
+				`Messages: ${restoredMessages.length} | Last active: ${restoredState.lastActiveAt}\n`,
 			);
-			if (restoredState != null) {
-				stderr.write(
-					`Messages: ${restoredMessages.length} | Last active: ${restoredState.lastActiveAt}\n`,
-				);
-			}
-			stderr.write("Type your message, or /exit to quit.\n\n");
+		}
+		stderr.write("Type your message, or /exit to quit.\n\n");
 
-			rl = readline.createInterface({ input: stdin, output: stderr });
+		rl = readline.createInterface({ input: stdin, output: stderr });
 
-			let state = restoredState;
-			if (state == null) {
-				state = createState([]);
-			} else {
-				state = createState(restoredMessages, {
-					...state,
-					messages: restoredMessages,
-				});
-			}
-			const messages: Message[] = [...state.messages];
-			const sessionAssembler = createPromptSessionAssembler(
-				modelId,
-				registry,
-				state.createdAt,
-				restoredState?.lastActiveAt,
-				skillsManager,
-			);
-
-			const llm = new StreamingLLMClient(provider(modelId), (chunk) => {
-				stderr.write(chunk);
+		let state = restoredState;
+		if (state == null) {
+			state = createState([]);
+		} else {
+			state = createState(restoredMessages, {
+				...state,
+				messages: restoredMessages,
 			});
+		}
+
+		const messages: Message[] = [...state.messages];
+		const sessionAssembler = createPromptSessionAssembler(
+			modelId,
+			registry,
+			state.createdAt,
+			restoredState?.lastActiveAt,
+			skillsManager,
+		);
+		let inferenceConfig: InferenceConfig = {
+			...DEFAULT_INFERENCE_CONFIG,
+		};
+		let reasoningDisplay: ReasoningDisplayMode = "collapsed";
+		let streamRenderState = createStreamRenderState();
+		const llm = new StreamingLLMClient(
+			{
+				model: provider(modelId),
+				resolveModel: provider,
+			},
+			(event) => {
+				renderStreamEvent(event, reasoningDisplay, streamRenderState);
+			},
+		);
 
 		while (true) {
 			const input = await rl.question("quilin> ");
@@ -218,45 +322,97 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 				break;
 			}
 
-				if (trimmed === "/clear") {
-					messages.length = 0;
-					sessionAssembler.resetSession();
-					state = createState([...messages], {
-						...state,
-						messages: [...messages],
-						isTerminal: false,
+			if (trimmed === "/clear") {
+				messages.length = 0;
+				sessionAssembler.resetSession();
+				state = createState([...messages], {
+					...state,
+					messages: [...messages],
+					isTerminal: false,
 					lastActiveAt: new Date().toISOString(),
 				});
 				stderr.write("Conversation cleared.\n\n");
 				continue;
-				}
+			}
 
-				const previousLastActiveAt = state.lastActiveAt;
-				messages.push({ role: "user", content: trimmed });
-				state = createState([...messages], {
-					...state,
-					messages: [...messages],
+			if (trimmed.startsWith("/think")) {
+				const mode = trimmed.split(/\s+/u)[1];
+				switch (mode) {
+					case "on":
+						inferenceConfig = {
+							...inferenceConfig,
+							thinkingMode: "enabled",
+						};
+						stderr.write("Thinking mode: enabled.\n");
+						break;
+					case "off":
+						inferenceConfig = {
+							...inferenceConfig,
+							thinkingMode: "disabled",
+						};
+						stderr.write("Thinking mode: disabled.\n");
+						break;
+					case "auto":
+						inferenceConfig = {
+							...inferenceConfig,
+							thinkingMode: "auto",
+						};
+						stderr.write("Thinking mode: auto.\n");
+						break;
+					default:
+						stderr.write("Usage: /think on|off|auto\n");
+						break;
+				}
+				continue;
+			}
+
+			if (trimmed === "/verbose") {
+				reasoningDisplay = "verbose";
+				stderr.write("Reasoning display: verbose.\n");
+				continue;
+			}
+
+			if (trimmed === "/collapse") {
+				reasoningDisplay = "collapsed";
+				stderr.write("Reasoning display: collapsed.\n");
+				continue;
+			}
+
+			const previousLastActiveAt = state.lastActiveAt;
+			messages.push({ role: "user", content: trimmed });
+			state = createState([...messages], {
+				...state,
+				messages: [...messages],
 				lastActiveAt: new Date().toISOString(),
 			});
 			stderr.write("\n");
 
 			try {
+				streamRenderState = createStreamRenderState();
+				let latestAssistantMessage: Message | undefined;
 				const response = await runAgentLoop(
-						{
-							llm,
-							context,
-							sessionAssembler,
-							checkpoint,
-							state,
-							modelId,
-							lastMessageTime: previousLastActiveAt,
-							tools: allTools,
-							inferenceConfig: DEFAULT_INFERENCE_CONFIG,
+					{
+						llm,
+						context,
+						sessionAssembler,
+						checkpoint,
+						state,
+						modelId,
+						lastMessageTime: previousLastActiveAt,
+						tools: allTools,
+						inferenceConfig,
+						hooks: {
+							onAssistantMessage: (message) => {
+								latestAssistantMessage = message;
+							},
 						},
+					},
 					messages,
 				);
 
-				messages.push({ role: "assistant", content: response });
+				messages.push(
+					latestAssistantMessage ?? { role: "assistant", content: response },
+				);
 				state = createState([...messages], {
 					...state,
 					messages: [...messages],

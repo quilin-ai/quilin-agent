@@ -93,4 +93,41 @@ describe("adaptMessagesForModel", () => {
 			),
 		).toHaveLength(1);
 	});
+
+	it("never serializes assistant reasoning into outbound model messages in Phase 2", () => {
+		const result = adaptMessagesForModel({
+			provider: "deepseek.chat",
+			messages: [
+				{ role: "system", content: "system prompt" },
+				{
+					role: "assistant",
+					content: "",
+					reasoning: [{ provider: "deepseek", text: "SECRET_REASONING" }],
+					toolCalls: [
+						{
+							id: "call-1",
+							name: "memory_recall",
+							arguments: { query: "hello" },
+						},
+					],
+				},
+			],
+		});
+
+		expect(JSON.stringify(result.messages)).not.toContain("SECRET_REASONING");
+		expect(result.messages).toEqual([
+			{ role: "system", content: "system prompt" },
+			{
+				role: "assistant",
+				content: [
+					{
+						type: "tool-call",
+						toolCallId: "call-1",
+						toolName: "memory_recall",
+						input: { query: "hello" },
+					},
+				],
+			},
+		]);
+	});
 });
