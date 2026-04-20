@@ -7,7 +7,9 @@ import {
 	DEFAULT_CONTEXT_BUDGET,
 } from "./context/manager.js";
 import { PromptBuilder } from "./context/prompt-builder.js";
+import { createSkillsCatalogSection } from "./context/skills-catalog-section.js";
 import { createTemporalSection } from "./context/temporal.js";
+import type { SkillsManager } from "./skills/manager.js";
 import { StreamingLLMClient } from "./llm/client.js";
 import type { createProvider } from "./llm/provider.js";
 import type { InferenceConfig } from "./llm/types.js";
@@ -36,6 +38,7 @@ interface ReplOptions {
 	sessionId?: string;
 	tools?: readonly Tool[];
 	mcpServers?: readonly MCPServerEntry[];
+	skillsManager?: SkillsManager;
 }
 
 function createState(
@@ -68,10 +71,14 @@ function buildDefaultSystemPrompt(
 	modelId: string,
 	lastSessionEndTime?: string,
 	descriptors?: readonly ToolPromptDescriptor[],
+	skillsManager?: SkillsManager,
 ): string {
 	const promptBuilder = new PromptBuilder();
 	for (const section of createDefaultPromptSections()) {
 		promptBuilder.register(section);
+	}
+	if (skillsManager != null) {
+		promptBuilder.register(createSkillsCatalogSection(skillsManager));
 	}
 	promptBuilder.register(
 		createTemporalSection(() => ({
@@ -106,8 +113,18 @@ function withDefaultMetadata(tools: readonly Tool[]): ToolWithMetadata[] {
 }
 
 export async function startRepl(options: ReplOptions): Promise<void> {
-	const { provider, modelId, sessionId, tools = [], mcpServers = [] } = options;
+	const {
+		provider,
+		modelId,
+		sessionId,
+		tools = [],
+		mcpServers = [],
+		skillsManager,
+	} = options;
 	const context = new BasicContextManager();
+	if (skillsManager != null) {
+		await skillsManager.discover();
+	}
 	const registry = new MCPRegistry();
 	const resolvedSessionId = sessionId ?? crypto.randomUUID();
 	const checkpoint = new SQLiteCheckpoint({ sessionId: resolvedSessionId });
@@ -161,6 +178,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 						modelId,
 						restoredState?.lastActiveAt,
 						registry.getToolDescriptors(),
+						skillsManager,
 					),
 				),
 			],
