@@ -444,6 +444,135 @@ describe("runAgentLoop", () => {
 		expect(execute).not.toHaveBeenCalled();
 	});
 
+	it("默认 maxTurns=50 时在进入第 51 轮前终止 tool loop", async () => {
+		vi.mocked(getLoggerRuntimeMode).mockReturnValue("repl");
+
+		let calls = 0;
+		const chat = vi.fn().mockImplementation(async () => {
+			calls += 1;
+			if (calls > 50) {
+				throw new Error("safety sentinel: exceeded expected default maxTurns");
+			}
+
+			return {
+				content: "",
+				toolCalls: [
+					{
+						id: `call-${calls}`,
+						name: "memory_recall",
+						arguments: { query: `query-${calls}` },
+					},
+				],
+				usage: {
+					inputTokens: 10,
+					outputTokens: 10,
+				},
+				finishReason: "tool_calls" as const,
+			};
+		});
+
+		const execute = vi.fn().mockResolvedValue({
+			toolCallId: "ignored-by-router",
+			content: JSON.stringify({ records: [] }),
+			isError: false,
+		});
+
+		await expect(
+			runAgentLoop(
+				{
+					llm: { chat },
+					tools: [
+						{
+							name: "memory_recall",
+							description: "Recall memory",
+							parameters: {
+								safeParse: vi.fn().mockImplementation((input) => ({
+									success: true,
+									data: input,
+								})),
+							} as never,
+							execute,
+						},
+					],
+					inferenceConfig: {
+						temperature: 0.7,
+						maxTokens: 1024,
+						thinkingMode: "disabled",
+					},
+				},
+				[{ role: "user", content: "一直继续" }],
+			),
+		).rejects.toThrow(/maxTurns/i);
+
+		expect(chat).toHaveBeenCalledTimes(50);
+		expect(execute).toHaveBeenCalledTimes(49);
+	});
+
+	it("超过 maxTotalTokens 预算时终止 loop", async () => {
+		vi.mocked(getLoggerRuntimeMode).mockReturnValue("repl");
+
+		let calls = 0;
+		const chat = vi.fn().mockImplementation(async () => {
+			calls += 1;
+			if (calls > 5) {
+				throw new Error("safety sentinel: exceeded expected token budget");
+			}
+
+			return {
+				content: "",
+				toolCalls: [
+					{
+						id: `call-${calls}`,
+						name: "memory_recall",
+						arguments: { query: "budget" },
+					},
+				],
+				usage: {
+					inputTokens: 25_000,
+					outputTokens: 25_000,
+				},
+				finishReason: "tool_calls" as const,
+			};
+		});
+
+		const execute = vi.fn().mockResolvedValue({
+			toolCallId: "ignored-by-router",
+			content: JSON.stringify({ records: [] }),
+			isError: false,
+		});
+
+		await expect(
+			runAgentLoop(
+				{
+					llm: { chat },
+					tools: [
+						{
+							name: "memory_recall",
+							description: "Recall memory",
+							parameters: {
+								safeParse: vi.fn().mockImplementation((input) => ({
+									success: true,
+									data: input,
+								})),
+							} as never,
+							execute,
+						},
+					],
+					maxTotalTokens: 200_000,
+					inferenceConfig: {
+						temperature: 0.7,
+						maxTokens: 1024,
+						thinkingMode: "disabled",
+					},
+				} as never,
+				[{ role: "user", content: "继续直到超预算" }],
+			),
+		).rejects.toThrow(/token budget exceeded: 250000 \/ 200000/i);
+
+		expect(chat).toHaveBeenCalledTimes(5);
+		expect(execute).toHaveBeenCalledTimes(4);
+	});
+
 	it("在工具返回错误内容时仍按 tool message 回灌给下一轮 LLM", async () => {
 		vi.mocked(getLoggerRuntimeMode).mockReturnValue("repl");
 

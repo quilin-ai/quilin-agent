@@ -11,6 +11,16 @@ import type { AgentState, Checkpoint, Message } from "./state/types.js";
 import { ToolRouter } from "./tools/router.js";
 import type { Tool } from "./tools/types.js";
 
+export const DEFAULT_MAX_TURNS = 50;
+export const DEFAULT_MAX_TOTAL_TOKENS = 200_000;
+
+export class AgentLoopError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "AgentLoopError";
+	}
+}
+
 function buildCheckpointState(
 	messages: readonly Message[],
 	responseContent: string,
@@ -81,8 +91,10 @@ export async function runAgentLoop(
 			"ContextManager provided but no system message found — skipping context rebuild",
 		);
 	}
-	const maxTurns = config.maxTurns ?? Number.POSITIVE_INFINITY;
+	const maxTurns = config.maxTurns ?? DEFAULT_MAX_TURNS;
+	const maxTotalTokens = config.maxTotalTokens ?? DEFAULT_MAX_TOTAL_TOKENS;
 	let turnCount = 0;
+	let totalTokens = 0;
 	let consecutiveBlockedToolOutputs = 0;
 
 	while (true) {
@@ -96,7 +108,7 @@ export async function runAgentLoop(
 		}
 
 		if (turnCount >= maxTurns) {
-			throw new Error(`Agent loop exceeded maxTurns=${maxTurns}`);
+			throw new AgentLoopError(`Agent loop exceeded maxTurns=${maxTurns}`);
 		}
 
 		turnCount += 1;
@@ -120,8 +132,17 @@ export async function runAgentLoop(
 					finishReason: response.finishReason,
 					inputTokens: response.usage.inputTokens,
 					outputTokens: response.usage.outputTokens,
+					totalTokens,
+					maxTotalTokens,
 				},
 				"Agent loop: LLM responded",
+			);
+		}
+
+		totalTokens += response.usage.inputTokens + response.usage.outputTokens;
+		if (totalTokens > maxTotalTokens) {
+			throw new AgentLoopError(
+				`token budget exceeded: ${totalTokens} / ${maxTotalTokens}`,
 			);
 		}
 
@@ -140,7 +161,7 @@ export async function runAgentLoop(
 		}
 
 		if (turnCount >= maxTurns) {
-			throw new Error(
+			throw new AgentLoopError(
 				`Agent loop exceeded maxTurns=${maxTurns} while awaiting final response`,
 			);
 		}
@@ -186,7 +207,7 @@ export async function runAgentLoop(
 			});
 
 			if (consecutiveBlockedToolOutputs >= 3) {
-				throw new Error(
+				throw new AgentLoopError(
 					"Agent loop aborted after 3 consecutive blocked tool outputs",
 				);
 			}
@@ -200,6 +221,9 @@ export interface AgentLoopConfig {
 	readonly tools?: readonly Tool[];
 	readonly checkpoint?: Checkpoint;
 	readonly state?: AgentState;
+	/** Defaults to 50 if omitted to prevent unbounded tool loops. */
 	readonly maxTurns?: number;
+	/** Defaults to 200_000 if omitted; counts inputTokens + outputTokens across the whole loop. */
+	readonly maxTotalTokens?: number;
 	readonly inferenceConfig: InferenceConfig;
 }
