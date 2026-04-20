@@ -66,6 +66,7 @@
 | D-18 | `memory_tier_transition` span + 3 metrics | `08-observability/README.md` |
 | D-19 | Event-sourced state 延后到 Iter C | `adr-001-core-loop-and-language.md` |
 | **D-20** | **OmniMem v2 融合架构（5 流派思想吸收 + 转化升级，supersedes D-12）** | `03-memory/README.md`、`docs/research/memory-watchlist/` |
+| **D-21** | **Rule-first Observer Tier-1 formal gate = NO（v2-r3 recall 21.4% / FPR 2.8% / p95 4.19 ms, 2026-04-20）**；v1 90% 为 inflated baseline，v2-r1 7.3% → v2-r2 26.1% → v2-r3 21.4%；zh recall 0%、Tier 2 escalation 仅 1.1%；M0 Sprint 1 前需扩为 bilingual + multi-pattern + escalation-aware | `03-memory/README.md` §L3a、`docs/research/rule-first-observer-spike-report.md` |
 
 ---
 
@@ -89,12 +90,72 @@
 
 ---
 
-## 六、统计
+## 六、D-20 L3a rule-first spike 结果（Task #97 v2）
+
+### 方法论修正（vs v1 70-sample spike）
+
+v1 的 70-sample fixture 由实施方（Codex）自造自跑，规则设计与样本分布共变，**召回 90% / 误召 0%** 的数字存在 experimenter-author bias。
+
+**v2 方法论（2026-04-20 用户纠正）**：
+- 数据集由 **Claude** 独立造，Codex **只做规则 + 跑数**，禁止任何一方跨越职责
+- 数据集规模 ≥ 1000，含 6 类 × 4 难度 × 中英双语；committed 至 `docs/research/fixtures/rule-first-observer/`
+- 三次 run 渐进：r1 hand-only (288) → r2 +public data (719) → r3 +noise (1039)
+
+### v2-r1 结果（hand-only 288 samples，Claude 独立造）
+
+| 指标 | v1 (self-authored 70) | v2-r1 (hand 288) | Δ |
+|------|----------------------|------------------|---|
+| recall | 90.0% | **7.3%** | −82.7pp |
+| precision | ~100% | 89.5% | −10.5pp |
+| FPR | 0% | 3.6% | +3.6pp |
+| F1 | ~95% | 13.5% | −81.5pp |
+| Tier 2 escalation rate | — | 1.7% | — |
+
+**按 language** — `en 12.2% / zh 0.0% / mixed 0.0%`（规则只能吃英文 explicit）
+**按 difficulty** — `explicit 10.1% / implicit 3.2%`
+**按 type** — `emotion 0.0% / entity 1.4% / preference 9.3% / time 13.6% / intent 16.7%`
+
+### 架构级结论
+
+1. **D-20 L3a Tier-1 gate（recall ≥ 40% / FPR ≤ 5% / p95 < 20ms）在 v2-r1 不满足** — recall 远低于 40%（7.3%）
+2. 当前 prototype 只能识别 **English-explicit 单句 persona pattern**；对 zh 零命中，对 implicit 几乎零命中
+3. 漏抽大多数是 **静默 miss**，Tier 2 escalation 仅 1.7% — 这比 low recall 更危险（系统不知道自己不知道）
+4. v1 的"82%→90%" baseline 从此 **仅作对照组保留**，不再作为架构 gate evidence
+
+### v2-r2 / v2-r3 结果（正式 gate 判定）
+
+| 指标 | v2-r1 (hand 288) | v2-r2 (hand+public 719) | **v2-r3 (full 1039, gate)** |
+|------|------------------|-------------------------|----------------------------|
+| recall | 7.3% | 26.1% | **21.4%** |
+| precision | 89.5% | 97.4% | **96.7%** |
+| FPR | 3.6% | 2.9% | **2.8%** |
+| p95 latency | 4.35 ms | 4.21 ms | **4.19 ms** |
+| Tier 2 escalation | 1.7% | 1.1% | 1.1% |
+
+**按 noise 模式（v2-r3）**: `short 0.0% / emoji 6.6% / typo 7.3% / code 8.2%` — 短截断是最致命的破坏源。
+**按 language（v2-r3）**: `zh 0.0% / mixed 5.2%` — 双语支持仍是零。
+
+**形式化 gate 判定**：recall 21.4% < 40% → **NO**。FPR 和 p95 通过。
+
+### 下一步
+
+- ✅ 正式报告 `docs/research/rule-first-observer-spike-report.md` 已 commit（88cbd33）
+- **M0 Sprint 1 重新定义**：规则层必须扩展为 **bilingual + multi-pattern + escalation-aware**；当前 prototype 不能直接进生产
+- D-20 的 L3a "rule-first 两级架构" 方向 **不推翻**，但 Tier-1 规则模板需大幅扩充；Tier-2 escalation heuristics 需重做（当前只有 1.1% escalation 意味着系统对自己不知道的东西几乎完全沉默）
+- **D-21 finding** 正式开单，M0 Sprint 1 前闭合
+
+### Methodology memory
+
+本轮 spike 的 data/execution 职责分离已写入 Claude memory `feedback_spike_data_separation.md`，未来所有"验证技术假设"类 spike 默认按此 pattern 派工。
+
+---
+
+## 七、统计
 
 - **2026-04-17 Ultra-Review**：170 findings（14 CRITICAL / 59 HIGH / 其余）
 - **2026-04-20 Delta Audit**：10 NEW findings（2 CRITICAL / 8 HIGH）
-- **2026-04-20 Opus 4.7 Revisit（本报告）**：6 NEW findings（1 CRITICAL / 2 HIGH / 2 MEDIUM / 1 LOW）+ 7 外部调研决策
-- **累计修复**：186 / 186（100%）
+- **2026-04-20 Opus 4.7 Revisit（本报告）**：6 NEW findings（1 CRITICAL / 2 HIGH / 2 MEDIUM / 1 LOW）+ 7 外部调研决策 + **D-21 spike finding**（rule-first ceiling 7.3% recall）
+- **累计修复**：186 / 187（D-21 待 M0 Sprint 1 前闭合）
 
 下次 review 建议触发条件：
 - Iter B3a 收尾（Skills Core 实现完成后）

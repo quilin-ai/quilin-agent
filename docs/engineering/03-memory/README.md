@@ -194,6 +194,13 @@ prompt cache 的稳定前缀是 Mastra OM 的核心创新点；**我们保留并
   2. **Info-gain-gated Reflector**：只在新 observation 与旧 observation **冲突 / 显著扩展**（Δentropy > ε）时触发重结构化，不按时间/数量。
   3. **判决门槛**：Tier 1 hit rate ≥ 40% 且 observation 精度不降 → 保留，否则回退纯 LLM observer。
 
+- **⚠️ Task #97 v2-r1 spike 结果（2026-04-20，288-sample unbiased dataset）**：
+  - Tier 1 recall **7.3%**（远低于 40% 门槛），FPR 3.6%，zh recall 0%
+  - v1 self-authored 70-sample 的 90% 数字已证实为 experimenter-author bias
+  - **结论**：当前 prototype 只能识别 English explicit persona pattern。M0 Sprint 1 前必须扩规则为 **bilingual + multi-pattern + escalation-aware**，否则 L3a 回退纯 LLM observer
+  - 详见 [D-21 finding](../../review/2026-04-20-opus-4-7-revisit.md#d-21) 与 [spike report](../../research/rule-first-observer-spike-report.md)
+  - 数据集与评估脚本保留为 CI 回归测试基线：[`docs/research/fixtures/rule-first-observer/`](../../research/fixtures/rule-first-observer/)
+
 ##### L3b Temporal KG Layer
 
 - **原思想（Graphiti）**：每条 episode eagerly 抽实体 + 关系，bi-temporal edges 带 valid_from/valid_to。
