@@ -16,9 +16,12 @@ interface TemporalSessionState {
 
 function readTemporalContext(ctx: BuildContext): TemporalContext {
 	const state = (ctx.sessionState.temporal ?? {}) as TemporalSessionState;
-	const currentTime = state.currentTime == null ? new Date() : new Date(state.currentTime);
+	const currentTime =
+		state.currentTime == null ? new Date() : new Date(state.currentTime);
 	const sessionStartTime =
-		state.sessionStartTime == null ? currentTime : new Date(state.sessionStartTime);
+		state.sessionStartTime == null
+			? currentTime
+			: new Date(state.sessionStartTime);
 
 	return {
 		currentTime,
@@ -26,7 +29,9 @@ function readTemporalContext(ctx: BuildContext): TemporalContext {
 			state.lastMessageTime == null ? null : new Date(state.lastMessageTime),
 		sessionStartTime,
 		lastSessionEndTime:
-			state.lastSessionEndTime == null ? null : new Date(state.lastSessionEndTime),
+			state.lastSessionEndTime == null
+				? null
+				: new Date(state.lastSessionEndTime),
 	};
 }
 
@@ -84,10 +89,17 @@ export function createTemporalBucketSection(): PromptSection {
 		updateFrequency: "per_session",
 		compute: (ctx) => {
 			const context = readTemporalContext(ctx);
+			// This bucket is part of the per-session cached prefix.
+			// Pinning the date to sessionStartTime keeps the prefix stable even if
+			// a long-running session crosses midnight.
+			// That is also the more honest meaning of this field under
+			// updateFrequency="per_session": it describes when the session started,
+			// not the exact current date at outbound-render time.
+			// Exact current time still lives in the precise temporal decoration on
+			// the latest outbound user message.
 			const lines = [
 				"[时间桶]",
-				`日期桶: ${context.currentTime.toISOString().slice(0, 10)}`,
-				`时间桶: ${classifyDayPeriod(context.currentTime)}`,
+				`日期桶: ${context.sessionStartTime.toISOString().slice(0, 10)}`,
 			];
 
 			if (context.lastMessageTime != null) {
@@ -117,17 +129,20 @@ export function decoratePreciseTemporalUserInput(
 	const lines = [
 		"[时间上下文]",
 		`当前时间: ${formatDateTime(context.currentTime)}`,
+		`时段: ${classifyDayPeriod(context.currentTime)}`,
 	];
 
 	if (context.lastMessageTime != null) {
 		const gapSeconds =
-			(context.currentTime.getTime() - context.lastMessageTime.getTime()) / 1_000;
+			(context.currentTime.getTime() - context.lastMessageTime.getTime()) /
+			1_000;
 		lines.push(`距上条消息: ${formatDuration(gapSeconds)}`);
 		lines.push(`消息间隔分类: ${classifyGap(gapSeconds)}`);
 	}
 
 	const sessionDurationSeconds =
-		(context.currentTime.getTime() - context.sessionStartTime.getTime()) / 1_000;
+		(context.currentTime.getTime() - context.sessionStartTime.getTime()) /
+		1_000;
 	lines.push(`本次 session 持续: ${formatDuration(sessionDurationSeconds)}`);
 
 	if (context.lastSessionEndTime != null) {
