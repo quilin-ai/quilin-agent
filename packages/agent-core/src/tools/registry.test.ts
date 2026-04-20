@@ -263,4 +263,44 @@ describe("MCPRegistry", () => {
 		expect(registry.findTool("memory/memory_recall")).toBeUndefined();
 		expect(registry.getAllTools()).toEqual([]);
 	});
+
+	it("keeps existing global tool state unchanged when replacement registration fails mid-build", async () => {
+		const existingClient = createFakeClient([
+			createTool("memory_recall"),
+			createTool("memory_store"),
+		]);
+		const duplicateToolClient = createFakeClient([
+			createTool("memory_recall"),
+			createTool("memory_recall"),
+		]);
+		const registry = new MCPRegistry(() => {
+			if (!registry.findTool("memory/memory_recall")) {
+				return existingClient;
+			}
+
+			return duplicateToolClient;
+		});
+
+		await registry.register({
+			id: "memory",
+			config: createServerConfig(),
+			namespace: "memory",
+		});
+
+		const previousToolNames = registry.getAllTools().map((tool) => tool.name);
+
+		await expect(
+			registry.register({
+				id: "memory",
+				config: createServerConfig(),
+				namespace: "memory",
+			}),
+		).rejects.toThrow(/duplicate/i);
+
+		expect(existingClient.disconnect).not.toHaveBeenCalled();
+		expect(duplicateToolClient.disconnect).toHaveBeenCalledTimes(1);
+		expect(registry.getAllTools().map((tool) => tool.name)).toEqual(
+			previousToolNames,
+		);
+	});
 });

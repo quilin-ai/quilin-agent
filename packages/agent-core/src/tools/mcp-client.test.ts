@@ -126,6 +126,128 @@ describe.sequential("MCPClientManager", () => {
 		vi.useRealTimers();
 	});
 
+	it("waits for in-flight tool calls before disconnect resolves", async () => {
+		let resolveToolCall:
+			| ((value: {
+					content: [{ type: "text"; text: string }];
+					isError: false;
+			  }) => void)
+			| undefined;
+		const pendingToolCall = new Promise<{
+			content: [{ type: "text"; text: string }];
+			isError: false;
+		}>((resolve) => {
+			resolveToolCall = resolve;
+		});
+		const manager = new MCPClientManager();
+		const client = {
+			callTool: vi.fn(() => pendingToolCall),
+		};
+		const transport = {
+			close: vi.fn(async () => {}),
+		};
+
+		Object.assign(manager as object, {
+			client,
+			transport,
+			isConnected: true,
+		});
+
+		const callPromise = manager.callTool("memory_recall", { query: "hello" });
+		await Promise.resolve();
+
+		let disconnectResolved = false;
+		const disconnectPromise = manager.disconnect().then(() => {
+			disconnectResolved = true;
+		});
+		await Promise.resolve();
+
+		expect(disconnectResolved).toBe(false);
+		resolveToolCall?.({
+			content: [{ type: "text", text: "hello" }],
+			isError: false,
+		});
+
+		await expect(callPromise).resolves.toBe("hello");
+		await disconnectPromise;
+
+		expect(transport.close).toHaveBeenCalledTimes(1);
+		expect(disconnectResolved).toBe(true);
+	});
+
+	it("marks nested JSON errors inside text content as tool errors", async () => {
+		const manager = new MCPClientManager();
+		const client = {
+			callTool: vi.fn(async () => ({
+				content: [
+					{
+						type: "text",
+						text: JSON.stringify({
+							payload: {
+								error: "inner tool failed",
+							},
+						}),
+					},
+				],
+				isError: false,
+			})),
+		};
+
+		Object.assign(manager as object, {
+			client,
+			isConnected: true,
+		});
+
+		const result = await (
+			manager as unknown as {
+				callToolWithMetadata: (
+					name: string,
+					args: Record<string, unknown>,
+				) => Promise<{ content: string; isError: boolean }>;
+			}
+		).callToolWithMetadata("memory_recall", { query: "hello" });
+
+		expect(result).toEqual({
+			content: JSON.stringify({
+				payload: {
+					error: "inner tool failed",
+				},
+			}),
+			isError: true,
+		});
+	});
+
+	it("respects structuredContent.isError even when top-level isError is false", async () => {
+		const manager = new MCPClientManager();
+		const client = {
+			callTool: vi.fn(async () => ({
+				content: [{ type: "text", text: "opaque failure" }],
+				structuredContent: {
+					isError: true,
+					message: "tool failed",
+				},
+				isError: false,
+			})),
+		};
+
+		Object.assign(manager as object, {
+			client,
+			isConnected: true,
+		});
+
+		const result = await (
+			manager as unknown as {
+				callToolWithMetadata: (
+					name: string,
+					args: Record<string, unknown>,
+				) => Promise<{ content: string; isError: boolean }>;
+			}
+		).callToolWithMetadata("memory_recall", { query: "hello" });
+
+		expect(result.isError).toBe(true);
+		expect(result.content).toBe("opaque failure");
+	});
+
 	it("connects to OmniMem and maps MCP tools into local Tool definitions", async () => {
 		const manager = new MCPClientManager();
 

@@ -53,18 +53,63 @@ export class MCPRegistry {
 			new MCPClientManager(),
 	) {}
 
-	private installServerTools(
+	private buildPendingServerState(
 		serverId: string,
 		client: MCPClientConnection,
 		tools: readonly ToolWithMetadata[],
-	): void {
-		this.connections.set(serverId, client);
-		this.serverToolNames.set(
-			serverId,
-			tools.map((tool) => tool.name),
-		);
-		tools.forEach((tool) => {
-			this.serverTools.set(tool.name, tool);
+	): {
+		readonly connections: Map<string, MCPClientConnection>;
+		readonly serverToolNames: Map<string, readonly string[]>;
+		readonly serverTools: Map<string, ToolWithMetadata>;
+	} {
+		const duplicateToolName = new Set<string>();
+		const toolNames = tools.map((tool) => tool.name);
+		for (const toolName of toolNames) {
+			if (duplicateToolName.has(toolName)) {
+				throw new Error(`Duplicate MCP tool name: ${toolName}`);
+			}
+			duplicateToolName.add(toolName);
+		}
+
+		const pendingConnections = new Map(this.connections);
+		const pendingServerToolNames = new Map(this.serverToolNames);
+		const pendingServerTools = new Map(this.serverTools);
+		const previousToolNames = pendingServerToolNames.get(serverId) ?? [];
+
+		for (const toolName of previousToolNames) {
+			pendingServerTools.delete(toolName);
+		}
+
+		pendingConnections.set(serverId, client);
+		pendingServerToolNames.set(serverId, toolNames);
+		for (const tool of tools) {
+			pendingServerTools.set(tool.name, tool);
+		}
+
+		return {
+			connections: pendingConnections,
+			serverToolNames: pendingServerToolNames,
+			serverTools: pendingServerTools,
+		};
+	}
+
+	private applyServerState(state: {
+		readonly connections: Map<string, MCPClientConnection>;
+		readonly serverToolNames: Map<string, readonly string[]>;
+		readonly serverTools: Map<string, ToolWithMetadata>;
+	}): void {
+		this.connections.clear();
+		this.serverToolNames.clear();
+		this.serverTools.clear();
+
+		state.connections.forEach((client, serverId) => {
+			this.connections.set(serverId, client);
+		});
+		state.serverToolNames.forEach((toolNames, serverId) => {
+			this.serverToolNames.set(serverId, toolNames);
+		});
+		state.serverTools.forEach((tool, toolName) => {
+			this.serverTools.set(toolName, tool);
 		});
 	}
 
@@ -91,7 +136,13 @@ export class MCPRegistry {
 				),
 			);
 
+			const pendingState = this.buildPendingServerState(
+				entry.id,
+				client,
+				wrappedTools,
+			);
 			const existingClient = this.connections.get(entry.id);
+
 			if (existingClient != null) {
 				try {
 					await existingClient.disconnect();
@@ -103,11 +154,14 @@ export class MCPRegistry {
 					);
 					throw error;
 				}
-
-				this.clearServerTools(entry.id);
 			}
 
-			this.installServerTools(entry.id, client, wrappedTools);
+			try {
+				this.applyServerState(pendingState);
+			} catch (error) {
+				await client.disconnect().catch(() => undefined);
+				throw error;
+			}
 
 			return wrappedTools;
 		} catch (error) {

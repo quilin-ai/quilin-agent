@@ -16,6 +16,7 @@ import type { Tool } from "./types.js";
 
 const CONNECT_TIMEOUT_MS = 5_000;
 const DEFAULT_TOOL_TIMEOUT_MS = 30_000;
+const DISCONNECT_TIMEOUT_MS = 5_000;
 const ALLOWED_PATH_COMMANDS = new Set(["bun", "node", "npx", "python", "python3", "uv"]);
 const ALLOWED_ABSOLUTE_COMMANDS = new Set([
 	"/usr/bin/bun",
@@ -161,15 +162,55 @@ export function writeReplLogSeparatorIfNeeded(
 function detectErrorPayload(content: string): boolean {
 	try {
 		const parsed = JSON.parse(content) as unknown;
-		return (
-			parsed != null &&
-			typeof parsed === "object" &&
-			"error" in parsed &&
-			typeof parsed.error === "string"
-		);
+		return containsErrorMarker(parsed);
 	} catch {
 		return false;
 	}
+}
+
+function containsErrorMarker(
+	value: unknown,
+	seen = new WeakSet<object>(),
+): boolean {
+	if (value == null) {
+		return false;
+	}
+
+	if (typeof value === "string") {
+		try {
+			return containsErrorMarker(JSON.parse(value), seen);
+		} catch {
+			return false;
+		}
+	}
+
+	if (Array.isArray(value)) {
+		return value.some((item) => containsErrorMarker(item, seen));
+	}
+
+	if (typeof value !== "object") {
+		return false;
+	}
+
+	if (seen.has(value)) {
+		return false;
+	}
+	seen.add(value);
+
+	const record = value as Record<string, unknown>;
+	if (record.isError === true) {
+		return true;
+	}
+
+	if ("error" in record && record.error != null) {
+		return true;
+	}
+
+	if (record.type === "text" && typeof record.text === "string") {
+		return detectErrorPayload(record.text);
+	}
+
+	return Object.values(record).some((entry) => containsErrorMarker(entry, seen));
 }
 
 function formatCallToolResult(result: CallToolResult): MCPToolCallResult {
@@ -199,7 +240,10 @@ function formatCallToolResult(result: CallToolResult): MCPToolCallResult {
 
 	return {
 		content,
-		isError: result.isError === true || detectErrorPayload(content),
+		isError:
+			result.isError === true ||
+			result.structuredContent?.isError === true ||
+			detectErrorPayload(content),
 	};
 }
 
@@ -208,6 +252,7 @@ export class MCPClientManager {
 	private transport?: StdioClientTransport;
 	private isConnected = false;
 	private disconnectReason = "MCP client is not connected";
+	private readonly pendingCalls = new Set<Promise<CallToolResult>>();
 
 	async connect(config: MCPServerConfig): Promise<Tool[]> {
 		await this.disconnect();
@@ -294,7 +339,23 @@ export class MCPClientManager {
 
 	async disconnect(): Promise<void> {
 		this.isConnected = false;
-		this.disconnectReason = "MCP client is not connected";
+		this.disconnectReason = "MCP server disconnected";
+
+		if (this.pendingCalls.size > 0) {
+			try {
+				await withTimeout(
+					Promise.allSettled([...this.pendingCalls]),
+					"MCP disconnect drain",
+					DISCONNECT_TIMEOUT_MS,
+				);
+			} catch (error) {
+				writeReplLogSeparatorIfNeeded();
+				logger.warn(
+					{ err: error, pendingCallCount: this.pendingCalls.size },
+					"MCP disconnect timed out waiting for in-flight tool calls",
+				);
+			}
+		}
 
 		await this.transport?.close();
 		this.client = undefined;
@@ -309,8 +370,9 @@ export class MCPClientManager {
 			return createDisconnectedResult(this.disconnectReason);
 		}
 
+		let pendingCall: Promise<CallToolResult> | undefined;
 		try {
-			const result = await withTimeout(
+			pendingCall = withTimeout(
 				this.client.callTool({
 					name,
 					arguments: args,
@@ -318,6 +380,8 @@ export class MCPClientManager {
 				`MCP tool ${name}`,
 				DEFAULT_TOOL_TIMEOUT_MS,
 			);
+			this.pendingCalls.add(pendingCall);
+			const result = await pendingCall;
 			return formatCallToolResult(result);
 		} catch (error) {
 			if (
@@ -330,6 +394,10 @@ export class MCPClientManager {
 			const message =
 				error instanceof Error ? error.message : "MCP tool call failed";
 			return createDisconnectedResult(message);
+		} finally {
+			if (pendingCall != null) {
+				this.pendingCalls.delete(pendingCall);
+			}
 		}
 	}
 }
