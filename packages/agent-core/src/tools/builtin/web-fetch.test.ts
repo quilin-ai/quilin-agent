@@ -261,8 +261,15 @@ describe("builtin web_fetch tool", () => {
 				},
 			}),
 		);
+		const resolver = vi.fn(async () => [
+			{
+				address: "8.8.8.8",
+				family: 4 as const,
+			},
+		]);
 		const tool = createWebFetchTool({
 			fetcher,
+			resolver,
 			allowedAuthHosts: ["api.example.com"],
 		} as never);
 
@@ -285,6 +292,7 @@ describe("builtin web_fetch tool", () => {
 				},
 			}),
 		);
+		expect(resolver).toHaveBeenCalledWith("evil.example");
 	});
 
 	it("rejects oversized responses before reading the full body", async () => {
