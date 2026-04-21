@@ -135,8 +135,8 @@ filtered = descriptors
 
 ## Open Questions
 
-- [ ] hot_skills 的 `relevance` 计算:keyword match 要不要对 skill name + description 都跑,还是只 description?默认都跑
-- [ ] `mandatory: true` 是否允许覆盖 source-based 默认(community skill 声称 mandatory 要不要接受)?倾向 **不允许**,只有 bundled / user 能声明 mandatory
+- [x] hot_skills 的 `relevance` 计算:keyword match 对 skill name + description **都跑**,且 **name 权重 > description**(Codex 2026-04-22 定:短名精确命中信号最强)
+- [x] `mandatory: true` **只允许 bundled / user 声明**,community skill 自声明 mandatory 被忽略(Codex 2026-04-22 定:防第三方 skill 反向劫持 catalog 注入权,与 D-13 宿主控制原则一致)
 
 ## Blockers
 
@@ -144,4 +144,17 @@ filtered = descriptors
 
 ## Decisions(随 Phase 推进补充)
 
-<!-- Phase 1 开工后把具体决策逐条记录到这里 -->
+### 2026-04-22 — hot_skills relevance 算双字段 + name 高权重
+
+- **Before:** Phase 1 spec 里 `relevance = keyword match × 0.4` 没说对哪个字段
+- **After:** 对 `skill.name` + `skill.description` 都跑 keyword match,`name` 权重 > `description`(具体倍数由 Codex 在 P1-b 实现时定,回填到本文件)
+- **理由:** 短名精确命中是最强信号;只看 description 会漏掉用户用 skill 名直呼的命中
+- **Source:** Codex cross-review on `a66dc02` tracking doc
+
+### 2026-04-22 — mandatory: true 只允许 bundled / user
+
+- **Before:** Phase 1 spec 没明令 mandatory 的 source 约束
+- **After:** `frontmatter.mandatory === true` 只在 `source ∈ {bundled, user}` 时生效;community skill 自声明 mandatory 被过滤器忽略
+- **理由:** 防第三方 skill 反向劫持 catalog 注入权;与 D-13 "宿主控制稳定前缀"原则一致
+- **Source:** Codex cross-review on `a66dc02` tracking doc
+- **守护位置:** P1-a 过滤管道里就应加这条(和 trust 过滤并列),测试需覆盖 "community skill claim mandatory → 仍进 hot_skills 而非 stable prefix"
