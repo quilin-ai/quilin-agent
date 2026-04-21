@@ -26,8 +26,8 @@ interface LoadSkillOptions {
 	readonly maxBodyBytes?: number;
 }
 
-const DEFAULT_MAX_BODY_CHARS = 100_000;
-const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
+export const DEFAULT_MAX_BODY_CHARS = 100_000;
+export const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
 
 export class SkillsManager {
 	private readonly roots: readonly RootEntry[];
@@ -244,7 +244,7 @@ async function resolveSkillRoots(
 	);
 }
 
-function isWithinRoot(targetPath: string, rootPath: string): boolean {
+export function isWithinRoot(targetPath: string, rootPath: string): boolean {
 	const pathRelative = relative(rootPath, targetPath);
 	return (
 		pathRelative === "" ||

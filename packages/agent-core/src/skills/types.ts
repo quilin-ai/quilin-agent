@@ -34,3 +34,40 @@ export interface LoadedSkill {
 	readonly body: string;
 	readonly tokenEstimate: number;
 }
+
+export type SkillManageAction =
+	| {
+			readonly action: "create";
+			readonly descriptor: SkillDescriptor;
+			readonly body: string;
+			readonly target?: "user" | "project";
+	  }
+	| {
+			readonly action: "update";
+			readonly name: string;
+			readonly patch: Partial<SkillDescriptor>;
+			readonly body?: string;
+	  }
+	| {
+			readonly action: "delete";
+			readonly name: string;
+			readonly reason: string;
+	  };
+
+export type SkillManageError =
+	| "validation_failed"
+	| "path_denied"
+	| "size_exceeded"
+	| "not_found"
+	| "write_denied";
+
+export type SkillManageResult =
+	| {
+			readonly ok: true;
+			readonly descriptor: SkillDescriptor;
+	  }
+	| {
+			readonly ok: false;
+			readonly error: SkillManageError;
+			readonly detail: string;
+	  };

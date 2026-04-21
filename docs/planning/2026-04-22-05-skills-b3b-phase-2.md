@@ -1,6 +1,6 @@
 ---
 title: Skills B3b Phase 2 — skill_manage CRUD + WriteAuthority 集成 (tracking)
-status: planning
+status: in-progress
 owner: Codex (impl) + Claude (plan + review)
 created: 2026-04-22
 last_updated: 2026-04-22
