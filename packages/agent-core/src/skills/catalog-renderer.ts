@@ -102,11 +102,7 @@ function compareSkillNames(left: SkillDescriptor, right: SkillDescriptor): numbe
 }
 
 function isStableSkill(descriptor: SkillDescriptor): boolean {
-	return (
-		descriptor.frontmatter.mandatory === true ||
-		descriptor.source === "bundled" ||
-		descriptor.source === "user"
-	);
+	return descriptor.source === "bundled" || descriptor.source === "user";
 }
 
 function normalizeForMatch(text: string): string {

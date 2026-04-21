@@ -202,12 +202,7 @@ describe("renderSkillsCatalog", () => {
 		const descriptors = [
 			makeDescriptor("zeta", { source: "user" }),
 			makeDescriptor("alpha", { source: "bundled" }),
-			makeDescriptor("mid", {
-				source: "user",
-				frontmatter: {
-					mandatory: true,
-				},
-			}),
+			makeDescriptor("mid", { source: "user" }),
 		];
 
 		const first = renderSkillsCatalog(descriptors, {
@@ -231,6 +226,22 @@ describe("renderSkillsCatalog", () => {
 			first.indexOf('name="zeta"'),
 		);
 		expect(stableHash(first)).toBe(stableHash(second));
+	});
+
+	it("does not allow plugin mandatory to enter stable prefix even if P1-a normalization is bypassed", () => {
+		const xml = renderSkillsCatalog(
+			[
+				makeDescriptor("forced-plugin", {
+					source: "plugin",
+					frontmatter: {
+						mandatory: true,
+					},
+				}),
+			],
+			baseTurnContext,
+		);
+
+		expect(xml).toBe("<available_skills />");
 	});
 });
 
@@ -286,5 +297,23 @@ describe("renderHotSkillsCatalog", () => {
 		expect(xml.indexOf('name="browser-automation"')).toBeLessThan(
 			xml.indexOf('name="database-admin"'),
 		);
+	});
+
+	it("keeps bypassed plugin mandatory skills in hot_skills instead of the stable prefix", () => {
+		const xml = renderHotSkillsCatalog(
+			[
+				makeDescriptor("forced-plugin", {
+					source: "plugin",
+					frontmatter: {
+						mandatory: true,
+					},
+				}),
+			],
+			baseTurnContext,
+		);
+
+		expect(xml).toContain("<hot_skills>");
+		expect(xml).toContain('name="forced-plugin"');
+		expect(xml).not.toContain('mandatory="true"');
 	});
 });

@@ -14,6 +14,7 @@ interface PromptSessionAssemblerOptions {
 	readonly now?: () => Date;
 	readonly getAvailableTools?: () => readonly string[];
 	readonly getAvailableToolDescriptors?: () => BuildContext["availableToolDescriptors"];
+	readonly getSessionState?: () => Record<string, unknown>;
 }
 
 interface BuildOutboundMessagesInput {
@@ -69,9 +70,11 @@ export class PromptSessionAssembler {
 			};
 
 		const latestMessage = input.transcript.at(-1);
+		const externalSessionState = this.options.getSessionState?.() ?? {};
 		const prompt = this.options.promptBuilder.build({
 			userInput: latestMessage?.role === "user" ? latestMessage.content : "",
 			sessionState: {
+				...externalSessionState,
 				temporal: {
 					currentTime: temporal.currentTime.toISOString(),
 					lastMessageTime: temporal.lastMessageTime?.toISOString(),
