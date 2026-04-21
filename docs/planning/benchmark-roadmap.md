@@ -42,10 +42,16 @@ threat_surface_delta:
 | **BFCL v4** ⭐ Pinned | ≥ **70%** | ≥ **80%** | 前 3 波动在 ~85-90%,不稳定 | Iter B tool schema routing + Iter C tool-call planning + 01-LLM parallel tool call |
 | τ2-bench / τ-bench | ≥ 80%(aspirational) | ≥ 90%(aspirational) | Opus 4.6 telecom 99.3% | **Aspirational only** — 不是 pinned,Iter E4 按 harness 预算决定是否跑 |
 
-**阈值反推原则**(给后继 review 可追溯):
-- Alive = 当前"最笨 baseline agent"(LLM + 浅层工具调用,无 memory)理论可达数字的 1.2x。**低于此** = 说明我们的设计层没给 LLM 加分 → Iter A..D 有设计缺陷,不是调参问题。
-- Success = Alive × 1.5-1.8,位于"SOTA 中位"区间。**超过此** = Quilin 在单 Agent 单模型前提下有显著增量价值,值得对外宣称"Iter E 收官"。
-- Aspirational = 当前 SOTA 或前 3 水平,**多 Agent mesh / idle evolution / user-tuned skills 才有望触及**;留给 Iter F 及以后。
+**阈值口径说明**(诚实标注 heuristic vs derivation):
+
+- **表格里的具体数字(30/40/70 alive;50/55/80 success)有出处** ——
+  均承接自 `docs/review/2026-04-21-opus-4-7-round-3.md` §AA-04 行 194-195 的初始建议值,
+  经本文吸收 + 补 τ2 的 aspirational 定位后成为 planning 合约。
+- **"Alive / Success / Aspirational" 三层的语义意图**(用于解释为什么把数字切成三档,**非**可复验的严格 derivation):
+  - *Alive* 语义:最笨 baseline(LLM + 浅层工具调用 + 无 memory)理应能接近的区间;**低于此**提示设计层未给 LLM 加分,回 Iter A..D 复盘,而非调参。
+  - *Success* 语义:位于"SOTA 中位"区间,体现单 Agent 单模型前提下的增量价值;**达到此**即允许宣称 Iter E 收官。
+  - *Aspirational* 语义:SOTA 或前 3 水平,需多 Agent mesh / idle evolution / user-tuned skills 叠加才有望触及;留给 Iter F 及以后。
+- **本文的 "×1.2" / "×1.5-1.8" 字样(若早期草稿出现过)视为 heuristic 经验口径,不作 audited derivation**。待 E1 harness 跑出首批实测后,回填实测经验依据或按实际分布重标定阈值(见 Decision 2026-04-22 与 Open Questions)。
 
 **τ2-bench 为什么是 aspirational 而非 pinned**:
 - `quilin.md` 已明确"3 pinned + roadmap"(SWE-bench / GAIA / BFCL v4);τ2 属于 Iter E4 aspirational roadmap
