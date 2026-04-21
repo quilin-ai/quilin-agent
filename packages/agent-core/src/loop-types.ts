@@ -22,6 +22,28 @@ export interface LoopHooks {
 	readonly onAssistantMessage?: (message: Message) => void | Promise<void>;
 }
 
+export async function recordLoopSpan(
+	hooks: LoopHooks | undefined,
+	name: string,
+	attributes?: Record<string, unknown>,
+): Promise<void> {
+	await hooks?.recordSpan?.(name, attributes);
+}
+
+export function createAssistantMessage(
+	response: Pick<Message, "content"> & {
+		readonly toolCalls?: Message["toolCalls"];
+		readonly reasoning?: Message["reasoning"];
+	},
+): Message {
+	return {
+		role: "assistant",
+		content: response.content,
+		...(response.toolCalls == null ? {} : { toolCalls: response.toolCalls }),
+		...(response.reasoning == null ? {} : { reasoning: response.reasoning }),
+	};
+}
+
 export interface AgentLoopConfig {
 	readonly llm: LLMClient;
 	readonly context?: ContextManager;

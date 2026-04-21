@@ -9,37 +9,16 @@ import {
 import { getLoggerRuntimeMode, logger } from "./logger.js";
 import {
 	AgentLoopError,
+	createAssistantMessage,
 	DEFAULT_MAX_TOTAL_TOKENS,
 	DEFAULT_MAX_TURNS,
+	recordLoopSpan,
 	type AgentLoopConfig,
-	type LoopHooks,
 } from "./loop-types.js";
 import { executeToolCalls } from "./loop-tool-calls.js";
 import { saveCheckpointState } from "./state/checkpoint-writer.js";
 import type { Message } from "./state/types.js";
 import { ToolRouter } from "./tools/router.js";
-
-async function recordLoopSpan(
-	hooks: LoopHooks | undefined,
-	name: string,
-	attributes?: Record<string, unknown>,
-): Promise<void> {
-	await hooks?.recordSpan?.(name, attributes);
-}
-
-function createAssistantMessage(
-	response: Pick<Message, "content"> & {
-		readonly toolCalls?: Message["toolCalls"];
-		readonly reasoning?: Message["reasoning"];
-	},
-): Message {
-	return {
-		role: "assistant",
-		content: response.content,
-		...(response.toolCalls == null ? {} : { toolCalls: response.toolCalls }),
-		...(response.reasoning == null ? {} : { reasoning: response.reasoning }),
-	};
-}
 
 // Quilin Agent 核心循环：保持 loop file 小而稳，具体副作用委托给 helper 模块。
 export async function runAgentLoop(
