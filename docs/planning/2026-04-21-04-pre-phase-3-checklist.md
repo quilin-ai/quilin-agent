@@ -12,27 +12,19 @@ source: Codex msg_209 提议 + Opus 4.7 Round 3 gate 分层
 
 ## Gate A — B3b Phase 0 开工前（Codex 手）
 
-### A.1 🔴 loop.ts 减行（CC-01）
-- **现状**：407 LOC（契约 <200）
-- **要抽出的**：
-  - `sanitizeReasoningParts` → `context/reasoning-sanitizer.ts`
-  - `stripReasoningFromMessage(s)` → `context/reasoning-sanitizer.ts`
-  - `saveCheckpointState` → `state/checkpoint-writer.ts`
-  - `isWithinWorkspace` / `shouldTrustToolOutput` → `context/injection-scanner.ts`
-- **验收**：`wc -l packages/agent-core/src/loop.ts` < 220；tests 不变 green
+### A.1 ✅ loop.ts 减行（CC-01）— 已完成（commit `0464377`）
+- **现状**：**212 LOC**（契约 `<220`）
+- **抽出产出**：
+  - `context/reasoning-sanitizer.ts`（sanitize / strip）
+  - `state/checkpoint-writer.ts`（writer 边界）
+  - `loop-tool-calls.ts` + `loop-types.ts`（tool-call 分发 + 共享类型）
+  - `context/injection-scanner.ts`（trust helpers）
+- **验证**：`wc -l loop.ts` = 212；`pnpm --filter @quilin/agent-core test` 266/267 绿（唯一红灯 web-fetch 老债，不在本写集）
 
-### A.2 🟠 skill_view 工具实现（CC-02）
-- **现状**：文档 11 处引用，代码 0 处实现
-- **动作**：
-  1. 新建 `packages/agent-core/src/tools/builtin/skill-view.ts`
-  2. 输入：`{ skill_id: string }`
-  3. 输出：SKILL.md 正文（注入到下一轮 user message 尾部，不进 system prompt）
-  4. 注册到 `tools/builtin/index.ts`
-- **单测必须覆盖**：
-  - happy-path：合法 skill_id → 返回正文
-  - path-traversal：SKILL.md 在 workspace 外 → 拒绝
-  - 缺失 skill_id → 返回 tool error
-  - 文件超限（参考 B3a M0 既有 size guard）→ 拒绝
+### A.2 ✅ skill_view 工具实现（CC-02）— 已完成（commit `0464377`）
+- **落地**：`packages/agent-core/src/tools/builtin/skill-view.ts` 接入 `index.ts` 和 `repl.ts`
+- **复用**：`SkillsManager.loadBody()` on-demand load，新增 root 越界 + body size guard
+- **测试覆盖**：happy-path / 缺参 / 越界 / 超限
 
 ## Gate B — Phase 3 Reasoning carry-over 开工前（Claude 手）
 
@@ -58,10 +50,12 @@ source: Codex msg_209 提议 + Opus 4.7 Round 3 gate 分层
 - ✅ **已完成**（2026-04-21 后续 session）：`docs/planning/00-implementation-plan.md` 已在 Iter D 区块新增 "Memory Sprint 0 Pre-Work (D-21 follow-up)" 小节，记录 gate failed / 1-week spike / 分支决策
 - ⏳ **待做**：如果下一次 Sprint 仍不过 40%，起草 ADR-004（切 ML-first 或 L3a 降级 opt-in）
 
-### C.2 🟠 CC-03 修 bun-types typecheck
-- `packages/agent-core/package.json` devDep 加 `@types/bun` 或 `bun-types` pinned 版本
-- 让 `pnpm --filter @quilin/agent-core exec tsc --noEmit` 能跑
-- CI 里把 tsc --noEmit 改成阻塞步骤
+### C.2 🟡 CC-03 bun-types typecheck — 半闭合（commit `0464377`）
+- ✅ **作用域窄化**：`tsconfig.base.json` 删 `"types": ["bun-types"]`；`packages/agent-core` 本地 `"types": ["bun"]`
+- ✅ **依赖对齐**：`packages/agent-core` 装 `@types/bun`（lockfile 快照已入 commit 2）
+- ⚠️ **未闭合**：tsc 仍报 89 errors（bun-types 伪装被拆后暴露的既有技术债）
+- 📋 **老债追踪**：新建 `docs/planning/2026-04-21-06-ai-sdk-type-debt.md`，4 cluster 分类（Cluster 1 AI SDK v6 漂移 63 err → Iter D；Cluster 2/3/4 低成本杂项 26 err → Iter C 前清理）
+- ⏳ **待做**：CI 里把 `tsc --noEmit` 上 blocking gate 必须等 Cluster 1 修完，否则会阻塞所有 PR
 
 ## 不 gate 任何事（Phase 4 合并时再做）
 
@@ -82,11 +76,11 @@ source: Codex msg_209 提议 + Opus 4.7 Round 3 gate 分层
 
 ## 责任归属一览
 
-| Gate | 动作 | 谁做 |
-|---|---|---|
-| A.1 loop.ts 减行 | 重构抽函数 | Codex |
-| A.2 skill_view 实现 | 新建 tool + 单测 | Codex |
-| B.1 威胁面字段 | 改 template | Claude |
-| B.2 Phase 3 threat walk | 填 template | Claude 或 adversarial reviewer |
-| C.1 implementation-plan 同步 | 改文档 | Claude |
-| C.2 bun-types fix | 改 package.json + CI | Codex |
+| Gate | 动作 | 谁做 | 状态 |
+|---|---|---|---|
+| A.1 loop.ts 减行 | 重构抽函数 | Codex | ✅ commit `0464377`（212 LOC） |
+| A.2 skill_view 实现 | 新建 tool + 单测 | Codex | ✅ commit `0464377` |
+| B.1 威胁面字段 | 改 template | Claude | ✅ commit `b967d1c` |
+| B.2 Phase 3 threat walk | 填 template | Claude 或 adversarial reviewer | ⏳ 待 Phase 3 开工时做 |
+| C.1 implementation-plan 同步 | 改文档 | Claude | ✅ commit `b967d1c` |
+| C.2 bun-types fix | 改 package.json + CI | Codex | 🟡 commit `0464377` 半闭合；老债 → `2026-04-21-06-ai-sdk-type-debt.md` |
