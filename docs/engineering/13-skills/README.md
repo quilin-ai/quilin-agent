@@ -1,9 +1,14 @@
 # 技能工程（Skill Engineering）
 
-> **实现状态（R-07，2026-04-18）**
-> - ✅ **已实现**：无
-> - 🚧 **进行中**：无（B3a 排期开启后进入 M0）
-> - 💭 **未开始**：SKILL.md frontmatter 解析器、SkillsManager（扫描/缓存/懒加载）、CatalogRenderer（system prompt 索引）、skill_manage 工具（读/写单写口，D-05）、路径/大小安全校验、skill → Sub-Agent 桥接。Iter 排期 = M0（B3a） → M1（后续）；Self-Evolution 写入路径依赖 M1 完成。
+> **实现状态（2026-04-22 实证更新，replaces R-07 2026-04-18）**
+>
+> | 里程碑 | 状态 | 实证 |
+> |--------|------|------|
+> | **M0 — catalog 注入 system prompt** | ✅ 已实现 | commits `16f3868`（SkillsManager + CatalogRenderer M0）+ `d617e32`（Gateway 接入 `<available_skills>`）。`context/skills-catalog-section.ts` 稳定前缀段已接 PromptBuilder。 |
+> | **M0.5 — `skill_view` tool 按需加载 body** | ✅ 已实现 | commit `0464377`。文件：`packages/agent-core/src/tools/builtin/skill-view.ts`（60 LOC）+ `skill-view.test.ts`（143 LOC）。测试覆盖 happy-path / missing-args / root-escape / size-limit。 |
+> | **M0.5 契约缺口** | ⚠️ 未收口 | 当前 `skill_view` 把 body 作为普通 tool result 返回；"注入下一轮 user message 尾部"的 outbound decoration 层**尚未实现**。由 B3b Phase 1/2 收口（Codex 独立判断：decoration 应在 REPL/assembler 层做，不是 tool 层）。 |
+> | **M1 — 条件激活 / CRUD / 安全扫描** | ✅ Phase 0 / ⏳ Phase 1 | `bc93f42` 完成 Phase 0：frontmatter schema v2 reader + `metadata.quilin.*` + source-based trust defaults。CC-03 从本 phase 剥离为独立 cluster。Tracking：`docs/planning/2026-04-21-01-skills-b3b-activation.md`。 |
+> | **M2+ — 平台化 / Background nudge / ToolSearch 延迟加载** | 💭 未开始 | 依赖 10-self-evolution / Plugin 平台 / 工具数 >100。 |
 
 > **ADR-001 对齐说明**：技能系统（Skill Loading）用 TS 实现，作为 Agent Core 内的独立子系统。Skill 与 Tool 严格分离：Tool 是运行时可执行动作，Skill 是可被 LLM 读取的知识/指令资产。本文档中的 Python 代码示例仅表达设计意图，实施时以 TS 落地。
 

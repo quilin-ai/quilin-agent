@@ -1,12 +1,22 @@
 # Quilin Agent 实现规划
 
-> **状态**：Iter A 已完成（v0.1.0-iter-a），**Iter B 进行中（B1 ✓ / B2 ✓ 合并 + 持续加固 / B3a M0 ✓ Gateway 接入 / B3b 待排）**
+> **状态（2026-04-22 实证更新）**：
+> - Phase 0 ✅ v0.0.3 | Iter A ✅ v0.1.0-iter-a
+> - **Iter B 进行中**:B1 ✅ | B2 ✅ 合并 + 持续加固 | **B3a 拆分状态**:M0 ✅ catalog 注入(`16f3868`/`d617e32`)+ M0.5 ✅ `skill_view` tool(`0464377`,60 LOC + 143 LOC 测试)+ ⚠️ outbound decoration 契约缺口留 B3b Phase 1/2 | **B3b ✅ Phase 0 / ⏳ Phase 1**(`bc93f42`,frontmatter schema v2 reader + source-based trust defaults;tracking `docs/planning/2026-04-21-01-skills-b3b-activation.md`)
+> - **loop.ts LOC**:commit `0464377` 407 → 212,目标 `<200` 差 12 行,留后续 refactor PR
+> - **OmniMem L3a observer gate failed**(recall 21.4%/中文 0%),Iter D Sprint 0 1 周 spike 决定 ML-first 或降级 opt-in(起草 ADR-004)
 >
 > **语言架构（当前）**：TS（核心）+ Python（ML Provider）。**Rust**（基础设施 / mesh / WASM）延后到 Iter D 引入，详见 [ADR-001](../adr/adr-001-core-loop-and-language.md)。
 >
-> **2026-04-17 架构复查**：Opus 4.7 ultra-review 完成，决策已回写，详见 [docs/review/2026-04-17-ultra-review.md](../review/2026-04-17-ultra-review.md)。
+> **Review 时间线**:
+> - 2026-04-17 Ultra-review(170 findings):已回写,`docs/review/2026-04-17-ultra-review.md`
+> - 2026-04-20 Revisit(26 findings):Wave-3 全部合并(H-01..10 / M-01..08 / L-01..05),`docs/review/2026-04-20-opus-4-7-revisit.md`
+> - 2026-04-21 Phase-2 review(18 findings):合并完成,`docs/review/2026-04-21-phase-2-review.md`
+> - 2026-04-21 Round 3(14 findings):**partially-outdated**,经 2026-04-22 实证,CC-01/02/03 已被 commit `0464377` 解决或大部分解决,详见 `docs/review/2026-04-21-opus-4-7-round-3.md` 顶部 VERIFIED 表
 >
-> **2026-04-20 Opus 4.7 revisit**：26 findings（3 CRITICAL / 10 HIGH / 8 MEDIUM / 5 LOW）Wave-3 批次已全部合并（H-01..10 / M-01..08 / L-01..05，见 `docs/review/2026-04-20-opus-4-7-revisit.md`）；Planning spec 同步升级到 v1.1（main-LLM-direct + Gateway Skills + 可选 audit layer）；B2 tiny-classifier spike 因 Codex 额度 blocker 从 Iter C gate 降级为 Iter D 研究实验。
+> **Spec 升级**：Planning spec v1.1（main-LLM-direct + Gateway Skills + 可选 audit layer）;B2 tiny-classifier spike 降级到 Iter D 研究实验。
+>
+> **⚠️ 状态声明实证纪律(2026-04-22)**:本文档里任何 ✅/⏳/⚠️ 声明必须附 commit hash + 实测证据。详见 `quilin.md` "状态声明实证纪律"节。
 
 ## Context
 
@@ -208,15 +218,35 @@ Iter F: Scale-Out + Memory Depth + Self-Evolution
 - **⚠️ D-01 约束**：不建"God Mode 超级权限通道"；所有账号走同一条授权链路
 - 🧪 Tiny-classifier spike：因 Codex 额度 blocker 降级到 Iter D 研究实验（`docs/research/tiny-llm-baseline/` 保留 baseline）
 
-#### B3a — Skills Core ✅ M0（Gateway 接入 Main LLM）
-- ✅ SKILL.md + YAML frontmatter（name/description/type/version）
-- ✅ 三源发现：`bundled/` / `user/` / `project/`
-- ✅ Catalog（启动期建索引，不 eager 全量加载）
-- ✅ `skill_view` tool（按需拉取 body，Tool host 但 Skill ≠ Tool）
-- ✅ 路径 / 体积硬 guard（symlink 拒绝 / 绝对路径锁定 / 单文件 max size）
-- ✅ Gateway 接入：`createSkillsCatalogSection` 注入 system prompt，REPL 已接线（`d617e32`）
+#### B3a — Skills Core（拆分为 M0 + M0.5,2026-04-22 实证更新）
 
-> **B3b Activation**（条件激活 + post-compact + CRUD + skills_guard）被推到 Iter B 后期或 Iter C 过渡期。
+**M0 — Catalog 注入 ✅**(commits `16f3868` + `d617e32`)
+- ✅ SKILL.md + YAML frontmatter(M0 字段:`name` / `description` / `type` / `version`)
+- ✅ 三源发现:`bundled/` / `user/` / `project/`
+- ✅ SkillsManager 启动期建 Catalog,不 eager 全量加载
+- ✅ 路径 / 体积硬 guard(symlink 拒绝 / realpath 锁定 / 单文件 max size)
+- ✅ Gateway 接入:`context/skills-catalog-section.ts` 注入 `<available_skills>` 稳定前缀,REPL 已接线
+
+**M0.5 — `skill_view` tool ✅**(commit `0464377`)
+- ✅ `packages/agent-core/src/tools/builtin/skill-view.ts`(60 LOC)+ `skill-view.test.ts`(143 LOC)
+- ✅ 测试覆盖:happy-path / missing-args / root-escape / size-limit
+- ✅ `SkillsManager.loadBody()` 在 loader 层加了 root-boundary + body-size 守卫(之前只在 catalog 层)
+- ⚠️ **契约缺口**:当前 tool 把 body 作为普通 tool result 返回;**"注入下一轮 user message 尾部"的 outbound decoration 层尚未落地**。由 B3b Phase 1/2 收口(Codex 独立判断:decoration 应在 REPL/assembler 层做,不是 tool 层直接改状态)
+
+#### B3b — Skills Activation(M1) ✅ Phase 0 / ⏳ Phase 1
+
+**2026-04-21 用户 approved 4-phase 拆法**,tracking:`docs/planning/2026-04-21-01-skills-b3b-activation.md`。
+
+| Phase | 范围 | 状态 |
+|-------|------|------|
+| **0** | Frontmatter schema v2 reader(`requiresTools` / `requiresToolsets` / `platforms` / `trust` + D-17 kebab-case 双向 alias + `metadata.quilin.*` 嵌套) | ✅ `bc93f42` 已完成；CC-03 从本 phase 剥离为独立 cluster |
+| **1** | 条件激活 + KV-cache friendly catalog(稳定前缀 lex-sort + `<hot_skills>` ≤10 可变段,D-13) | ⏳ pending |
+| **2** | `skill_manage` CRUD + WriteAuthority 集成(R-01 critical,落盘单一 gate) | ⏳ pending |
+| **3** | skills_guard 内容扫描 + 4 级信任策略(builtin/trusted/community/agent-created) | ⏳ pending |
+| **4** | Post-compact 恢复(保留最近 5 个 ≤25K token) + file watcher 热发现 | ⏳ pending |
+
+**Phase 0 最终边界**(2026-04-21 用户 approved):
+- 单一 Phase 0 不拆 0a/0b;**trust 责任分层**(parser 只读文本 / `SkillsManager.discover()` 按 source 回填 / `skill_manage(create)` 显式 `agent-created`);writer 延到 Phase 2;YAML parser 最小改法不引入依赖;fixture 用 `upstreams/llm-vercel-ai/skills/*` 真实上游样式。
 
 **验证标准**：
 - [x] B1 同时连接 ≥2 个 MCP Server

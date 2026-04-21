@@ -3,10 +3,62 @@ title: Iter B3b — Skills Activation (M1)
 status: in-progress
 owner: Claude (plan) + Codex (impl)
 created: 2026-04-21
-last_updated: 2026-04-21
+last_updated: 2026-04-22
+
+threat_surface_delta:
+  phase_0:
+    new_ingress:
+      - source: skill frontmatter (M1 fields — requiresTools / requiresToolsets / platforms / trust / metadata.quilin.*)
+        trust: untrusted (community / user sources)
+        mitigations: [frontmatter-parser-size-cap, unknown-field-ignore, yaml-depth-limit-2, path-realpath-guard-inherited-from-M0]
+    new_egress: []
+    new_persistence: []
+  phase_1:
+    new_ingress:
+      - source: turnContext.availableToolNames (for requiresTools filter)
+        trust: trusted (produced by ToolRouter)
+        mitigations: [filter-logic-pure-function, no-escape-from-lexicographic-sort]
+    new_egress: []
+    new_persistence: []
+  phase_2:
+    new_ingress:
+      - source: skill_manage(create|update|delete) args (agent / user can invoke)
+        trust: untrusted (may include path-traversal attempts in skill_id)
+        mitigations: [WriteAuthority-single-gate, path-workspace-containment, skill_id-charset-whitelist, size-cap, content-scan-stub-until-phase-3]
+    new_egress: []
+    new_persistence:
+      - location: .quilin/skills/**/SKILL.md and adjacencies
+        sensitive: [user-authored-instructions, agent-authored-instructions]
+        migration: schemaVersion in SKILL.md frontmatter (M1 adds trust default by source, no schema bump)
+  phase_3:
+    new_ingress:
+      - source: skill body content (community / agent-created skills)
+        trust: untrusted
+        mitigations: [skills_guard-30+-threat-patterns, 4-level-trust-strategy, trust=agent-created-forces-ask]
+    new_egress: []
+    new_persistence: []
+  phase_4:
+    new_ingress:
+      - source: fs.watch events on .quilin/skills/ (file watcher)
+        trust: untrusted (attacker could drop skill file while session live)
+        mitigations: [debounce, realpath-guard, re-run-skills_guard-on-new-file, rate-limit-add-events]
+    new_egress: []
+    new_persistence: []
 ---
 
-> **规划状态**：用户已 approve 4-phase 拆法 + R-01 critical 约束（2026-04-21）。Codex 正在收尾 Reasoning Phase 2 first batch，等其合并后从 B3b Phase 0 开始 TDD。
+> **规划状态（2026-04-22 更新）**：用户已 approve 4-phase 拆法 + R-01 critical 约束（2026-04-21）+ Phase 0 最终边界（2026-04-21 19:xx，Codex 提议 / Claude 转达 / 用户 approved）。**Phase 0 已完成并提交 `bc93f42`**。实证：`vitest src/skills/frontmatter.test.ts src/skills/manager.test.ts` → 14 passed（2 files）；改动仅限 `skills/*` 五个文件；`biome check` on changed files passed。进度以 commit 实证为准，不接受"凭记忆"状态转述。
+
+### Phase 0 最终边界（2026-04-22 用户 approved）
+
+- **单一 Phase 0** = `frontmatter schema v2 reader` + **CC-03 并行小改**。不拆 Phase 0a/0b，回归 tracking doc 原定边界。
+- **trust 责任分层**（Codex 独立判断，Claude 转达 / 用户 approved）：
+  - parser：**只**校验并返回文本里明写的 trust，不硬编码默认值
+  - `SkillsManager.discover()`：按 source 注入默认（`bundled/` → `builtin` / `~/.quilin/skills/` → `community`）
+  - `skill_manage(create)`（Phase 2）：写入时显式 `agent-created`，不靠 parser 默认值
+- **writer 延到 Phase 2**：`skill_manage(update)` 实现时一起做完整 writer + 保真写回。Phase 0 **只 ship reader**，不做半成品 writer 结构。
+- **CC-03 并行**：pin `@types/bun` 到 exact version（当前 `^1.3.12` 浮动不够）+ CI TypeScript job 加 `tsc --noEmit` 硬门步骤。
+- **YAML parser 最小改法**：升级现有逐行 parser 支持 2 层缩进，**不引入** YAML 库依赖。
+- **fixture 选择**：复用 `upstreams/llm-vercel-ai/skills/*/SKILL.md` 真实上游样式 + 本地扩展 fixture 覆盖 `metadata.quilin.*`。
 
 # Iter B3b — Skills Activation (M1)
 
@@ -26,13 +78,13 @@ B3b 不做：M2+ 的 Plugin 平台、Background nudge 自进化、ToolSearch 延
 
 | # | 名称 | 状态 | Owner | Commit | 备注 |
 |---|---|---|---|---|---|
-| 0 | Frontmatter schema v2 + D-17 kebab-case alias | ⏳ pending | Codex | — | M0 parser 只吃 M0 字段，v2 解锁 M1 字段；`allowed-tools` ↔ `allowedTools` 双向 |
+| 0 | Frontmatter schema v2 + D-17 kebab-case alias | ✅ completed | Codex | `bc93f42` | parser 解锁 M1 字段 + `metadata.quilin.*` + source-based trust defaults；CC-03 从本 phase 剥离为独立 cluster |
 | 1 | 条件激活 + KV-cache friendly catalog (D-13) | ⏳ pending | Codex | — | 稳定前缀 lex-sort + `<hot_skills>` ≤10 可变段 |
 | 2 | skill_manage CRUD + WriteAuthority 集成 | ⏳ pending | Codex | — | **R-01 critical**：落盘必须过单一 WriteAuthority gate |
 | 3 | skills_guard 内容扫描 + 4 级信任策略 | ⏳ pending | Codex | — | 借用 07 分类器基础设施；trust=agent-created 自动 ask |
 | 4 | Post-compact 恢复 + file watcher | ⏳ pending | Codex | — | 02-context 协作：compact 后保留最近 5 个 skill、≤25K token |
 
-### Phase 0 — Frontmatter schema v2 + kebab-case alias ⏳
+### Phase 0 — Frontmatter schema v2 + kebab-case alias ✅
 
 - **做什么**：
   1. `packages/agent-core/src/skills/frontmatter.ts` parser 解锁 M1 字段：`requiresTools` / `requiresToolsets` / `platforms` / `trust` / `metadata.quilin.*`
@@ -49,6 +101,11 @@ B3b 不做：M2+ 的 Plugin 平台、Background nudge 自进化、ToolSearch 延
   - `src/skills/frontmatter.test.ts` 补 kebab-case alias 往返 + M1 字段 parse + 未知字段 ignore
   - 真实的 `anthropics/skills` fixture（2 个 skill 足够）能零翻译解析
 - **产出**：frontmatter.ts + types.ts + 测试
+- **提交**：`bc93f42` — `feat(skills): add frontmatter v2 reader with source-based trust defaults`
+- **实证**：
+  - `vitest src/skills/frontmatter.test.ts src/skills/manager.test.ts` → 14 passed（2 files）
+  - `biome check` on changed files → passed
+  - `git diff --stat` → `skills/*` only，5 files changed，`+305 / -24`
 
 ### Phase 1 — 条件激活 + KV-cache friendly catalog ⏳
 
