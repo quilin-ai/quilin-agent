@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { SkillDescriptor } from "../skills/types.js";
-import { createSkillsCatalogSection } from "./skills-catalog-section.js";
+import {
+	createHotSkillsSection,
+	createSkillsCatalogSection,
+} from "./skills-catalog-section.js";
 import type { BuildContext } from "./prompt-types.js";
 
 function makeDescriptor(name: string): SkillDescriptor {
@@ -70,6 +73,22 @@ describe("createSkillsCatalogSection", () => {
 		).toContain('name="browser-skill"');
 	});
 
+	it("only keeps stable-prefix descriptors in the per_session section", () => {
+		const section = createSkillsCatalogSection({
+			list: () => [
+				makeDescriptor("bundled-skill"),
+				{
+					...makeDescriptor("project-skill"),
+					source: "project",
+				},
+			],
+		});
+
+		const output = section.compute(baseCtx);
+		expect(output).toContain('name="bundled-skill"');
+		expect(output).not.toContain('name="project-skill"');
+	});
+
 	it("returns null when no descriptors are available (section omitted)", () => {
 		const section = createSkillsCatalogSection({ list: () => [] });
 		expect(section.compute(baseCtx)).toBeNull();
@@ -91,5 +110,59 @@ describe("createSkillsCatalogSection", () => {
 		descriptors = [makeDescriptor("gamma")];
 		const output = section.compute(baseCtx);
 		expect(output).toContain('name="gamma"');
+	});
+});
+
+describe("createHotSkillsSection", () => {
+	it("renders project and plugin skills into a per_turn hot-skills block", () => {
+		const section = createHotSkillsSection({
+			list: () => [
+				{
+					...makeDescriptor("project-skill"),
+					source: "project",
+				},
+			],
+		});
+
+		const output = section.compute({
+			...baseCtx,
+			userInput: "project",
+		});
+
+		expect(output).toContain("<hot_skills>");
+		expect(output).toContain('name="project-skill"');
+		expect(section.updateFrequency).toBe("per_turn");
+		expect(section.order).toBe(55);
+	});
+
+	it("uses sessionState recentSkillNames to rank hot skills", () => {
+		const section = createHotSkillsSection({
+			list: () => [
+				{
+					...makeDescriptor("alpha"),
+					source: "project",
+				},
+				{
+					...makeDescriptor("beta"),
+					source: "project",
+				},
+			],
+		});
+
+		const output = section.compute({
+			...baseCtx,
+			sessionState: {
+				skills: {
+					recentSkillNames: ["beta", "alpha"],
+				},
+			},
+		});
+
+		if (output == null) {
+			throw new Error("expected hot skills output");
+		}
+		expect(output.indexOf('name="beta"')).toBeLessThan(
+			output.indexOf('name="alpha"'),
+		);
 	});
 });

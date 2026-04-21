@@ -4,7 +4,10 @@ import { createDefaultPromptSections } from "./context/default-sections.js";
 import { BasicContextManager } from "./context/manager.js";
 import { PromptBuilder } from "./context/prompt-builder.js";
 import { PromptSessionAssembler } from "./context/prompt-session-assembler.js";
-import { createSkillsCatalogSection } from "./context/skills-catalog-section.js";
+import {
+	createHotSkillsSection,
+	createSkillsCatalogSection,
+} from "./context/skills-catalog-section.js";
 import { createTemporalBucketSection } from "./context/temporal.js";
 import { StreamingLLMClient } from "./llm/client.js";
 import type { createProvider } from "./llm/provider.js";
@@ -64,6 +67,7 @@ function createPromptSessionAssembler(
 	}
 	if (skillsManager != null) {
 		promptBuilder.register(createSkillsCatalogSection(skillsManager));
+		promptBuilder.register(createHotSkillsSection(skillsManager));
 	}
 	promptBuilder.register(createTemporalBucketSection());
 

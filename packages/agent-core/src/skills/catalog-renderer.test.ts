@@ -1,6 +1,10 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { renderSkillsCatalog } from "./catalog-renderer.js";
-import type { SkillDescriptor } from "./types.js";
+import {
+	renderHotSkillsCatalog,
+	renderSkillsCatalog,
+} from "./catalog-renderer.js";
+import type { SkillDescriptor, SkillFrontmatter } from "./types.js";
 
 const descriptor: SkillDescriptor = {
 	name: "web-scraping",
@@ -26,7 +30,38 @@ const baseTurnContext = {
 	availableToolsets: ["browser"],
 	minTrustLevel: "community" as const,
 	platform: "linux" as const,
+	userInput: "",
+	recentSkillNames: [],
 };
+
+function stableHash(value: string): string {
+	return createHash("sha256").update(value).digest("hex").slice(0, 16);
+}
+
+type DescriptorOverrides = Omit<Partial<SkillDescriptor>, "frontmatter"> & {
+	readonly frontmatter?: Partial<SkillFrontmatter>;
+};
+
+function makeDescriptor(
+	name: string,
+	overrides: DescriptorOverrides = {},
+): SkillDescriptor {
+	const overrideFrontmatter = overrides.frontmatter ?? {};
+	const frontmatter = Object.assign({}, descriptor.frontmatter, {
+		name,
+		description: `Skill ${name} description`,
+		mandatory: false,
+	}, overrideFrontmatter);
+
+	return {
+		...descriptor,
+		name,
+		description: `Skill ${name} description`,
+		path: `/tmp/${name}/SKILL.md`,
+		...overrides,
+		frontmatter,
+	};
+}
 
 describe("renderSkillsCatalog", () => {
 	it("renders available skills block and truncates long descriptions", () => {
@@ -161,5 +196,95 @@ describe("renderSkillsCatalog", () => {
 		);
 
 		expect(xml).toContain('mandatory="true"');
+	});
+
+	it("keeps the stable prefix lexicographically sorted and hash-stable across recency changes", () => {
+		const descriptors = [
+			makeDescriptor("zeta", { source: "user" }),
+			makeDescriptor("alpha", { source: "bundled" }),
+			makeDescriptor("mid", {
+				source: "user",
+				frontmatter: {
+					mandatory: true,
+				},
+			}),
+		];
+
+		const first = renderSkillsCatalog(descriptors, {
+			...baseTurnContext,
+			recentSkillNames: ["zeta", "alpha", "mid"],
+			userInput: "mid zeta",
+		});
+		const second = renderSkillsCatalog(descriptors, {
+			...baseTurnContext,
+			recentSkillNames: ["alpha", "mid", "zeta"],
+			userInput: "alpha",
+		});
+
+		expect(first).toContain('name="alpha"');
+		expect(first).toContain('name="mid"');
+		expect(first).toContain('name="zeta"');
+		expect(first.indexOf('name="alpha"')).toBeLessThan(
+			first.indexOf('name="mid"'),
+		);
+		expect(first.indexOf('name="mid"')).toBeLessThan(
+			first.indexOf('name="zeta"'),
+		);
+		expect(stableHash(first)).toBe(stableHash(second));
+	});
+});
+
+describe("renderHotSkillsCatalog", () => {
+	it("renders hot skills as a separate XML block", () => {
+		const xml = renderHotSkillsCatalog(
+			[
+				makeDescriptor("project-skill", {
+					source: "project",
+				}),
+			],
+			baseTurnContext,
+		);
+
+		expect(xml).toContain("<hot_skills>");
+		expect(xml).toContain('name="project-skill"');
+	});
+
+	it("limits hot skills to 10 entries", () => {
+		const descriptors = Array.from({ length: 15 }, (_, index) =>
+			makeDescriptor(`project-skill-${index}`, {
+				source: "project",
+			}),
+		);
+
+		const xml = renderHotSkillsCatalog(descriptors, baseTurnContext);
+		expect(xml.match(/<skill /g)?.length ?? 0).toBeLessThanOrEqual(10);
+	});
+
+	it("ranks hot skills by recency first and relevance second", () => {
+		const xml = renderHotSkillsCatalog(
+			[
+				makeDescriptor("web-fetch-advanced", {
+					source: "project",
+				}),
+				makeDescriptor("browser-automation", {
+					source: "plugin",
+				}),
+				makeDescriptor("database-admin", {
+					source: "project",
+				}),
+			],
+			{
+				...baseTurnContext,
+				userInput: "browser automation",
+				recentSkillNames: ["web-fetch-advanced", "database-admin"],
+			},
+		);
+
+		expect(xml.indexOf('name="web-fetch-advanced"')).toBeLessThan(
+			xml.indexOf('name="browser-automation"'),
+		);
+		expect(xml.indexOf('name="browser-automation"')).toBeLessThan(
+			xml.indexOf('name="database-admin"'),
+		);
 	});
 });

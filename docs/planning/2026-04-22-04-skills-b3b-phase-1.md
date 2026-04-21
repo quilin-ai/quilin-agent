@@ -158,9 +158,16 @@ filtered = descriptors
 ### 2026-04-22 — hot_skills relevance 算双字段 + name 高权重
 
 - **Before:** Phase 1 spec 里 `relevance = keyword match × 0.4` 没说对哪个字段
-- **After:** 对 `skill.name` + `skill.description` 都跑 keyword match,`name` 权重 > `description`(具体倍数由 Codex 在 P1-b 实现时定,回填到本文件)
+- **After:** 对 `skill.name` + `skill.description` 都跑 keyword match,权重固定为 `name=0.7` / `description=0.3`
 - **理由:** 短名精确命中是最强信号;只看 description 会漏掉用户用 skill 名直呼的命中
 - **Source:** Codex cross-review on `a66dc02` tracking doc
+
+### 2026-04-22 — P1-b 的 recency 先读 sessionState.skills.recentSkillNames
+
+- **Before:** spec 写 `recency (last_used_at) × 0.6`,但当前代码面尚无持久化 `last_used_at`
+- **After:** P1-b 先用 `BuildContext.sessionState.skills.recentSkillNames` 作为 recency 信号,约定为 newest-first 名称列表;命中越靠前得分越高。排序总分仍为 `recency×0.6 + relevance×0.4`
+- **理由:** 不阻塞 D-13 稳定前缀 / hot_skills 分流先落地;P1-c 再决定是否把该信号上提成显式 BuildContext 字段或接真实 usage telemetry
+- **Source:** Codex P1-b implementation checkpoint 2026-04-22
 
 ### 2026-04-22 — mandatory: true 只允许 bundled / user
 

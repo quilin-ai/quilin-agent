@@ -1,6 +1,11 @@
 import type { SkillDescriptor, SkillTrustLevel } from "./types.js";
 
 const MAX_DESCRIPTION_CHARS = 64;
+const HOT_SKILLS_LIMIT = 10;
+const NAME_RELEVANCE_WEIGHT = 0.7;
+const DESCRIPTION_RELEVANCE_WEIGHT = 0.3;
+const RECENCY_WEIGHT = 0.6;
+const RELEVANCE_WEIGHT = 0.4;
 const TRUST_LEVEL_RANK: Record<SkillTrustLevel, number> = {
 	"agent-created": 0,
 	community: 1,
@@ -13,6 +18,8 @@ export interface SkillsCatalogTurnContext {
 	readonly availableToolsets?: readonly string[];
 	readonly minTrustLevel?: SkillTrustLevel;
 	readonly platform?: NodeJS.Platform;
+	readonly userInput?: string;
+	readonly recentSkillNames?: readonly string[];
 }
 
 function truncateDescription(text: string): string {
@@ -84,11 +91,87 @@ function normalizeMandatory(descriptor: SkillDescriptor): SkillDescriptor {
 	};
 }
 
-export function renderSkillsCatalog(
+function compareSkillNames(left: SkillDescriptor, right: SkillDescriptor): number {
+	if (left.name < right.name) {
+		return -1;
+	}
+	if (left.name > right.name) {
+		return 1;
+	}
+	return 0;
+}
+
+function isStableSkill(descriptor: SkillDescriptor): boolean {
+	return (
+		descriptor.frontmatter.mandatory === true ||
+		descriptor.source === "bundled" ||
+		descriptor.source === "user"
+	);
+}
+
+function normalizeForMatch(text: string): string {
+	return text.trim().toLowerCase();
+}
+
+function extractKeywords(input: string): readonly string[] {
+	return normalizeForMatch(input)
+		.split(/[^a-z0-9\u4e00-\u9fff-]+/u)
+		.filter((keyword) => keyword.length > 0);
+}
+
+function scoreKeywordHits(
+	text: string,
+	keywords: readonly string[],
+): number {
+	if (keywords.length === 0) {
+		return 0;
+	}
+
+	const normalizedText = normalizeForMatch(text);
+	const matches = keywords.filter((keyword) =>
+		normalizedText.includes(keyword),
+	).length;
+	return matches / keywords.length;
+}
+
+function scoreRelevance(
+	descriptor: SkillDescriptor,
+	userInput: string | undefined,
+): number {
+	if (userInput == null || userInput.trim().length === 0) {
+		return 0;
+	}
+
+	const keywords = extractKeywords(userInput);
+	const nameScore = scoreKeywordHits(descriptor.name, keywords);
+	const descriptionScore = scoreKeywordHits(descriptor.description, keywords);
+	return (
+		nameScore * NAME_RELEVANCE_WEIGHT +
+		descriptionScore * DESCRIPTION_RELEVANCE_WEIGHT
+	);
+}
+
+function scoreRecency(
+	descriptor: SkillDescriptor,
+	recentSkillNames: readonly string[] | undefined,
+): number {
+	if (recentSkillNames == null || recentSkillNames.length === 0) {
+		return 0;
+	}
+
+	const index = recentSkillNames.indexOf(descriptor.name);
+	if (index === -1) {
+		return 0;
+	}
+
+	return (recentSkillNames.length - index) / recentSkillNames.length;
+}
+
+function filterActiveSkills(
 	descriptors: readonly SkillDescriptor[],
 	turnContext: SkillsCatalogTurnContext,
-): string {
-	const filteredDescriptors = descriptors
+): readonly SkillDescriptor[] {
+	return descriptors
 		.filter((descriptor) =>
 			covers(turnContext.availableToolNames, descriptor.frontmatter.requiresTools),
 		)
@@ -108,12 +191,17 @@ export function renderSkillsCatalog(
 			meetsTrust(descriptor.frontmatter.trust, turnContext.minTrustLevel),
 		)
 		.map((descriptor) => normalizeMandatory(descriptor));
+}
 
-	if (filteredDescriptors.length === 0) {
-		return "<available_skills />";
+function renderSkillList(
+	tagName: "available_skills" | "hot_skills",
+	descriptors: readonly SkillDescriptor[],
+): string {
+	if (descriptors.length === 0) {
+		return `<${tagName} />`;
 	}
 
-	const lines = filteredDescriptors.map((descriptor) => {
+	const lines = descriptors.map((descriptor) => {
 		const attrs: string[] = [
 			`name="${xmlEscape(descriptor.name)}"`,
 			`source="${descriptor.source}"`,
@@ -136,5 +224,54 @@ export function renderSkillsCatalog(
 		return `  <skill ${attrs.join(" ")}>${body}</skill>`;
 	});
 
-	return `<available_skills>\n${lines.join("\n")}\n</available_skills>`;
+	return `<${tagName}>\n${lines.join("\n")}\n</${tagName}>`;
+}
+
+export function renderSkillsCatalog(
+	descriptors: readonly SkillDescriptor[],
+	turnContext: SkillsCatalogTurnContext,
+): string {
+	const filteredDescriptors = filterActiveSkills(descriptors, turnContext)
+		.filter((descriptor) => isStableSkill(descriptor))
+		.sort(compareSkillNames);
+
+	return renderSkillList("available_skills", filteredDescriptors);
+}
+
+export function renderHotSkillsCatalog(
+	descriptors: readonly SkillDescriptor[],
+	turnContext: SkillsCatalogTurnContext,
+): string {
+	const filteredDescriptors = filterActiveSkills(descriptors, turnContext).filter(
+		(descriptor) => !isStableSkill(descriptor),
+	);
+
+	const rankedDescriptors = filteredDescriptors
+		.map((descriptor) => ({
+			descriptor,
+			recencyScore: scoreRecency(descriptor, turnContext.recentSkillNames),
+			relevanceScore: scoreRelevance(descriptor, turnContext.userInput),
+		}))
+		.sort((left, right) => {
+			const leftScore =
+				left.recencyScore * RECENCY_WEIGHT +
+				left.relevanceScore * RELEVANCE_WEIGHT;
+			const rightScore =
+				right.recencyScore * RECENCY_WEIGHT +
+				right.relevanceScore * RELEVANCE_WEIGHT;
+			if (leftScore !== rightScore) {
+				return rightScore - leftScore;
+			}
+			if (left.recencyScore !== right.recencyScore) {
+				return right.recencyScore - left.recencyScore;
+			}
+			if (left.relevanceScore !== right.relevanceScore) {
+				return right.relevanceScore - left.relevanceScore;
+			}
+			return compareSkillNames(left.descriptor, right.descriptor);
+		})
+		.slice(0, HOT_SKILLS_LIMIT)
+		.map((entry) => entry.descriptor);
+
+	return renderSkillList("hot_skills", rankedDescriptors);
 }
