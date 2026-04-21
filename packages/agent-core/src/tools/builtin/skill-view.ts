@@ -1,15 +1,24 @@
 import { z } from "zod";
+import { createSkillsGuard } from "../../skills/guard.js";
 import type { SkillsManager } from "../../skills/manager.js";
+import type { SkillSource, SkillTrustLevel, SkillsGuard } from "../../skills/types.js";
 import type { ToolWithMetadata } from "../tool-metadata.js";
 import type { ToolResult } from "../types.js";
 
 const DEFAULT_MAX_BODY_CHARS = 100_000;
 const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
 
-function createErrorResult(message: string): ToolResult {
+function createErrorResult(message: string, extra?: Record<string, unknown>): ToolResult {
 	return {
 		toolCallId: "builtin-skill-view",
-		content: JSON.stringify({ error: message }),
+		content: JSON.stringify(
+			extra == null
+				? { error: message }
+				: {
+						error: message,
+						...extra,
+					},
+		),
 		isError: true,
 	};
 }
@@ -26,6 +35,18 @@ export interface SkillViewToolOptions {
 	readonly skillsManager: SkillsManager;
 	readonly maxBodyChars?: number;
 	readonly maxBodyBytes?: number;
+	readonly guard?: SkillsGuard;
+}
+
+function defaultTrustForSource(source: SkillSource): SkillTrustLevel {
+	switch (source) {
+		case "bundled":
+			return "builtin";
+		case "user":
+		case "project":
+		case "plugin":
+			return "community";
+	}
 }
 
 export function createSkillViewTool(
@@ -33,6 +54,7 @@ export function createSkillViewTool(
 ): ToolWithMetadata {
 	const maxBodyChars = options.maxBodyChars ?? DEFAULT_MAX_BODY_CHARS;
 	const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
+	const guard = options.guard ?? createSkillsGuard();
 
 	return {
 		name: "skill_view",
@@ -49,6 +71,25 @@ export function createSkillViewTool(
 					maxBodyChars,
 					maxBodyBytes,
 				});
+				const decision = guard.scan(skill.body, {
+					trust:
+						skill.descriptor.frontmatter.trust ??
+						defaultTrustForSource(skill.descriptor.source),
+					stage: "read",
+					skillName: skill.descriptor.name,
+				});
+				if (decision.kind === "ask") {
+					return createErrorResult("guard_ask", {
+						detail: `skills_guard requires confirmation for ${skill.descriptor.name}`,
+						findings: decision.findings,
+					});
+				}
+				if (decision.kind === "deny") {
+					return createErrorResult("guard_denied", {
+						detail: decision.detail,
+						findings: decision.findings,
+					});
+				}
 				return createSuccessResult(skill.body);
 			} catch (error) {
 				const message =
