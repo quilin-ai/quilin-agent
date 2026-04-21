@@ -8,8 +8,8 @@
 > |--------|------|------|
 > | **M0 — catalog 注入 system prompt** | ✅ 已实现 | commits `16f3868`（SkillsManager + CatalogRenderer M0）+ `d617e32`（Gateway 接入 `<available_skills>`）。`context/skills-catalog-section.ts` 稳定前缀段已接 PromptBuilder。 |
 > | **M0.5 — `skill_view` tool 按需加载 body** | ✅ 已实现 | commit `0464377`。文件：`packages/agent-core/src/tools/builtin/skill-view.ts`（60 LOC）+ `skill-view.test.ts`（143 LOC）。测试覆盖 happy-path / missing-args / root-escape / size-limit。 |
-> | **M0.5 契约缺口** | ⚠️ 未收口 | 当前 `skill_view` 把 body 作为普通 tool result 返回；"注入下一轮 user message 尾部"的 outbound decoration 层**尚未实现**。由 B3b Phase 1/2 收口（Codex 独立判断：decoration 应在 REPL/assembler 层做，不是 tool 层）。 |
-> | **M1 — 条件激活 / CRUD / 安全扫描** | ✅ Phase 0 / ⏳ Phase 1 | `bc93f42` 完成 Phase 0：frontmatter schema v2 reader + `metadata.quilin.*` + source-based trust defaults。CC-03 从本 phase 剥离为独立 cluster。Tracking：`docs/planning/2026-04-21-01-skills-b3b-activation.md`。 |
+> | **M0.5 契约缺口** | ✅ 已收口 | B3b Phase 1 落地 `<hot_skills>` 条件激活 + REPL/assembler 稳定前缀注入（`a9ef022` / `86f4512` / `338c607`）；B3b Phase 3 `skills_guard` 在 `skill_view` 读入 body 时做 4×4 策略矩阵扫描（`35886f3`）。outbound decoration 由 assembler 的 dynamic suffix 承担，不再落在 tool 层（Codex 独立判断已成立）。 |
+> | **M1 — 条件激活 / CRUD / 安全扫描** | ✅ Phase 0/1/2/3 / ⏳ Phase 4 | Phase 0 `bc93f42` frontmatter schema v2；Phase 1 `a9ef022` / `86f4512` / `338c607` 条件激活 + 稳定前缀；Phase 2 `b5a9474` / `a5140da` / `29d6c18` `skill_manage` CRUD + WriteAuthority（R-01 critical）；Phase 3 `c2954f6` / `35886f3` / `0fae827` skills_guard + 4 级信任策略 × 4 级严重度（R-02 spy 合同）。Phase 4 post-compact 恢复 + file watcher 进行中，tracking doc：`docs/planning/2026-04-22-07-skills-b3b-phase-4.md`。 |
 > | **M2+ — 平台化 / Background nudge / ToolSearch 延迟加载** | 💭 未开始 | 依赖 10-self-evolution / Plugin 平台 / 工具数 >100。 |
 
 > **ADR-001 对齐说明**：技能系统（Skill Loading）用 TS 实现，作为 Agent Core 内的独立子系统。Skill 与 Tool 严格分离：Tool 是运行时可执行动作，Skill 是可被 LLM 读取的知识/指令资产。本文档中的 Python 代码示例仅表达设计意图，实施时以 TS 落地。
