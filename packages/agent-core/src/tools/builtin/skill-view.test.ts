@@ -81,6 +81,7 @@ describe("builtin skill_view tool", () => {
 
 		expect(result.isError).toBe(false);
 		expect(result.content).toBe("# Skill Body\n\nUse it carefully.\n");
+		expect(skillsManager.getRecentSkillNames()).toEqual(["read-page"]);
 	});
 
 	it("rejects skill files that resolve outside the configured roots", async () => {
@@ -271,5 +272,21 @@ describe("builtin skill_view tool", () => {
 				trust: "community",
 			}),
 		);
+	});
+
+	it("updates recentSkillNames newest-first on repeated successful views", async () => {
+		const userRoot = await createTempDir();
+		await writeSkill(userRoot, "alpha", "Alpha", "alpha body");
+		await writeSkill(userRoot, "beta", "Beta", "beta body");
+
+		const skillsManager = new SkillsManager({ userRoots: [userRoot] });
+		await skillsManager.discover();
+		const tool = createSkillViewTool({ skillsManager });
+
+		await tool.execute({ skill_id: "alpha" });
+		await tool.execute({ skill_id: "beta" });
+		await tool.execute({ skill_id: "alpha" });
+
+		expect(skillsManager.getRecentSkillNames()).toEqual(["alpha", "beta"]);
 	});
 });

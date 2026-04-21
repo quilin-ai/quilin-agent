@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { SkillDescriptor } from "../skills/types.js";
 import {
 	createHotSkillsSection,
+	createPostCompactSkillsSection,
 	createSkillsCatalogSection,
 } from "./skills-catalog-section.js";
 import type { BuildContext } from "./prompt-types.js";
@@ -163,6 +164,66 @@ describe("createHotSkillsSection", () => {
 		}
 		expect(output.indexOf('name="beta"')).toBeLessThan(
 			output.indexOf('name="alpha"'),
+		);
+	});
+});
+
+describe("createPostCompactSkillsSection", () => {
+	it("returns null when compaction was not just triggered", () => {
+		const section = createPostCompactSkillsSection({
+			list: () => [],
+			postCompactRestore: () => ({
+				entries: [
+					{
+						name: "alpha",
+						source: "user",
+						body: "alpha body",
+						tokenEstimate: 3,
+					},
+				],
+				totalTokens: 3,
+			}),
+		});
+
+		expect(
+			section.compute({
+				...baseCtx,
+				sessionState: {
+					skills: { recentSkillNames: ["alpha"] },
+				},
+			}),
+		).toBeNull();
+	});
+
+	it("renders a dynamic restore block when compaction flag is present", () => {
+		const section = createPostCompactSkillsSection({
+			list: () => [],
+			postCompactRestore: ({ recentSkillNames }) => ({
+				entries: recentSkillNames.map((name) => ({
+					name,
+					source: "user" as const,
+					body: `${name} body`,
+					tokenEstimate: 3,
+				})),
+				totalTokens: recentSkillNames.length * 3,
+			}),
+		});
+
+		const output = section.compute({
+			...baseCtx,
+			sessionState: {
+				skills: { recentSkillNames: ["beta", "alpha"] },
+				compaction: { justCompacted: true, at: 123 },
+			},
+		});
+
+		expect(section.order).toBe(60);
+		expect(section.updateFrequency).toBe("per_turn");
+		expect(output).toContain("<post_compact_skills>");
+		expect(output).toContain('name="beta"');
+		expect(output).toContain('name="alpha"');
+		expect(output?.indexOf('name="beta"')).toBeLessThan(
+			output?.indexOf('name="alpha"') ?? 0,
 		);
 	});
 });

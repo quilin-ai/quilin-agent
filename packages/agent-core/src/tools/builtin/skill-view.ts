@@ -90,6 +90,7 @@ export function createSkillViewTool(
 						findings: decision.findings,
 					});
 				}
+				options.skillsManager.recordViewedSkill(skill);
 				return createSuccessResult(skill.body);
 			} catch (error) {
 				const message =

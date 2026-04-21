@@ -35,6 +35,18 @@ export interface LoadedSkill {
 	readonly tokenEstimate: number;
 }
 
+export interface PostCompactRestoreEntry {
+	readonly name: string;
+	readonly source: SkillSource;
+	readonly body: string;
+	readonly tokenEstimate: number;
+}
+
+export interface PostCompactRestoreResult {
+	readonly entries: readonly PostCompactRestoreEntry[];
+	readonly totalTokens: number;
+}
+
 export type SkillManageAction =
 	| {
 			readonly action: "create";

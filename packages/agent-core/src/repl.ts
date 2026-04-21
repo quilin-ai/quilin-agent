@@ -6,6 +6,7 @@ import { PromptBuilder } from "./context/prompt-builder.js";
 import { PromptSessionAssembler } from "./context/prompt-session-assembler.js";
 import {
 	createHotSkillsSection,
+	createPostCompactSkillsSection,
 	createSkillsCatalogSection,
 } from "./context/skills-catalog-section.js";
 import { createTemporalBucketSection } from "./context/temporal.js";
@@ -68,6 +69,7 @@ function createPromptSessionAssembler(
 	if (skillsManager != null) {
 		promptBuilder.register(createSkillsCatalogSection(skillsManager));
 		promptBuilder.register(createHotSkillsSection(skillsManager));
+		promptBuilder.register(createPostCompactSkillsSection(skillsManager));
 	}
 	promptBuilder.register(createTemporalBucketSection());
 
@@ -83,6 +85,11 @@ function createPromptSessionAssembler(
 				.map((tool) => tool.name)
 				.filter((name): name is string => name != null),
 		getAvailableToolDescriptors: () => registry.getToolDescriptors(),
+		getSessionState: () => ({
+			skills: {
+				recentSkillNames: skillsManager?.getRecentSkillNames() ?? [],
+			},
+		}),
 	});
 
 	registry.onChange(() => {

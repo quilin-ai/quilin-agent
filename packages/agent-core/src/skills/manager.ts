@@ -1,8 +1,11 @@
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { isAbsolute, join, relative } from "node:path";
+import { estimateTokens } from "../context/tokens.js";
 import { parseSkillMarkdown } from "./frontmatter.js";
 import type {
 	LoadedSkill,
+	PostCompactRestoreEntry,
+	PostCompactRestoreResult,
 	SkillDescriptor,
 	SkillFrontmatter,
 	SkillSource,
@@ -26,14 +29,28 @@ interface LoadSkillOptions {
 	readonly maxBodyBytes?: number;
 }
 
+export interface PostCompactRestoreOptions {
+	readonly recentSkillNames: readonly string[];
+	readonly maxSkills?: number;
+	readonly maxSkillTokens?: number;
+	readonly maxTotalTokens?: number;
+	readonly estimateTokens?: (text: string) => number;
+}
+
 export const DEFAULT_MAX_BODY_CHARS = 100_000;
 export const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
+export const DEFAULT_MAX_RECENT_SKILL_NAMES = 10;
+export const DEFAULT_POST_COMPACT_MAX_SKILLS = 5;
+export const DEFAULT_POST_COMPACT_MAX_SKILL_TOKENS = 5_000;
+export const DEFAULT_POST_COMPACT_MAX_TOTAL_TOKENS = 25_000;
 
 export class SkillsManager {
 	private readonly roots: readonly RootEntry[];
 	private descriptorByName: Map<string, SkillDescriptor> = new Map();
 	private discoveryOrder: readonly string[] = [];
 	private readonly changeListeners = new Set<() => void>();
+	private recentSkillNames: readonly string[] = [];
+	private loadedSkillByName = new Map<string, LoadedSkill>();
 
 	constructor(options: SkillsManagerOptions) {
 		const roots: RootEntry[] = [];
@@ -169,6 +186,68 @@ export class SkillsManager {
 			descriptor,
 			body,
 			tokenEstimate: Math.max(1, Math.ceil(body.length / 4)),
+		};
+	}
+
+	recordViewedSkill(
+		skill: LoadedSkill,
+		maxEntries = DEFAULT_MAX_RECENT_SKILL_NAMES,
+	): void {
+		this.loadedSkillByName.set(skill.descriptor.name, skill);
+		this.recentSkillNames = [
+			skill.descriptor.name,
+			...this.recentSkillNames.filter((entry) => entry !== skill.descriptor.name),
+		].slice(0, maxEntries);
+	}
+
+	getRecentSkillNames(): readonly string[] {
+		return this.recentSkillNames;
+	}
+
+	postCompactRestore(
+		options: PostCompactRestoreOptions,
+	): PostCompactRestoreResult {
+		const maxSkills = options.maxSkills ?? DEFAULT_POST_COMPACT_MAX_SKILLS;
+		const maxSkillTokens =
+			options.maxSkillTokens ?? DEFAULT_POST_COMPACT_MAX_SKILL_TOKENS;
+		const maxTotalTokens =
+			options.maxTotalTokens ?? DEFAULT_POST_COMPACT_MAX_TOTAL_TOKENS;
+		const estimate = options.estimateTokens ?? estimateTokens;
+		const dedupedRecentNames = Array.from(new Set(options.recentSkillNames));
+		const entries: PostCompactRestoreEntry[] = [];
+		let totalTokens = 0;
+
+		for (const name of dedupedRecentNames) {
+			if (entries.length >= maxSkills) {
+				break;
+			}
+
+			const descriptor = this.findByName(name);
+			const loaded = this.loadedSkillByName.get(name);
+			if (descriptor == null || loaded == null) {
+				continue;
+			}
+
+			const tokenEstimate = estimate(loaded.body);
+			if (tokenEstimate > maxSkillTokens) {
+				continue;
+			}
+			if (totalTokens + tokenEstimate > maxTotalTokens) {
+				break;
+			}
+
+			totalTokens += tokenEstimate;
+			entries.push({
+				name,
+				source: descriptor.source,
+				body: loaded.body,
+				tokenEstimate,
+			});
+		}
+
+		return {
+			entries,
+			totalTokens,
 		};
 	}
 

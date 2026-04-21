@@ -4,6 +4,7 @@ import { PromptBuilder } from "./prompt-builder.js";
 import { PromptSessionAssembler } from "./prompt-session-assembler.js";
 import {
 	createHotSkillsSection,
+	createPostCompactSkillsSection,
 	createSkillsCatalogSection,
 } from "./skills-catalog-section.js";
 import type { SkillDescriptor } from "../skills/types.js";
@@ -198,5 +199,69 @@ describe("PromptSessionAssembler", () => {
 		expect(first.prompt.dynamicSuffix).toContain("<hot_skills>");
 		expect(second.prompt.dynamicSuffix).toContain('name="db-inspector"');
 		expect(third.prompt.dynamicSuffix).toContain('name="browser-automation"');
+	});
+
+	test("keeps post-compact restore content in dynamicSuffix only", () => {
+		const builder = new PromptBuilder();
+		const descriptors = [
+			makeSkill("alpha", "bundled"),
+			makeSkill("beta", "project"),
+		];
+		let justCompacted = false;
+
+		builder.register(createSkillsCatalogSection({ list: () => descriptors }));
+		builder.register(createHotSkillsSection({ list: () => descriptors }));
+		builder.register(
+			createPostCompactSkillsSection({
+				list: () => descriptors,
+				postCompactRestore: () => ({
+					entries: justCompacted
+						? [
+								{
+									name: "beta",
+									source: "project",
+									body: "beta body",
+									tokenEstimate: 3,
+								},
+						  ]
+						: [],
+					totalTokens: justCompacted ? 3 : 0,
+				}),
+			}),
+		);
+
+		const assembler = new PromptSessionAssembler({
+			promptBuilder: builder,
+			modelId: "deepseek-chat",
+			sessionStartedAt: "2026-04-21T09:00:00.000Z",
+			now: () => new Date("2026-04-21T10:00:00.000Z"),
+			getSessionState: () => ({
+				skills: {
+					recentSkillNames: ["beta"],
+				},
+				compaction: {
+					justCompacted,
+					at: 1,
+				},
+			}),
+		});
+
+		const before = assembler.buildOutboundRequest({
+			transcript: [{ role: "user", content: "before compact" }],
+			turnKind: "user-turn",
+		});
+		justCompacted = true;
+		const after = assembler.buildOutboundRequest({
+			transcript: [{ role: "user", content: "after compact" }],
+			turnKind: "user-turn",
+		});
+
+		expect(stableHash(before.prompt.staticPrefix)).toBe(
+			stableHash(after.prompt.staticPrefix),
+		);
+		expect(before.prompt.dynamicSuffix).not.toContain("<post_compact_skills>");
+		expect(after.prompt.dynamicSuffix).toContain("<post_compact_skills>");
+		expect(after.prompt.dynamicSuffix).toContain("beta body");
+		expect(after.prompt.staticPrefix).not.toContain("<post_compact_skills>");
 	});
 });

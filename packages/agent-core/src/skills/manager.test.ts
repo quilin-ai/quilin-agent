@@ -142,4 +142,64 @@ trust: trusted
 			"trusted",
 		);
 	});
+
+	it("records viewed skills as newest-first unique recentSkillNames", async () => {
+		const userRoot = await createTempDir();
+		await writeSkill(userRoot, "alpha", "Alpha", "# alpha");
+		await writeSkill(userRoot, "beta", "Beta", "# beta");
+		const manager = new SkillsManager({ userRoots: [userRoot] });
+
+		await manager.discover();
+		manager.recordViewedSkill(await manager.load("alpha"));
+		manager.recordViewedSkill(await manager.load("beta"));
+		manager.recordViewedSkill(await manager.load("alpha"));
+
+		expect(manager.getRecentSkillNames()).toEqual(["alpha", "beta"]);
+	});
+
+	it("postCompactRestore skips oversized skills and enforces total budget", async () => {
+		const userRoot = await createTempDir();
+		await writeSkill(userRoot, "alpha", "Alpha", "a".repeat(200));
+		await writeSkill(userRoot, "beta", "Beta", "b".repeat(40));
+		await writeSkill(userRoot, "gamma", "Gamma", "c".repeat(40));
+		const manager = new SkillsManager({ userRoots: [userRoot] });
+
+		await manager.discover();
+		manager.recordViewedSkill(await manager.load("gamma"));
+		manager.recordViewedSkill(await manager.load("beta"));
+		manager.recordViewedSkill(await manager.load("alpha"));
+
+		const estimatedBodies: string[] = [];
+		const result = manager.postCompactRestore({
+			recentSkillNames: manager.getRecentSkillNames(),
+			maxSkillTokens: 20,
+			maxTotalTokens: 15,
+			estimateTokens: (text) => {
+				estimatedBodies.push(text);
+				return Math.ceil(text.length / 4);
+			},
+		});
+
+		expect(result.entries.map((entry) => entry.name)).toEqual(["beta"]);
+		expect(result.totalTokens).toBe(11);
+		expect(estimatedBodies).toHaveLength(3);
+		expect(estimatedBodies[0]).toHaveLength(201);
+		expect(estimatedBodies[1]).toHaveLength(41);
+		expect(estimatedBodies[2]).toHaveLength(41);
+	});
+
+	it("postCompactRestore skips missing skills from the recent list", async () => {
+		const userRoot = await createTempDir();
+		await writeSkill(userRoot, "alpha", "Alpha", "# alpha");
+		const manager = new SkillsManager({ userRoots: [userRoot] });
+
+		await manager.discover();
+		manager.recordViewedSkill(await manager.load("alpha"));
+
+		const result = manager.postCompactRestore({
+			recentSkillNames: ["missing", ...manager.getRecentSkillNames()],
+		});
+
+		expect(result.entries.map((entry) => entry.name)).toEqual(["alpha"]);
+	});
 });
