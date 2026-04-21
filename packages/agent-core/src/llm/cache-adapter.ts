@@ -1,4 +1,4 @@
-import type { ModelMessage } from "ai";
+import type { JSONValue, ModelMessage } from "ai";
 import type {
 	AssembledPrompt,
 	RecommendedBreakpoint,
@@ -36,7 +36,7 @@ function parseToolOutput(content: string) {
 	try {
 		return {
 			type: "json" as const,
-			value: JSON.parse(content) as unknown,
+			value: JSON.parse(content) as JSONValue,
 		};
 	} catch {
 		return {
@@ -46,30 +46,17 @@ function parseToolOutput(content: string) {
 	}
 }
 
-function toSdkMessage(
-	message: Message,
-	providerOptions?: Record<string, unknown>,
-): ModelMessage[] {
+function toSdkMessage(message: Message): ModelMessage[] {
 	switch (message.role) {
 		case "system":
+			return [{ role: "system", content: message.content }];
+
 		case "user":
-			return [
-				{
-					role: message.role,
-					content: message.content,
-					...(providerOptions == null ? {} : { providerOptions }),
-				} satisfies ModelMessage,
-			];
+			return [{ role: "user", content: message.content }];
 
 		case "assistant": {
 			if (message.toolCalls == null || message.toolCalls.length === 0) {
-				return [
-					{
-						role: "assistant",
-						content: message.content,
-						...(providerOptions == null ? {} : { providerOptions }),
-					} satisfies ModelMessage,
-				];
+				return [{ role: "assistant", content: message.content }];
 			}
 
 			const content = [
@@ -84,35 +71,33 @@ function toSdkMessage(
 				})),
 			];
 
-			return [
-				{
-					role: "assistant",
-					content,
-					...(providerOptions == null ? {} : { providerOptions }),
-				} satisfies ModelMessage,
-			];
-		}
+				return [
+					{
+						role: "assistant",
+						content,
+					} satisfies ModelMessage,
+				];
+			}
 
 		case "tool": {
 			if (message.toolCallId == null || message.name == null) {
 				return [];
 			}
 
-			return [
-				{
-					role: "tool",
+				return [
+					{
+						role: "tool",
 					content: [
 						{
 							type: "tool-result",
 							toolCallId: message.toolCallId,
 							toolName: message.name,
-							output: parseToolOutput(message.content),
-						},
-					],
-					...(providerOptions == null ? {} : { providerOptions }),
-				} satisfies ModelMessage,
-			];
-		}
+								output: parseToolOutput(message.content),
+							},
+						],
+					} satisfies ModelMessage,
+				];
+			}
 
 		default:
 			return [];
@@ -121,6 +106,19 @@ function toSdkMessage(
 
 function serializeMessages(messages: readonly Message[]): ModelMessage[] {
 	return messages.flatMap((message) => toSdkMessage(message));
+}
+
+function toAnthropicSystemMessage(
+	content: string,
+	includeCacheControl: boolean,
+): ModelMessage {
+	return {
+		role: "system",
+		content,
+		...(includeCacheControl
+			? { providerOptions: ANTHROPIC_CACHE_CONTROL }
+			: {}),
+	};
 }
 
 function normalizeProvider(provider: string | undefined): CacheAwareProvider {
@@ -163,10 +161,7 @@ function adaptAnthropicMessages(
 	const systemMessages = prompt.segments.flatMap((segment, index) =>
 		segment.role !== "system"
 			? []
-			: toSdkMessage(
-					{ role: "system", content: segment.text },
-					breakpointIndexes.has(index) ? ANTHROPIC_CACHE_CONTROL : undefined,
-				),
+			: [toAnthropicSystemMessage(segment.text, breakpointIndexes.has(index))],
 	);
 
 	const transcript =

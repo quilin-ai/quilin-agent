@@ -4,6 +4,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createProvider, getDefaultModel } from "./llm/provider.js";
 import { configureLogger, logger } from "./logger.js";
 import { startRepl } from "./repl.js";
+import {
+	createMockLanguageModel,
+	createMockProvider,
+	mockGenerateTextResult,
+} from "./test/ai-fixtures.js";
 
 vi.mock("ai", () => ({
 	generateText: vi.fn(),
@@ -63,17 +68,18 @@ describe("main", () => {
 	});
 
 	it("starts the repl only in repl mode", async () => {
-		const model = {} as LanguageModel;
-		const provider = vi.fn().mockReturnValue(model);
+		const model = createMockLanguageModel();
+		const provider = createMockProvider(() => model);
 		vi.mocked(createProvider).mockReturnValue(provider);
 		vi.mocked(getDefaultModel).mockReturnValue("deepseek-chat");
-		vi.mocked(generateText).mockResolvedValue({
+		vi.mocked(generateText).mockResolvedValue(mockGenerateTextResult({
 			text: "Quilin Agent online.",
 			usage: {
 				promptTokens: 18,
 				completionTokens: 5,
 			},
-		} as Awaited<ReturnType<typeof generateText>>);
+			finishReason: "stop",
+		}));
 		mockConnect.mockResolvedValue([{ name: "memory_recall" }]);
 		mockDisconnect.mockResolvedValue(undefined);
 
@@ -99,7 +105,7 @@ describe("main", () => {
 		expect(generateText).toHaveBeenCalledWith({
 			model,
 			prompt: 'Reply with exactly: "Quilin Agent online." Nothing else.',
-			maxTokens: 20,
+			maxOutputTokens: 20,
 		});
 		expect(logger.info).toHaveBeenNthCalledWith(
 			4,
@@ -126,18 +132,19 @@ describe("main", () => {
 	});
 
 	it("stays in service mode without entering the repl", async () => {
-		const model = {} as LanguageModel;
-		const provider = vi.fn().mockReturnValue(model);
+		const model = createMockLanguageModel();
+		const provider = createMockProvider(() => model);
 		const serviceRunner = vi.fn().mockResolvedValue(undefined);
 		vi.mocked(createProvider).mockReturnValue(provider);
 		vi.mocked(getDefaultModel).mockReturnValue("deepseek-chat");
-		vi.mocked(generateText).mockResolvedValue({
+		vi.mocked(generateText).mockResolvedValue(mockGenerateTextResult({
 			text: "Quilin Agent online.",
 			usage: {
 				inputTokens: 21,
 				outputTokens: 6,
 			},
-		} as Awaited<ReturnType<typeof generateText>>);
+			finishReason: "stop",
+		}));
 		mockConnect.mockResolvedValue([{ name: "memory_recall" }]);
 
 		const { main } = await import("./index.js");
@@ -165,17 +172,18 @@ describe("main", () => {
 	});
 
 	it("passes the explicit sessionId to the repl when --resume is provided", async () => {
-		const model = {} as LanguageModel;
-		const provider = vi.fn().mockReturnValue(model);
+		const model = createMockLanguageModel();
+		const provider = createMockProvider(() => model);
 		vi.mocked(createProvider).mockReturnValue(provider);
 		vi.mocked(getDefaultModel).mockReturnValue("deepseek-chat");
-		vi.mocked(generateText).mockResolvedValue({
+		vi.mocked(generateText).mockResolvedValue(mockGenerateTextResult({
 			text: "Quilin Agent online.",
 			usage: {
 				promptTokens: 18,
 				completionTokens: 5,
 			},
-		} as Awaited<ReturnType<typeof generateText>>);
+			finishReason: "stop",
+		}));
 		mockConnect.mockResolvedValue([{ name: "memory_recall" }]);
 		mockDisconnect.mockResolvedValue(undefined);
 		process.argv = [
@@ -199,17 +207,18 @@ describe("main", () => {
 	});
 
 	it("loads the newest session when --resume-latest is provided", async () => {
-		const model = {} as LanguageModel;
-		const provider = vi.fn().mockReturnValue(model);
+		const model = createMockLanguageModel();
+		const provider = createMockProvider(() => model);
 		vi.mocked(createProvider).mockReturnValue(provider);
 		vi.mocked(getDefaultModel).mockReturnValue("deepseek-chat");
-		vi.mocked(generateText).mockResolvedValue({
+		vi.mocked(generateText).mockResolvedValue(mockGenerateTextResult({
 			text: "Quilin Agent online.",
 			usage: {
 				promptTokens: 18,
 				completionTokens: 5,
 			},
-		} as Awaited<ReturnType<typeof generateText>>);
+			finishReason: "stop",
+		}));
 		mockConnect.mockResolvedValue([{ name: "memory_recall" }]);
 		mockDisconnect.mockResolvedValue(undefined);
 		mockCheckpointList.mockResolvedValue(["latest-session", "older-session"]);

@@ -26,6 +26,7 @@ type ModelHandle = LanguageModel | ResolvableModelHandle;
 
 interface PreparedInvocation {
 	readonly model: LanguageModel;
+	readonly modelProvider?: string;
 	readonly messages: ReturnType<typeof adaptMessagesForModel>["messages"];
 	readonly providerOptions?: InvocationProviderOptions;
 	readonly warnings: readonly InvocationWarning[];
@@ -35,24 +36,9 @@ type InvocationWarning =
 	| "deepseek-reasoner-upgrade"
 	| "openai-thinking-budget-ignored";
 
-interface AnthropicProviderOptions {
-	readonly anthropic: {
-		readonly thinking: {
-			readonly type: "enabled";
-			readonly budgetTokens: number;
-		};
-	};
-}
-
-interface OpenAIProviderOptions {
-	readonly openai: {
-		readonly reasoningEffort: "medium" | "high";
-	};
-}
-
-type InvocationProviderOptions =
-	| AnthropicProviderOptions
-	| OpenAIProviderOptions;
+type InvocationProviderOptions = NonNullable<
+	Parameters<typeof generateText>[0]["providerOptions"]
+>;
 
 interface ProviderOptionsBuildResult {
 	readonly providerOptions?: InvocationProviderOptions;
@@ -86,6 +72,11 @@ interface ReasoningAccumulatorState {
 	readonly id: string;
 	text: string;
 	providerMetadata?: NativeProviderMetadata;
+}
+
+interface LanguageModelMetadata {
+	readonly provider?: string;
+	readonly modelId?: string;
 }
 
 function toSdkTools(tools: readonly Tool[]) {
@@ -146,6 +137,23 @@ function isResolvableModelHandle(
 
 function getBaseModel(model: ModelHandle): LanguageModel {
 	return isResolvableModelHandle(model) ? model.model : model;
+}
+
+function getLanguageModelMetadata(model: LanguageModel): LanguageModelMetadata {
+	if (typeof model !== "object" || model == null) {
+		return {};
+	}
+
+	return {
+		provider:
+			"provider" in model && typeof model.provider === "string"
+				? model.provider
+				: undefined,
+		modelId:
+			"modelId" in model && typeof model.modelId === "string"
+				? model.modelId
+				: undefined,
+	};
 }
 
 function normalizeProviderName(
@@ -223,17 +231,19 @@ function resolveInvocationModel(
 	config: InferenceConfig,
 ): ResolvedInvocationModel {
 	const baseModel = getBaseModel(modelHandle);
+	const baseModelMetadata = getLanguageModelMetadata(baseModel);
 	if (
-		normalizeProviderName(baseModel.provider) === "deepseek" &&
+		normalizeProviderName(baseModelMetadata.provider) === "deepseek" &&
 		config.thinkingMode !== "disabled" &&
 		isResolvableModelHandle(modelHandle) &&
 		modelHandle.resolveModel != null
 	) {
 		const resolvedModel = modelHandle.resolveModel("deepseek-reasoner");
+		const resolvedModelMetadata = getLanguageModelMetadata(resolvedModel);
 		return {
 			model: resolvedModel,
 			warnings:
-				resolvedModel.modelId === baseModel.modelId
+				resolvedModelMetadata.modelId === baseModelMetadata.modelId
 					? []
 					: ["deepseek-reasoner-upgrade"],
 		};
@@ -249,18 +259,17 @@ function prepareInvocation(
 	prompt?: AssembledPrompt,
 ): PreparedInvocation {
 	const resolvedModel = resolveInvocationModel(modelHandle, config);
+	const modelMetadata = getLanguageModelMetadata(resolvedModel.model);
 	const adaptedPrompt = adaptMessagesForModel({
 		messages,
 		prompt,
-		provider: resolvedModel.model.provider,
+		provider: modelMetadata.provider,
 	});
-	const providerOptions = buildProviderOptions(
-		resolvedModel.model.provider,
-		config,
-	);
+	const providerOptions = buildProviderOptions(modelMetadata.provider, config);
 
 	return {
 		model: resolvedModel.model,
+		modelProvider: modelMetadata.provider,
 		messages: adaptedPrompt.messages,
 		providerOptions: providerOptions.providerOptions,
 		warnings: [...resolvedModel.warnings, ...providerOptions.warnings],
@@ -587,8 +596,8 @@ export class VercelLLMClient implements LLMClient {
 				: { providerOptions: prepared.providerOptions }),
 		});
 		const thinking =
-			toReasoningParts(prepared.model.provider, result.reasoning) ??
-			toReasoningPartsFromText(prepared.model.provider, result.reasoningText);
+			toReasoningParts(prepared.modelProvider, result.reasoning) ??
+			toReasoningPartsFromText(prepared.modelProvider, result.reasoningText);
 
 		return {
 			content: result.text,
@@ -756,12 +765,12 @@ export class StreamingLLMClient implements LLMClient {
 		const finishReason = await result.finishReason;
 		const toolCalls = await Promise.resolve(result.toolCalls);
 		const thinking =
-			toReasoningParts(prepared.model.provider, reasoning) ??
+			toReasoningParts(prepared.modelProvider, reasoning) ??
 			toReasoningParts(
-				prepared.model.provider,
+				prepared.modelProvider,
 				toAccumulatedReasoningParts(reasoningOrder),
 			) ??
-			toReasoningPartsFromText(prepared.model.provider, reasoningText);
+			toReasoningPartsFromText(prepared.modelProvider, reasoningText);
 
 		return {
 			content: fullText,

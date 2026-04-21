@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { BasicContextManager } from "./context/manager.js";
+import {
+	createMockLanguageModel,
+	createMockProvider,
+} from "./test/ai-fixtures.js";
 import type { ToolWithMetadata } from "./tools/tool-metadata.js";
 
 const mockQuestion = vi.fn();
@@ -173,7 +177,7 @@ describe("startRepl", () => {
 		const { startRepl } = await import("./repl.js");
 
 		await startRepl({
-			provider: vi.fn().mockReturnValue("model-instance"),
+			provider: createMockProvider(() => createMockLanguageModel()),
 			modelId: "deepseek-chat",
 			tools: tools as never,
 		});
@@ -184,7 +188,11 @@ describe("startRepl", () => {
 		});
 		expect(mockStreamingClient).toHaveBeenCalledWith(
 			{
-				model: "model-instance",
+				model: expect.objectContaining({
+					specificationVersion: "v3",
+					provider: "mock-provider",
+					modelId: "mock-model",
+				}),
 				resolveModel: expect.any(Function),
 			},
 			expect.any(Function),
@@ -246,7 +254,7 @@ describe("startRepl", () => {
 		const { startRepl } = await import("./repl.js");
 
 		await startRepl({
-			provider: vi.fn().mockReturnValue("model-instance"),
+			provider: createMockProvider(() => createMockLanguageModel()),
 			modelId: "deepseek-chat",
 			tools: [{ name: "memory_recall", description: "Recall memory" }] as never,
 		});
@@ -311,7 +319,7 @@ describe("startRepl", () => {
 		const { startRepl } = await import("./repl.js");
 
 		await startRepl({
-			provider: vi.fn().mockReturnValue("model-instance"),
+			provider: createMockProvider(() => createMockLanguageModel()),
 			modelId: "deepseek-chat",
 		});
 
@@ -338,7 +346,7 @@ describe("startRepl", () => {
 		const { startRepl } = await import("./repl.js");
 
 		await startRepl({
-			provider: vi.fn().mockReturnValue("model-instance"),
+			provider: createMockProvider(() => createMockLanguageModel()),
 			modelId: "deepseek-chat",
 			tools: [{ name: "memory_recall", description: "Recall memory" }] as never,
 		});
@@ -388,7 +396,7 @@ describe("startRepl", () => {
 		const { startRepl } = await import("./repl.js");
 
 		await startRepl({
-			provider: vi.fn().mockReturnValue("model-instance"),
+			provider: createMockProvider(() => createMockLanguageModel()),
 			modelId: "deepseek-chat",
 		});
 
@@ -422,7 +430,7 @@ describe("startRepl", () => {
 		const { startRepl } = await import("./repl.js");
 
 		await startRepl({
-			provider: vi.fn().mockReturnValue("model-instance"),
+			provider: createMockProvider(() => createMockLanguageModel()),
 			modelId: "deepseek-chat",
 			sessionId: "resume-session",
 			tools: [{ name: "memory_recall", description: "Recall memory" }] as never,
@@ -458,7 +466,7 @@ describe("startRepl", () => {
 		const { startRepl } = await import("./repl.js");
 
 		await startRepl({
-			provider: vi.fn().mockReturnValue("model-instance"),
+			provider: createMockProvider(() => createMockLanguageModel()),
 			modelId: "deepseek-chat",
 			mcpServers: [
 				{
@@ -503,7 +511,7 @@ describe("startRepl", () => {
 		const { startRepl } = await import("./repl.js");
 
 		await startRepl({
-			provider: vi.fn().mockReturnValue("model-instance"),
+			provider: createMockProvider(() => createMockLanguageModel()),
 			modelId: "deepseek-chat",
 		});
 
@@ -549,10 +557,12 @@ describe("startRepl", () => {
 		const { startRepl } = await import("./repl.js");
 
 		await startRepl({
-			provider: vi.fn((requestedModelId: string) => ({
-				provider: "deepseek",
-				modelId: requestedModelId,
-			})),
+			provider: createMockProvider((requestedModelId: string) =>
+				createMockLanguageModel({
+					provider: "deepseek",
+					modelId: requestedModelId,
+				}),
+			),
 			modelId: "deepseek-chat",
 		});
 
@@ -595,10 +605,12 @@ describe("startRepl", () => {
 		const { startRepl } = await import("./repl.js");
 
 		await startRepl({
-			provider: vi.fn((requestedModelId: string) => ({
-				provider: "deepseek",
-				modelId: requestedModelId,
-			})),
+			provider: createMockProvider((requestedModelId: string) =>
+				createMockLanguageModel({
+					provider: "deepseek",
+					modelId: requestedModelId,
+				}),
+			),
 			modelId: "deepseek-chat",
 		});
 
@@ -636,7 +648,7 @@ describe("startRepl", () => {
 		const { startRepl } = await import("./repl.js");
 
 		await startRepl({
-			provider: vi.fn().mockReturnValue("model-instance"),
+			provider: createMockProvider(() => createMockLanguageModel()),
 			modelId: "deepseek-chat",
 		});
 
@@ -685,7 +697,7 @@ describe("startRepl", () => {
 		const { startRepl } = await import("./repl.js");
 
 		await startRepl({
-			provider: vi.fn().mockReturnValue("model-instance"),
+			provider: createMockProvider(() => createMockLanguageModel()),
 			modelId: "deepseek-chat",
 		});
 

@@ -137,7 +137,7 @@ export async function main(options: MainOptions = {}): Promise<void> {
 		const { text, usage } = await generateText({
 			model: provider(modelId),
 			prompt: 'Reply with exactly: "Quilin Agent online." Nothing else.',
-			maxTokens: 20,
+			maxOutputTokens: 20,
 		});
 		const normalizedUsage = normalizeTokenUsage(usage);
 

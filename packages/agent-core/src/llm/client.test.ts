@@ -3,6 +3,11 @@ import { generateText, tool as sdkTool, streamText } from "ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {
+	createMockLanguageModel,
+	mockGenerateTextResult,
+	mockStreamTextResult,
+} from "../test/ai-fixtures.js";
+import {
 	__test__ as clientTestHelpers,
 	StreamingLLMClient,
 	VercelLLMClient,
@@ -15,21 +20,21 @@ vi.mock("ai", () => ({
 }));
 
 describe("VercelLLMClient", () => {
-	const model = {} as LanguageModel;
+	const model = createMockLanguageModel();
 
 	beforeEach(() => {
 		vi.clearAllMocks();
 	});
 
 	it("maps messages and usage through generateText", async () => {
-		vi.mocked(generateText).mockResolvedValue({
+		vi.mocked(generateText).mockResolvedValue(mockGenerateTextResult({
 			text: "hello from model",
 			usage: {
 				promptTokens: 12,
 				completionTokens: 34,
 			},
 			finishReason: "stop",
-		} as Awaited<ReturnType<typeof generateText>>);
+		}));
 
 		const client = new VercelLLMClient(model);
 
@@ -87,7 +92,7 @@ describe("VercelLLMClient", () => {
 	});
 
 	it("maps provider metadata cache usage when generic usage omits cache breakdown", async () => {
-		vi.mocked(generateText).mockResolvedValue({
+		vi.mocked(generateText).mockResolvedValue(mockGenerateTextResult({
 			text: "hello from cache",
 			usage: {
 				promptTokens: 12,
@@ -101,7 +106,7 @@ describe("VercelLLMClient", () => {
 				},
 			},
 			finishReason: "stop",
-		} as Awaited<ReturnType<typeof generateText>>);
+		}));
 
 		const client = new VercelLLMClient(model);
 
@@ -123,18 +128,18 @@ describe("VercelLLMClient", () => {
 	});
 
 	it("adapts prompt breakpoints for Anthropic before calling generateText", async () => {
-		const anthropicModel = {
+		const anthropicModel = createMockLanguageModel({
 			provider: "anthropic",
 			modelId: "claude-sonnet-4-5",
-		} as LanguageModel;
-		vi.mocked(generateText).mockResolvedValue({
+		});
+		vi.mocked(generateText).mockResolvedValue(mockGenerateTextResult({
 			text: "cached",
 			usage: {
 				promptTokens: 6,
 				completionTokens: 2,
 			},
 			finishReason: "stop",
-		} as Awaited<ReturnType<typeof generateText>>);
+		}));
 
 		const client = new VercelLLMClient(anthropicModel);
 
@@ -199,30 +204,29 @@ describe("VercelLLMClient", () => {
 	});
 
 	it("switches DeepSeek to deepseek-reasoner when thinking is enabled", async () => {
-		const deepseekChatModel = {
+		const deepseekChatModel = createMockLanguageModel({
 			provider: "deepseek",
 			modelId: "deepseek-chat",
-		} as LanguageModel;
-		const deepseekReasonerModel = {
+		});
+		const deepseekReasonerModel = createMockLanguageModel({
 			provider: "deepseek",
 			modelId: "deepseek-reasoner",
-		} as LanguageModel;
+		});
 		const resolveModel = vi.fn((modelId: string) =>
 			modelId === "deepseek-reasoner"
 				? deepseekReasonerModel
 				: deepseekChatModel,
 		);
 		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-		vi.mocked(generateText).mockResolvedValue({
+		vi.mocked(generateText).mockResolvedValue(mockGenerateTextResult({
 			text: "reasoned",
 			usage: {
 				promptTokens: 9,
 				completionTokens: 3,
 			},
 			finishReason: "stop",
-		} as Awaited<ReturnType<typeof generateText>>);
+		}));
 
-		// @ts-expect-error Phase 2 upgrades the client to accept a resolver-backed model handle.
 		const client = new VercelLLMClient({
 			model: deepseekChatModel,
 			resolveModel,
@@ -246,30 +250,29 @@ describe("VercelLLMClient", () => {
 	});
 
 	it("warns once when DeepSeek thinking upgrades the effective model", async () => {
-		const deepseekChatModel = {
+		const deepseekChatModel = createMockLanguageModel({
 			provider: "deepseek",
 			modelId: "deepseek-chat",
-		} as LanguageModel;
-		const deepseekReasonerModel = {
+		});
+		const deepseekReasonerModel = createMockLanguageModel({
 			provider: "deepseek",
 			modelId: "deepseek-reasoner",
-		} as LanguageModel;
+		});
 		const resolveModel = vi.fn((modelId: string) =>
 			modelId === "deepseek-reasoner"
 				? deepseekReasonerModel
 				: deepseekChatModel,
 		);
 		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-		vi.mocked(generateText).mockResolvedValue({
+		vi.mocked(generateText).mockResolvedValue(mockGenerateTextResult({
 			text: "reasoned",
 			usage: {
 				promptTokens: 9,
 				completionTokens: 3,
 			},
 			finishReason: "stop",
-		} as Awaited<ReturnType<typeof generateText>>);
+		}));
 
-		// @ts-expect-error Phase 2 upgrades the client to accept a resolver-backed model handle.
 		const client = new VercelLLMClient({
 			model: deepseekChatModel,
 			resolveModel,
@@ -293,18 +296,18 @@ describe("VercelLLMClient", () => {
 	});
 
 	it("enables Anthropic thinking when thinking mode is enabled", async () => {
-		const anthropicModel = {
+		const anthropicModel = createMockLanguageModel({
 			provider: "anthropic",
 			modelId: "claude-3-7-sonnet-latest",
-		} as LanguageModel;
-		vi.mocked(generateText).mockResolvedValue({
+		});
+		vi.mocked(generateText).mockResolvedValue(mockGenerateTextResult({
 			text: "thinking",
 			usage: {
 				promptTokens: 7,
 				completionTokens: 5,
 			},
 			finishReason: "stop",
-		} as Awaited<ReturnType<typeof generateText>>);
+		}));
 
 		const client = new VercelLLMClient(anthropicModel);
 
@@ -331,11 +334,11 @@ describe("VercelLLMClient", () => {
 	});
 
 	it("extracts ordered reasoning parts from generateText for non-stream calls", async () => {
-		const anthropicModel = {
+		const anthropicModel = createMockLanguageModel({
 			provider: "anthropic",
 			modelId: "claude-3-7-sonnet-latest",
-		} as LanguageModel;
-		vi.mocked(generateText).mockResolvedValue({
+		});
+		vi.mocked(generateText).mockResolvedValue(mockGenerateTextResult({
 			text: "final answer",
 			reasoning: [
 				{
@@ -363,7 +366,7 @@ describe("VercelLLMClient", () => {
 				completionTokens: 5,
 			},
 			finishReason: "stop",
-		} as Awaited<ReturnType<typeof generateText>>);
+		}));
 
 		const client = new VercelLLMClient(anthropicModel);
 
@@ -392,11 +395,11 @@ describe("VercelLLMClient", () => {
 	});
 
 	it("drops Anthropic reasoning blocks without signatures", async () => {
-		const anthropicModel = {
+		const anthropicModel = createMockLanguageModel({
 			provider: "anthropic",
 			modelId: "claude-3-7-sonnet-latest",
-		} as LanguageModel;
-		vi.mocked(generateText).mockResolvedValue({
+		});
+		vi.mocked(generateText).mockResolvedValue(mockGenerateTextResult({
 			text: "final answer",
 			reasoning: [
 				{
@@ -409,7 +412,7 @@ describe("VercelLLMClient", () => {
 				completionTokens: 5,
 			},
 			finishReason: "stop",
-		} as Awaited<ReturnType<typeof generateText>>);
+		}));
 
 		const client = new VercelLLMClient(anthropicModel);
 
@@ -434,11 +437,11 @@ describe("VercelLLMClient", () => {
 	});
 
 	it("falls back to openai-chat reasoning when Responses metadata is incomplete", async () => {
-		const openaiModel = {
+		const openaiModel = createMockLanguageModel({
 			provider: "openai",
 			modelId: "o4-mini",
-		} as LanguageModel;
-		vi.mocked(generateText).mockResolvedValue({
+		});
+		vi.mocked(generateText).mockResolvedValue(mockGenerateTextResult({
 			text: "final answer",
 			reasoning: [
 				{
@@ -456,7 +459,7 @@ describe("VercelLLMClient", () => {
 				completionTokens: 5,
 			},
 			finishReason: "stop",
-		} as Awaited<ReturnType<typeof generateText>>);
+		}));
 
 		const client = new VercelLLMClient(openaiModel);
 
@@ -482,18 +485,18 @@ describe("VercelLLMClient", () => {
 	});
 
 	it("maps OpenAI auto thinking mode to medium reasoning effort", async () => {
-		const openaiModel = {
+		const openaiModel = createMockLanguageModel({
 			provider: "openai",
 			modelId: "o4-mini",
-		} as LanguageModel;
-		vi.mocked(generateText).mockResolvedValue({
+		});
+		vi.mocked(generateText).mockResolvedValue(mockGenerateTextResult({
 			text: "reasoned",
 			usage: {
 				promptTokens: 7,
 				completionTokens: 5,
 			},
 			finishReason: "stop",
-		} as Awaited<ReturnType<typeof generateText>>);
+		}));
 
 		const client = new VercelLLMClient(openaiModel);
 
@@ -516,19 +519,19 @@ describe("VercelLLMClient", () => {
 	});
 
 	it("warns when OpenAI thinkingBudget cannot be mapped precisely", async () => {
-		const openaiModel = {
+		const openaiModel = createMockLanguageModel({
 			provider: "openai",
 			modelId: "o4-mini",
-		} as LanguageModel;
+		});
 		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-		vi.mocked(generateText).mockResolvedValue({
+		vi.mocked(generateText).mockResolvedValue(mockGenerateTextResult({
 			text: "reasoned",
 			usage: {
 				promptTokens: 7,
 				completionTokens: 5,
 			},
 			finishReason: "stop",
-		} as Awaited<ReturnType<typeof generateText>>);
+		}));
 
 		const client = new VercelLLMClient(openaiModel);
 
@@ -546,14 +549,14 @@ describe("VercelLLMClient", () => {
 	});
 
 	it("maps non-stop finish reasons to length", async () => {
-		vi.mocked(generateText).mockResolvedValue({
+		vi.mocked(generateText).mockResolvedValue(mockGenerateTextResult({
 			text: "truncated",
 			usage: {
 				promptTokens: 1,
 				completionTokens: 2,
 			},
 			finishReason: "length",
-		} as Awaited<ReturnType<typeof generateText>>);
+		}));
 
 		const client = new VercelLLMClient(model);
 
@@ -567,7 +570,7 @@ describe("VercelLLMClient", () => {
 	});
 
 	it("maps tool calls from generateText", async () => {
-		vi.mocked(generateText).mockResolvedValue({
+		vi.mocked(generateText).mockResolvedValue(mockGenerateTextResult({
 			text: "",
 			usage: {
 				promptTokens: 1,
@@ -581,7 +584,7 @@ describe("VercelLLMClient", () => {
 					input: { query: "小明" },
 				},
 			],
-		} as Awaited<ReturnType<typeof generateText>>);
+		}));
 
 		const client = new VercelLLMClient(model);
 
@@ -613,14 +616,14 @@ describe("VercelLLMClient", () => {
 	});
 
 	it("maps assistant tool calls and tool results back into AI SDK messages", async () => {
-		vi.mocked(generateText).mockResolvedValue({
+		vi.mocked(generateText).mockResolvedValue(mockGenerateTextResult({
 			text: "你叫小明。",
 			usage: {
 				promptTokens: 8,
 				completionTokens: 9,
 			},
 			finishReason: "stop",
-		} as Awaited<ReturnType<typeof generateText>>);
+		}));
 
 		const client = new VercelLLMClient(model);
 
@@ -697,7 +700,7 @@ describe("VercelLLMClient", () => {
 });
 
 describe("StreamingLLMClient", () => {
-	const model = {} as LanguageModel;
+	const model = createMockLanguageModel();
 
 	beforeEach(() => {
 		vi.clearAllMocks();
@@ -705,12 +708,12 @@ describe("StreamingLLMClient", () => {
 
 	it("maps fullStream events and returns accumulated text plus reasoning", async () => {
 		const events: unknown[] = [];
-		const streamingModel = {
+		const streamingModel = createMockLanguageModel({
 			provider: "deepseek",
 			modelId: "deepseek-reasoner",
-		} as LanguageModel;
+		});
 
-		vi.mocked(streamText).mockReturnValue({
+		vi.mocked(streamText).mockReturnValue(mockStreamTextResult({
 			fullStream: (async function* () {
 				yield { type: "reasoning-start", id: "r-1" };
 				yield { type: "reasoning-delta", id: "r-1", delta: "step " };
@@ -741,7 +744,7 @@ describe("StreamingLLMClient", () => {
 				completionTokens: 7,
 			}),
 			finishReason: Promise.resolve("stop"),
-		} as ReturnType<typeof streamText>);
+		}));
 
 		const client = new StreamingLLMClient(streamingModel, (event) => {
 			events.push(event);
@@ -805,7 +808,7 @@ describe("StreamingLLMClient", () => {
 
 	it("buffers tool-input deltas until the tool name is known", async () => {
 		const events: unknown[] = [];
-		vi.mocked(streamText).mockReturnValue({
+		vi.mocked(streamText).mockReturnValue(mockStreamTextResult({
 			fullStream: (async function* () {
 				yield { type: "tool-input-delta", id: "call-1", delta: '{"q":' };
 				yield {
@@ -833,7 +836,7 @@ describe("StreamingLLMClient", () => {
 					input: { q: "hi" },
 				},
 			]),
-		} as ReturnType<typeof streamText>);
+		}));
 
 		const client = new StreamingLLMClient(model, (event) => {
 			events.push(event);
@@ -870,12 +873,12 @@ describe("StreamingLLMClient", () => {
 	});
 
 	it("preserves multiple reasoning blocks in order from fullStream", async () => {
-		const anthropicModel = {
+		const anthropicModel = createMockLanguageModel({
 			provider: "anthropic",
 			modelId: "claude-3-7-sonnet-latest",
-		} as LanguageModel;
+		});
 
-		vi.mocked(streamText).mockReturnValue({
+		vi.mocked(streamText).mockReturnValue(mockStreamTextResult({
 			fullStream: (async function* () {
 				yield { type: "reasoning-start", id: "r-1" };
 				yield { type: "reasoning-delta", id: "r-1", delta: "step one" };
@@ -911,7 +914,7 @@ describe("StreamingLLMClient", () => {
 				completionTokens: 7,
 			}),
 			finishReason: Promise.resolve("stop"),
-		} as ReturnType<typeof streamText>);
+		}));
 
 		const client = new StreamingLLMClient(anthropicModel);
 
@@ -936,7 +939,7 @@ describe("StreamingLLMClient", () => {
 	});
 
 	it("maps streamed provider metadata cache usage", async () => {
-		vi.mocked(streamText).mockReturnValue({
+		vi.mocked(streamText).mockReturnValue(mockStreamTextResult({
 			fullStream: (async function* () {
 				yield { type: "text-delta", id: "t-1", delta: "hi" };
 			})(),
@@ -952,7 +955,7 @@ describe("StreamingLLMClient", () => {
 				},
 			}),
 			finishReason: Promise.resolve("stop"),
-		} as ReturnType<typeof streamText>);
+		}));
 
 		const client = new StreamingLLMClient(model);
 
@@ -974,7 +977,7 @@ describe("StreamingLLMClient", () => {
 	});
 
 	it("throws when fullStream emits an error chunk", async () => {
-		vi.mocked(streamText).mockReturnValue({
+		vi.mocked(streamText).mockReturnValue(mockStreamTextResult({
 			fullStream: (async function* () {
 				yield {
 					type: "error",
@@ -986,7 +989,7 @@ describe("StreamingLLMClient", () => {
 				completionTokens: 4,
 			}),
 			finishReason: Promise.resolve("stop"),
-		} as ReturnType<typeof streamText>);
+		}));
 
 		const client = new StreamingLLMClient(model);
 
@@ -1000,7 +1003,7 @@ describe("StreamingLLMClient", () => {
 	});
 
 	it("maps tool calls from streamText", async () => {
-		vi.mocked(streamText).mockReturnValue({
+		vi.mocked(streamText).mockReturnValue(mockStreamTextResult({
 			fullStream: (async function* () {})(),
 			usage: Promise.resolve({
 				promptTokens: 3,
@@ -1014,7 +1017,7 @@ describe("StreamingLLMClient", () => {
 					input: { content: "我叫小明", tier: "short" },
 				},
 			]),
-		} as ReturnType<typeof streamText>);
+		}));
 
 		const client = new StreamingLLMClient(model);
 
