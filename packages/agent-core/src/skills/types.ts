@@ -11,10 +11,13 @@ export interface SkillFrontmatter {
 	readonly description: string;
 	readonly whenToUse?: string;
 	readonly allowedTools?: readonly string[];
+	readonly requiresTools?: readonly string[];
+	readonly requiresToolsets?: readonly string[];
+	readonly platforms?: readonly string[];
 	readonly version?: string;
 	readonly userInvocable: boolean;
 	readonly disableModelInvocation: boolean;
-	readonly trust: SkillTrustLevel;
+	readonly trust?: SkillTrustLevel;
 }
 
 export interface SkillDescriptor {

@@ -1,6 +1,6 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { SkillsManager } from "./manager.js";
 
@@ -32,8 +32,20 @@ ${body}
 	);
 }
 
+async function writeSkillMarkdown(
+	root: string,
+	name: string,
+	markdown: string,
+): Promise<void> {
+	const skillDir = join(root, name);
+	await mkdir(skillDir, { recursive: true });
+	await writeFile(join(skillDir, "SKILL.md"), markdown, "utf8");
+}
+
 afterEach(async () => {
-	await Promise.all(createdDirs.splice(0).map((dir) => rm(dir, { recursive: true })));
+	await Promise.all(
+		createdDirs.splice(0).map((dir) => rm(dir, { recursive: true })),
+	);
 });
 
 describe("SkillsManager", () => {
@@ -60,13 +72,20 @@ describe("SkillsManager", () => {
 			"user-only",
 		]);
 		expect(manager.findByName("shared-skill")?.source).toBe("project");
-		expect(manager.findByName("shared-skill")?.description).toBe("project copy");
+		expect(manager.findByName("shared-skill")?.description).toBe(
+			"project copy",
+		);
 		expect(manager.findByName("user-only")?.source).toBe("user");
 	});
 
 	it("loads body on demand and keeps descriptor lightweight", async () => {
 		const userRoot = await createTempDir();
-		await writeSkill(userRoot, "read-page", "Read a page", "# Skill Body\n\nUse it.");
+		await writeSkill(
+			userRoot,
+			"read-page",
+			"Read a page",
+			"# Skill Body\n\nUse it.",
+		);
 
 		const manager = new SkillsManager({
 			userRoots: [userRoot],
@@ -79,5 +98,48 @@ describe("SkillsManager", () => {
 		expect(loaded.descriptor.name).toBe("read-page");
 		expect(loaded.body).toContain("# Skill Body");
 		expect(loaded.tokenEstimate).toBeGreaterThan(0);
+	});
+
+	it("applies source-based trust defaults while preserving explicit trust", async () => {
+		const bundledRoot = await createTempDir();
+		const userRoot = await createTempDir();
+		const projectRoot = await createTempDir();
+
+		await writeSkill(
+			bundledRoot,
+			"bundled-default",
+			"Bundled default",
+			"# body",
+		);
+		await writeSkill(userRoot, "user-default", "User default", "# body");
+		await writeSkillMarkdown(
+			projectRoot,
+			"project-explicit",
+			`---
+name: project-explicit
+description: Project explicit
+trust: trusted
+---
+# body
+`,
+		);
+
+		const manager = new SkillsManager({
+			bundledRoots: [bundledRoot],
+			userRoots: [userRoot],
+			projectRoots: [projectRoot],
+		});
+
+		await manager.discover();
+
+		expect(manager.findByName("bundled-default")?.frontmatter.trust).toBe(
+			"builtin",
+		);
+		expect(manager.findByName("user-default")?.frontmatter.trust).toBe(
+			"community",
+		);
+		expect(manager.findByName("project-explicit")?.frontmatter.trust).toBe(
+			"trusted",
+		);
 	});
 });

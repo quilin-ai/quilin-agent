@@ -6,6 +6,7 @@ interface ParsedSkillMarkdown {
 }
 
 type SkillFrontmatterInput = Record<string, unknown>;
+type NestedObject = Record<string, unknown>;
 
 const MAX_NAME_LENGTH = 64;
 const MAX_DESCRIPTION_LENGTH = 1024;
@@ -46,6 +47,9 @@ function parseScalar(rawValue: string): unknown {
 function parseYamlLike(yamlText: string): SkillFrontmatterInput {
 	const parsed: SkillFrontmatterInput = {};
 	const lines = yamlText.split(/\r?\n/);
+	const stack: Array<{ indent: number; value: NestedObject }> = [
+		{ indent: -1, value: parsed },
+	];
 
 	for (const line of lines) {
 		const trimmed = line.trim();
@@ -58,9 +62,27 @@ function parseYamlLike(yamlText: string): SkillFrontmatterInput {
 			continue;
 		}
 
+		const indent = line.length - line.trimStart().length;
 		const key = line.slice(0, separatorIndex).trim();
 		const rawValue = line.slice(separatorIndex + 1);
-		parsed[key] = parseScalar(rawValue);
+
+		while (stack.length > 1 && indent <= stack[stack.length - 1]?.indent) {
+			stack.pop();
+		}
+
+		const parent = stack[stack.length - 1]?.value;
+		if (parent == null) {
+			throw new Error("Skill frontmatter nesting is malformed");
+		}
+
+		if (rawValue.trim() === "") {
+			const nested: NestedObject = {};
+			parent[key] = nested;
+			stack.push({ indent, value: nested });
+			continue;
+		}
+
+		parent[key] = parseScalar(rawValue);
 	}
 
 	return parsed;
@@ -131,20 +153,42 @@ function normalizeBoolean(value: unknown, fallback: boolean): boolean {
 }
 
 function normalizeTrust(value: unknown): SkillTrustLevel {
-	if (value == null) {
-		return "community";
-	}
-
-	if (typeof value !== "string" || !TRUST_VALUES.has(value as SkillTrustLevel)) {
+	if (
+		typeof value !== "string" ||
+		!TRUST_VALUES.has(value as SkillTrustLevel)
+	) {
 		throw new Error("Skill frontmatter trust must be a valid trust level");
 	}
 
 	return value as SkillTrustLevel;
 }
 
-export function parseSkillFrontmatter(input: SkillFrontmatterInput): SkillFrontmatter {
+function getNestedRecord(
+	value: unknown,
+	fieldName: string,
+): NestedObject | undefined {
+	if (value == null) {
+		return undefined;
+	}
+
+	if (typeof value !== "object" || Array.isArray(value)) {
+		throw new Error(`Skill frontmatter field ${fieldName} must be an object`);
+	}
+
+	return value as NestedObject;
+}
+
+function firstDefined(...values: unknown[]): unknown {
+	return values.find((value) => value !== undefined);
+}
+
+export function parseSkillFrontmatter(
+	input: SkillFrontmatterInput,
+): SkillFrontmatter {
 	const name = normalizeString(input.name, "name", true);
 	const description = normalizeString(input.description, "description", true);
+	const metadata = getNestedRecord(input.metadata, "metadata");
+	const quilinMetadata = getNestedRecord(metadata?.quilin, "metadata.quilin");
 
 	if (name == null || description == null) {
 		throw new Error("Skill frontmatter is missing required fields");
@@ -168,19 +212,49 @@ export function parseSkillFrontmatter(input: SkillFrontmatterInput): SkillFrontm
 		input.allowedTools ?? input["allowed-tools"],
 		"allowedTools",
 	);
+	const requiresTools = normalizeStringArray(
+		firstDefined(
+			input.requiresTools,
+			input.requires_tools,
+			quilinMetadata?.requiresTools,
+			quilinMetadata?.requires_tools,
+		),
+		"requiresTools",
+	);
+	const requiresToolsets = normalizeStringArray(
+		firstDefined(
+			input.requiresToolsets,
+			input.requires_toolsets,
+			quilinMetadata?.requiresToolsets,
+			quilinMetadata?.requires_toolsets,
+		),
+		"requiresToolsets",
+	);
+	const platforms = normalizeStringArray(
+		firstDefined(input.platforms, quilinMetadata?.platforms),
+		"platforms",
+	);
+	const trustValue = firstDefined(input.trust, quilinMetadata?.trust);
 
 	return {
 		name,
 		description,
-		whenToUse: normalizeString(input.whenToUse, "whenToUse", false),
+		whenToUse: normalizeString(
+			firstDefined(input.whenToUse, input["when-to-use"]),
+			"whenToUse",
+			false,
+		),
 		allowedTools,
+		requiresTools,
+		requiresToolsets,
+		platforms,
 		version: normalizeString(input.version, "version", false),
 		userInvocable: normalizeBoolean(input.userInvocable, true),
 		disableModelInvocation: normalizeBoolean(
 			input.disableModelInvocation,
 			false,
 		),
-		trust: normalizeTrust(input.trust),
+		trust: trustValue == null ? undefined : normalizeTrust(trustValue),
 	};
 }
 

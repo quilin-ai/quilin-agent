@@ -1,7 +1,13 @@
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { isAbsolute, join, relative } from "node:path";
 import { parseSkillMarkdown } from "./frontmatter.js";
-import type { LoadedSkill, SkillDescriptor, SkillSource } from "./types.js";
+import type {
+	LoadedSkill,
+	SkillDescriptor,
+	SkillFrontmatter,
+	SkillSource,
+	SkillTrustLevel,
+} from "./types.js";
 
 export interface SkillsManagerOptions {
 	readonly bundledRoots?: readonly string[];
@@ -71,12 +77,16 @@ export class SkillsManager {
 				let descriptor: SkillDescriptor;
 				try {
 					const { frontmatter } = parseSkillMarkdown(content);
+					const normalizedFrontmatter = applySourceTrustDefault(
+						frontmatter,
+						source,
+					);
 					descriptor = {
-						name: frontmatter.name,
-						description: frontmatter.description,
+						name: normalizedFrontmatter.name,
+						description: normalizedFrontmatter.description,
 						path: skillPath,
 						source,
-						frontmatter,
+						frontmatter: normalizedFrontmatter,
 					};
 				} catch {
 					continue;
@@ -167,6 +177,33 @@ export class SkillsManager {
 		return () => {
 			this.changeListeners.delete(listener);
 		};
+	}
+}
+
+function applySourceTrustDefault(
+	frontmatter: SkillFrontmatter,
+	source: SkillSource,
+): SkillFrontmatter {
+	if (frontmatter.trust != null) {
+		return frontmatter;
+	}
+
+	const trust = defaultTrustForSource(source);
+	return {
+		...frontmatter,
+		trust,
+	};
+}
+
+function defaultTrustForSource(source: SkillSource): SkillTrustLevel {
+	switch (source) {
+		case "bundled":
+			return "builtin";
+		case "user":
+			return "community";
+		case "project":
+		case "plugin":
+			return "community";
 	}
 }
 
