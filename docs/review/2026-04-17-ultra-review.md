@@ -1,5 +1,7 @@
 # Quilin Agent — Opus 4.7 全面 Ultra Review（2026-04-17）
 
+> **⚠️ 术语口径更新（2026-04-22)**：本 review 文内多处引用 "13 领域"。项目在 2026-04-22 的文档整理中明确口径为 **12 个活跃领域（01..11 + 13-skills）+ 1 parked 子模块（12-conversation-engineering，已挪至 `02-context/conversation-engineering/`）**。本文保留原 "13 领域" 字样作历史记录;任何新 finding / 跟进引用该数字时以当前 spec 结构为准。
+>
 > **背景**：项目原架构由 Opus 4.6 + GPT-5.4 规划；升级到 Opus 4.7 后用户要求重新 review 全部架构 + 已写代码，并解决所有问题。本报告整合 **11 个并行 subagent** 的独立审查结果（5 文档层 + 6 代码层），按 severity 和可行动性排序。
 >
 > **Subagent 分工**：
