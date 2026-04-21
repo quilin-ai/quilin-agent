@@ -16,7 +16,7 @@
 |---|---|---|---|---|
 | [`adr/`](adr/) | 已定稿的架构决策（ADR-001, ADR-002, …） | 一次性、已拍板、要长期生效的技术决策 | 进行中的讨论、phase 状态、代码细节 | 编号查找 `adr-###-slug.md` |
 | [`architecture/`](architecture/) | 架构总览 / Harness / 术语表 / benchmark roadmap | 跨领域的顶层概念、全景图、规范术语 | 单领域实现细节（→ `engineering/`）、迭代进度（→ `iterations/`） | 从 `architecture/overview.md` 出发导航 |
-| [`engineering/`](engineering/) | 13 个领域 spec（`01-llm-integration/` … `13-skills/`） | 单领域的**规范 spec**（接口、数据结构、策略、风险） | phase 状态（→ `iterations/`）、一次性决策（→ `adr/`）、review 结论（→ `review/`） | 按编号读对应 `README.md` |
+| [`engineering/`](engineering/) | 12 个活跃领域 spec + 1 parked（`01..11` + `13-skills`；`02-context/conversation-engineering/` 为 parked 子模块） | 单领域的**规范 spec**（接口、数据结构、策略、风险） | phase 状态（→ `iterations/`）、一次性决策（→ `adr/`）、review 结论（→ `review/`） | 按编号读对应 `README.md` |
 | [`planning/`](planning/) | 规划文档：总路线图 + 单 feature 的 phase 拆分 | `00-implementation-plan.md` 宏观路线；`YYYY-MM-DD-NN-slug.md` 单 feature tracking（含 `threat_surface_delta` frontmatter） | 已完成回顾（→ `review/`）、spec（→ `engineering/`）、ADR（→ `adr/`） | 读 [`planning/README.md`](planning/README.md) + 按日期 + 编号排序 |
 | [`iterations/`](iterations/) | 每个 Iter 一个目录：`NN-iter-*/plan.md` | Iter 内部的执行 plan（目标、范围、验证、产出） | 跨 Iter 的全景（→ `planning/00-implementation-plan.md`） | 按前缀顺序 `00-phase-0` → `06-iter-f-scaleout` |
 | [`research/`](research/) | 一次性调研材料（Claude Code / Codex / OpenClaw / Hermes / skill loading…） | 深度调研产出、对比表、probe 报告 | 决策本身（→ `adr/`）、spec（→ `engineering/`） | 按主题 / 日期文件名 |
