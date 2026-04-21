@@ -5,10 +5,13 @@ reviewer: Claude (code-review-graph + 人工核验)
 base: 6fdda11
 scope: 3 个 commit（docs restructure + Gate A/C.2 + pre-phase-3 checklist）
 risk_score: 0.60 (中等)
-status: done
+status: partially-outdated-2026-04-22
+verified_at: 2026-04-22
 ---
 
 # Post-push graph review
+
+> **⚠️ partially-outdated-2026-04-22**：本文 review 的基线是 `6fdda11`，并把 C.2 类型债记为 **89 errors**。该结论已被后续实证覆盖：`f40c5d3` 把 residual 收敛到 **61 errors**，后继聚类见 `docs/planning/2026-04-22-01-tsc-hard-gate.md`。正文保留为当时提交窗口的历史审查快照，不回改 finding 主体。
 
 ## Scope
 

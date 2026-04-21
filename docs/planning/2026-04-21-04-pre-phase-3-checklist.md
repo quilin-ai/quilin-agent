@@ -4,9 +4,12 @@ date: 2026-04-21
 owner: Claude (plan) + Codex (impl)
 status: active
 source: Codex msg_209 提议 + Opus 4.7 Round 3 gate 分层
+verified_at: 2026-04-22
 ---
 
 # Pre-Phase-3 Gate Checklist
+
+> **⚠️ partially-outdated-2026-04-22**：本文是 2026-04-21 的阶段性 gate 快照。A.1 / A.2 已由 commit `0464377` 关闭，B.1 已由 commit `b967d1c` 关闭，C.2 的 "89 errors" 已被 commit `f40c5d3` 收敛到 **61 errors**。保留本文作为历史 gate 记录；当前 CC-03 residual 以后继文档 `docs/planning/2026-04-22-01-tsc-hard-gate.md` 为准。
 
 > **用途**：session 丢失也不用重新判断。B3b / Phase 3 / 本周同步三类 gate 压成一页。
 
