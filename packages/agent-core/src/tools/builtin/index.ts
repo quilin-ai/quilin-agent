@@ -9,8 +9,10 @@ import {
 	createShellExecTool,
 	type ShellExecToolOptions,
 } from "./shell-exec.js";
+import { createSkillViewTool } from "./skill-view.js";
 import { createWebFetchTool, type WebFetchToolOptions } from "./web-fetch.js";
 import type { WriteAuthority } from "../../safety/write-authority.js";
+import type { SkillsManager } from "../../skills/manager.js";
 import type { ToolWithMetadata } from "../tool-metadata.js";
 
 export interface BuiltinToolOptions {
@@ -19,12 +21,13 @@ export interface BuiltinToolOptions {
 	readonly shellExec?: ShellExecToolOptions;
 	readonly webFetch?: WebFetchToolOptions;
 	readonly writeAuthority?: WriteAuthority;
+	readonly skillsManager?: SkillsManager;
 }
 
 export function createBuiltinTools(
 	options: BuiltinToolOptions = {},
 ): ToolWithMetadata[] {
-	return [
+	const tools: ToolWithMetadata[] = [
 		createFileReadTool(options.fileRead),
 		createFileWriteTool({
 			...options.fileWrite,
@@ -37,6 +40,16 @@ export function createBuiltinTools(
 		}),
 		createWebFetchTool(options.webFetch),
 	];
+
+	if (options.skillsManager != null) {
+		tools.push(
+			createSkillViewTool({
+				skillsManager: options.skillsManager,
+			}),
+		);
+	}
+
+	return tools;
 }
 
 export {
@@ -44,5 +57,6 @@ export {
 	createFileReadTool,
 	createFileWriteTool,
 	createShellExecTool,
+	createSkillViewTool,
 	createWebFetchTool,
 };

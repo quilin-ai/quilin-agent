@@ -265,7 +265,9 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 	});
 
 	try {
-		registry.registerBuiltin(createBuiltinTools({ writeAuthority }));
+		registry.registerBuiltin(
+			createBuiltinTools({ writeAuthority, skillsManager }),
+		);
 		for (const entry of mcpServers) {
 			await registry.register(entry);
 		}

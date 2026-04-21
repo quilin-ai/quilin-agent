@@ -29,9 +29,10 @@ function describeToolDescriptors(ctx: BuildContext): string {
 	) {
 		return describeTools(ctx.availableTools);
 	}
+	const descriptors = ctx.availableToolDescriptors;
 
 	const sections = CATEGORY_ORDER.flatMap((category) => {
-		const matchingTools = ctx.availableToolDescriptors
+		const matchingTools = descriptors
 			.filter((tool) => tool.category === category)
 			.sort((left, right) => left.name.localeCompare(right.name));
 

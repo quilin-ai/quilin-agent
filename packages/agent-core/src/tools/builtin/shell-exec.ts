@@ -388,12 +388,15 @@ export function createShellExecTool(
 				summary: command,
 				detail: command,
 				origin: options.origin ?? "agent",
-			});
-			if (writeDecision.kind !== "allow") {
-				return createErrorResult("builtin-shell-exec", {
-					error: writeDecision.reason,
 				});
-			}
+				if (writeDecision.kind !== "allow") {
+					return createErrorResult("builtin-shell-exec", {
+						error:
+							writeDecision.kind === "deny"
+								? writeDecision.reason
+								: writeDecision.prompt,
+					});
+				}
 
 			const runner = options.runner ?? defaultShellRunner;
 			const result = await runner(executable, argv, {

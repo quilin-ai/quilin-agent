@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { SkillsManager } from "../../skills/manager.js";
 import { createBuiltinTools } from "./index.js";
 
 describe("builtin tool index", () => {
@@ -19,5 +20,13 @@ describe("builtin tool index", () => {
 			"programmatic",
 			"programmatic",
 		]);
+	});
+
+	it("adds skill_view when a skills manager is available", () => {
+		const tools = createBuiltinTools({
+			skillsManager: new SkillsManager({}),
+		});
+
+		expect(tools.map((tool) => tool.name)).toContain("skill_view");
 	});
 });

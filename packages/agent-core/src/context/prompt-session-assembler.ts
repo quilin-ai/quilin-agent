@@ -66,13 +66,11 @@ export class PromptSessionAssembler {
 				this.options.lastSessionEndedAt == null
 					? null
 					: new Date(this.options.lastSessionEndedAt),
-		};
+			};
 
+		const latestMessage = input.transcript.at(-1);
 		const prompt = this.options.promptBuilder.build({
-			userInput:
-				input.transcript.at(-1)?.role === "user"
-					? input.transcript.at(-1)?.content
-					: "",
+			userInput: latestMessage?.role === "user" ? latestMessage.content : "",
 			sessionState: {
 				temporal: {
 					currentTime: temporal.currentTime.toISOString(),

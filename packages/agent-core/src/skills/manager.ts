@@ -1,5 +1,5 @@
-import { readdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { readdir, readFile, realpath, stat } from "node:fs/promises";
+import { isAbsolute, join, relative } from "node:path";
 import { parseSkillMarkdown } from "./frontmatter.js";
 import type { LoadedSkill, SkillDescriptor, SkillSource } from "./types.js";
 
@@ -14,6 +14,14 @@ interface RootEntry {
 	readonly source: SkillSource;
 	readonly path: string;
 }
+
+interface LoadSkillOptions {
+	readonly maxBodyChars?: number;
+	readonly maxBodyBytes?: number;
+}
+
+const DEFAULT_MAX_BODY_CHARS = 100_000;
+const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
 
 export class SkillsManager {
 	private readonly roots: readonly RootEntry[];
@@ -92,7 +100,10 @@ export class SkillsManager {
 				return `${descriptor.name}:${descriptor.path}:${descriptor.source}`;
 			})
 			.join(",");
-		if (previousOrder !== nextOrder || previousDescriptors !== nextDescriptors) {
+		if (
+			previousOrder !== nextOrder ||
+			previousDescriptors !== nextDescriptors
+		) {
 			for (const listener of this.changeListeners) {
 				listener();
 			}
@@ -110,14 +121,40 @@ export class SkillsManager {
 		);
 	}
 
-	async load(name: string): Promise<LoadedSkill> {
+	async load(
+		name: string,
+		options: LoadSkillOptions = {},
+	): Promise<LoadedSkill> {
 		const descriptor = this.descriptorByName.get(name);
 		if (descriptor == null) {
 			throw new Error(`Skill not found: ${name}`);
 		}
 
-		const content = await readFile(descriptor.path, "utf8");
+		const maxBodyChars = options.maxBodyChars ?? DEFAULT_MAX_BODY_CHARS;
+		const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
+		const resolvedPath = await realpath(descriptor.path);
+		const allowedRoots = await resolveSkillRoots(this.roots);
+		if (
+			!allowedRoots.some((rootPath) => isWithinRoot(resolvedPath, rootPath))
+		) {
+			throw new Error("Skill path resolves outside configured roots");
+		}
+
+		const fileStats = await stat(resolvedPath);
+		if (fileStats.size > maxBodyBytes) {
+			throw new Error(
+				`Skill body exceeds maxBodyBytes limit: ${fileStats.size} > ${maxBodyBytes}`,
+			);
+		}
+
+		const content = await readFile(resolvedPath, "utf8");
 		const { body } = parseSkillMarkdown(content);
+		if (body.length > maxBodyChars) {
+			throw new Error(
+				`Skill body exceeds maxBodyChars limit: ${body.length} > ${maxBodyChars}`,
+			);
+		}
+
 		return {
 			descriptor,
 			body,
@@ -136,7 +173,9 @@ export class SkillsManager {
 async function safeReaddir(path: string): Promise<readonly string[]> {
 	try {
 		const entries = await readdir(path, { withFileTypes: true });
-		return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+		return entries
+			.filter((entry) => entry.isDirectory())
+			.map((entry) => entry.name);
 	} catch {
 		return [];
 	}
@@ -148,4 +187,30 @@ async function safeReadFile(path: string): Promise<string | null> {
 	} catch {
 		return null;
 	}
+}
+
+async function resolveSkillRoots(
+	roots: readonly RootEntry[],
+): Promise<readonly string[]> {
+	const resolvedRoots = await Promise.all(
+		roots.map(async ({ path }) => {
+			try {
+				return await realpath(path);
+			} catch {
+				return null;
+			}
+		}),
+	);
+
+	return resolvedRoots.filter(
+		(rootPath): rootPath is string => rootPath != null,
+	);
+}
+
+function isWithinRoot(targetPath: string, rootPath: string): boolean {
+	const pathRelative = relative(rootPath, targetPath);
+	return (
+		pathRelative === "" ||
+		(!pathRelative.startsWith("..") && !isAbsolute(pathRelative))
+	);
 }

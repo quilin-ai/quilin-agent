@@ -12,8 +12,7 @@
     "declarationMap": true,
     "sourceMap": true,
     "outDir": "dist",
-    "rootDir": "src",
-    "types": ["bun-types"]
+    "rootDir": "src"
   },
   "exclude": ["node_modules", "dist"]
 }

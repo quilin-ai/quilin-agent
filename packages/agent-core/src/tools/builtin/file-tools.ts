@@ -428,7 +428,12 @@ export function createFileWriteTool(
 					origin: options.origin ?? "agent",
 				});
 				if (writeDecision.kind !== "allow") {
-					return createErrorResult("builtin-file-write", writeDecision.reason);
+					return createErrorResult(
+						"builtin-file-write",
+						writeDecision.kind === "deny"
+							? writeDecision.reason
+							: writeDecision.prompt,
+					);
 				}
 				const bytesWritten = Buffer.byteLength(content, "utf8");
 

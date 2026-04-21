@@ -1,3 +1,5 @@
+import { isAbsolute, relative, resolve } from "node:path";
+
 export interface ThreatMatch {
 	readonly pattern: string;
 	readonly location: string;
@@ -13,6 +15,27 @@ export interface ScanResult {
 
 export interface ScanExternalContextOptions {
 	readonly trustedSource?: boolean;
+}
+
+export function isWithinWorkspace(filePath: string): boolean {
+	const resolvedWorkspace = resolve(process.cwd());
+	const resolvedPath = resolve(filePath);
+	const relativePath = relative(resolvedWorkspace, resolvedPath);
+	return (
+		relativePath === "" ||
+		(!relativePath.startsWith("..") && !isAbsolute(relativePath))
+	);
+}
+
+export function shouldTrustToolOutput(
+	toolName: string,
+	toolArgs: Record<string, unknown>,
+): boolean {
+	return (
+		toolName === "file_read" &&
+		typeof toolArgs.path === "string" &&
+		isWithinWorkspace(toolArgs.path)
+	);
 }
 
 const THREAT_PATTERNS: ReadonlyArray<{

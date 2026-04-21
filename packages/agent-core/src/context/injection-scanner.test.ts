@@ -1,5 +1,9 @@
 import { describe, expect, test } from "vitest";
-import { scanExternalContext } from "./injection-scanner.js";
+import {
+	isWithinWorkspace,
+	scanExternalContext,
+	shouldTrustToolOutput,
+} from "./injection-scanner.js";
 
 describe("scanExternalContext", () => {
 	test("正常内容返回 safe=true", () => {
@@ -102,5 +106,28 @@ describe("scanExternalContext", () => {
 		expect(result.sanitizedContent).toBe(
 			"[REDACTED: instruction_override] and [REDACTED: credential_exfiltration]",
 		);
+	});
+
+	test("识别 workspace 内外路径", () => {
+		expect(isWithinWorkspace(`${process.cwd()}/README.md`)).toBe(true);
+		expect(isWithinWorkspace("/tmp/outside-readme.md")).toBe(false);
+	});
+
+	test("只信任 workspace 内的 file_read 输出", () => {
+		expect(
+			shouldTrustToolOutput("file_read", {
+				path: `${process.cwd()}/README.md`,
+			}),
+		).toBe(true);
+		expect(
+			shouldTrustToolOutput("file_read", {
+				path: "/tmp/outside-readme.md",
+			}),
+		).toBe(false);
+		expect(
+			shouldTrustToolOutput("web_fetch", {
+				path: `${process.cwd()}/README.md`,
+			}),
+		).toBe(false);
 	});
 });

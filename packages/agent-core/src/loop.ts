@@ -1,50 +1,23 @@
-import { isAbsolute, relative, resolve } from "node:path";
-import { scanExternalContext } from "./context/injection-scanner.js";
 import {
 	createSystemContextSource,
 	DEFAULT_CONTEXT_BUDGET,
 } from "./context/manager.js";
-import type { PromptSessionAssembler } from "./context/prompt-session-assembler.js";
-import type { ContextManager } from "./context/types.js";
-import type { InferenceConfig, LLMClient } from "./llm/types.js";
+import {
+	stripReasoningFromMessages,
+	sanitizeReasoningParts,
+} from "./context/reasoning-sanitizer.js";
 import { getLoggerRuntimeMode, logger } from "./logger.js";
-import type { AgentState, Checkpoint, Message } from "./state/types.js";
+import {
+	AgentLoopError,
+	DEFAULT_MAX_TOTAL_TOKENS,
+	DEFAULT_MAX_TURNS,
+	type AgentLoopConfig,
+	type LoopHooks,
+} from "./loop-types.js";
+import { executeToolCalls } from "./loop-tool-calls.js";
+import { saveCheckpointState } from "./state/checkpoint-writer.js";
+import type { Message } from "./state/types.js";
 import { ToolRouter } from "./tools/router.js";
-import type { Tool } from "./tools/types.js";
-
-export const DEFAULT_MAX_TURNS = 50;
-export const DEFAULT_MAX_TOTAL_TOKENS = 200_000;
-
-export class AgentLoopError extends Error {
-	constructor(message: string) {
-		super(message);
-		this.name = "AgentLoopError";
-	}
-}
-
-function buildCheckpointState(
-	messages: readonly Message[],
-	turnCount: number,
-	state?: AgentState,
-): AgentState {
-	const now = new Date().toISOString();
-
-	return {
-		messages: [...messages],
-		isTerminal: false,
-		turnCount,
-		createdAt: state?.createdAt ?? now,
-		lastActiveAt: now,
-	};
-}
-
-export interface LoopHooks {
-	readonly recordSpan?: (
-		name: string,
-		attributes?: Record<string, unknown>,
-	) => void | Promise<void>;
-	readonly onAssistantMessage?: (message: Message) => void | Promise<void>;
-}
 
 async function recordLoopSpan(
 	hooks: LoopHooks | undefined,
@@ -68,111 +41,7 @@ function createAssistantMessage(
 	};
 }
 
-function sanitizeReasoningParts(
-	reasoning: Message["reasoning"],
-): Message["reasoning"] {
-	if (reasoning == null || reasoning.length === 0) {
-		return reasoning;
-	}
-
-	return reasoning.map((part, partIndex) => {
-		if (part.text == null || part.text.length === 0) {
-			return part;
-		}
-
-		const source = `reasoning:${part.provider}`;
-		const scanResult = scanExternalContext(part.text, source);
-		if (!scanResult.safe) {
-			logger.warn(
-				{
-					provider: part.provider,
-					source,
-					partIndex,
-					threats: scanResult.threats,
-				},
-				"Reasoning scan detected threats",
-			);
-		}
-
-		return scanResult.sanitizedContent === part.text
-			? part
-			: { ...part, text: scanResult.sanitizedContent };
-	});
-}
-
-function stripReasoningFromMessage(message: Message): Message {
-	if (message.reasoning == null) {
-		return message;
-	}
-
-	const { reasoning: _reasoning, ...messageWithoutReasoning } = message;
-	return messageWithoutReasoning;
-}
-
-function stripReasoningFromMessages(messages: readonly Message[]): Message[] {
-	return messages.map((message) => stripReasoningFromMessage(message));
-}
-
-async function saveCheckpointState(
-	checkpoint: Checkpoint | undefined,
-	hooks: LoopHooks | undefined,
-	messages: readonly Message[],
-	turnCount: number,
-	state?: AgentState,
-	phase?: string,
-): Promise<void> {
-	if (checkpoint == null) {
-		return;
-	}
-
-	const checkpointState = buildCheckpointState(messages, turnCount, state);
-	await checkpoint.save(checkpointState);
-	await recordLoopSpan(hooks, "loop.checkpoint.save", {
-		turnCount,
-		phase,
-		messageCount: checkpointState.messages.length,
-	});
-}
-
-function isWithinWorkspace(filePath: string): boolean {
-	const resolvedWorkspace = resolve(process.cwd());
-	const resolvedPath = resolve(filePath);
-	const relativePath = relative(resolvedWorkspace, resolvedPath);
-	return (
-		relativePath === "" ||
-		(!relativePath.startsWith("..") && !isAbsolute(relativePath))
-	);
-}
-
-function shouldTrustToolOutput(
-	toolName: string,
-	toolArgs: Record<string, unknown>,
-): boolean {
-	return (
-		toolName === "file_read" &&
-		typeof toolArgs.path === "string" &&
-		isWithinWorkspace(toolArgs.path)
-	);
-}
-
-/**
- * Quilin Agent 核心循环
- *
- * 目标: < 200 行，极简 while-loop
- * 参考: Claude Code ~88 行, Codex async queue, OpenClaw Pi agent
- *
- * 数据流:
- *   用户输入 → LLMClient.chat()
- *            → if tool_calls → ToolRouter.execute() → 结果追加 messages
- *            → if assistant   → 返回文本
- *            → loop
- *
- * Phase 0 简化:
- *   - ContextManager 可选接入，仅重建 system prompt
- *   - 无 ToolRouter（无工具）
- *   - Checkpoint 可选接入，仅保存最终 assistant 回复后的状态
- *   - 纯文本对话，不处理 tool_calls
- */
+// Quilin Agent 核心循环：保持 loop file 小而稳，具体副作用委托给 helper 模块。
 export async function runAgentLoop(
 	config: AgentLoopConfig,
 	messages: readonly Message[],
@@ -219,14 +88,14 @@ export async function runAgentLoop(
 			turnCount,
 			messageCount: workingMessages.length,
 		});
-		await saveCheckpointState(
-			config.checkpoint,
-			config.hooks,
-			workingMessages,
+		await saveCheckpointState({
+			checkpoint: config.checkpoint,
+			messages: workingMessages,
 			turnCount,
-			config.state,
-			"turn_start",
-		);
+			state: config.state,
+			phase: "turn_start",
+			recordSpan: config.hooks?.recordSpan,
+		});
 
 		if (shouldLogDebug) {
 			logger.debug(
@@ -249,12 +118,12 @@ export async function runAgentLoop(
 			outboundRequest.messages,
 		);
 
-		const response = await llm.chat(
-			outboundMessages,
-			config.tools ?? [],
-			inferenceConfig,
-			outboundRequest.prompt,
-		);
+			const response = await llm.chat(
+				outboundMessages,
+				config.tools ?? [],
+				inferenceConfig,
+				"prompt" in outboundRequest ? outboundRequest.prompt : undefined,
+			);
 		await recordLoopSpan(config.hooks, "loop.llm.chat", {
 			turnCount,
 			finishReason: response.finishReason,
@@ -296,14 +165,14 @@ export async function runAgentLoop(
 				reasoning: storedThinking,
 			});
 			await config.hooks?.onAssistantMessage?.(assistantMessage);
-			await saveCheckpointState(
-				config.checkpoint,
-				config.hooks,
-				[...workingMessages, assistantMessage],
+			await saveCheckpointState({
+				checkpoint: config.checkpoint,
+				messages: [...workingMessages, assistantMessage],
 				turnCount,
-				config.state,
-				"assistant_response",
-			);
+				state: config.state,
+				phase: "assistant_response",
+				recordSpan: config.hooks?.recordSpan,
+			});
 
 			return response.content;
 		}
@@ -319,89 +188,25 @@ export async function runAgentLoop(
 		});
 		await config.hooks?.onAssistantMessage?.(assistantToolCallMessage);
 		workingMessages.push(assistantToolCallMessage);
-		await saveCheckpointState(
-			config.checkpoint,
-			config.hooks,
-			workingMessages,
+		await saveCheckpointState({
+			checkpoint: config.checkpoint,
+			messages: workingMessages,
 			turnCount,
-			config.state,
-			"assistant_tool_calls",
-		);
+			state: config.state,
+			phase: "assistant_tool_calls",
+			recordSpan: config.hooks?.recordSpan,
+		});
 
-		// TODO: 在明确工具副作用/顺序语义后，将独立 tool calls 改为并行执行。
-		for (const toolCall of response.toolCalls) {
-			const toolResult = await router.execute(toolCall);
-			await recordLoopSpan(config.hooks, "loop.tool.execute", {
-				turnCount,
-				toolName: toolCall.name,
-				toolCallId: toolCall.id,
-				isError: toolResult.isError,
-			});
-			const trustedToolOutput = shouldTrustToolOutput(
-				toolCall.name,
-				toolCall.arguments,
-			);
-			const scanResult = scanExternalContext(
-				toolResult.content,
-				`tool:${toolCall.name}`,
-				{ trustedSource: trustedToolOutput },
-			);
-			if (!scanResult.safe) {
-				logger.warn(
-					{ toolName: toolCall.name, threats: scanResult.threats },
-					"Tool output scan detected threats",
-				);
-			}
-
-			const hasBlockedThreat = scanResult.threats.some(
-				(threat) => threat.severity === "block",
-			);
-			consecutiveBlockedToolOutputs =
-				hasBlockedThreat && !trustedToolOutput
-					? consecutiveBlockedToolOutputs + 1
-					: 0;
-
-			workingMessages.push({
-				role: "tool",
-				toolCallId: toolResult.toolCallId,
-				name: toolCall.name,
-				content: scanResult.sanitizedContent,
-			});
-			await saveCheckpointState(
-				config.checkpoint,
-				config.hooks,
-				workingMessages,
-				turnCount,
-				config.state,
-				"tool_result",
-			);
-
-			if (consecutiveBlockedToolOutputs >= 3) {
-				throw new AgentLoopError(
-					"Agent loop aborted after 3 consecutive blocked tool outputs",
-				);
-			}
-		}
+		consecutiveBlockedToolOutputs = await executeToolCalls({
+			router,
+			toolCalls: response.toolCalls,
+			turnCount,
+			workingMessages,
+			checkpoint: config.checkpoint,
+			state: config.state,
+			hooks: config.hooks,
+			consecutiveBlockedToolOutputs,
+		});
 		turnKind = "tool-resume";
 	}
-}
-
-export interface AgentLoopConfig {
-	readonly llm: LLMClient;
-	readonly context?: ContextManager;
-	readonly sessionAssembler?: Pick<
-		PromptSessionAssembler,
-		"buildOutboundRequest"
-	>;
-	readonly tools?: readonly Tool[];
-	readonly checkpoint?: Checkpoint;
-	readonly state?: AgentState;
-	readonly modelId?: string;
-	readonly lastMessageTime?: string;
-	/** Defaults to 50 if omitted to prevent unbounded tool loops. */
-	readonly maxTurns?: number;
-	/** Defaults to 200_000 if omitted; counts inputTokens + outputTokens across the whole loop. */
-	readonly maxTotalTokens?: number;
-	readonly hooks?: LoopHooks;
-	readonly inferenceConfig: InferenceConfig;
 }
