@@ -28,29 +28,25 @@ Quilin Agent（麒麟）is a self-evolving Agent framework that tracks **curated
 - **Runtime**: Bun (TS) + CPython 3.14 (Python); pnpm/uv package managers; just for cross-language orchestration. Cargo/Rust added in Iter D.
 - **Benchmark Scope**: 3 pinned + roadmap — no "every public leaderboard" claim until Iter E1 baseline harness exists
 
-> ⚠️ **Cut from earlier drafts** (see `docs/review/2026-04-17-ultra-review.md`):
-> - ~~God Mode~~ (unrestricted founder permissions) — replaced by the standard permission model above; founder账号 and regular账号 走同一条授权链路
-> - ~~Auto fusion patches~~ — upstream diffs surface as review suggestions; merging is a human PR decision
-> - ~~Three-language architecture upfront~~ — Rust arrives in Iter D, not Phase 0
-> - ~~13-domain planning~~ — 12-conversation-engineering 已降级为 `02-context/conversation-engineering/` 子模块并延后到 Iter F+（2026-04-18 D-05）；主语汇 12 个领域 (01..11, 13)
+Active scope = **12 engineering domain specs** (01..11 + 13-skills). Domain 12 (Conversation Engineering) is parked as a research note until the core loop proves stable on benchmarks.
 
-## Current Status
-
-**Iter B running** — B1 tool substrate ✅; B2 safety policy ✅ merged (WriteAuthority single-gate + pre/post hooks + two-strike + 2-stage classifier); B3a Skills Core ✅ M0 (catalog + `skill_view` + Gateway 接入 system prompt, commits `16f3868` / `d617e32`); B3b Activation pending. Planning spec 升级到 v1.1（main-LLM-direct + Gateway Skills，详见 `docs/engineering/04-planning/README.md`）. B2 tiny-classifier spike 因 Codex 额度 blocker 降级到 Iter D 研究。Active scope = **12 engineering domain specs** (01..11 + 13-skills). Domain 12 (Conversation Engineering) is parked as a research note until the core loop proves stable on benchmarks.
+> **进度不写在本文件**。本文件是项目指南(符号链接为 CLAUDE.md / AGENTS.md,每 session 加载到每个 agent 上下文),任何 phase / ✅ / ⏳ 细节必须放在 `docs/planning/` 下,经"状态声明实证纪律"(见 Agent Collaboration 节)验证后写入。
 
 ## Documentation Map
 
 | 文档 | 位置 | 用途 |
 |------|------|------|
-| 架构决策 | `docs/adr/adr-###-slug.md` | 已定稿的技术决策（ADR-001 核心循环、ADR-002 骨架、ADR-003 A2A vs 自建 gRPC） |
-| 架构总览 | `docs/architecture/overview.md` | 13 领域全景图 + 导航 |
+| docs 索引 | `docs/README.md` | docs/ 各子文件夹说明 + 写入/查阅约定 |
+| 协作协议 | `agent-bridge.md` | Claude ↔ Codex 协作**权威源**（任务生命周期、长任务纪律、对称异步 review、commit 权属、降级模式） |
+| 架构决策 | `docs/adr/adr-###-slug.md` | 已定稿的技术决策 |
+| 架构总览 | `docs/architecture/overview.md` | 12 活跃领域 + 1 parked 全景图 + 导航 |
 | Harness 工程 | `docs/architecture/harness-engineering.md` | 顶层架构概念 |
-| **术语表** | `docs/architecture/glossary.md` | **规范术语源（CI 强制）**：OmniMem tier casing、`skill_view`、`Quilin` 等 |
-| 工程领域 spec | `docs/engineering/<编号-领域>/README.md` | 13 个领域详细设计 |
-| 调研材料 | `docs/research/` | Claude Code / Codex / OpenClaw / Hermes 深度调研 |
-| 实施计划 | `docs/planning/00-implementation-plan.md` | 三阶段迁移 + benchmark 竞赛；所有 planning docs 在 `docs/planning/` 按 `NN-` 或 `YYYY-MM-DD-NN-` 前缀排序 |
-| 迭代记录 | `docs/iterations/NN-iter-*/` | 按 `00-phase-0` → `01-iter-a-context` → … `06-iter-f-scaleout` 顺序；每迭代一个目录 |
-| 2026-04-17 Ultra-Review | `docs/review/2026-04-17-ultra-review.md` | Opus 4.7 全面复查报告（170 findings） |
+| 术语表 | `docs/architecture/glossary.md` | **规范术语源（CI 强制）** |
+| 工程领域 spec | `docs/engineering/<编号-领域>/README.md` | 12 个活跃领域（01..11 + 13）详细设计 |
+| 调研材料 | `docs/research/` | 上游项目 / 竞品深度调研 |
+| 实施计划 | `docs/planning/00-implementation-plan.md` + `docs/planning/YYYY-MM-DD-NN-*.md` | 三阶段迁移 + tracking docs，按 `NN-` 或 `YYYY-MM-DD-NN-` 前缀排序 |
+| 迭代记录 | `docs/iterations/NN-iter-*/` | 按 `00-phase-0` → `01-iter-a-context` → … `06-iter-f-scaleout` 顺序 |
+| Review 记录 | `docs/review/YYYY-MM-DD-*.md` | 按日期排序的复查报告 |
 
 ## Commands
 
@@ -173,6 +169,18 @@ quilin-agent/
 - 在核心实现落地前，默认先改文档 / 计划 / 脚本，不凭空扩展未批准的运行时代码结构
 - 新增 `packages/` / `providers/` 下的代码，必须先对齐 `docs/adr/adr-002-project-skeleton.md` 与对应工程 spec（`crates/` 在 Iter D 引入后才适用）
 - 所有日志输出 JSON 到 stdout，确保 Claude Code Monitor 可在 dev / test / prod 三种环境实时监控
+
+### 状态声明实证纪律
+
+任何关于项目进度、契约履行、LOC 约束、代码缺失的声明，在写进任何文档之前**必须先做 git 实证**：
+
+- LOC 声明 → `wc -l <file>` 附数字
+- 代码缺失声明 → `Glob` + `Grep` 附结果
+- phase ✅ 声明 → 附 commit hash + 测试通过数 + tsc/lint 结果
+- 契约违反声明 → 附被违反契约的文档出处（行号）+ 实测值
+- 引用非本 session 产出的 review 前，**抽样 2-3 条 finding 当场实证**
+
+结束 phase 或关闭 finding 的 commit，commit message 附实证片段（LOC / 测试通过数 / tsc 退出码）。给其他 agent 下任务书引用 review 条目时，标明"抽查 X 条 / Y 条已过时"。
 
 ## Important Constraints
 
