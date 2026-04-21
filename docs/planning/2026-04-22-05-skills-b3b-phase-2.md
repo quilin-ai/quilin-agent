@@ -5,8 +5,10 @@ owner: Codex (impl) + Claude (plan + review)
 created: 2026-04-22
 last_updated: 2026-04-22
 closure_commits:
-  - b5a9474  # P2-a
-  - a5140da  # P2-b
+  - b5a9474  # P2-a 核心 + 路径/大小安全
+  - a5140da  # P2-b WriteAuthority gate + R-01 契约测试
+  - 29d6c18  # P2-c builtin adapter + Phase 2 docs closure
+completed_at: 2026-04-22
 predecessors:
   - docs/planning/2026-04-21-01-skills-b3b-activation.md  # Phase 2 总 spec(§Phases L132-155)
   - docs/planning/2026-04-22-04-skills-b3b-phase-1.md     # Phase 1 closure
