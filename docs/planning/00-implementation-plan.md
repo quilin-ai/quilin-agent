@@ -2,7 +2,7 @@
 
 > **状态（2026-04-22 实证更新）**：
 > - Phase 0 ✅ v0.0.3 | Iter A ✅ v0.1.0-iter-a | **Iter B 进行中**
-> - Iter B 当前落点：B1 ✅、B2 ✅、B3a ✅、**B3b ✅ Phase 0 / ⏳ Phase 1**。技能细节以 `docs/planning/2026-04-21-01-skills-b3b-activation.md` 和 `docs/engineering/13-skills/README.md` 为准。
+> - Iter B 当前落点：B1 ✅、B2 ✅、B3a ✅、**B3b ✅ Phase 0/1/2/3 / ⏳ Phase 4**。技能细节以 `docs/planning/2026-04-21-01-skills-b3b-activation.md` 和 `docs/engineering/13-skills/README.md` 为准。
 > - `loop.ts` **191 LOC**（commit `776300e` 把 helpers 抽到 `loop-types.ts`，CC-01 <200 契约已守住；演进链 407 → 212 (`0464377`) → 191 (`776300e`)）
 > - OmniMem L3a observer gate 仍失败（recall 21.4% / 中文 0%）；Iter D Sprint 0 决定 ML-first 或降级 opt-in
 >
@@ -17,7 +17,7 @@
 - 核心架构决策已定稿（ADR-001）
 - Phase 0 已完成（v0.0.3）：Agent Loop + OmniMem MCP + REPL + 78 tests
 - Iter A 已完成（v0.1.0-iter-a）：上下文工程 + 提示词工程（PromptBuilder, ContextAssembler, InjectionScanner, TemporalAwareness, MemoryBridge）+ 91 tests
-- Iter B 进行中：B1 tool substrate ✅；B2 Safety Policy ✅（WriteAuthority + pre/post hooks + Two-Strike + classifier 均已合并）；B3a Skills Core ✅；B3b Activation 已完成 Phase 0，Phase 1 待排
+- Iter B 进行中：B1 tool substrate ✅；B2 Safety Policy ✅（WriteAuthority + pre/post hooks + Two-Strike + classifier 均已合并）；B3a Skills Core ✅；B3b Activation 已完成 Phase 0/1/2/3（条件激活 + CRUD + skills_guard 全部落地），Phase 4（post-compact 恢复 + file watcher）待排
 
 ---
 
@@ -97,7 +97,7 @@ Iter A: Grounded Context ✅ — v0.1.0-iter-a
     │
     ▼
 Iter B: Useful Tools + Skills + Safety（进行中）
-    │  B1 工具基座 ✅ / B2 安全策略 ✅ / B3a Skills Core ✅ M0 / B3b ⏳
+    │  B1 工具基座 ✅ / B2 安全策略 ✅ / B3a Skills Core ✅ M0 / B3b Phase 0-3 ✅ Phase 4 ⏳
     │
     ▼
 Iter C: Planning Core
@@ -212,21 +212,21 @@ Iter F: Scale-Out + Memory Depth + Self-Evolution
 
 - 已完成：M0 catalog 注入（`16f3868` / `d617e32`）与 M0.5 `skill_view` on-demand load（`0464377`）
 - 当前仅保留状态摘要；M0 / M0.5 的细项与测试证据以 `docs/engineering/13-skills/README.md` 为准
-- 契约缺口仍在：`skill_view` 返回 body 后的 outbound decoration 仍留给 B3b Phase 1/2 收口
+- 契约缺口仍在：`skill_view` 返回 body 后的 outbound decoration 已由 B3b Phase 1-3 全面收口（条件激活 + CRUD + skills_guard 落在 read/write 两个边界）
 
-#### B3b — Skills Activation(M1) ✅ Phase 0 / ⏳ Phase 1
+#### B3b — Skills Activation(M1) ✅ Phase 0/1/2/3 / ⏳ Phase 4
 
 **状态真相源**：`docs/planning/2026-04-21-01-skills-b3b-activation.md`。
 
 | Phase | 范围 | 状态 |
 |-------|------|------|
-| **0** | Frontmatter schema v2 reader(`requiresTools` / `requiresToolsets` / `platforms` / `trust` + D-17 kebab-case 双向 alias + `metadata.quilin.*` 嵌套) | ✅ `bc93f42` 已完成；CC-03 从本 phase 剥离为独立 cluster |
-| **1** | 条件激活 + KV-cache friendly catalog(稳定前缀 lex-sort + `<hot_skills>` ≤10 可变段,D-13) | ⏳ pending |
-| **2** | `skill_manage` CRUD + WriteAuthority 集成(R-01 critical,落盘单一 gate) | ⏳ pending |
-| **3** | skills_guard 内容扫描 + 4 级信任策略(builtin/trusted/community/agent-created) | ⏳ pending |
-| **4** | Post-compact 恢复(保留最近 5 个 ≤25K token) + file watcher 热发现 | ⏳ pending |
+| **0** | Frontmatter schema v2 reader(`requiresTools` / `requiresToolsets` / `platforms` / `trust` + D-17 kebab-case 双向 alias + `metadata.quilin.*` 嵌套) | ✅ `bc93f42` |
+| **1** | 条件激活 + KV-cache friendly catalog(稳定前缀 lex-sort + `<hot_skills>` ≤10 可变段,D-13) | ✅ `a9ef022` / `86f4512` / `338c607` |
+| **2** | `skill_manage` CRUD + WriteAuthority 集成(R-01 critical,落盘单一 gate) | ✅ `b5a9474` / `a5140da` / `29d6c18` |
+| **3** | skills_guard 内容扫描 + 4 级信任策略(builtin/trusted/community/agent-created) | ✅ `c2954f6` / `35886f3` / `0fae827` |
+| **4** | Post-compact 恢复(保留最近 5 个 ≤25K token) + file watcher 热发现 | ⏳ pending(tracking doc `2026-04-22-07-skills-b3b-phase-4.md` 规划中) |
 
-**Phase 0 已完成**：`bc93f42` 落地 frontmatter schema v2 reader + source-based trust defaults。reader / trust 分层 / fixture 细节留在 tracking doc，不在本计划文档重复展开。
+**Phase 0-3 已完成**：frontmatter schema v2 reader、条件激活 + stable prefix / hot_skills、`skill_manage` CRUD + WriteAuthority、skills_guard + 4 级信任策略 × 4 级严重度矩阵全部落地。reader / trust 分层 / CRUD / guard 细节留在对应 tracking doc，不在本计划文档重复展开。
 
 **验证标准**：
 - [x] B1 同时连接 ≥2 个 MCP Server
@@ -237,7 +237,8 @@ Iter F: Scale-Out + Memory Depth + Self-Evolution
 - [x] B2 MCP spawn 命令白名单 + argv sanitization + cwd 沙箱（`e574338` / `1fe0cc1`）
 - [x] B3a catalog 启动期建成 + `skill_view` 按需加载生效
 - [x] B3a 恶意 symlink / oversize skill 被安全栈拒绝
-- [ ] B3b 条件激活 / post-compact / skills_guard（待排）
+- [x] B3b 条件激活 (Phase 1 ✅) + skills_guard (Phase 3 ✅)
+- [ ] B3b post-compact 恢复 + file watcher (Phase 4 ⏳)
 
 **涉及工程领域**：05-Tool（主）、13-Skills（主）、07-Safety（基础）
 
@@ -482,7 +483,7 @@ Benchmark 验证层（Iter E 独立 iter）
 | 09 | 部署运行时 | justfile + REPL CLI | — | — | — | **配置管理 + CI 三语言** | — | 热更新 + 主动通知 |
 | 10 | 自进化 | — | — | — | — | — | — | **轨迹分析 + human-in-loop patch + Insight + Idle(opt-in)** |
 | 11 | Agent Mesh | — | — | — | — | **crates/ 骨架** | — | **mesh-sdk 填肉 + discover/send/receive** |
-| 13 | 技能工程 ★ | — | — | **B3a ✅**：M0 + M0.5 已完成，细节见 `13-skills/README.md` | B3b: 条件激活 + CRUD + skills_guard | — | — | M2+: plugin + background nudge（默认 OFF） |
+| 13 | 技能工程 ★ | — | — | **B3a ✅**：M0 + M0.5 已完成，细节见 `13-skills/README.md` | **B3b ✅ Phase 0-3**：条件激活 + CRUD + skills_guard 全部落地；Phase 4（post-compact + file watcher）待排 | — | — | M2+: plugin + background nudge（默认 OFF） |
 
 ### Parked (sub-module under 02-context)
 
