@@ -3,7 +3,7 @@
 > **状态（2026-04-22 实证更新）**：
 > - Phase 0 ✅ v0.0.3 | Iter A ✅ v0.1.0-iter-a | **Iter B 进行中**
 > - Iter B 当前落点：B1 ✅、B2 ✅、B3a ✅、**B3b ✅ Phase 0 / ⏳ Phase 1**。技能细节以 `docs/planning/2026-04-21-01-skills-b3b-activation.md` 和 `docs/engineering/13-skills/README.md` 为准。
-> - `loop.ts` 已由 commit `0464377` 从 407 降到 **212 LOC**；剩余 `<200` 收口不阻塞 B3b
+> - `loop.ts` **191 LOC**（commit `776300e` 把 helpers 抽到 `loop-types.ts`，CC-01 <200 契约已守住；演进链 407 → 212 (`0464377`) → 191 (`776300e`)）
 > - OmniMem L3a observer gate 仍失败（recall 21.4% / 中文 0%）；Iter D Sprint 0 决定 ML-first 或降级 opt-in
 >
 > **语言架构**：TS（核心）+ Python（ML Provider）。Rust（mesh / WASM / infra）延后到 Iter D，引入前以 [ADR-001](../adr/adr-001-core-loop-and-language.md) 为准。
