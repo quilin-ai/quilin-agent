@@ -1,16 +1,22 @@
 ---
-title: 三方协作体系 v0 — User × Claude × Codex
-status: planning
+title: "[HISTORICAL v0] 三方协作体系 v0 — User × Claude × Codex"
+status: superseded
+superseded_by: /agent-bridge.md
+superseded_at: 2026-04-22
 owner: Claude (起草) + Codex (待 review) + human (终审)
 created: 2026-04-21
-last_updated: 2026-04-21
+last_updated: 2026-04-22
 threat_surface_delta:
   new_ingress: []
   new_egress: []
   new_persistence: []
 ---
 
-# 三方协作体系 v0
+> **⚠️ 已废止（HISTORICAL）**：本文件为 v0 草稿，已于 2026-04-22 被仓库根目录的
+> [`/agent-bridge.md`](../../agent-bridge.md) 取代。保留此文件仅用于历史追溯。
+> **所有协作规则以 `agent-bridge.md` 为准**。
+
+# [HISTORICAL v0] 三方协作体系 v0
 
 ## 目标
 

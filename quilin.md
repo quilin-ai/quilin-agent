@@ -161,10 +161,15 @@ quilin-agent/
 
 ## Agent Collaboration
 
-- **Claude Code** (Reviewer / Planner) 和 **Codex** (Implementer / Executor) 通过 AgentBridge 协作
-- **Claude Code 只做规划，不写代码**：架构设计、代码审查、任务分解、决策判断由 Claude Code 负责；所有代码编写、修改、重构由 Codex 执行
-- **协作请求必须回复**：收到对方的协作消息（review 结果、修改建议、任务完成通知等）后，必须通过 AgentBridge 回复对方，不能单方面沉默
+> **权威源**：[`agent-bridge.md`](./agent-bridge.md)（仓库根目录）。本节仅列高频条目；完整协议（任务生命周期、长任务纪律、对称异步 review、Commit 权属、降级模式等）以 `agent-bridge.md` 为准。冲突时以 `agent-bridge.md` 为准。
+
+- **Claude Code** (Planner / Reviewer / Scribe) 和 **Codex** (Implementer / Verifier) 通过 AgentBridge 协作；双方都可起 subagent
+- **双在线 + token 充足** → 共同规划。Claude 不当甩手掌柜，开放性 / 时效性问题必须网络搜索（详见 agent-bridge.md §2 / §5.2 / §5.3）
+- **协作请求必须回复**：收到对方的协作消息后，必须通过 AgentBridge 回复，不能单方面沉默
 - **协作语言使用中文**：Agent 之间通过 AgentBridge 的所有对话使用中文，方便用户同步查看协作内容
+- **长任务必须 subagent**：预期超过 5 分钟的任务用 subagent，主线程保持响应（详见 agent-bridge.md §3.3）
+- **谁写代码谁 commit**（详见 agent-bridge.md §8.1）
+- 每个任务结束双方主动提醒用户开新 session（详见 agent-bridge.md §9）
 - 在核心实现落地前，默认先改文档 / 计划 / 脚本，不凭空扩展未批准的运行时代码结构
 - 新增 `packages/` / `providers/` 下的代码，必须先对齐 `docs/adr/adr-002-project-skeleton.md` 与对应工程 spec（`crates/` 在 Iter D 引入后才适用）
 - 所有日志输出 JSON 到 stdout，确保 Claude Code Monitor 可在 dev / test / prod 三种环境实时监控
