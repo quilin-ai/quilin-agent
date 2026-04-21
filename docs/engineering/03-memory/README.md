@@ -194,10 +194,13 @@ prompt cache 的稳定前缀是 Mastra OM 的核心创新点；**我们保留并
   2. **Info-gain-gated Reflector**：只在新 observation 与旧 observation **冲突 / 显著扩展**（Δentropy > ε）时触发重结构化，不按时间/数量。
   3. **判决门槛**：Tier 1 hit rate ≥ 40% 且 observation 精度不降 → 保留，否则回退纯 LLM observer。
 
-- **⚠️ Task #97 v2-r1 spike 结果（2026-04-20，288-sample unbiased dataset）**：
-  - Tier 1 recall **7.3%**（远低于 40% 门槛），FPR 3.6%，zh recall 0%
-  - v1 self-authored 70-sample 的 90% 数字已证实为 experimenter-author bias
-  - **结论**：当前 prototype 只能识别 English explicit persona pattern。M0 Sprint 1 前必须扩规则为 **bilingual + multi-pattern + escalation-aware**，否则 L3a 回退纯 LLM observer
+- **🚨 Task #97 v2-r3 formal gate judgment = NO（2026-04-20，1039-sample full dataset）**：
+  - **v2-r3 (full 1039, gate)**: recall **21.4%**（远低于 40% 门槛），FPR 2.8%，p95 4.19ms
+  - 迭代轨迹：v1 self-authored 90%（inflated baseline）→ v2-r1 7.3% → v2-r2 26.1% → **v2-r3 21.4%**
+  - 按 noise：short 0.0% / emoji 6.6% / typo 7.3% / code 8.2% — 短截断最致命
+  - 按语言：zh 0.0% / mixed 5.2% — 双语支持仍为零；Tier 2 escalation 仅 1.1%
+  - **结论**：rule-first 路线在现实输入分布下 recall 存在天花板；M0 Sprint 1 前必须扩为 **bilingual + multi-pattern + escalation-aware**，否则 L3a 回退纯 LLM observer
+  - **状态**：`gate failed, go/no-go pending` — 下一次 Sprint 若仍不过 40%，必须切 ML-first（新起 ADR-004）或把 L3a 降级为 opt-in
   - 详见 [D-21 finding](../../review/2026-04-20-opus-4-7-revisit.md#d-21) 与 [spike report](../../research/rule-first-observer-spike-report.md)
   - 数据集与评估脚本保留为 CI 回归测试基线：[`docs/research/fixtures/rule-first-observer/`](../../research/fixtures/rule-first-observer/)
 
