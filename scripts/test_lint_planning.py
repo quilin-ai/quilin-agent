@@ -163,3 +163,21 @@ def test_validate_tsd_reports_all_missing_keys() -> None:
     problems = lint_planning.validate_tsd("  new_ingress: []\n")
     assert any("new_egress" in p for p in problems)
     assert any("new_persistence" in p for p in problems)
+
+
+def test_grace_allowlist_frozen_snapshot() -> None:
+    """Shrink-only guard: pin GRACE_ALLOWLIST to the exact current set so
+    any future addition forces an intentional test update (per Codex
+    cross-review feedback on a6c7cab — prevents silent allowlist growth).
+
+    When auditing a doc off the allowlist, remove both the entry in
+    `lint-planning.py` AND the matching string here in the same commit.
+    Adding entries should be rejected in review unless paired with a
+    planning doc explaining the delay."""
+    assert lint_planning.GRACE_ALLOWLIST == frozenset(
+        {
+            "2026-04-21-02-reasoning-lifecycle.md",
+            "2026-04-21-03-handoff.md",
+            "2026-04-21-04-pre-phase-3-checklist.md",
+        }
+    )
