@@ -59,7 +59,8 @@ export type SkillManageError =
 	| "path_denied"
 	| "size_exceeded"
 	| "not_found"
-	| "write_denied";
+	| "write_denied"
+	| "guard_denied";
 
 export type SkillManageResult =
 	| {
@@ -71,3 +72,41 @@ export type SkillManageResult =
 			readonly error: SkillManageError;
 			readonly detail: string;
 	  };
+
+export type GuardThreatCategory =
+	| "data_exfiltration"
+	| "prompt_injection"
+	| "destructive_ops"
+	| "persistence"
+	| "obfuscation";
+
+export type GuardSeverity = "low" | "medium" | "high" | "critical";
+
+export interface GuardFinding {
+	readonly category: GuardThreatCategory;
+	readonly severity: GuardSeverity;
+	readonly pattern_id: string;
+	readonly match: string;
+	readonly line: number;
+}
+
+export type GuardDecision =
+	| { readonly kind: "pass" }
+	| { readonly kind: "warn"; readonly findings: readonly GuardFinding[] }
+	| { readonly kind: "ask"; readonly findings: readonly GuardFinding[] }
+	| {
+			readonly kind: "deny";
+			readonly findings: readonly GuardFinding[];
+			readonly detail: string;
+	  };
+
+export interface SkillsGuard {
+	scan(
+		body: string,
+		ctx: {
+			readonly trust: SkillTrustLevel;
+			readonly stage: "read" | "write";
+			readonly skillName: string;
+		},
+	): GuardDecision;
+}

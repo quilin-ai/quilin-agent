@@ -1,6 +1,6 @@
 ---
 title: Skills B3b Phase 3 — skills_guard 内容扫描 + 4 级信任策略 (tracking)
-status: planning
+status: in-progress
 owner: Codex (impl) + Claude (plan + review)
 created: 2026-04-22
 last_updated: 2026-04-22
