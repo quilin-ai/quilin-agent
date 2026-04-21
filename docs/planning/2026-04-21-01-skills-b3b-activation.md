@@ -154,7 +154,9 @@ B3b 不做：M2+ 的 Plugin 平台、Background nudge 自进化、ToolSearch 延
   - E2E：agent 调用 skill_manage(create) → WriteAuthority prompt → 用户确认 → 文件落盘 → catalog 立即包含新 skill
 - **产出**：manage.ts + skill_manage tool 注册 + 测试
 
-### Phase 3 — skills_guard 内容扫描 + 4 级信任策略 ⏳
+### Phase 3 — skills_guard 内容扫描 + 4 级信任策略 ✅
+
+> **完成**（2026-04-22, closure commits: `c2954f6` / `35886f3` / `0fae827`；拆解见 [`2026-04-22-06-skills-b3b-phase-3.md`](./2026-04-22-06-skills-b3b-phase-3.md)）。Hermes 未 vendor 到 `upstreams/`，改为自产 5 类×≥5 条 / 共 25 条威胁模式并附 OWASP LLM + MITRE ATT&CK 引用；07 `InjectionClassifier` / `HarmClassifier` 仅有 Python spec 伪码（未有 TS 实现），因此 M1 走独立 regex scanner + DI 接口，M2+ 可以替换。Guard 在 WriteAuthority 之前运行：ask 会把 riskLevel 升级到 critical，deny 直接短路 authorize；builtin 永不扫描；trusted warn 通过 `summarizeGuardDecision()` 写入 `WriteRequest.detail`。R-02 合同以 `vi.fn` spy 在 manage.test.ts 验证（create/update 各 1 次，delete 0 次）。skill_view warn 不扩展 ToolResult 协议（M2+ 决策），只有 pass/deny/ask 通过现有 success/error 通道。测试：基线 316 → 345（+29，P3-a +20、P3-b +4、P3-c +5）。
 
 - **做什么**：
   1. `packages/agent-core/src/skills/guard.ts`：移植 Hermes 的 30+ 威胁模式（数据外泄、prompt 注入、破坏性操作、持久化、混淆）为 regex / AST 规则集

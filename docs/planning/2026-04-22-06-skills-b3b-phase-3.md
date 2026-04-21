@@ -1,10 +1,14 @@
 ---
 title: Skills B3b Phase 3 — skills_guard 内容扫描 + 4 级信任策略 (tracking)
-status: in-progress
+status: completed
 owner: Codex (impl) + Claude (plan + review)
 created: 2026-04-22
 last_updated: 2026-04-22
-closure_commits: []
+completed_at: 2026-04-22
+closure_commits:
+  - c2954f6  # P3-a: SkillsGuard 类型 + threat-patterns + guard.ts + 20 tests
+  - 35886f3  # P3-b: skill_view 接入 guard (read-time boundary)
+  - 0fae827  # P3-c: skill_manage 接入 guard (write-time boundary) + R-02 spy contract
 predecessors:
   - docs/planning/2026-04-21-01-skills-b3b-activation.md  # Phase 3 总 spec (L157-177)
   - docs/planning/2026-04-22-05-skills-b3b-phase-2.md     # Phase 2 closure(CRUD + WriteAuthority)
