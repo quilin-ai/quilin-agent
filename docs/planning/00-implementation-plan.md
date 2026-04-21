@@ -2,9 +2,9 @@
 
 > **状态**：Iter A 已完成（v0.1.0-iter-a），**Iter B 进行中（B1 ✓ / B2 ✓ 合并 + 持续加固 / B3a M0 ✓ Gateway 接入 / B3b 待排）**
 >
-> **语言架构（当前）**：TS（核心）+ Python（ML Provider）。**Rust**（基础设施 / mesh / WASM）延后到 Iter D 引入，详见 [ADR-001](./adr/adr-001-core-loop-and-language.md)。
+> **语言架构（当前）**：TS（核心）+ Python（ML Provider）。**Rust**（基础设施 / mesh / WASM）延后到 Iter D 引入，详见 [ADR-001](../adr/adr-001-core-loop-and-language.md)。
 >
-> **2026-04-17 架构复查**：Opus 4.7 ultra-review 完成，决策已回写，详见 [docs/review/2026-04-17-ultra-review.md](./review/2026-04-17-ultra-review.md)。
+> **2026-04-17 架构复查**：Opus 4.7 ultra-review 完成，决策已回写，详见 [docs/review/2026-04-17-ultra-review.md](../review/2026-04-17-ultra-review.md)。
 >
 > **2026-04-20 Opus 4.7 revisit**：26 findings（3 CRITICAL / 10 HIGH / 8 MEDIUM / 5 LOW）Wave-3 批次已全部合并（H-01..10 / M-01..08 / L-01..05，见 `docs/review/2026-04-20-opus-4-7-revisit.md`）；Planning spec 同步升级到 v1.1（main-LLM-direct + Gateway Skills + 可选 audit layer）；B2 tiny-classifier spike 因 Codex 额度 blocker 从 Iter C gate 降级为 Iter D 研究实验。
 
@@ -62,7 +62,7 @@
 14. **空闲自进化（opt-in）** — 默认 OFF，显式开启后才使用闲置配额做记忆整合 / 浏览
 15. **技能工程（第 13 领域）** — SKILL.md + catalog + on-demand load，Skill ≠ Tool
 
-> **早期宣传用词中的"God Mode"、"自动缝合发布"、"默认最大信任"、"每个榜单真实碾压"已在 2026-04-17 ultra-review 后收回** — 见 [review 报告](./review/2026-04-17-ultra-review.md)。
+> **早期宣传用词中的"God Mode"、"自动缝合发布"、"默认最大信任"、"每个榜单真实碾压"已在 2026-04-17 ultra-review 后收回** — 见 [review 报告](../review/2026-04-17-ultra-review.md)。
 
 ---
 
@@ -78,13 +78,13 @@
 | 6 | 思考模式控制 | GLM-5.1 | ThinkingMode（thinking/non-thinking 动态切换） | C |
 | 7 | 内建验证 | DeepSeek, UI-TARS-2 | Verifier（步骤验证 + 元验证） | C-D |
 
-详见 [model-architecture-insights.md](./research/model-architecture-insights.md)
+详见 [model-architecture-insights.md](../research/model-architecture-insights.md)
 
 ---
 
 ## 迭代路线图
 
-> 对应 [ADR-001 迁移路径](./adr/adr-001-core-loop-and-language.md#5-迁移路径)。
+> 对应 [ADR-001 迁移路径](../adr/adr-001-core-loop-and-language.md#5-迁移路径)。
 >
 > **核心原则**：先把单 Agent 做强，再做大。不按 13 领域平铺推进，而按产品价值和依赖关系分 **A..F 六个迭代**递进。**Benchmark Ascent 被显式独立为 Iter E（拆 E1-E4）**，取代早期"贯穿各迭代、能力就绪即提交"的模糊承诺。
 
@@ -241,7 +241,7 @@ Iter F: Scale-Out + Memory Depth + Self-Evolution
 
 **为什么第三**：Planning 的价值建立在 context（A）和 tool space（B）之上。
 
-> **Spec v1.1（2026-04-20）**：见 [04-planning/README.md](./engineering/04-planning/README.md)。核心变更：放弃三段式 L1/L2/L3 默认方案，改为 **Main LLM Direct 推理 + Gateway Skills descriptor + 可选 structured audit layer**；`IntentClassifier.dispatch()` 从 LLM response shape 推导 intent；local tiny classifier 降级为 Iter D 研究实验。
+> **Spec v1.1（2026-04-20）**：见 [04-planning/README.md](../engineering/04-planning/README.md)。核心变更：放弃三段式 L1/L2/L3 默认方案，改为 **Main LLM Direct 推理 + Gateway Skills descriptor + 可选 structured audit layer**；`IntentClassifier.dispatch()` 从 LLM response shape 推导 intent；local tiny classifier 降级为 Iter D 研究实验。
 
 **范围**：
 
@@ -300,6 +300,15 @@ Rust 基础设施骨架：
 - 新建 `crates/mesh-sdk/`（仍是 stub，但 workspace/justfile/ci 都接入）
 - `justfile` 补 `just build-rs` / `just test-rs`
 - CI 矩阵加 Rust job
+
+Memory Sprint 0 Pre-Work（D-21 follow-up，**与 Iter D 主轴并行但不 block**）：
+- **背景**：2026-04-20 spike v2-r3 结果 recall 21.4% / FPR 2.8% / p95 4.19ms（中文 recall 0%），未达 L3a 门槛（recall ≥ 40% / FPR < 5% / p95 < 10ms），详见 `docs/engineering/03-memory/README.md` §L3a 与 `docs/review/2026-04-20-opus-4-7-revisit.md` D-21
+- **状态**：🚨 **gate failed, go/no-go pending**（Opus 4.7 Round 3 AA-01 升级为 CRITICAL）
+- **本 Iter 允许动作**：用不超过 1 周 spike 验证 tier-1 rule-first observer（bilingual + multi-pattern + escalation-aware）能否过 40% recall 门槛
+- **分支决策**：
+  - 过 40% → 按 OmniMem v2 roadmap 进入 Iter F 记忆深度
+  - 过不了 → 起草 `ADR-004`，二选一：(a) 切 ML-first（tier-2 tiny LLM 分类器提前到 Iter C 或并行）；(b) L3a 降级为 opt-in（用户主动开 observer 才跑）
+- **不做**：任何 Iter F Memory Depth 的 4-tier 扩展代码；先拿到 L3a go/no-go
 
 **验证标准**：
 - [ ] LLM 调用和工具调用有 OTel span
@@ -469,9 +478,9 @@ Benchmark 验证层（Iter E 独立 iter）
 
 | # | 领域 | 状态 |
 |---|------|------|
-| 02.x | 对话工程（原 12-） | **降级为 02-context 子模块**（2026-04-18 D-05）→ Iter F 解冻。核心回路在 Iter E benchmark 上稳态之前不启动"活人感"工程。spec 保留为研究笔记，见 [02-context/conversation-engineering](engineering/02-context/conversation-engineering/README.md)。 |
+| 02.x | 对话工程（原 12-） | **降级为 02-context 子模块**（2026-04-18 D-05）→ Iter F 解冻。核心回路在 Iter E benchmark 上稳态之前不启动"活人感"工程。spec 保留为研究笔记，见 [02-context/conversation-engineering](../engineering/02-context/conversation-engineering/README.md)。 |
 
-> **★ 13-技能工程**：2026-04-17 新增领域；Iter B3 分成 **B3a Skills Core**（5 个窄收口能力）+ **B3b Activation**（条件激活 / post-compact），B3a 依赖 B2 安全契约冻结。详见 [13-skills/README.md](./engineering/13-skills/README.md)，四上游调研见 [skill-loading-comparison.md](./research/skill-loading-comparison.md)。
+> **★ 13-技能工程**：2026-04-17 新增领域；Iter B3 分成 **B3a Skills Core**（5 个窄收口能力）+ **B3b Activation**（条件激活 / post-compact），B3a 依赖 B2 安全契约冻结。详见 [13-skills/README.md](../engineering/13-skills/README.md)，四上游调研见 [skill-loading-comparison.md](../research/skill-loading-comparison.md)。
 
 ---
 

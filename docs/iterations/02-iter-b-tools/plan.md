@@ -4,7 +4,7 @@
 >
 > **主轴**：05-Tool　**搭配**：07-Safety-lite
 >
-> **全局路线图**：[implementation-plan.md](../../implementation-plan.md)
+> **全局路线图**：[implementation-plan.md](../../planning/00-implementation-plan.md)
 
 ---
 

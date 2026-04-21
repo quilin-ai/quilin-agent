@@ -4,7 +4,7 @@
 >
 > **主轴**：04-Planning　**搭配**：01-dynamic（InferenceConfig 动态调整）
 >
-> **全局路线图**：[implementation-plan.md](../../implementation-plan.md)
+> **全局路线图**：[implementation-plan.md](../../planning/00-implementation-plan.md)
 
 ---
 

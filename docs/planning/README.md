@@ -6,10 +6,10 @@
 
 | 位置 | 粒度 | 例子 |
 |---|---|---|
-| `docs/implementation-plan.md` | 宏观迁移（Iter A→F） | "Iter A 完成 TS core + Python memory provider" |
-| `docs/iterations/<iter>/` | 单个 iter 的详细规划 | Iter B 的工具架构细节 |
+| `docs/planning/00-implementation-plan.md` | 宏观迁移（Iter A→F） | "Iter A 完成 TS core + Python memory provider" |
+| `docs/iterations/NN-iter-*/` | 单个 iter 的详细规划（按顺序编号） | Iter B 的工具架构细节 |
 | `docs/adr/` | 已定稿的一次性架构决策 | "ADR-003: A2A vs 自建 gRPC" |
-| **`docs/planning/<date>-<slug>.md`** | **一条 feature 的 phase 拆分 + 进度** | **"Reasoning Lifecycle: Phase 0-4"** |
+| **`docs/planning/YYYY-MM-DD-NN-<slug>.md`** | **一条 feature 的 phase 拆分 + 进度（同日多篇按 `NN` 递增）** | **"Reasoning Lifecycle: Phase 0-4"** |
 | `docs/review/` | 单次 review / spec 报告 | "2026-04-21 prompt-cache spec" |
 | `docs/research/` | 一次性调研产出 | DeepSeek reasoning probe |
 

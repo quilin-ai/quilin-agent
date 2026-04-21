@@ -138,7 +138,7 @@ agent 看不到的东西不存在。所有架构决策、规范、部署流程�
 
 > **控制类型**来自 [harness-engineering.md §三](./harness-engineering.md#三harness-控制模型)：前馈（行动前引导）、反馈（行动后观察纠正）。
 >
-> **Iter** 对应 [implementation-plan.md](../implementation-plan.md) 的迭代划分 A..F，其中 Iter E 是 Benchmark Ascent（E1-E4）。
+> **Iter** 对应 [implementation-plan.md](../planning/00-implementation-plan.md) 的迭代划分 A..F，其中 Iter E 是 Benchmark Ascent（E1-E4）。
 
 ---
 
@@ -203,9 +203,9 @@ Quilin 选择**单线程主循环**作为核心，同时融合中间件思想（
 
 ## 实施路线图
 
-详见 [ADR-001 迁移路径](../adr/adr-001-core-loop-and-language.md#5-迁移路径) 和 [implementation-plan.md](../implementation-plan.md)。
+详见 [ADR-001 迁移路径](../adr/adr-001-core-loop-and-language.md#5-迁移路径) 和 [implementation-plan.md](../planning/00-implementation-plan.md)。
 
-迭代路线（详见 [implementation-plan.md](../implementation-plan.md)）：
+迭代路线（详见 [implementation-plan.md](../planning/00-implementation-plan.md)）：
 
 ```
 Phase 0 (PoC)           — Agent Loop + OmniMem MCP + REPL

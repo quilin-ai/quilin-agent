@@ -4,7 +4,7 @@
 >
 > **主轴**：02-Context（上下文工程 + 提示词工程）　**搭配**：03-light 改进、12-light 基础
 >
-> **全局路线图**：[implementation-plan.md](../../implementation-plan.md)
+> **全局路线图**：[implementation-plan.md](../../planning/00-implementation-plan.md)
 
 ---
 

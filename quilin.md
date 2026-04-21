@@ -48,7 +48,8 @@ Quilin Agent（麒麟）is a self-evolving Agent framework that tracks **curated
 | **术语表** | `docs/architecture/glossary.md` | **规范术语源（CI 强制）**：OmniMem tier casing、`skill_view`、`Quilin` 等 |
 | 工程领域 spec | `docs/engineering/<编号-领域>/README.md` | 13 个领域详细设计 |
 | 调研材料 | `docs/research/` | Claude Code / Codex / OpenClaw / Hermes 深度调研 |
-| 实施计划 | `docs/implementation-plan.md` | 三阶段迁移 + benchmark 竞赛 |
+| 实施计划 | `docs/planning/00-implementation-plan.md` | 三阶段迁移 + benchmark 竞赛；所有 planning docs 在 `docs/planning/` 按 `NN-` 或 `YYYY-MM-DD-NN-` 前缀排序 |
+| 迭代记录 | `docs/iterations/NN-iter-*/` | 按 `00-phase-0` → `01-iter-a-context` → … `06-iter-f-scaleout` 顺序；每迭代一个目录 |
 | 2026-04-17 Ultra-Review | `docs/review/2026-04-17-ultra-review.md` | Opus 4.7 全面复查报告（170 findings） |
 
 ## Commands
@@ -97,7 +98,9 @@ quilin-agent/
 │   │   ├── 11-agent-mesh/
 │   │   └── 13-skills/
 │   ├── research/                   # 深度调研
-│   └── implementation-plan.md
+│   ├── planning/                   # 按顺序排列的规划文档（00-implementation-plan.md + YYYY-MM-DD-NN-*.md）
+│   ├── iterations/                 # 按顺序排列的迭代记录（00-phase-0 … 06-iter-f-scaleout）
+│   └── README.md                   # docs/ 各子文件夹说明 + 写入/查阅约定
 ├── scripts/                        # 自动化脚本
 ├── .devcontainer/                  # Dev Container（Bun + Python 3.14 + Rust 1.94）
 ├── .github/workflows/ci.yml       # CI（三语言矩阵）
@@ -136,7 +139,7 @@ quilin-agent/
 - **TypeScript**: ESNext target, strict mode, Biome for lint/format, immutable interfaces (`readonly`), `.js` extensions in imports
 - **Python**: 4-space indent, type annotations, `pathlib.Path`, Ruff for lint/format, structlog for logging
 - **Rust**: (Iter D) edition 2024, clippy + rustfmt, workspace dependencies — rules 保留备用，代码暂不存在
-- **Markdown**: 保留现有编号目录形式（`01-llm-integration`），ADR 统一 `adr-###-slug.md`
+- **Markdown**: 保留现有编号目录形式（`01-llm-integration`），ADR 统一 `adr-###-slug.md`；`docs/planning/` 用 `NN-` 或 `YYYY-MM-DD-NN-slug.md`（同日多篇按 `01`/`02` 递增），`docs/iterations/` 用 `NN-iter-x-*/`
 - **Shell**: 小写 kebab-case, `set -euo pipefail`
 - **Logging**: 三种语言统一 JSON schema 输出到 stdout（详见 ADR-002 §7）
 - **Generated artifacts**: `.logs/`, `.patches/`, `dist/`, `target/`, `__pycache__/` 不纳入版本控制

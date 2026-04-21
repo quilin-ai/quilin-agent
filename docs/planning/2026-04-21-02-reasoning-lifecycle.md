@@ -208,4 +208,4 @@ last_updated: 2026-04-21
 - **Claude**：基于 Phase 2 first-batch fix 落独立 commit / PR，描述引用本 tracking doc + [`docs/review/2026-04-21-phase-2-review.md`](../review/2026-04-21-phase-2-review.md)
 - **Codex**：等待 merge 后选择下一步
   - Option A：继续 Phase 2 second batch（`H-04..H-07 + M-01..M-05`，倾向）
-  - Option B：切到 B3b Phase 0（见 [`docs/planning/2026-04-21-skills-b3b-activation.md`](./2026-04-21-skills-b3b-activation.md)）
+  - Option B：切到 B3b Phase 0（见 [`docs/planning/2026-04-21-01-skills-b3b-activation.md`](./2026-04-21-01-skills-b3b-activation.md)）

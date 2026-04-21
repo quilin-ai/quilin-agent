@@ -4,6 +4,21 @@ status: planning  # planning | in-progress | blocked | done
 owner: <Claude | Codex | human>
 created: YYYY-MM-DD
 last_updated: YYYY-MM-DD
+threat_surface_delta:
+  # 本 phase / 本 plan 新引入的外部可接触面。开工前必填，review 时据此做 threat walk。
+  # 留空（`[]`）表示显式宣告"本 phase 不新增此类表面"；缺省字段视为未审计 → CI/review 应拒。
+  # 非空 item 采用以下 schema（ingress / egress 用前者，persistence 用后者）：
+  #   new_ingress / new_egress:
+  #     - source|sink: <字符串，数据来源或去向>
+  #       trust: untrusted | semi-trusted | trusted
+  #       mitigations: [<拦截/净化手段，如 injection-scanner / strip-on-outbound / signature-verify>]
+  #   new_persistence:
+  #     - location: <字符串，如 sessions.db / .claude/state.json>
+  #       sensitive: [<字段名，如 reasoning.signature / encryptedContent>]
+  #       migration: <schemaVersion bump / none / 迁移策略>
+  new_ingress: []        # 新增的"外部数据能进来"的入口（provider 字段、用户输入、MCP 返回、cache replay 等）
+  new_egress: []         # 新增的"数据能出去"的通道（outbound API payload、日志、checkpoint 上传等）
+  new_persistence: []    # 新增的"数据落盘"的位置（sessions.db 新列、新文件、新 schemaVersion 等）
 ---
 
 # <Feature Name>
@@ -25,6 +40,11 @@ last_updated: YYYY-MM-DD
 
 - **做什么**：...
 - **不做什么**：...
+- **威胁面 delta**（本 phase 独立填；必须是 frontmatter `threat_surface_delta` 的子集或全量）：
+  - 新增 ingress：... 或 `无`
+  - 新增 egress：... 或 `无`
+  - 新增 persistence：... 或 `无`
+  - 缓解措施：... 或 `沿用上 phase 的 X/Y/Z`
 - **依赖**：前置 phase / 外部条件
 - **验证**：如何确认完成
 - **产出**：文件路径 / commit

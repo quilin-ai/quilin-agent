@@ -110,7 +110,9 @@ quilin-agent/
 │   │   └── 13-skills/              #   ★ 技能工程（新）
 │   ├── review/                     # 架构 review 报告（2026-04-17 ultra-review）
 │   ├── research/                   # 深度调研（Claude Code / Codex / OpenClaw / Hermes / Skill Loading）
-│   └── implementation-plan.md      # 迭代式实施路线图（A→F）
+│   ├── planning/                   # 规划文档（00-implementation-plan.md + YYYY-MM-DD-NN-*.md）
+│   ├── iterations/                 # 迭代记录（00-phase-0 → 06-iter-f-scaleout）
+│   └── README.md                   # docs/ 子文件夹导航（写入/查阅约定）
 ├── scripts/                        # 自动化脚本（sync-upstreams / merge-with-claude / release / setup-cron）
 ├── .github/workflows/ci.yml        # CI（TS + Python 矩阵；Rust 在 Iter D 加入）
 ├── justfile                        # 跨语言编排

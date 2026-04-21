@@ -55,7 +55,7 @@ source: Codex msg_209 提议 + Opus 4.7 Round 3 gate 分层
 
 ### C.1 🔴 AA-01 + 同步 03-memory
 - ✅ **已完成**（2026-04-21 session）：`docs/engineering/03-memory/README.md:197-205` 从 v2-r1 7.3% 更新为 v2-r3 21.4% gate failed
-- ⏳ **待做**：`docs/implementation-plan.md` 对应 Iter D Memory track 同步"gate failed, go/no-go pending"
+- ✅ **已完成**（2026-04-21 后续 session）：`docs/planning/00-implementation-plan.md` 已在 Iter D 区块新增 "Memory Sprint 0 Pre-Work (D-21 follow-up)" 小节，记录 gate failed / 1-week spike / 分支决策
 - ⏳ **待做**：如果下一次 Sprint 仍不过 40%，起草 ADR-004（切 ML-first 或 L3a 降级 opt-in）
 
 ### C.2 🟠 CC-03 修 bun-types typecheck

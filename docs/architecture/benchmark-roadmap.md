@@ -1,7 +1,7 @@
 # Benchmark Roadmap — Quilin Agent
 
 > **状态**：v0.1（2026-04-18 首次定稿，D-09 交付物）
-> **决策锚点**：[implementation-plan.md](../implementation-plan.md) Iter E + CLAUDE.md "Benchmark Scope: 3 pinned + roadmap"
+> **决策锚点**：[implementation-plan.md](../planning/00-implementation-plan.md) Iter E + CLAUDE.md "Benchmark Scope: 3 pinned + roadmap"
 > **目的**：把"全量刷 30+ benchmark"这种模糊承诺显式拆成可调度的优先级队列，避免每次 planning 都重新讨论。
 
 ---
@@ -131,7 +131,7 @@ Iter F3
 
 - **审查节奏**：每个 Iter retro 必审；新 benchmark 提议走 PR 修本文档。
 - **关联文档**：
-  - [implementation-plan.md](../implementation-plan.md) Iter E 详细步骤
+  - [implementation-plan.md](../planning/00-implementation-plan.md) Iter E 详细步骤
   - [docs/engineering/08-observability/README.md](../engineering/08-observability/README.md) trace 采集
   - [docs/engineering/10-self-evolution/README.md](../engineering/10-self-evolution/README.md) failure 复盘
 - **不在本文档讨论**：具体 harness 实现（归 `benchmarks/` 子目录的 README）、prompt 工程（归每个 benchmark 自己的 `SYSTEM.md`）。

@@ -25,7 +25,7 @@
 | Parked 子模块 | 1 | — | `02-context/conversation-engineering/` |
 | `upstreams/` 子模块实际数量 | **21**（2026-04-18 验证） | `~100`（规划上限） | `git submodule status \| wc -l`；文档引用 `~100` 时必须注明为规划数而非当前数 |
 | Benchmark 锚定榜单 | **3** | 3 | SWE-bench Verified / GAIA / BFCL v4（其他榜单为路线图） |
-| Iter 阶段 | A..F | A..F | [implementation-plan.md](../implementation-plan.md) |
+| Iter 阶段 | A..F | A..F | [implementation-plan.md](../planning/00-implementation-plan.md) |
 | Iter B 子阶段 | B1 / B2 / B3a / B3b | — | B3a = Skills Core 窄收口；B3b = Activation |
 
 > **写作约定**：引用 `~100` 时如果指当前状态应写 "规划上限 ~100，实际 21"；如果仅指长期目标可写 "~100 (planned)"。

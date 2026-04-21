@@ -4,7 +4,7 @@
 >
 > **主轴**：03-Memory（深化）　**搭配**：12-Conversation、10-Self-Evolution（基础）
 >
-> **全局路线图**：[implementation-plan.md](../../implementation-plan.md)
+> **全局路线图**：[implementation-plan.md](../../planning/00-implementation-plan.md)
 
 ---
 

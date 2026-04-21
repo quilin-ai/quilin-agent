@@ -4,7 +4,7 @@
 >
 > **主轴**：06-Multi-Agent + 11-Agent-Mesh　**搭配**：10-Self-Evolution（全量）
 >
-> **全局路线图**：[implementation-plan.md](../../implementation-plan.md)
+> **全局路线图**：[implementation-plan.md](../../planning/00-implementation-plan.md)
 
 ---
 
