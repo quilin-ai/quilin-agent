@@ -203,11 +203,14 @@ describe("tools integration", () => {
 	});
 
 	it("ToolRouter executes builtin tools and namespaced MCP tools from the registry", async () => {
-		const recallExecute = vi.fn(async ({ query }: { query: string }) => ({
-			toolCallId: "call-1",
-			content: JSON.stringify({ echoed: query }),
-			isError: false,
-		}));
+		const recallExecute = vi.fn(async (args: unknown) => {
+			const { query } = args as { query: string };
+			return {
+				toolCallId: "call-1",
+				content: JSON.stringify({ echoed: query }),
+				isError: false,
+			};
+		});
 		const registry = new MCPRegistry(
 			createFakeClientFactory([
 				createFakeClient([

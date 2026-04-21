@@ -80,14 +80,19 @@ export function jsonSchemaToZod(schema: JsonSchema): z.ZodTypeAny {
 			return z.number();
 		case "boolean":
 			return z.boolean();
-		case "array":
-			if (schema.items == null) {
+		case "array": {
+			const arraySchema = schema as JsonSchemaArray;
+			if (arraySchema.items == null) {
 				throw new Error("Unsupported MCP schema type for array: missing items");
 			}
-			return z.array(jsonSchemaToZod(schema.items));
+			return z.array(jsonSchemaToZod(arraySchema.items));
+		}
 		case "object": {
-			const required = new Set(schema.required ?? []);
-			return z.object(toRequiredShape(schema.properties ?? {}, required));
+			const objectSchema = schema as JsonSchemaObject;
+			const required = new Set<string>(objectSchema.required ?? []);
+			return z.object(
+				toRequiredShape(objectSchema.properties ?? {}, required),
+			);
 		}
 		default:
 			return fallbackToUnknown(schema, schema.type ?? "unknown");

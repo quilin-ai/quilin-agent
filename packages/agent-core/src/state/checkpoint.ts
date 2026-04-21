@@ -73,7 +73,7 @@ function extractEnvelopePayload(payload: unknown, version: number): AgentState {
 		throw new MigrationError(`Checkpoint v${version} payload is invalid`);
 	}
 
-	return sanitizeState(payload as AgentState);
+	return sanitizeState(payload as unknown as AgentState);
 }
 
 function createEnvelope(state: AgentState): CheckpointEnvelopeV2 {
@@ -97,7 +97,7 @@ function migrateEnvelope(parsed: unknown): AgentState {
 	}
 
 	if (!("schemaVersion" in parsed)) {
-		return sanitizeState(parsed as AgentState);
+		return sanitizeState(parsed as unknown as AgentState);
 	}
 
 	const envelope = parsed as Partial<CheckpointEnvelope>;

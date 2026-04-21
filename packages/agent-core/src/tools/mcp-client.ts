@@ -384,11 +384,11 @@ export class MCPClientManager {
 
 		let pendingCall: Promise<CallToolResult> | undefined;
 		try {
-			pendingCall = withTimeout(
+			pendingCall = withTimeout<CallToolResult>(
 				this.client.callTool({
 					name,
 					arguments: args,
-				}),
+				}) as Promise<CallToolResult>,
 				`MCP tool ${name}`,
 				DEFAULT_TOOL_TIMEOUT_MS,
 			);

@@ -255,7 +255,6 @@ describe("runAgentLoop", () => {
 					load: vi.fn(),
 					list: vi.fn(),
 				},
-				// @ts-expect-error Phase 2 adds an assistant-message hook for REPL state sync.
 				hooks: { onAssistantMessage },
 				inferenceConfig: {
 					temperature: 0.7,
@@ -315,7 +314,6 @@ describe("runAgentLoop", () => {
 					load: vi.fn(),
 					list: vi.fn(),
 				},
-				// @ts-expect-error Phase 2 adds an assistant-message hook for REPL state sync.
 				hooks: { onAssistantMessage },
 				inferenceConfig: {
 					temperature: 0.7,
@@ -1784,7 +1782,7 @@ describe("runAgentLoop", () => {
 			{
 				llm: { chat },
 				hooks: {
-					recordSpan: async (name, attributes) => {
+					recordSpan: async (name: string, attributes?: Record<string, unknown>) => {
 						spans.push({ name, attributes });
 					},
 				},
@@ -1865,7 +1863,7 @@ describe("runAgentLoop", () => {
 			{
 				llm: { chat },
 				hooks: {
-					recordSpan: async (name, attributes) => {
+					recordSpan: async (name: string, attributes?: Record<string, unknown>) => {
 						spans.push({ name, attributes });
 					},
 				},

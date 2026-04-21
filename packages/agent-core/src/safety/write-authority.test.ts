@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
 	WriteAuthority,
 	type AuditRecord,
+	type WriteAuthorityOptions,
 	type WriteDecision,
 	type WriteRequest,
 } from "./write-authority.js";
@@ -21,7 +22,7 @@ function createRequest(
 describe("WriteAuthority", () => {
 	it("applies the MVP decision matrix across mode, origin, and risk", () => {
 		const cases: ReadonlyArray<{
-			mode: ConstructorParameters<typeof WriteAuthority>[0]["mode"];
+			mode: WriteAuthorityOptions["mode"];
 			request: WriteRequest;
 			expected: WriteDecision["kind"];
 		}> = [

@@ -181,7 +181,7 @@ describe("builtin web_fetch tool", () => {
 	});
 
 	it("uses timeout and manual redirect handling for each fetch hop", async () => {
-		const fetcher = vi.fn(async (_url: string, init?: RequestInit) => {
+		const fetcher = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
 			expect(init?.redirect).toBe("manual");
 			expect(init?.signal).toBeInstanceOf(AbortSignal);
 

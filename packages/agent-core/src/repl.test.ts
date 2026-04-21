@@ -123,7 +123,7 @@ describe("startRepl", () => {
 		capturedMessages.length = 0;
 		registryBuiltinTools.length = 0;
 		registryServerTools.length = 0;
-		randomUUIDSpy.mockReturnValue("generated-session-id");
+		randomUUIDSpy.mockReturnValue("00000000-0000-0000-0000-000000000000");
 		mockCheckpointLoad.mockResolvedValue(null);
 		mockCheckpointSave.mockResolvedValue(undefined);
 		stdoutWriteSpy.mockImplementation(() => true);
@@ -193,7 +193,7 @@ describe("startRepl", () => {
 			"\n🐉 Quilin Agent v0.0.3 (DeepSeek)\n",
 		);
 		expect(stderrWriteSpy).toHaveBeenCalledWith(
-			"Session: generated-session-id (new)\n",
+			"Session: 00000000-0000-0000-0000-000000000000 (new)\n",
 		);
 		expect(stderrWriteSpy).toHaveBeenCalledWith(
 			"Type your message, or /exit to quit.\n\n",
@@ -202,7 +202,7 @@ describe("startRepl", () => {
 		expect(stdoutWriteSpy).not.toHaveBeenCalled();
 		expect(mockClose).toHaveBeenCalled();
 		expect(mockCheckpointConstructor).toHaveBeenCalledWith({
-			sessionId: "generated-session-id",
+			sessionId: "00000000-0000-0000-0000-000000000000",
 		});
 		expect(mockCreateBuiltinTools).toHaveBeenCalledTimes(1);
 		expect(mockRegistryRegisterBuiltin).toHaveBeenNthCalledWith(

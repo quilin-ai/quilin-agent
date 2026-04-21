@@ -38,7 +38,10 @@ BLOCKED_IPS.addSubnet("::ffff:172.16.0.0", 108, "ipv6");
 BLOCKED_IPS.addSubnet("::ffff:192.168.0.0", 112, "ipv6");
 BLOCKED_IPS.addSubnet("::ffff:169.254.0.0", 112, "ipv6");
 
-type Fetcher = typeof fetch;
+type Fetcher = (
+	input: string | URL | Request,
+	init?: RequestInit,
+) => Promise<Response>;
 type IPFamily = 4 | 6;
 
 interface ResolvedAddress {
@@ -465,7 +468,7 @@ export function createWebFetchTool(
 							signal: AbortSignal.timeout(timeoutMs),
 							redirect: "manual",
 							dispatcher,
-						} satisfies FetchRequestInit);
+						} as FetchRequestInit as RequestInit);
 					} finally {
 						await cleanupDispatcher(dispatcher);
 					}

@@ -3,7 +3,7 @@ title: AI SDK v6 + Bun Types — 遗留类型债清单
 status: planning
 owner: Claude (起草) + human (终审) + 未来 Codex PR
 created: 2026-04-21
-last_updated: 2026-04-21
+last_updated: 2026-04-21 (Task A done — Cluster 2/3/4 closed; Cluster 1 remains for Iter D)
 threat_surface_delta:
   new_ingress: []
   new_egress: []
@@ -20,7 +20,9 @@ Gate C.2（2026-04-21）把 `tsconfig.base.json` 的 `"types": ["bun-types"]` �
 
 ## 总规模
 
-`pnpm --filter @quilin/agent-core exec tsc --noEmit` 输出 **89 errors** across **15 files**。
+`pnpm --filter @quilin/agent-core exec tsc --noEmit` 输出 **89 errors** across **15 files**（2026-04-21 初始基线）。
+
+**2026-04-21 Task A 收束后**：Cluster 2/3/4 全部关闭，剩 **61 errors**，全部属于 Cluster 1（AI SDK v6 漂移），见 commit `TBD` + 下文各 Cluster 段落 ✅ 标注。
 
 ## 4 类根因
 
@@ -52,7 +54,7 @@ Gate C.2（2026-04-21）把 `tsconfig.base.json` 的 `"types": ["bun-types"]` �
 
 ---
 
-### Cluster 2 — Bun strict fetch / Request 类型（~9 errors）
+### Cluster 2 — Bun strict fetch / Request 类型（~9 errors）✅ 2026-04-21 Task A 关闭
 
 **症状**：
 - `Property 'preconnect' is missing in type 'MockInstance<...>' but required in type 'typeof fetch'.`
@@ -73,9 +75,16 @@ Gate C.2（2026-04-21）把 `tsconfig.base.json` 的 `"types": ["bun-types"]` �
 
 **修复窗口**：Gate A 稳定后 1-2 天内可做。小改动、边界清楚。
 
+**实际修复（2026-04-21 Task A）**：
+- `web-fetch.ts:467`：`satisfies FetchRequestInit` → `as FetchRequestInit as RequestInit`（保留 dispatcher 字段给 undici，不改运行时语义）
+- `Fetcher` 类型从 `typeof fetch` 窄化为 `(input, init?) => Promise<Response>`，去掉对 `preconnect` 的依赖（生产路径只调用函数，不访问 preconnect）
+- `web-fetch.test.ts:184` 签名参数补 `string | URL | Request`
+- `integration.test.ts:103` 随 Fetcher 类型收敛自动解决
+- bonus `integration.test.ts:223` recallExecute 改为 `(args: unknown)` + 内部 narrow
+
 ---
 
-### Cluster 3 — Type cast / 联合类型窄化不足（~10 errors）
+### Cluster 3 — Type cast / 联合类型窄化不足（~10 errors）✅ 2026-04-21 Task A 关闭
 
 **症状**：
 - `Conversion of type 'Record<string, unknown>' to type 'AgentState' may be a mistake because neither type sufficiently overlaps with the other.`
@@ -98,9 +107,14 @@ Gate C.2（2026-04-21）把 `tsconfig.base.json` 的 `"types": ["bun-types"]` �
 
 **修复窗口**：随手做，每个文件 10-30 分钟。
 
+**实际修复（2026-04-21 Task A）**：
+- `checkpoint.ts:76/100`：`as AgentState` → `as unknown as AgentState`（advisor 建议：不改 runtime 语义，仅满足 TS 双重 cast 要求，避免误引入 zod 解码破坏 prod checkpoint resume）
+- `schema-converter.ts`：`array` / `object` 两个 case 局部 cast 到具体 schema 类型（`JsonSchemaArray` / `JsonSchemaObject`），并把 `Set` 显式标注为 `Set<string>` 解决 `ReadonlySet<string>` 类型匹配
+- `mcp-client.ts:387`：`withTimeout<CallToolResult>(...)` 显式泛型 + SDK 返回值 `as Promise<CallToolResult>` cast，收敛到 CallToolResult shape（SDK 返回 `CallToolResult | CompatibilityCallToolResult` union）
+
 ---
 
-### Cluster 4 — 测试小修（~7 errors）
+### Cluster 4 — 测试小修（~7 errors）✅ 2026-04-21 Task A 关闭
 
 **症状**：
 - `Unused '@ts-expect-error' directive.`
@@ -123,23 +137,29 @@ Gate C.2（2026-04-21）把 `tsconfig.base.json` 的 `"types": ["bun-types"]` �
 
 **修复窗口**：1 小时内。可以作为独立小 PR 清理。
 
+**实际修复（2026-04-21 Task A）**：
+- `loop.test.ts:258 / 318`：删除已过期的 `// @ts-expect-error Phase 2 adds an assistant-message hook for REPL state sync.`（Phase 2 LoopHooks 已正式类型化 `onAssistantMessage`，directive 变成 TS2578 噪音；已核验删除不掩盖其他错误）
+- `loop.test.ts:1785 / 1866` recordSpan callback 参数补类型注解 `(name: string, attributes?: Record<string, unknown>)`（对齐 `LoopHooks.recordSpan` 签名）
+- `repl.test.ts:126`：UUID literal 从 `"generated-session-id"` 改为合法 UUID `"00000000-0000-0000-0000-000000000000"`，两处断言（L196 / L205）同步替换
+- `write-authority.test.ts:24`：导入 `WriteAuthorityOptions` 类型，用 `WriteAuthorityOptions["mode"]` 替代 `ConstructorParameters<typeof WriteAuthority>[0]["mode"]`（constructor 默认参数 `= {}` 使 `ConstructorParameters[0]` 推成 `WriteAuthorityOptions | undefined`，无法索引 `.mode`）
+
 ## 修复优先级 & 路径建议
 
 | 优先级 | Cluster | 修复窗口 | 估工 | 说明 |
 |---|---|---|---|---|
-| P0 | 2 + 3 + 4 | **Iter B 收束前或 Iter C 启动时** | 0.5-1 天 | 低风险、边界小，清掉能让 tsc 从 89 → 63 |
+| ~~P0~~ ✅ done | 2 + 3 + 4 | 2026-04-21 Task A | 0.5 天（实际约 1h） | 清掉 28 errors（含 bonus），tsc 89 → 61；全部剩余属 Cluster 1 |
 | P1 | 1（AI SDK） | **Iter D 开始前** | 1-2 天（或更多） | 需要查 v6 migration，可能触发 ADR 讨论；是最大块 |
 
 ## Open Questions
 
 - [ ] AI SDK v6 是否已稳定？是否需要 pin minor 版本锁定类型 API？
-- [ ] `packages/agent-core/src/tools/builtin/web-fetch.ts:467` 的 `dispatcher` 到底是为什么用？删了会不会破坏 proxy 逻辑？
+- [x] ~~`packages/agent-core/src/tools/builtin/web-fetch.ts:467` 的 `dispatcher` 到底是为什么用？删了会不会破坏 proxy 逻辑？~~ → Task A 保留 dispatcher，用 `as FetchRequestInit as RequestInit` 让 undici 继续接收该字段（dispatcherFactory 本就通过 L452 构造，用于 IP-pinned 代理）
 - [ ] `tsc --noEmit` 是否要进 CI 作为 blocking gate？如果是，Cluster 1 必须在 CI 上线前修完
 
 ## Next Action
 
-1. 本文档 commit 后，**在 commit 2 message 里明确引用**：`See docs/planning/2026-04-21-06-ai-sdk-type-debt.md for residual 89 tsc errors, split into 4 clusters.`
-2. Iter B 收束 PR 或下次 Codex 会话起草 Cluster 2/3/4 的修复 PR（目标：tsc errors 89 → ~63）
+1. ~~本文档 commit 后，**在 commit 2 message 里明确引用**~~（已完成）
+2. ~~Iter B 收束 PR 或下次 Codex 会话起草 Cluster 2/3/4 的修复 PR（目标：tsc errors 89 → ~63）~~ → **2026-04-21 Task A 已完成，实际 89→61**
 3. Cluster 1 列为 Iter D kickoff 的 pre-work，和 Memory Sprint 0 并列
 
 ## Decisions
@@ -150,3 +170,9 @@ Gate C.2（2026-04-21）把 `tsconfig.base.json` 的 `"types": ["bun-types"]` �
 - **After**：拆 `bun-types` 伪装后暴露 89 错既有债，规模过大不适合混入 Gate A + Gate C.2 commit
 - **证据**：`pnpm --filter @quilin/agent-core exec tsc --noEmit` 返回 89 errors；分类后 63 属于 AI SDK 深层漂移（需要独立 migration 讨论）
 - **后果**：commit 2 subject 撤回 "restore tsc baseline"，改为如实描述；本文档作为 residual tracking
+
+### 2026-04-21 Task A — Cluster 2/3/4 关闭
+
+- **变更**：tsc 错误 89→61（-28，含 integration.test.ts:223 bonus）；测试 266/267 持平（红灯是 Cluster 1 既有 web-fetch 老债，本次未触碰）
+- **原则**：advisor 审计下三条硬约束：(1) 不扩散到 Cluster 1；(2) 不引入运行时语义变化（dispatcher 保留、checkpoint runtime 不解码）；(3) 不写新的测试文件（D-03 属于 D 的 follow-up，不是 A 的范围）
+- **证据**：commit `TBD`；`pnpm --filter @quilin/agent-core exec tsc --noEmit 2>&1 | grep -cE "error TS"` = 61
