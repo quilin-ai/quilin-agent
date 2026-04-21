@@ -50,7 +50,12 @@ Phase 0 契约验证状态:
 
 ### P1-a:条件激活过滤管道
 
-**改 `catalog-renderer.ts`:** `render(descriptors, turnContext)` 签名不变(Phase 0 已有 turnContext 参数),内部加 4 条 pre-filter 步骤:
+**现状实证(2026-04-22 HEAD=`7f8a797`):**
+- `catalog-renderer.ts:21-23` `renderSkillsCatalog(descriptors)` **单参数**(我早前写"Phase 0 已有 turnContext"是错的,Codex cross-read 纠正)
+- `context/skills-catalog-section.ts:23` 调用点也只传 `descriptors`,`updateFrequency: "per_session"`(L17)
+- P1-a 必须同时:(a) 给 `renderSkillsCatalog` 加 `turnContext` 参数;(b) 在 `createSkillsCatalogSection` source 或 compute 闭包里把 turnContext 拿到并透传
+
+**改 `catalog-renderer.ts` 拟签名:** `renderSkillsCatalog(descriptors, turnContext)`,内部加 4 条 pre-filter + 1 条 mandatory source 限制:
 
 ```
 filtered = descriptors
@@ -58,7 +63,13 @@ filtered = descriptors
   .filter(d => covers(turnContext.availableToolsets, d.requiresToolsets))
   .filter(d => matchesPlatform(d.platforms, process.platform))
   .filter(d => meetsTrust(d.trust, turnContext.minTrustLevel))
+  // mandatory 源限制:只有 bundled/user 声明的 mandatory 保留;community skill 自声明被降级
+  .map(d => d.frontmatter.mandatory && !["bundled", "user"].includes(d.source)
+    ? { ...d, frontmatter: { ...d.frontmatter, mandatory: false } }
+    : d)
 ```
+
+**source 透传机制:** `SkillsCatalogSectionSource` 要么把 `list()` 扩成 `list(turnContext)`,要么在 `createSkillsCatalogSection(source, turnContextProvider)` 处注入。Codex 实现时选最小改动面,回填到本文件 Decisions 里。
 
 **不做:**
 - 任何 I/O(pure function)
