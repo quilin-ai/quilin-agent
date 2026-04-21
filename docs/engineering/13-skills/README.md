@@ -2,6 +2,8 @@
 
 > **实现状态（2026-04-22 实证更新，replaces R-07 2026-04-18）**
 >
+> **状态真相源**：日常 phase 拆分、owner 和 commit 级进度以 `docs/planning/2026-04-21-01-skills-b3b-activation.md` 为准；本 spec 只保留里程碑摘要与设计约束，不再重复逐 phase 的执行叙事。
+>
 > | 里程碑 | 状态 | 实证 |
 > |--------|------|------|
 > | **M0 — catalog 注入 system prompt** | ✅ 已实现 | commits `16f3868`（SkillsManager + CatalogRenderer M0）+ `d617e32`（Gateway 接入 `<available_skills>`）。`context/skills-catalog-section.ts` 稳定前缀段已接 PromptBuilder。 |

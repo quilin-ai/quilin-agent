@@ -937,7 +937,7 @@ def build_context(self, state: HarnessState) -> AssembledContext:
 
 **定位**：OmniMem（03）的 recall 结果到 ContextSource 的**薄适配层**，是 02-Context 与 03-Memory 之间唯一的数据转换点。
 
-**权威实现**：[`packages/agent-core/src/context/memory-bridge.ts`](../../../packages/agent-core/src/context/memory-bridge.ts)
+**权威实现**：[`packages/agent-core/src/context/draft/memory-bridge.ts`](../../../packages/agent-core/src/context/draft/memory-bridge.ts)
 
 **合同**（TS）：
 

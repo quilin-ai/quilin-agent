@@ -2,7 +2,7 @@
 
 > **实现状态（R-07，2026-04-18）**
 > - ✅ **已实现**：shell_exec 危险模式拦截、MCP spawn allowlist、tool result 体积/超时 clamp、`scanExternalContext` 注入点（全部 P0-4 落地）、[threat-model.md](./threat-model.md)（D-08 首发）
-> - 🚧 **进行中**：B2 Safety Policy Gate spec（[`../../iterations/2026-04-xx-iter-b-tools/spec-b2.md`](../../iterations/2026-04-xx-iter-b-tools/spec-b2.md)）— ExecutionGate 接线 + confirm 语义待定稿
+> - 🚧 **进行中**：B2 Safety Policy Gate spec（[`../../iterations/02-iter-b-tools/spec-b2.md`](../../iterations/02-iter-b-tools/spec-b2.md)）— ExecutionGate 接线 + confirm 语义待定稿
 > - 💭 **未开始**：Layer 1 完整输入分类器、Layer 3 secret scrubber + PII detector、Layer 4 元验证、web_fetch SSRF 防护
 
 > 本文档是 Quilin Agent 工程规格系列的第 7 篇，定义安全护栏层的设计方案、参考来源与验证标准。安全护栏是系统的横切关注点，贯穿输入、推理、输出、元验证的全流程。

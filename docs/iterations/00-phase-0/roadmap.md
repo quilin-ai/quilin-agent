@@ -3,7 +3,7 @@
 > **状态**: Active
 > **日期**: 2026-04-15
 > **参与方**: Claude Code (规划/Review) + Codex (实现/验证)
-> **前置**: [ADR-002](adr/adr-002-project-skeleton.md) §15 Step 1-2 已完成（v0.0.1）
+> **前置**: [ADR-002](../../adr/adr-002-project-skeleton.md) §15 Step 1-2 已完成（v0.0.1）
 
 ---
 

@@ -2,7 +2,7 @@
 
 > **实现状态（R-07，2026-04-18）**
 > - ✅ **已实现**：`packages/agent-core/src/tools/` — MCPRegistry（原子 register/unregister，P0-3 修复）、shell_exec sandbox（P0-4 修复）、mcp-client spawn allowlist（P0-4 修复）、builtin tools 基础集
-> - 🚧 **进行中**：B2 Safety Policy Gate spec review、B3 Skills Core（衔接 13-skills）
+> - 🚧 **进行中**：B2 Safety Policy Gate spec review、B3b Skills Activation Phase 1（条件激活 / KV-cache friendly catalog，衔接 13-skills）
 > - 💭 **未开始**：CLI-Anything wrapper、browser tool、MCP over TCP transport（mesh 启用后）
 
 > **ADR-001 对齐说明**：工具系统用 TS 实现（MCP Client Manager），Python ML 工具封装为独立 MCP Server。本文档中的 Python 代码示例仅表达设计意图，实施时将以 TS 重写。`quilin/` 路径为规划参考。详见 [ADR-001](../../adr/adr-001-core-loop-and-language.md)。

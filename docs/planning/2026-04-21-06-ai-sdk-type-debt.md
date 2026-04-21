@@ -3,7 +3,7 @@ title: AI SDK v6 + Bun Types — 遗留类型债清单
 status: planning
 owner: Claude (起草) + human (终审) + 未来 Codex PR
 created: 2026-04-21
-last_updated: 2026-04-21 (Task A done — Cluster 2/3/4 closed; Cluster 1 remains for Iter D)
+last_updated: 2026-04-22 (Task A done — Cluster 2/3/4 closed; residual re-clustered into successor doc)
 threat_surface_delta:
   new_ingress: []
   new_egress: []
@@ -14,15 +14,15 @@ threat_surface_delta:
 
 ## 背景
 
-Gate C.2（2026-04-21）把 `tsconfig.base.json` 的 `"types": ["bun-types"]` 改为 `packages/agent-core` 本地 `"types": ["bun"]` + 安装 `@types/bun` 之后，`tsc --noEmit` 仍然失败 **89 个错误**。这些错误**不是本次引入的**，而是原本被 `bun-types` 错误配置（包未安装）**遮蔽**的既有技术债。
+Gate C.2（2026-04-21）把 `tsconfig.base.json` 的 `"types": ["bun-types"]` 改为 `packages/agent-core` 本地 `"types": ["bun"]` + 安装 `@types/bun` 之后，初始实测仍失败 **89 个错误**。这些错误**不是本次引入的**，而是原本被 `bun-types` 错误配置（包未安装）**遮蔽**的既有技术债。
 
-本次 Gate C.2 提交（commit `TBD`）不试图闭合这 89 条错误；本文档作为 residual tracking，列出**所有剩余错误**、分类根因、建议修复窗口，转由未来专项 PR 处理。
+本次 Gate C.2 提交（commit `0464377`）不试图闭合这 89 条错误；本文档作为 residual tracking，列出初始全量错误、分类根因与建议修复窗口。随后 `f40c5d3` 已关闭旧 Cluster 2/3/4，把 residual 从 **89 → 61**；其后继拆分与执行顺序见 `docs/planning/2026-04-22-01-tsc-hard-gate.md`。
 
 ## 总规模
 
 `pnpm --filter @quilin/agent-core exec tsc --noEmit` 输出 **89 errors** across **15 files**（2026-04-21 初始基线）。
 
-**2026-04-21 Task A 收束后**：Cluster 2/3/4 全部关闭，剩 **61 errors**，全部属于 Cluster 1（AI SDK v6 漂移），见 commit `TBD` + 下文各 Cluster 段落 ✅ 标注。
+**2026-04-21 Task A 收束后**：Cluster 2/3/4 全部关闭，剩 **61 errors**，全部属于旧 Cluster 1（AI SDK v6 漂移），见 commit `f40c5d3`。该旧 Cluster 1 已在 2026-04-22 被重新拆成 3 个 work clusters（A/B/C），后继 tracking 见 `docs/planning/2026-04-22-01-tsc-hard-gate.md`。
 
 ## 4 类根因
 
@@ -175,4 +175,4 @@ Gate C.2（2026-04-21）把 `tsconfig.base.json` 的 `"types": ["bun-types"]` �
 
 - **变更**：tsc 错误 89→61（-28，含 integration.test.ts:223 bonus）；测试 266/267 持平（红灯是 Cluster 1 既有 web-fetch 老债，本次未触碰）
 - **原则**：advisor 审计下三条硬约束：(1) 不扩散到 Cluster 1；(2) 不引入运行时语义变化（dispatcher 保留、checkpoint runtime 不解码）；(3) 不写新的测试文件（D-03 属于 D 的 follow-up，不是 A 的范围）
-- **证据**：commit `TBD`；`pnpm --filter @quilin/agent-core exec tsc --noEmit 2>&1 | grep -cE "error TS"` = 61
+- **证据**：commit `f40c5d3`；`pnpm --filter @quilin/agent-core exec tsc --noEmit 2>&1 | grep -cE "error TS"` = 61

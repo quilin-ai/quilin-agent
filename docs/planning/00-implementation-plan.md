@@ -1,33 +1,23 @@
 # Quilin Agent 实现规划
 
 > **状态（2026-04-22 实证更新）**：
-> - Phase 0 ✅ v0.0.3 | Iter A ✅ v0.1.0-iter-a
-> - **Iter B 进行中**:B1 ✅ | B2 ✅ 合并 + 持续加固 | **B3a 拆分状态**:M0 ✅ catalog 注入(`16f3868`/`d617e32`)+ M0.5 ✅ `skill_view` tool(`0464377`,60 LOC + 143 LOC 测试)+ ⚠️ outbound decoration 契约缺口留 B3b Phase 1/2 | **B3b ✅ Phase 0 / ⏳ Phase 1**(`bc93f42`,frontmatter schema v2 reader + source-based trust defaults;tracking `docs/planning/2026-04-21-01-skills-b3b-activation.md`)
-> - **loop.ts LOC**:commit `0464377` 407 → 212,目标 `<200` 差 12 行,留后续 refactor PR
-> - **OmniMem L3a observer gate failed**(recall 21.4%/中文 0%),Iter D Sprint 0 1 周 spike 决定 ML-first 或降级 opt-in(起草 ADR-004)
+> - Phase 0 ✅ v0.0.3 | Iter A ✅ v0.1.0-iter-a | **Iter B 进行中**
+> - Iter B 当前落点：B1 ✅、B2 ✅、B3a ✅、**B3b ✅ Phase 0 / ⏳ Phase 1**。技能细节以 `docs/planning/2026-04-21-01-skills-b3b-activation.md` 和 `docs/engineering/13-skills/README.md` 为准。
+> - `loop.ts` 已由 commit `0464377` 从 407 降到 **212 LOC**；剩余 `<200` 收口不阻塞 B3b
+> - OmniMem L3a observer gate 仍失败（recall 21.4% / 中文 0%）；Iter D Sprint 0 决定 ML-first 或降级 opt-in
 >
-> **语言架构（当前）**：TS（核心）+ Python（ML Provider）。**Rust**（基础设施 / mesh / WASM）延后到 Iter D 引入，详见 [ADR-001](../adr/adr-001-core-loop-and-language.md)。
->
-> **Review 时间线**:
-> - 2026-04-17 Ultra-review(170 findings):已回写,`docs/review/2026-04-17-ultra-review.md`
-> - 2026-04-20 Revisit(26 findings):Wave-3 全部合并(H-01..10 / M-01..08 / L-01..05),`docs/review/2026-04-20-opus-4-7-revisit.md`
-> - 2026-04-21 Phase-2 review(18 findings):合并完成,`docs/review/2026-04-21-phase-2-review.md`
-> - 2026-04-21 Round 3(14 findings):**partially-outdated**,经 2026-04-22 实证,CC-01/02/03 已被 commit `0464377` 解决或大部分解决,详见 `docs/review/2026-04-21-opus-4-7-round-3.md` 顶部 VERIFIED 表
->
-> **Spec 升级**：Planning spec v1.1（main-LLM-direct + Gateway Skills + 可选 audit layer）;B2 tiny-classifier spike 降级到 Iter D 研究实验。
->
-> **⚠️ 状态声明实证纪律(2026-04-22)**:本文档里任何 ✅/⏳/⚠️ 声明必须附 commit hash + 实测证据。详见 `quilin.md` "状态声明实证纪律"节。
+> **语言架构**：TS（核心）+ Python（ML Provider）。Rust（mesh / WASM / infra）延后到 Iter D，引入前以 [ADR-001](../adr/adr-001-core-loop-and-language.md) 为准。
 
 ## Context
 
 旧 Python Harness 已删除（ADR-001 结论：不用 LangGraph，自研极简 Loop）。当前状态：
 
-- **12 个活跃工程领域** spec 已完成（01..11 + 13-skills）；**12-Conversation Engineering 已 parked 到 Iter F+**
+- **12 个活跃工程领域** spec 已完成（01..11 + 13-skills）；对话工程作为 **02-context 的 parked 子模块**，不计入活跃领域数
 - ~100 个上游子模块已配置（精选，非全自动融合）
 - 核心架构决策已定稿（ADR-001）
 - Phase 0 已完成（v0.0.3）：Agent Loop + OmniMem MCP + REPL + 78 tests
 - Iter A 已完成（v0.1.0-iter-a）：上下文工程 + 提示词工程（PromptBuilder, ContextAssembler, InjectionScanner, TemporalAwareness, MemoryBridge）+ 91 tests
-- Iter B 进行中：B1 tool substrate ✅；B2 Safety Policy ✅（WriteAuthority + pre/post hooks + Two-Strike + classifier 均已合并）；B3a Skills Core ✅ M0（catalog + `skill_view` + Gateway 接入 system prompt，commit `d617e32` / `16f3868`）；B3b Activation 待排
+- Iter B 进行中：B1 tool substrate ✅；B2 Safety Policy ✅（WriteAuthority + pre/post hooks + Two-Strike + classifier 均已合并）；B3a Skills Core ✅；B3b Activation 已完成 Phase 0，Phase 1 待排
 
 ---
 
@@ -70,7 +60,7 @@
 12. **Benchmark 聚焦** — **3 个 pinned 榜单（SWE-bench Verified / GAIA / BFCL v4）**，其他作为 aspirational roadmap
 13. **主 Agent 永不阻塞** — Supervisor 架构为默认
 14. **空闲自进化（opt-in）** — 默认 OFF，显式开启后才使用闲置配额做记忆整合 / 浏览
-15. **技能工程（第 13 领域）** — SKILL.md + catalog + on-demand load，Skill ≠ Tool
+15. **技能工程（编号 13 的活跃领域）** — SKILL.md + catalog + on-demand load，Skill ≠ Tool
 
 > **早期宣传用词中的"God Mode"、"自动缝合发布"、"默认最大信任"、"每个榜单真实碾压"已在 2026-04-17 ultra-review 后收回** — 见 [review 报告](../review/2026-04-17-ultra-review.md)。
 
@@ -96,7 +86,7 @@
 
 > 对应 [ADR-001 迁移路径](../adr/adr-001-core-loop-and-language.md#5-迁移路径)。
 >
-> **核心原则**：先把单 Agent 做强，再做大。不按 13 领域平铺推进，而按产品价值和依赖关系分 **A..F 六个迭代**递进。**Benchmark Ascent 被显式独立为 Iter E（拆 E1-E4）**，取代早期"贯穿各迭代、能力就绪即提交"的模糊承诺。
+> **核心原则**：先把单 Agent 做强，再做大。不按领域数量平铺推进，而按产品价值和依赖关系分 **A..F 六个迭代**递进。**Benchmark Ascent 被显式独立为 Iter E（拆 E1-E4）**，取代早期"贯穿各迭代、能力就绪即提交"的模糊承诺。
 
 ```
 Phase 0 (PoC) ✅ — v0.0.3
@@ -197,7 +187,7 @@ Iter F: Scale-Out + Memory Depth + Self-Evolution
 
 **主轴**：`05-Tool` + `13-Skills`　**搭配**：`07-Safety-lite`
 
-**为什么绑定推进**：工具和安全必须一起推——更强的工具没有安全分层 = 风险放大器。Skills（第 13 领域）借用 05 的 ToolRouter 作为 host（但 Skill ≠ Tool），B3a 已在 B2 合并后紧跟落地。
+**为什么绑定推进**：工具和安全必须一起推——更强的工具没有安全分层 = 风险放大器。Skills（编号 13 的活跃领域）借用 05 的 ToolRouter 作为 host（但 Skill ≠ Tool），B3a 已在 B2 合并后紧跟落地。
 
 **子阶段**：
 
@@ -218,24 +208,15 @@ Iter F: Scale-Out + Memory Depth + Self-Evolution
 - **⚠️ D-01 约束**：不建"God Mode 超级权限通道"；所有账号走同一条授权链路
 - 🧪 Tiny-classifier spike：因 Codex 额度 blocker 降级到 Iter D 研究实验（`docs/research/tiny-llm-baseline/` 保留 baseline）
 
-#### B3a — Skills Core（拆分为 M0 + M0.5,2026-04-22 实证更新）
+#### B3a — Skills Core ✅
 
-**M0 — Catalog 注入 ✅**(commits `16f3868` + `d617e32`)
-- ✅ SKILL.md + YAML frontmatter(M0 字段:`name` / `description` / `type` / `version`)
-- ✅ 三源发现:`bundled/` / `user/` / `project/`
-- ✅ SkillsManager 启动期建 Catalog,不 eager 全量加载
-- ✅ 路径 / 体积硬 guard(symlink 拒绝 / realpath 锁定 / 单文件 max size)
-- ✅ Gateway 接入:`context/skills-catalog-section.ts` 注入 `<available_skills>` 稳定前缀,REPL 已接线
-
-**M0.5 — `skill_view` tool ✅**(commit `0464377`)
-- ✅ `packages/agent-core/src/tools/builtin/skill-view.ts`(60 LOC)+ `skill-view.test.ts`(143 LOC)
-- ✅ 测试覆盖:happy-path / missing-args / root-escape / size-limit
-- ✅ `SkillsManager.loadBody()` 在 loader 层加了 root-boundary + body-size 守卫(之前只在 catalog 层)
-- ⚠️ **契约缺口**:当前 tool 把 body 作为普通 tool result 返回;**"注入下一轮 user message 尾部"的 outbound decoration 层尚未落地**。由 B3b Phase 1/2 收口(Codex 独立判断:decoration 应在 REPL/assembler 层做,不是 tool 层直接改状态)
+- 已完成：M0 catalog 注入（`16f3868` / `d617e32`）与 M0.5 `skill_view` on-demand load（`0464377`）
+- 当前仅保留状态摘要；M0 / M0.5 的细项与测试证据以 `docs/engineering/13-skills/README.md` 为准
+- 契约缺口仍在：`skill_view` 返回 body 后的 outbound decoration 仍留给 B3b Phase 1/2 收口
 
 #### B3b — Skills Activation(M1) ✅ Phase 0 / ⏳ Phase 1
 
-**2026-04-21 用户 approved 4-phase 拆法**,tracking:`docs/planning/2026-04-21-01-skills-b3b-activation.md`。
+**状态真相源**：`docs/planning/2026-04-21-01-skills-b3b-activation.md`。
 
 | Phase | 范围 | 状态 |
 |-------|------|------|
@@ -245,8 +226,7 @@ Iter F: Scale-Out + Memory Depth + Self-Evolution
 | **3** | skills_guard 内容扫描 + 4 级信任策略(builtin/trusted/community/agent-created) | ⏳ pending |
 | **4** | Post-compact 恢复(保留最近 5 个 ≤25K token) + file watcher 热发现 | ⏳ pending |
 
-**Phase 0 最终边界**(2026-04-21 用户 approved):
-- 单一 Phase 0 不拆 0a/0b;**trust 责任分层**(parser 只读文本 / `SkillsManager.discover()` 按 source 回填 / `skill_manage(create)` 显式 `agent-created`);writer 延到 Phase 2;YAML parser 最小改法不引入依赖;fixture 用 `upstreams/llm-vercel-ai/skills/*` 真实上游样式。
+**Phase 0 已完成**：`bc93f42` 落地 frontmatter schema v2 reader + source-based trust defaults。reader / trust 分层 / fixture 细节留在 tracking doc，不在本计划文档重复展开。
 
 **验证标准**：
 - [x] B1 同时连接 ≥2 个 MCP Server
@@ -261,7 +241,7 @@ Iter F: Scale-Out + Memory Depth + Self-Evolution
 
 **涉及工程领域**：05-Tool（主）、13-Skills（主）、07-Safety（基础）
 
-**参考 spec**：[05-tool](engineering/05-tool/README.md)、[13-skills](engineering/13-skills/README.md)、[07-safety-guardrails](engineering/07-safety-guardrails/README.md)
+**参考 spec**：[05-tool](../engineering/05-tool/README.md)、[13-skills](../engineering/13-skills/README.md)、[07-safety-guardrails](../engineering/07-safety-guardrails/README.md)
 
 ---
 
@@ -502,7 +482,7 @@ Benchmark 验证层（Iter E 独立 iter）
 | 09 | 部署运行时 | justfile + REPL CLI | — | — | — | **配置管理 + CI 三语言** | — | 热更新 + 主动通知 |
 | 10 | 自进化 | — | — | — | — | — | — | **轨迹分析 + human-in-loop patch + Insight + Idle(opt-in)** |
 | 11 | Agent Mesh | — | — | — | — | **crates/ 骨架** | — | **mesh-sdk 填肉 + discover/send/receive** |
-| 13 | 技能工程 ★ | — | — | **B3a ✅ M0**：SKILL.md + frontmatter + 三源发现 + catalog + `skill_view` + 路径/体积硬 guard + Gateway 接入 system prompt | B3b: 条件激活 + CRUD + skills_guard | — | — | M2+: plugin + background nudge（默认 OFF） |
+| 13 | 技能工程 ★ | — | — | **B3a ✅**：M0 + M0.5 已完成，细节见 `13-skills/README.md` | B3b: 条件激活 + CRUD + skills_guard | — | — | M2+: plugin + background nudge（默认 OFF） |
 
 ### Parked (sub-module under 02-context)
 

@@ -128,13 +128,13 @@ agent 看不到的东西不存在。所有架构决策、规范、部署流程�
 | 09 | 部署运行时 | — | CLI、配置管理、热更新、熵管理 | [09-deployment-runtime](../engineering/09-deployment-runtime/README.md) | D + F |
 | 10 | 自进化 | 前馈+反馈 | 轨迹分析、**human-in-loop scaffold patch**、用户自助吸收 | [10-self-evolution](../engineering/10-self-evolution/README.md) | F |
 | 11 | Agent Mesh | — | AgentMesh SDK 接入（Rust，crates/ 在 Iter D 引入） | [11-agent-mesh](../engineering/11-agent-mesh/README.md) | D + F |
-| 13 | 技能工程 | 前馈 | SKILL.md + frontmatter、catalog 索引 + 按需加载、路径/大小安全、M0/M1/M2+ 分层 | [13-skills](../engineering/13-skills/README.md) | B |
+| 13 | 技能工程 | 前馈 | 第 13 号活跃领域：SKILL.md + frontmatter、catalog 索引 + 按需加载、路径/大小安全、M0/M1/M2+ 分层 | [13-skills](../engineering/13-skills/README.md) | B |
 
 ### Parked (sub-module under 02-context)
 
 | # | 领域 | 状态 |
 |---|------|------|
-| 02.x | 对话工程（原 12-） | **作为 02-context 子模块，Iter F 解冻**。核心回路 benchmark 稳态之前不启动"活人感"工程。详见 [02-context/conversation-engineering](../engineering/02-context/conversation-engineering/README.md)。 |
+| 02.x | 对话工程（原 12-） | **parked 子模块，不计入活跃领域数**。作为 02-context 子模块，Iter F 解冻；因此当前口径是 **12 个活跃领域 + 1 个 parked 子模块**。详见 [02-context/conversation-engineering](../engineering/02-context/conversation-engineering/README.md)。 |
 
 > **控制类型**来自 [harness-engineering.md §三](./harness-engineering.md#三harness-控制模型)：前馈（行动前引导）、反馈（行动后观察纠正）。
 >

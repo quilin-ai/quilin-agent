@@ -785,9 +785,10 @@ class Quilin:
                     )
             return result
 
-    async def _run_node(self, node_name: str, state: AgentState) -> AgentState:
+    async def _run_node(self, node_name: str, current_state: AgentState) -> AgentState:
         async with self._obs.tracer.start_node_span(node_name) as node:
-            new_state = await self._nodes[node_name](state)
+            handler = self._nodes[node_name]
+            new_state = await handler(current_state)
             self._obs.structured_log(
                 level="INFO",
                 component="StateGraph",

@@ -50,13 +50,13 @@ threat_surface_delta:
 
 ### Phase 0 最终边界（2026-04-22 用户 approved）
 
-- **单一 Phase 0** = `frontmatter schema v2 reader` + **CC-03 并行小改**。不拆 Phase 0a/0b，回归 tracking doc 原定边界。
+- **单一 Phase 0** = `frontmatter schema v2 reader`。不拆 Phase 0a/0b，回归 tracking doc 原定边界。
 - **trust 责任分层**（Codex 独立判断，Claude 转达 / 用户 approved）：
   - parser：**只**校验并返回文本里明写的 trust，不硬编码默认值
   - `SkillsManager.discover()`：按 source 注入默认（`bundled/` → `builtin` / `~/.quilin/skills/` → `community`）
   - `skill_manage(create)`（Phase 2）：写入时显式 `agent-created`，不靠 parser 默认值
 - **writer 延到 Phase 2**：`skill_manage(update)` 实现时一起做完整 writer + 保真写回。Phase 0 **只 ship reader**，不做半成品 writer 结构。
-- **CC-03 并行**：pin `@types/bun` 到 exact version（当前 `^1.3.12` 浮动不够）+ CI TypeScript job 加 `tsc --noEmit` 硬门步骤。
+- **CC-03 已剥离独立 cluster**：剩余 `tsc --noEmit` residual 见 `docs/planning/2026-04-22-01-tsc-hard-gate.md`，不再算入 B3b Phase 0 范围。
 - **YAML parser 最小改法**：升级现有逐行 parser 支持 2 层缩进，**不引入** YAML 库依赖。
 - **fixture 选择**：复用 `upstreams/llm-vercel-ai/skills/*/SKILL.md` 真实上游样式 + 本地扩展 fixture 覆盖 `metadata.quilin.*`。
 

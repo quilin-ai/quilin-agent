@@ -858,7 +858,7 @@ Quilin 运行标准化深度调研（6 步流程，见 deep-code-research-method
 **与前沿研究（2.8）的关系**：
 - 2.8 是**官方**对参考项目的自动变更跟踪与研究摘要
 - 2.11 是**用户**对任意 GitHub 仓库的自助吸收
-- 两者共享同一套调研流程（[deep-code-research-methodology.md](../research/deep-code-research-methodology.md)）
+- 两者共享同一套调研流程（[deep-code-research-methodology.md](../../research/deep-code-research-methodology.md)）
 - 两者产出的补丁格式相同，通过同一套 Scaffold 修改系统应用
 
 ### 2.12 空闲自进化经济学（Idle Evolution Budget, 默认关闭）
