@@ -26,7 +26,9 @@ export interface BuildContext {
 	readonly sessionState: Record<string, unknown>;
 	readonly modelId: string;
 	readonly availableTools: readonly string[];
+	readonly availableToolsets?: readonly string[];
 	readonly availableToolDescriptors?: readonly ToolPromptDescriptor[];
+	readonly minTrustLevel?: import("../skills/types.js").SkillTrustLevel;
 	readonly profile: PromptProfile;
 }
 

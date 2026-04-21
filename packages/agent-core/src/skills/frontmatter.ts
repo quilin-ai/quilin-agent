@@ -245,6 +245,10 @@ export function parseSkillFrontmatter(
 			false,
 		),
 		allowedTools,
+		mandatory: normalizeBoolean(
+			firstDefined(input.mandatory, quilinMetadata?.mandatory),
+			false,
+		),
 		requiresTools,
 		requiresToolsets,
 		platforms,

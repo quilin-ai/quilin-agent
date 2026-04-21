@@ -11,6 +11,7 @@ export interface SkillFrontmatter {
 	readonly description: string;
 	readonly whenToUse?: string;
 	readonly allowedTools?: readonly string[];
+	readonly mandatory?: boolean;
 	readonly requiresTools?: readonly string[];
 	readonly requiresToolsets?: readonly string[];
 	readonly platforms?: readonly string[];

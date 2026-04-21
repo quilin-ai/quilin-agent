@@ -1,6 +1,6 @@
 ---
 title: Skills B3b Phase 1 — 条件激活 + KV-cache friendly catalog (tracking)
-status: planning
+status: in-progress
 owner: Codex (impl) + Claude (plan + review)
 created: 2026-04-22
 last_updated: 2026-04-22

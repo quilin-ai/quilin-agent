@@ -13,6 +13,7 @@ describe("parseSkillFrontmatter", () => {
 		expect(frontmatter).toEqual({
 			name: "web-scraping",
 			description: "Extract structured data from websites",
+			mandatory: false,
 			userInvocable: true,
 			disableModelInvocation: false,
 		});
@@ -36,6 +37,7 @@ describe("parseSkillFrontmatter", () => {
 		const frontmatter = parseSkillFrontmatter({
 			name: "multi-tool-research",
 			description: "Coordinate search and extraction",
+			mandatory: true,
 			requiresTools: ["web_fetch"],
 			requires_toolsets: ["browser"],
 			platforms: ["darwin", "linux"],
@@ -47,6 +49,7 @@ describe("parseSkillFrontmatter", () => {
 		});
 
 		expect(frontmatter).toMatchObject({
+			mandatory: true,
 			requiresTools: ["web_fetch"],
 			requiresToolsets: ["browser"],
 			platforms: ["darwin", "linux"],

@@ -13,6 +13,7 @@ function makeDescriptor(name: string): SkillDescriptor {
 			name,
 			description: `Skill ${name} description`,
 			whenToUse: `When ${name} is relevant`,
+			mandatory: false,
 			userInvocable: true,
 			disableModelInvocation: false,
 			trust: "builtin",
@@ -39,6 +40,34 @@ describe("createSkillsCatalogSection", () => {
 		expect(output).toContain('name="alpha"');
 		expect(output).toContain('name="beta"');
 		expect(output).toContain("</available_skills>");
+	});
+
+	it("filters descriptors based on available tools from build context", () => {
+		const section = createSkillsCatalogSection({
+			list: () => [
+				{
+					...makeDescriptor("browser-skill"),
+					frontmatter: {
+						...makeDescriptor("browser-skill").frontmatter,
+						requiresTools: ["web_fetch"],
+					},
+				},
+			],
+		});
+
+		expect(
+			section.compute({
+				...baseCtx,
+				availableTools: [],
+			}),
+		).toBe("<available_skills />");
+
+		expect(
+			section.compute({
+				...baseCtx,
+				availableTools: ["web_fetch"],
+			}),
+		).toContain('name="browser-skill"');
 	});
 
 	it("returns null when no descriptors are available (section omitted)", () => {
