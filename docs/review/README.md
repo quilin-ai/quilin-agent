@@ -17,6 +17,7 @@
 | 2026-04-21 | [2026-04-21-prompt-cache-architecture-spec.md](./2026-04-21-prompt-cache-architecture-spec.md) | Prompt Cache 架构 spec(非 finding,为设计草案) | `PromptSessionAssembler` + cache-adapter + single sliding breakpoint 方案 | draft for review(注:本文是 spec 不是 finding list,归入 review 目录因为定稿前走了 review 流程) |
 | 2026-04-21 | [2026-04-21-post-push-graph-review.md](./2026-04-21-post-push-graph-review.md) | 3 commit(`b967d1c` / `0464377` / `117b879`)post-push graph review,基线 `6fdda11` | risk_score 0.60,核心声明 C.2 89 errors | **partially-outdated**(residual 已收敛到 61,见 `docs/planning/2026-04-22-01-tsc-hard-gate.md`) |
 | 2026-04-21 | [2026-04-21-opus-4-7-round-3.md](./2026-04-21-opus-4-7-round-3.md) | **Round 3** — 架构 + 代码交叉复查(基线 `0464377` 合入前快照) | **14 findings**(CC-01..03 / SD-06..08 / AA-01..05 / PB-01..03)+ 4 维度差异化价值 | **partially-outdated**(CC-01/02/03 已实证更正,详见文档 banner;VERIFIED 表 2026-04-22 更新) |
+| 2026-04-22 | (多 commit 收尾,无单独 review 文件) | **Track C 收尾** — round-3 4 条遗留 + PB-02 索引 + AA-04 heuristic 重构 | 6 commits(`776300e` CC-01 / `a6c7cab` SD-08 / `106448d` PB-03 / `9dec6e1` AA-04 / `3dc62e7` PB-02 / `9211db4` AA-04 重构) | active(round-3 主体 findings 已闭合,残余为 Iter B3b 跨 session 跟踪) |
 
 ## 按继承链
 
@@ -41,7 +42,9 @@
              │
              └─→ 2026-04-21  Round 3 (14 findings)
                       │
-                      └─→ 2026-04-22  实证更正 + Track C 收尾(commits 776300e..9dec6e1)
+                      └─→ 2026-04-22  Track C 收尾(6 commits 776300e..9211db4)
+                             闭合:CC-01 / SD-08 / PB-03 / AA-04 / PB-02
+                             残余:Iter B3b 跨 session 跟踪(非 round-3 主线)
 ```
 
 ## 按"我想找 X"
