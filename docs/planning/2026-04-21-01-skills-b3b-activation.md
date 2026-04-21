@@ -129,7 +129,7 @@ B3b 不做：M2+ 的 Plugin 平台、Background nudge 自进化、ToolSearch 延
   - 02-context 集成测试：KV-cache 命中率（通过 stable-prefix hash）在 3 轮对话里保持 100%
 - **产出**：catalog-renderer.ts 改造 + sorter 工具 + 测试
 
-### Phase 2 — skill_manage CRUD + WriteAuthority 集成 ⏳
+### Phase 2 — skill_manage CRUD + WriteAuthority 集成 ✅
 
 - **做什么**：
   1. `packages/agent-core/src/skills/manage.ts` 实现 `SkillManageAction` 三种 action（参照 13 §2.6）

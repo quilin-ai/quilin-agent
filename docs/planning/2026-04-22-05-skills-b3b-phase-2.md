@@ -1,9 +1,12 @@
 ---
 title: Skills B3b Phase 2 — skill_manage CRUD + WriteAuthority 集成 (tracking)
-status: in-progress
+status: completed
 owner: Codex (impl) + Claude (plan + review)
 created: 2026-04-22
 last_updated: 2026-04-22
+closure_commits:
+  - b5a9474  # P2-a
+  - a5140da  # P2-b
 predecessors:
   - docs/planning/2026-04-21-01-skills-b3b-activation.md  # Phase 2 总 spec(§Phases L132-155)
   - docs/planning/2026-04-22-04-skills-b3b-phase-1.md     # Phase 1 closure
@@ -204,11 +207,11 @@ const SENSITIVE_TOOLS = new Set([
 
 > 契约测试实现建议:在 manage.ts 里写文件时 **必须** 通过 options 注入的 `fsOps: { writeFile, unlink, rmdir }`(默认 = node:fs/promises);测试用一个 spy fsOps + 一个 spy WriteAuthority,断言 `fsOps.writeFile.callCount === writeAuthority.authorize.callCount`(在 allow 分支上)。
 
-### P2-c:工具注册 + discover() 刷新
+### P2-c:工具注册 + discover() 刷新 ✅
 
 **注册 `skill_manage` 到 ToolRouter:**
 
-> **依赖:** 等待 Reasoning Phase 2 first batch(Codex 进行中的 `loop.ts` / `state/*`)合并。如果 P2-a/P2-b 完成时 Reasoning Phase 2 尚未并轨,**P2-c 拆出作为 `2026-04-22-06-skills-b3b-phase-2c.md` 单独推进,不阻塞 P2-a/b 落地**。
+> **实装结论(2026-04-22):** 读仓后确认无需等待额外并轨。`skill_manage` 作为 builtin adapter 接到 `tools/builtin/index.ts` 即可,不必改 `registry.ts` / `loop.ts` / `state/*`。
 
 **改动面(预期):**
 
@@ -242,14 +245,14 @@ const SENSITIVE_TOOLS = new Set([
 
 ## 完成定义(Phase 2 done)
 
-- [ ] P2-a / P2-b 代码合入 master,无 tsc error
-- [ ] P2-c 根据 Reasoning Phase 2 合并状态决定 land 节点(本 tracking doc 或分拆文档)
-- [ ] `manage.test.ts` ≥ 20 条测试(P2-a 12 + P2-b 8)
-- [ ] **契约测试过 R-01**(spy 验证 WriteAuthority 必经)
-- [ ] `bunx vitest run` 全绿(≥291 + 新加)
-- [ ] CI tsc hard gate 通过
-- [ ] 本文件 status:`planning` → `in-progress`(Codex 接手时) → `completed`(合入时)
-- [ ] `2026-04-21-01-skills-b3b-activation.md §Phases L132 Phase 2` ⏳ → ✅
+- [x] P2-a / P2-b 代码合入 master,无 tsc error
+- [x] P2-c 在本 tracking doc 内 land,无额外分拆文档
+- [x] `manage.test.ts` ≥ 20 条测试(P2-a 12 + P2-b 8)
+- [x] **契约测试过 R-01**(spy 验证 WriteAuthority 必经)
+- [x] `bunx vitest run` 全绿(316/316)
+- [x] CI tsc hard gate 通过
+- [x] 本文件 status:`planning` → `in-progress`(Codex 接手时) → `completed`(合入时)
+- [x] `2026-04-21-01-skills-b3b-activation.md §Phases L132 Phase 2` ⏳ → ✅
 
 ## 风险
 
@@ -257,20 +260,20 @@ const SENSITIVE_TOOLS = new Set([
 - **R-02(high):** 敏感工具列表遗漏(比如未来 05-tool 新增一个 file-mutating 工具但未加入 SENSITIVE_TOOLS) → 升级规则失效。**守护:05-tool 工具注册侧加单元测试,发现 mutation-capable 工具未在 SENSITIVE_TOOLS 里时 CI 失败**(Phase 3 或 M2 加,Phase 2 先硬编码 + 文档注释)。
 - **R-03(medium):** Phase 2 同步 `discover()` 导致 CRUD 响应时间 O(skills总数)。**守护:acceptable trade-off;Phase 4 的 file watcher 落地后移除**。
 - **R-04(medium):** frontmatter serialize 不是精确 roundtrip(YAML 保序 / 注释) → update 吃掉用户手写注释。**守护:serialize 用最小 YAML 子集 + roundtrip 测试**。
-- **R-05(low):** Reasoning Phase 2 并发改动 `tools/registry.ts` 导致 merge conflict。**守护:P2-c 拆出单独推进 + Codex 自己判断等并轨还是先 land P2-a/b**。
+- **R-05(low):** builtin 层 root 配置若未显式传入,`skill_manage` 默认只解析 `userRoot=~/.quilin/skills`;project 路径需调用方显式提供。**守护:P2-c adapter 把 roots 做成显式 option,拒绝从 `SkillsManager` 实例隐式猜测 roots**。
 
 ## Next Action
 
 - **Codex(一等任务)**:
   1. 接手时把本文件 status 切 `in-progress`
   2. 按 P2-a → P2-b 顺序开工(P2-a 纯逻辑 + 文件 I/O;P2-b 在 P2-a 之上接 WriteAuthority)
-  3. P2-c 延后到 Reasoning Phase 2 first batch 合并后;合并前可以把 ToolRouter adapter 文件先写完但不注册,或留给下一轮
+  3. P2-c 已完成:新增 builtin `skill_manage` adapter + zod schema + same-session catalog 可见性测试
   4. 每个 sub-deliverable 落完 push 后 ping Claude 做 cross-review
   5. 遇到开放性决策(如 SENSITIVE_TOOLS 列表是否加 `file_patch` / `git_write`):按**最严格方向**先落地,决策回填到本文件 Decisions
 - **Claude(一等任务)**:
   1. 监督 WriteAuthority 合同不漂移(每个 PR 验 R-01 契约测试存在)
   2. P2-b 落完时抽查 `writeAuthority.authorize` 调用点,确认 origin / riskLevel 与本文件 §P2-b 表一致
-  3. Phase 2 全部完成后,更新 `2026-04-21-01-skills-b3b-activation.md §Phases L132` 为 ✅
+  3. Phase 2 已闭合,更新 `2026-04-21-01-skills-b3b-activation.md §Phases L132` 为 ✅
 
 ## Open Questions
 
@@ -280,7 +283,7 @@ const SENSITIVE_TOOLS = new Set([
 
 ## Blockers
 
-- P2-c 依赖 Reasoning Phase 2 first batch(`loop.ts` / `state/*`)。P2-a/b 无 blocker。
+- 无
 
 ## Decisions(随 Phase 推进补充)
 
@@ -298,3 +301,10 @@ const SENSITIVE_TOOLS = new Set([
 - **After:** P2-b 只把 `shell_exec` / `file_write` / `skill_manage` 视为敏感工具并升级到 `critical`;不预留未来工具名
 - **理由:** 预留不存在的工具名会制造“看似覆盖、其实无验证”的假安全感;等 05-tool 真引入新的 mutating 工具时,再用新增测试 + Decisions 条目显式扩表
 - **Source:** Codex P2-b implementation checkpoint 2026-04-22
+
+### 2026-04-22 — P2-c 直接走 builtin adapter,不等待额外并轨
+
+- **Before:** tracking doc 预设 P2-c 可能需要等 Reasoning Phase 2 first batch,或者拆出单独文档
+- **After:** 读仓后确认 `skill_manage` 只需接到 `tools/builtin/index.ts` 并由 `createBuiltinTools()` 条件注册,不需要改 `registry.ts` / `loop.ts` / `state/*`;因此直接在本 doc 内完成 P2-c
+- **理由:** 当前工具注册真入口在 builtin index,并发风险比原估计低;继续等待只会拖慢 Phase 2 闭环
+- **Source:** Codex P2-c implementation checkpoint 2026-04-22

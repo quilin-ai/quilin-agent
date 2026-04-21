@@ -9,6 +9,10 @@ import {
 	createShellExecTool,
 	type ShellExecToolOptions,
 } from "./shell-exec.js";
+import {
+	createSkillManageTool,
+	type SkillManageToolOptions,
+} from "./skill-manage.js";
 import { createSkillViewTool } from "./skill-view.js";
 import { createWebFetchTool, type WebFetchToolOptions } from "./web-fetch.js";
 import type { WriteAuthority } from "../../safety/write-authority.js";
@@ -22,6 +26,10 @@ export interface BuiltinToolOptions {
 	readonly webFetch?: WebFetchToolOptions;
 	readonly writeAuthority?: WriteAuthority;
 	readonly skillsManager?: SkillsManager;
+	readonly skillManage?: Omit<
+		SkillManageToolOptions,
+		"skillsManager" | "writeAuthority"
+	>;
 }
 
 export function createBuiltinTools(
@@ -47,6 +55,15 @@ export function createBuiltinTools(
 				skillsManager: options.skillsManager,
 			}),
 		);
+		if (options.writeAuthority != null) {
+			tools.push(
+				createSkillManageTool({
+					skillsManager: options.skillsManager,
+					writeAuthority: options.writeAuthority,
+					...options.skillManage,
+				}),
+			);
+		}
 	}
 
 	return tools;
@@ -57,6 +74,7 @@ export {
 	createFileReadTool,
 	createFileWriteTool,
 	createShellExecTool,
+	createSkillManageTool,
 	createSkillViewTool,
 	createWebFetchTool,
 };

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { WriteAuthority } from "../../safety/write-authority.js";
 import { SkillsManager } from "../../skills/manager.js";
 import { createBuiltinTools } from "./index.js";
 
@@ -28,5 +29,17 @@ describe("builtin tool index", () => {
 		});
 
 		expect(tools.map((tool) => tool.name)).toContain("skill_view");
+	});
+
+	it("adds skill_manage when both skillsManager and writeAuthority are available", () => {
+		const tools = createBuiltinTools({
+			skillsManager: new SkillsManager({}),
+			writeAuthority: new WriteAuthority({
+				mode: "ask",
+				confirm: async () => true,
+			}),
+		});
+
+		expect(tools.map((tool) => tool.name)).toContain("skill_manage");
 	});
 });
