@@ -1,10 +1,11 @@
 ---
 title: Agent Bridge — Claude × Codex × User 协作协议
 status: draft
-version: v1
+version: v1.1
 owner: Claude + Codex (co-authored) + human (终审)
 created: 2026-04-22
 last_updated: 2026-04-22
+revision_note: v1.1 adds §10.3.1 Claude 代写代码细粒度约束 (PB-03 closed)
 supersedes: docs/planning/2026-04-21-05-collaboration-protocol.md
 precedence: User instructions > this file > quilin.md > agent global rules
 ---
@@ -413,6 +414,27 @@ Next Action: <下一 session 入口>
 
 主动报告自身 token 状态，不要到报错才暴露。
 
+#### §10.3.1 Claude 代写代码的细粒度约束（PB-03）
+
+当 Codex 额度 < 20% 或离线,Claude 可以代写代码,**但必须落在以下 allow-list**(round-3 PB-03):
+
+**允许 (a / b / c)**:
+| 类型 | 边界 | 约束 |
+|---|---|---|
+| **(a) 文档 / 计划 / 脚本** | `docs/**` / `scripts/**` / `*.md` / `justfile` / CI workflow | 无 LOC 上限,但必须走 §7 pre-push cross-review |
+| **(b) ≤50 LOC 纯 TS 小修** | `packages/**/src/*.ts`(非 `index.ts` / 非顶层聚合) | 单文件 diff ≤50 LOC、零新抽象、零新依赖、零新跨包 import;必须同 PR 补 / 更新测试 |
+| **(c) 测试用例补全** | `packages/**/*.test.ts` / `providers/**/test_*.py` / `scripts/test_*.py` | 只加 / 改测试,不改被测代码;覆盖已存在实现的既有分支 |
+
+**永远禁止**(Claude 不许写,即便 token 足):
+- 架构级改动(新 package / 新 provider / 新 MCP server / 新领域 spec / 新 ADR 落地代码)
+- `loop.ts` / `WriteAuthority` / `SafetyPolicy` / `SkillsManager` 等单点契约核心文件的**结构性**修改(命名重命名、签名调整、新 branch)
+- 跨 `llm/*` ↔ `context/*` ↔ `skills/*` ↔ `tools/*` 的接口漂移(需 Codex sandbox 验证回归)
+- 任何 `providers/memory/src/**` Python runtime 代码(Codex 专属域)
+
+**超出 allow-list 时**:Claude 只写 plan / tracking doc,用 AgentBridge 明确告知用户"此任务需唤醒 Codex",**不得**擅自扩大范围。
+
+**强制 review**:Claude 代写的 (b) / (c) 类改动必须在 commit message 附 LOC 实证(`wc -l` 或 diff stat)+ 测试结果,Codex 上线后走 §10.1 量化补 review(抽样 ≥30% diff)。
+
 ### §10.4 用户打断 / 改需求
 
 - tracking doc 的 `status` 按实际回退：`in-progress → planning`
@@ -457,7 +479,7 @@ Next Action: <下一 session 入口>
 
 ### §11.3 Open Questions（v1 留待观察 / 实战后定版）
 
-- [ ] `threat_surface_delta` CI 强制检查何时上线（目前人工填）
+- [x] `threat_surface_delta` CI 强制检查何时上线 → **CLOSED 2026-04-22**:`scripts/lint-planning.py` 落地(SD-08,commit `a6c7cab`),本地可跑;CI 集成作为后续 track 任务
 - [ ] N=3 未收敛阈值是否合适（实战后可调）
 - [ ] 10-commit 图谱失效阈值是否合适（实战后可调）
 - [ ] 多 feature 并行时 tracking doc 如何交叉引用（未覆盖）
