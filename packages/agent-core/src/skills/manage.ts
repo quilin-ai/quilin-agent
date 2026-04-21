@@ -8,7 +8,12 @@ import {
 	writeFile,
 } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { WriteAuthority } from "../safety/write-authority.js";
+import {
+	WriteAuthority,
+	type WriteOrigin,
+	type WriteRequest,
+	type WriteRiskLevel,
+} from "../safety/write-authority.js";
 import { parseSkillMarkdown } from "./frontmatter.js";
 import {
 	DEFAULT_MAX_BODY_BYTES,
@@ -24,6 +29,7 @@ import type {
 } from "./types.js";
 
 const SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
+const SENSITIVE_TOOLS = new Set(["shell_exec", "file_write", "skill_manage"]);
 
 interface FsOps {
 	readonly mkdir: (
@@ -146,6 +152,16 @@ function mergeFrontmatter(
 	};
 }
 
+function findSensitiveTools(
+	allowedTools: readonly string[] | undefined,
+): readonly string[] {
+	if (allowedTools == null) {
+		return [];
+	}
+
+	return allowedTools.filter((tool) => SENSITIVE_TOOLS.has(tool));
+}
+
 export class SkillManager {
 	private readonly userRoot: string;
 	private readonly projectRoot?: string;
@@ -222,6 +238,13 @@ export class SkillManager {
 			return serialized.error;
 		}
 
+		const authorization = await this.authorizeWrite(
+			this.buildCreateRequest(action, targetPath),
+		);
+		if (authorization != null) {
+			return authorization;
+		}
+
 		await this.fsOps.mkdir(targetDir, { recursive: true });
 		await this.fsOps.writeFile(targetPath, serialized.markdown, { flag: "wx" });
 		await this.skillsManager.discover();
@@ -286,6 +309,13 @@ export class SkillManager {
 			return serialized.error;
 		}
 
+		const authorization = await this.authorizeWrite(
+			this.buildUpdateRequest(action.name, existingPath.path, nextFrontmatter, nextBody),
+		);
+		if (authorization != null) {
+			return authorization;
+		}
+
 		await this.fsOps.writeFile(existingPath.path, serialized.markdown);
 		await this.skillsManager.discover();
 		const descriptor = this.skillsManager.findByName(action.name);
@@ -310,6 +340,13 @@ export class SkillManager {
 		const existingPath = await this.resolveExistingPath(existing.path);
 		if ("error" in existingPath) {
 			return existingPath.error;
+		}
+
+		const authorization = await this.authorizeWrite(
+			this.buildDeleteRequest(action.name, existingPath.path),
+		);
+		if (authorization != null) {
+			return authorization;
 		}
 
 		await this.fsOps.unlink(existingPath.path);
@@ -455,6 +492,92 @@ export class SkillManager {
 				),
 			};
 		}
+	}
+
+	private buildCreateRequest(
+		action: Extract<SkillManageAction, { action: "create" }>,
+		targetPath: string,
+	): WriteRequest {
+		return this.buildWriteRequest({
+			action: "create",
+			name: action.descriptor.name,
+			path: targetPath,
+			body: action.body,
+			allowedTools: action.descriptor.frontmatter.allowedTools,
+			riskLevel: "high",
+		});
+	}
+
+	private buildUpdateRequest(
+		name: string,
+		targetPath: string,
+		frontmatter: SkillFrontmatter,
+		body: string,
+	): WriteRequest {
+		return this.buildWriteRequest({
+			action: "update",
+			name,
+			path: targetPath,
+			body,
+			allowedTools: frontmatter.allowedTools,
+			riskLevel: "high",
+		});
+	}
+
+	private buildDeleteRequest(name: string, targetPath: string): WriteRequest {
+		return this.buildWriteRequest({
+			action: "delete",
+			name,
+			path: targetPath,
+			riskLevel: "medium",
+		});
+	}
+
+	private buildWriteRequest(input: {
+		readonly action: "create" | "update" | "delete";
+		readonly name: string;
+		readonly path: string;
+		readonly riskLevel: WriteRiskLevel;
+		readonly body?: string;
+		readonly allowedTools?: readonly string[];
+		readonly origin?: WriteOrigin;
+	}): WriteRequest {
+		const sensitiveTools = findSensitiveTools(input.allowedTools);
+		const riskLevel =
+			sensitiveTools.length > 0 ? "critical" : input.riskLevel;
+		const details = [
+			`path=${input.path}`,
+			input.body == null
+				? undefined
+				: `bytes=${Buffer.byteLength(input.body, "utf8")}`,
+			sensitiveTools.length === 0
+				? undefined
+				: `sensitive_tools=${sensitiveTools.join(",")}`,
+		].filter((value): value is string => value != null);
+
+		return {
+			tool: "skill_manage",
+			origin: input.origin ?? "agent",
+			riskLevel,
+			summary: `skills.${input.action} ${input.name}`,
+			detail: details.join(" | "),
+		};
+	}
+
+	private async authorizeWrite(
+		request: WriteRequest,
+	): Promise<SkillManageResult | null> {
+		const decision = await this.writeAuthority.authorize(request);
+		if (decision.kind === "allow") {
+			return null;
+		}
+
+		return createError(
+			"write_denied",
+			decision.kind === "deny"
+				? decision.reason
+				: "write request requires interactive confirmation",
+		);
 	}
 }
 

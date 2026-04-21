@@ -291,3 +291,10 @@ const SENSITIVE_TOOLS = new Set([
 - **理由:** <为什么>
 - **Source:** <提出人 + context>
 -->
+
+### 2026-04-22 — SENSITIVE_TOOLS 先只收已存在的 3 个真正写/执行型工具
+
+- **Before:** Open question 提到是否要预留未来的 `file_patch` / `git_commit`
+- **After:** P2-b 只把 `shell_exec` / `file_write` / `skill_manage` 视为敏感工具并升级到 `critical`;不预留未来工具名
+- **理由:** 预留不存在的工具名会制造“看似覆盖、其实无验证”的假安全感;等 05-tool 真引入新的 mutating 工具时,再用新增测试 + Decisions 条目显式扩表
+- **Source:** Codex P2-b implementation checkpoint 2026-04-22

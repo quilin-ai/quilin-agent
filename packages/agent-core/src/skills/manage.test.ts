@@ -1,8 +1,11 @@
 import { mkdir, mkdtemp, readFile, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { WriteAuthority } from "../safety/write-authority.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+	WriteAuthority,
+	type WriteRequest,
+} from "../safety/write-authority.js";
 import { parseSkillMarkdown } from "./frontmatter.js";
 import { SkillManager } from "./manage.js";
 import { SkillsManager } from "./manager.js";
@@ -40,14 +43,20 @@ function createSubject(options: {
 	userRoot: string;
 	projectRoot?: string;
 	skillsManager: SkillsManager;
+	writeAuthority?: WriteAuthority;
+	fsOps?: ConstructorParameters<typeof SkillManager>[0]["fsOps"];
 }): SkillManager {
 	return new SkillManager({
 		userRoot: options.userRoot,
 		projectRoot: options.projectRoot,
 		skillsManager: options.skillsManager,
-		writeAuthority: new WriteAuthority({
-			mode: "auto-medium",
-		}),
+		writeAuthority:
+			options.writeAuthority ??
+			new WriteAuthority({
+				mode: "ask",
+				confirm: async () => true,
+			}),
+		fsOps: options.fsOps,
 	});
 }
 
@@ -376,5 +385,308 @@ describe("SkillManager", () => {
 
 		expect(result.ok).toBe(true);
 		expect(skillsManager.findByName("project-skill")?.source).toBe("project");
+	});
+
+	it("create sends high-risk agent requests when no sensitive tools are present", async () => {
+		const userRoot = await createTempDir();
+		const skillsManager = new SkillsManager({ userRoots: [userRoot] });
+		const seenRequests: WriteRequest[] = [];
+		const subject = createSubject({
+			userRoot,
+			skillsManager,
+			writeAuthority: new WriteAuthority({
+				mode: "ask",
+				confirm: async () => true,
+				auditLog: (record) => {
+					seenRequests.push(record.request);
+				},
+			}),
+		});
+
+		await subject.manage({
+			action: "create",
+			descriptor: makeDescriptor("audited"),
+			body: "body",
+		});
+
+		expect(seenRequests).toContainEqual(
+			expect.objectContaining({
+				tool: "skill_manage",
+				origin: "agent",
+				riskLevel: "high",
+				summary: "skills.create audited",
+			}),
+		);
+	});
+
+	it("create escalates to critical for shell_exec", async () => {
+		const userRoot = await createTempDir();
+		const skillsManager = new SkillsManager({ userRoots: [userRoot] });
+		const seenRequests: WriteRequest[] = [];
+		const subject = createSubject({
+			userRoot,
+			skillsManager,
+			writeAuthority: new WriteAuthority({
+				mode: "ask",
+				confirm: async () => true,
+				auditLog: (record) => {
+					seenRequests.push(record.request);
+				},
+			}),
+		});
+
+		await subject.manage({
+			action: "create",
+			descriptor: {
+				...makeDescriptor("shell-sensitive"),
+				frontmatter: {
+					...makeDescriptor("shell-sensitive").frontmatter,
+					allowedTools: ["shell_exec"],
+				},
+			},
+			body: "body",
+		});
+
+		expect(seenRequests.at(-1)).toEqual(
+			expect.objectContaining({
+				riskLevel: "critical",
+				detail: expect.stringContaining("shell_exec"),
+			}),
+		);
+	});
+
+	it("create escalates to critical for file_write", async () => {
+		const userRoot = await createTempDir();
+		const skillsManager = new SkillsManager({ userRoots: [userRoot] });
+		const seenRequests: WriteRequest[] = [];
+		const subject = createSubject({
+			userRoot,
+			skillsManager,
+			writeAuthority: new WriteAuthority({
+				mode: "ask",
+				confirm: async () => true,
+				auditLog: (record) => {
+					seenRequests.push(record.request);
+				},
+			}),
+		});
+
+		await subject.manage({
+			action: "create",
+			descriptor: {
+				...makeDescriptor("file-sensitive"),
+				frontmatter: {
+					...makeDescriptor("file-sensitive").frontmatter,
+					allowedTools: ["file_write"],
+				},
+			},
+			body: "body",
+		});
+
+		expect(seenRequests.at(-1)?.riskLevel).toBe("critical");
+	});
+
+	it("create escalates to critical for skill_manage self-reference", async () => {
+		const userRoot = await createTempDir();
+		const skillsManager = new SkillsManager({ userRoots: [userRoot] });
+		const seenRequests: WriteRequest[] = [];
+		const subject = createSubject({
+			userRoot,
+			skillsManager,
+			writeAuthority: new WriteAuthority({
+				mode: "ask",
+				confirm: async () => true,
+				auditLog: (record) => {
+					seenRequests.push(record.request);
+				},
+			}),
+		});
+
+		await subject.manage({
+			action: "create",
+			descriptor: {
+				...makeDescriptor("self-managing"),
+				frontmatter: {
+					...makeDescriptor("self-managing").frontmatter,
+					allowedTools: ["skill_manage"],
+				},
+			},
+			body: "body",
+		});
+
+		expect(seenRequests.at(-1)?.riskLevel).toBe("critical");
+	});
+
+	it("update escalates to critical when merged allowedTools introduce shell_exec", async () => {
+		const userRoot = await createTempDir();
+		const skillsManager = new SkillsManager({ userRoots: [userRoot] });
+		const seenRequests: WriteRequest[] = [];
+		const subject = createSubject({
+			userRoot,
+			skillsManager,
+			writeAuthority: new WriteAuthority({
+				mode: "ask",
+				confirm: async () => true,
+				auditLog: (record) => {
+					seenRequests.push(record.request);
+				},
+			}),
+		});
+		await subject.manage({
+			action: "create",
+			descriptor: makeDescriptor("update-sensitive"),
+			body: "body",
+		});
+
+		await subject.manage({
+			action: "update",
+			name: "update-sensitive",
+			patch: {
+				frontmatter: {
+					...makeDescriptor("update-sensitive").frontmatter,
+					allowedTools: ["shell_exec"],
+				},
+			},
+		});
+
+		expect(seenRequests.at(-1)).toEqual(
+			expect.objectContaining({
+				summary: "skills.update update-sensitive",
+				riskLevel: "critical",
+			}),
+		);
+	});
+
+	it("delete uses medium risk", async () => {
+		const userRoot = await createTempDir();
+		const skillsManager = new SkillsManager({ userRoots: [userRoot] });
+		const seenRequests: WriteRequest[] = [];
+		const subject = createSubject({
+			userRoot,
+			skillsManager,
+			writeAuthority: new WriteAuthority({
+				mode: "ask",
+				confirm: async () => true,
+				auditLog: (record) => {
+					seenRequests.push(record.request);
+				},
+			}),
+		});
+		await subject.manage({
+			action: "create",
+			descriptor: makeDescriptor("delete-risk"),
+			body: "body",
+		});
+
+		await subject.manage({
+			action: "delete",
+			name: "delete-risk",
+			reason: "cleanup",
+		});
+
+		expect(seenRequests.at(-1)).toEqual(
+			expect.objectContaining({
+				summary: "skills.delete delete-risk",
+				riskLevel: "medium",
+			}),
+		);
+	});
+
+	it("returns write_denied when WriteAuthority is deny-all", async () => {
+		const userRoot = await createTempDir();
+		const skillsManager = new SkillsManager({ userRoots: [userRoot] });
+		const subject = createSubject({
+			userRoot,
+			skillsManager,
+			writeAuthority: new WriteAuthority({ mode: "deny-all" }),
+		});
+
+		const createResult = await subject.manage({
+			action: "create",
+			descriptor: makeDescriptor("denied"),
+			body: "body",
+		});
+		const updateResult = await subject.manage({
+			action: "update",
+			name: "denied",
+			patch: {},
+		});
+		const deleteResult = await subject.manage({
+			action: "delete",
+			name: "denied",
+			reason: "cleanup",
+		});
+
+		expect(createResult).toEqual({
+			ok: false,
+			error: "write_denied",
+			detail: expect.stringContaining("disabled"),
+		});
+		expect(updateResult).toEqual({
+			ok: false,
+			error: "not_found",
+			detail: expect.any(String),
+		});
+		expect(deleteResult).toEqual({
+			ok: false,
+			error: "not_found",
+			detail: expect.any(String),
+		});
+	});
+
+	it("routes every allowed create/update/delete mutation through authorize exactly once", async () => {
+		const userRoot = await createTempDir();
+		const skillsManager = new SkillsManager({ userRoots: [userRoot] });
+		const authorize = vi.fn(async () => ({ kind: "allow" as const }));
+		const writeAuthority = {
+			authorize,
+		} as unknown as WriteAuthority;
+		const writeFileSpy = vi.fn(async (path: string, data: string) => {
+			await import("node:fs/promises").then(({ writeFile: nodeWriteFile }) =>
+				nodeWriteFile(path, data, "utf8"),
+			);
+		});
+		const unlinkSpy = vi.fn(async (path: string) => {
+			await import("node:fs/promises").then(({ unlink: nodeUnlink }) =>
+				nodeUnlink(path),
+			);
+		});
+		const subject = createSubject({
+			userRoot,
+			skillsManager,
+			writeAuthority,
+			fsOps: {
+				writeFile: writeFileSpy,
+				unlink: unlinkSpy,
+			},
+		});
+
+		await subject.manage({
+			action: "create",
+			descriptor: makeDescriptor("contract"),
+			body: "body",
+		});
+		await subject.manage({
+			action: "update",
+			name: "contract",
+			patch: {
+				frontmatter: {
+					...makeDescriptor("contract").frontmatter,
+					description: "updated",
+				},
+			},
+		});
+		await subject.manage({
+			action: "delete",
+			name: "contract",
+			reason: "cleanup",
+		});
+
+		expect(authorize).toHaveBeenCalledTimes(3);
+		expect(writeFileSpy).toHaveBeenCalledTimes(2);
+		expect(unlinkSpy).toHaveBeenCalledTimes(1);
+		expect(writeFileSpy.mock.calls.length + unlinkSpy.mock.calls.length).toBe(
+			authorize.mock.calls.length,
+		);
 	});
 });
