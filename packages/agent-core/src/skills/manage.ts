@@ -15,6 +15,7 @@ import {
 	type WriteRiskLevel,
 } from "../safety/write-authority.js";
 import { parseSkillMarkdown } from "./frontmatter.js";
+import { createSkillsGuard } from "./guard.js";
 import {
 	DEFAULT_MAX_BODY_BYTES,
 	DEFAULT_MAX_BODY_CHARS,
@@ -22,10 +23,14 @@ import {
 	type SkillsManager,
 } from "./manager.js";
 import type {
+	GuardDecision,
 	SkillDescriptor,
 	SkillFrontmatter,
 	SkillManageAction,
 	SkillManageResult,
+	SkillsGuard,
+	SkillSource,
+	SkillTrustLevel,
 } from "./types.js";
 
 const SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
@@ -56,6 +61,7 @@ interface SkillManagerOptions {
 	readonly maxBodyChars?: number;
 	readonly maxBodyBytes?: number;
 	readonly fsOps?: Partial<FsOps>;
+	readonly guard?: SkillsGuard;
 }
 
 const defaultFsOps: FsOps = {
@@ -162,6 +168,24 @@ function findSensitiveTools(
 	return allowedTools.filter((tool) => SENSITIVE_TOOLS.has(tool));
 }
 
+function defaultTrustForSource(source: SkillSource): SkillTrustLevel {
+	switch (source) {
+		case "bundled":
+			return "builtin";
+		case "user":
+		case "project":
+		case "plugin":
+			return "community";
+	}
+}
+
+function summarizeGuardDecision(decision: Exclude<GuardDecision, { kind: "pass" }>): string {
+	const patternIds = Array.from(
+		new Set(decision.findings.map((finding) => finding.pattern_id)),
+	).slice(0, 3);
+	return `skills_guard=${decision.kind}:${patternIds.join(",")} findings=${decision.findings.length}`;
+}
+
 export class SkillManager {
 	private readonly userRoot: string;
 	private readonly projectRoot?: string;
@@ -170,6 +194,7 @@ export class SkillManager {
 	private readonly maxBodyChars: number;
 	private readonly maxBodyBytes: number;
 	private readonly fsOps: FsOps;
+	private readonly guard: SkillsGuard;
 
 	constructor(options: SkillManagerOptions) {
 		this.userRoot = options.userRoot;
@@ -182,6 +207,7 @@ export class SkillManager {
 			...defaultFsOps,
 			...options.fsOps,
 		};
+		this.guard = options.guard ?? createSkillsGuard();
 	}
 
 	async manage(action: SkillManageAction): Promise<SkillManageResult> {
@@ -238,8 +264,19 @@ export class SkillManager {
 			return serialized.error;
 		}
 
+		const guardOutcome = this.evaluateGuard(action.body, {
+			trust:
+				action.descriptor.frontmatter.trust ??
+				defaultTrustForSource(action.descriptor.source),
+			stage: "write",
+			skillName: action.descriptor.name,
+		});
+		if ("error" in guardOutcome) {
+			return guardOutcome.error;
+		}
+
 		const authorization = await this.authorizeWrite(
-			this.buildCreateRequest(action, targetPath),
+			this.buildCreateRequest(action, targetPath, guardOutcome),
 		);
 		if (authorization != null) {
 			return authorization;
@@ -309,8 +346,24 @@ export class SkillManager {
 			return serialized.error;
 		}
 
+		const guardOutcome = this.evaluateGuard(nextBody, {
+			trust:
+				nextFrontmatter.trust ?? defaultTrustForSource(existing.source),
+			stage: "write",
+			skillName: action.name,
+		});
+		if ("error" in guardOutcome) {
+			return guardOutcome.error;
+		}
+
 		const authorization = await this.authorizeWrite(
-			this.buildUpdateRequest(action.name, existingPath.path, nextFrontmatter, nextBody),
+			this.buildUpdateRequest(
+				action.name,
+				existingPath.path,
+				nextFrontmatter,
+				nextBody,
+				guardOutcome,
+			),
 		);
 		if (authorization != null) {
 			return authorization;
@@ -497,6 +550,7 @@ export class SkillManager {
 	private buildCreateRequest(
 		action: Extract<SkillManageAction, { action: "create" }>,
 		targetPath: string,
+		guardOutcome: GuardWriteOutcome,
 	): WriteRequest {
 		return this.buildWriteRequest({
 			action: "create",
@@ -504,7 +558,8 @@ export class SkillManager {
 			path: targetPath,
 			body: action.body,
 			allowedTools: action.descriptor.frontmatter.allowedTools,
-			riskLevel: "high",
+			riskLevel: guardOutcome.riskLevel ?? "high",
+			guardSummary: guardOutcome.detail,
 		});
 	}
 
@@ -513,6 +568,7 @@ export class SkillManager {
 		targetPath: string,
 		frontmatter: SkillFrontmatter,
 		body: string,
+		guardOutcome: GuardWriteOutcome,
 	): WriteRequest {
 		return this.buildWriteRequest({
 			action: "update",
@@ -520,7 +576,8 @@ export class SkillManager {
 			path: targetPath,
 			body,
 			allowedTools: frontmatter.allowedTools,
-			riskLevel: "high",
+			riskLevel: guardOutcome.riskLevel ?? "high",
+			guardSummary: guardOutcome.detail,
 		});
 	}
 
@@ -541,6 +598,7 @@ export class SkillManager {
 		readonly body?: string;
 		readonly allowedTools?: readonly string[];
 		readonly origin?: WriteOrigin;
+		readonly guardSummary?: string;
 	}): WriteRequest {
 		const sensitiveTools = findSensitiveTools(input.allowedTools);
 		const riskLevel =
@@ -553,6 +611,7 @@ export class SkillManager {
 			sensitiveTools.length === 0
 				? undefined
 				: `sensitive_tools=${sensitiveTools.join(",")}`,
+			input.guardSummary,
 		].filter((value): value is string => value != null);
 
 		return {
@@ -579,6 +638,41 @@ export class SkillManager {
 				: "write request requires interactive confirmation",
 		);
 	}
+
+	private evaluateGuard(
+		body: string,
+		ctx: {
+			readonly trust: SkillTrustLevel;
+			readonly stage: "write";
+			readonly skillName: string;
+		},
+	):
+		| { readonly error: SkillManageResult }
+		| GuardWriteOutcome {
+		const decision = this.guard.scan(body, ctx);
+		switch (decision.kind) {
+			case "pass":
+				return {};
+			case "warn":
+				return {
+					detail: summarizeGuardDecision(decision),
+				};
+			case "ask":
+				return {
+					detail: summarizeGuardDecision(decision),
+					riskLevel: "critical",
+				};
+			case "deny":
+				return {
+					error: createError("guard_denied", decision.detail),
+				};
+		}
+	}
+}
+
+interface GuardWriteOutcome {
+	readonly detail?: string;
+	readonly riskLevel?: WriteRiskLevel;
 }
 
 function isNonEmptyDirectoryError(error: unknown): boolean {

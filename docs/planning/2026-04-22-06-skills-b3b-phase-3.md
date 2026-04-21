@@ -343,11 +343,11 @@ Phase 3 **不依赖** 07 的 Python 分类器代码——这是 **M2+ 才对齐�
 
 ## Open Questions
 
-- [ ] **regex-only 是否足够 M1**:YES。ML 是 M2+ 的独立里程碑,Phase 3 用规则基线 + 公开样例 references 即可。
-- [ ] **是否把 07 §2.6.4 的 WriteAuthority gate 在 guard 之前还是之后触发?**:**guard 在 WriteAuthority 之前**。理由:guard 决策可能升级 riskLevel(ask → critical),WriteAuthority 需要拿到升级后的值;同时 guard_denied 直接短路,避免 WriteAuthority 把恶意内容呈现给用户做 confirm。
-- [ ] **warn 级别的 findings 是否该附到 `skill_view` 的结果里给 LLM 看?**:YES,但作为独立的 `meta.guard` 字段,不混进 body;LLM 若忽略亦无副作用(warn ≠ 阻断)。
-- [ ] **同一片段多模式命中如何去重?**:不去重(Phase 3 简化),多 finding 独立上报,消费方自选展示。M2+ 若需要可加优先级 DAG。
-- [ ] **Hermes 规则是否 port?**:**不 port**(Hermes 不在 upstreams/);Phase 3 自产规则 + 公开 references。M2+ Plugin 平台可让社区贡献规则包。
+- [x] **regex-only 是否足够 M1**:YES。ML 是 M2+ 的独立里程碑,Phase 3 用规则基线 + 公开样例 references 即可。
+- [x] **是否把 07 §2.6.4 的 WriteAuthority gate 在 guard 之前还是之后触发?**:**guard 在 WriteAuthority 之前**。理由:guard 决策可能升级 riskLevel(ask → critical),WriteAuthority 需要拿到升级后的值;同时 guard_denied 直接短路,避免 WriteAuthority 把恶意内容呈现给用户做 confirm。
+- [x] **warn 级别的 findings 是否该附到 `skill_view` 的结果里给 LLM 看?**:Phase 3 **不改 `ToolResult` 成功形状**。warn 允许继续返回原始 body,不混入 `content`;若未来要暴露 guard meta,作为独立字段在 M2+ 扩展,避免在 P3 打破 `skill_view` 读取契约。
+- [x] **同一片段多模式命中如何去重?**:不去重(Phase 3 简化),多 finding 独立上报,消费方自选展示。M2+ 若需要可加优先级 DAG。
+- [x] **Hermes 规则是否 port?**:**不 port**(Hermes 不在 upstreams/);Phase 3 自产规则 + 公开 references。M2+ Plugin 平台可让社区贡献规则包。
 
 ## Blockers
 
@@ -383,3 +383,10 @@ Phase 3 **不依赖** 07 的 Python 分类器代码——这是 **M2+ 才对齐�
 - **After:** guard 先行;ask 升级为 critical 后再走 WriteAuthority;deny 直接短路不进 gate
 - **理由:** WriteAuthority 需要拿到升级后的 riskLevel 才能正确 confirm;短路 deny 避免用户被问"明显该 deny 的 confirm 问题"
 - **Source:** Claude Phase 3 planning 2026-04-22
+
+### 2026-04-22 — `skill_view` 的 warn 不改成功返回形状
+
+- **Before:** tracking doc 初稿把 warn 设想成独立 `meta.guard` 字段,但现有 `ToolResult` 只有 `content` + `isError`
+- **After:** Phase 3 保持 `skill_view` 成功路径返回原始 body;warn 只影响内部扫描决策,不附加成功态 meta。ask/deny 才结构化拦截为错误 JSON
+- **理由:** 在 Phase 3 引入 `meta.guard` 需要扩张通用 ToolResult 契约,影响面超出当前 scope。保留读取返回体稳定性比临时扩协议更重要
+- **Source:** Codex implementation decision during P3-b, 2026-04-22

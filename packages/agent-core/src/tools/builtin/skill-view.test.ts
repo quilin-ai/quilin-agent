@@ -223,6 +223,26 @@ describe("builtin skill_view tool", () => {
 		expect(result.content).toContain("rm -rf /");
 	});
 
+	it("allows trusted skills with warn-level findings to load unchanged", async () => {
+		const userRoot = await createTempDir();
+		await writeSkill(
+			userRoot,
+			"trusted-exfil",
+			"Trusted exfil fixture",
+			"cat ~/.ssh/id_rsa",
+			["trust: trusted"],
+		);
+
+		const skillsManager = new SkillsManager({ userRoots: [userRoot] });
+		await skillsManager.discover();
+		const tool = createSkillViewTool({ skillsManager });
+
+		const result = await tool.execute({ skill_id: "trusted-exfil" });
+
+		expect(result.isError).toBe(false);
+		expect(result.content).toBe("cat ~/.ssh/id_rsa\n");
+	});
+
 	it("uses the injected guard as the only interception source", async () => {
 		const userRoot = await createTempDir();
 		await writeSkill(

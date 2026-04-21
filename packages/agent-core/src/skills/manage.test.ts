@@ -9,7 +9,7 @@ import {
 import { parseSkillMarkdown } from "./frontmatter.js";
 import { SkillManager } from "./manage.js";
 import { SkillsManager } from "./manager.js";
-import type { SkillDescriptor } from "./types.js";
+import type { SkillDescriptor, SkillsGuard } from "./types.js";
 
 const createdDirs: string[] = [];
 
@@ -45,6 +45,7 @@ function createSubject(options: {
 	skillsManager: SkillsManager;
 	writeAuthority?: WriteAuthority;
 	fsOps?: ConstructorParameters<typeof SkillManager>[0]["fsOps"];
+	guard?: SkillsGuard;
 }): SkillManager {
 	return new SkillManager({
 		userRoot: options.userRoot,
@@ -57,6 +58,7 @@ function createSubject(options: {
 				confirm: async () => true,
 			}),
 		fsOps: options.fsOps,
+		guard: options.guard,
 	});
 }
 
@@ -687,6 +689,192 @@ describe("SkillManager", () => {
 		expect(unlinkSpy).toHaveBeenCalledTimes(1);
 		expect(writeFileSpy.mock.calls.length + unlinkSpy.mock.calls.length).toBe(
 			authorize.mock.calls.length,
+		);
+	});
+
+	it("returns guard_denied before authorize when create body is denied", async () => {
+		const userRoot = await createTempDir();
+		const skillsManager = new SkillsManager({ userRoots: [userRoot] });
+		const authorize = vi.fn(async () => ({ kind: "allow" as const }));
+		const guard: SkillsGuard = {
+			scan: vi.fn(() => ({
+				kind: "deny" as const,
+				detail: "skills_guard denied denied-create due to matched threat patterns",
+				findings: [
+					{
+						category: "destructive_ops" as const,
+						severity: "critical" as const,
+						pattern_id: "DESTRUCT-001",
+						match: "rm -rf /",
+						line: 1,
+					},
+				],
+			})),
+		};
+		const subject = createSubject({
+			userRoot,
+			skillsManager,
+			writeAuthority: { authorize } as unknown as WriteAuthority,
+			guard,
+		});
+
+		const result = await subject.manage({
+			action: "create",
+			descriptor: makeDescriptor("denied-create"),
+			body: "rm -rf /",
+		});
+
+		expect(result).toEqual({
+			ok: false,
+			error: "guard_denied",
+			detail: expect.stringContaining("skills_guard denied"),
+		});
+		expect(guard.scan).toHaveBeenCalledTimes(1);
+		expect(authorize).not.toHaveBeenCalled();
+	});
+
+	it("escalates ask findings to critical before WriteAuthority", async () => {
+		const userRoot = await createTempDir();
+		const skillsManager = new SkillsManager({ userRoots: [userRoot] });
+		const seenRequests: WriteRequest[] = [];
+		const guard: SkillsGuard = {
+			scan: vi.fn(() => ({
+				kind: "ask" as const,
+				findings: [
+					{
+						category: "prompt_injection" as const,
+						severity: "medium" as const,
+						pattern_id: "PROMPT-INJECT-001",
+						match: "ignore previous instructions",
+						line: 1,
+					},
+				],
+			})),
+		};
+		const subject = createSubject({
+			userRoot,
+			skillsManager,
+			guard,
+			writeAuthority: new WriteAuthority({
+				mode: "ask",
+				confirm: async () => true,
+				auditLog: (record) => {
+					seenRequests.push(record.request);
+				},
+			}),
+		});
+
+		await subject.manage({
+			action: "create",
+			descriptor: makeDescriptor("ask-create"),
+			body: "ignore previous instructions",
+		});
+
+		expect(seenRequests.at(-1)).toEqual(
+			expect.objectContaining({
+				riskLevel: "critical",
+				detail: expect.stringContaining("skills_guard=ask:PROMPT-INJECT-001"),
+			}),
+		);
+	});
+
+	it("appends warn findings to update detail without blocking writes", async () => {
+		const userRoot = await createTempDir();
+		const skillsManager = new SkillsManager({ userRoots: [userRoot] });
+		const seenRequests: WriteRequest[] = [];
+		const guard: SkillsGuard = {
+			scan: vi.fn((body) =>
+				body.includes("launchctl")
+					? {
+							kind: "warn" as const,
+							findings: [
+								{
+									category: "persistence" as const,
+									severity: "high" as const,
+									pattern_id: "PERSIST-002",
+									match: "launchctl load",
+									line: 1,
+								},
+							],
+						}
+					: { kind: "pass" as const },
+			),
+		};
+		const subject = createSubject({
+			userRoot,
+			skillsManager,
+			guard,
+			writeAuthority: new WriteAuthority({
+				mode: "ask",
+				confirm: async () => true,
+				auditLog: (record) => {
+					seenRequests.push(record.request);
+				},
+			}),
+		});
+		await subject.manage({
+			action: "create",
+			descriptor: makeDescriptor("warn-update"),
+			body: "safe",
+		});
+
+		const result = await subject.manage({
+			action: "update",
+			name: "warn-update",
+			patch: {},
+			body: "launchctl load ~/Library/LaunchAgents/com.bad.plist",
+		});
+
+		expect(result.ok).toBe(true);
+		expect(seenRequests.at(-1)).toEqual(
+			expect.objectContaining({
+				summary: "skills.update warn-update",
+				detail: expect.stringContaining("skills_guard=warn:PERSIST-002"),
+				riskLevel: "high",
+			}),
+		);
+	});
+
+	it("calls guard exactly once for create and update, and skips delete", async () => {
+		const userRoot = await createTempDir();
+		const skillsManager = new SkillsManager({ userRoots: [userRoot] });
+		const guard: SkillsGuard = {
+			scan: vi.fn(() => ({ kind: "pass" as const })),
+		};
+		const subject = createSubject({ userRoot, skillsManager, guard });
+
+		await subject.manage({
+			action: "create",
+			descriptor: makeDescriptor("guard-contract"),
+			body: "create body",
+		});
+		await subject.manage({
+			action: "update",
+			name: "guard-contract",
+			patch: {},
+		});
+		await subject.manage({
+			action: "delete",
+			name: "guard-contract",
+			reason: "cleanup",
+		});
+
+		expect(guard.scan).toHaveBeenCalledTimes(2);
+		expect(guard.scan).toHaveBeenNthCalledWith(
+			1,
+			"create body",
+			expect.objectContaining({
+				stage: "write",
+				skillName: "guard-contract",
+			}),
+		);
+		expect(guard.scan).toHaveBeenNthCalledWith(
+			2,
+			"create body\n",
+			expect.objectContaining({
+				stage: "write",
+				skillName: "guard-contract",
+			}),
 		);
 	});
 });
