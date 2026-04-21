@@ -1,9 +1,14 @@
 ---
 title: Skills B3b Phase 1 — 条件激活 + KV-cache friendly catalog (tracking)
-status: in-progress
+status: completed
 owner: Codex (impl) + Claude (plan + review)
 created: 2026-04-22
 last_updated: 2026-04-22
+completed_at: 2026-04-22
+closure_commits:
+  - a9ef022  # P1-a 条件激活过滤管道
+  - 86f4512  # P1-b stable prefix + hot_skills 双 section
+  - 338c607  # P1-c assembler session-state 注入 + stable 收窄
 predecessors:
   - docs/planning/2026-04-21-01-skills-b3b-activation.md  # Phase 1 总 spec(L110-129)
   - docs/planning/2026-04-22-03-handoff.md                # 本轮 handoff 提到的 P1
