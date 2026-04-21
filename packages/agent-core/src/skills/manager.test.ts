@@ -1,7 +1,8 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import type { WatchListener } from "node:fs";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SkillsManager } from "./manager.js";
 
 const createdDirs: string[] = [];
@@ -201,5 +202,128 @@ trust: trusted
 		});
 
 		expect(result.entries.map((entry) => entry.name)).toEqual(["alpha"]);
+	});
+
+	it("evicts cached loaded skills that fall outside the bounded recent window", async () => {
+		const userRoot = await createTempDir();
+		await writeSkill(userRoot, "alpha", "Alpha", "# alpha");
+		await writeSkill(userRoot, "beta", "Beta", "# beta");
+		const manager = new SkillsManager({ userRoots: [userRoot] });
+
+		await manager.discover();
+		manager.recordViewedSkill(await manager.load("alpha"), 1);
+		manager.recordViewedSkill(await manager.load("beta"), 1);
+
+		const loadedSkillByName = (manager as unknown as {
+			loadedSkillByName: Map<string, unknown>;
+		}).loadedSkillByName;
+		expect(manager.getRecentSkillNames()).toEqual(["beta"]);
+		expect([...loadedSkillByName.keys()]).toEqual(["beta"]);
+	});
+
+	it("removes cached loaded skills when a watched skill disappears from the catalog", async () => {
+		const userRoot = await createTempDir();
+		await writeSkill(userRoot, "alpha", "Alpha", "# alpha");
+		const manager = new SkillsManager({ userRoots: [userRoot] });
+
+		await manager.discover();
+		manager.recordViewedSkill(await manager.load("alpha"));
+		await rm(join(userRoot, "alpha"), { recursive: true, force: true });
+		await manager.discover();
+
+		const loadedSkillByName = (manager as unknown as {
+			loadedSkillByName: Map<string, unknown>;
+		}).loadedSkillByName;
+		expect(manager.getRecentSkillNames()).toEqual([]);
+		expect(loadedSkillByName.size).toBe(0);
+	});
+
+	it("classifies added removed and changed descriptors in catalog diff notifications", async () => {
+		const userRoot = await createTempDir();
+		await writeSkill(userRoot, "alpha", "Alpha", "# alpha");
+		await writeSkill(userRoot, "beta", "Beta", "# beta");
+		const manager = new SkillsManager({ userRoots: [userRoot] });
+		const seenChanges: unknown[] = [];
+		manager.onCatalogChange((change) => {
+			seenChanges.push(change);
+		});
+
+		await manager.discover();
+		await writeSkill(userRoot, "gamma", "Gamma", "# gamma");
+		await writeSkill(userRoot, "beta", "Beta updated", "# beta");
+		await rm(join(userRoot, "alpha"), { recursive: true, force: true });
+		await manager.discover();
+
+		expect(seenChanges.at(-1)).toEqual({
+			added: ["gamma"],
+			removed: ["alpha"],
+			changed: ["beta"],
+		});
+	});
+
+	it("notifies listeners when an existing descriptor changes without add/remove", async () => {
+		const userRoot = await createTempDir();
+		await writeSkill(userRoot, "alpha", "Alpha", "# alpha");
+		const manager = new SkillsManager({ userRoots: [userRoot] });
+		const seenChanges: unknown[] = [];
+		manager.onCatalogChange((change) => {
+			seenChanges.push(change);
+		});
+
+		await manager.discover();
+		await writeSkill(userRoot, "alpha", "Alpha updated", "# alpha");
+		await manager.discover();
+
+		expect(seenChanges.at(-1)).toEqual({
+			added: [],
+			removed: [],
+			changed: ["alpha"],
+		});
+	});
+
+	it("debounces watcher rescan and stopWatching prevents further refreshes", async () => {
+		vi.useFakeTimers();
+		try {
+			const userRoot = await createTempDir();
+			const watchCallbacks: Array<() => void> = [];
+			const discoverSpy = vi.spyOn(SkillsManager.prototype, "discover");
+			const closeSpy = vi.fn();
+			const manager = new SkillsManager({
+				userRoots: [userRoot],
+				debounceMs: 200,
+				watchFactory: ((
+					_path: string,
+					_options: { recursive?: boolean } | undefined,
+					listener: WatchListener<string>,
+				) => {
+					watchCallbacks.push(listener as () => void);
+					return {
+						close: closeSpy,
+					} as never;
+				}) as never,
+			});
+
+			manager.startWatching();
+			manager.startWatching();
+			expect(watchCallbacks).toHaveLength(1);
+
+			watchCallbacks[0]?.();
+			watchCallbacks[0]?.();
+			watchCallbacks[0]?.();
+			await vi.advanceTimersByTimeAsync(199);
+			expect(discoverSpy).not.toHaveBeenCalled();
+			await vi.advanceTimersByTimeAsync(1);
+			expect(discoverSpy).toHaveBeenCalledTimes(1);
+
+			manager.stopWatching();
+			manager.stopWatching();
+			expect(closeSpy).toHaveBeenCalledTimes(1);
+
+			watchCallbacks[0]?.();
+			await vi.advanceTimersByTimeAsync(200);
+			expect(discoverSpy).toHaveBeenCalledTimes(1);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });

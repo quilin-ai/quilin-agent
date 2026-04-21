@@ -16,7 +16,7 @@ import type { InferenceConfig, LLMStreamEvent } from "./llm/types.js";
 import { logger } from "./logger.js";
 import { runAgentLoop } from "./loop.js";
 import { WriteAuthority } from "./safety/write-authority.js";
-import type { SkillsManager } from "./skills/manager.js";
+import type { SkillsCatalogChange, SkillsManager } from "./skills/manager.js";
 import { SQLiteCheckpoint } from "./state/checkpoint.js";
 import type { AgentState, Message } from "./state/types.js";
 import { createBuiltinTools } from "./tools/builtin/index.js";
@@ -220,6 +220,34 @@ function getEffectiveModelId(
 		: baseModelId;
 }
 
+function renderSkillsCatalogHint(change: SkillsCatalogChange): string | null {
+	if (
+		change.added.length === 1 &&
+		change.removed.length === 0 &&
+		change.changed.length === 0
+	) {
+		return `📥 New skill discovered: ${change.added[0]}\n`;
+	}
+
+	if (
+		change.removed.length === 1 &&
+		change.added.length === 0 &&
+		change.changed.length === 0
+	) {
+		return `🗑 Skill removed: ${change.removed[0]}\n`;
+	}
+
+	if (
+		change.added.length === 0 &&
+		change.removed.length === 0 &&
+		change.changed.length === 0
+	) {
+		return null;
+	}
+
+	return "🎯 Skills catalog updated\n";
+}
+
 export async function startRepl(options: ReplOptions): Promise<void> {
 	const {
 		provider,
@@ -232,6 +260,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 	const context = new BasicContextManager();
 	if (skillsManager != null) {
 		await skillsManager.discover();
+		skillsManager.startWatching();
 	}
 	const registry = new MCPRegistry();
 	const resolvedSessionId = sessionId ?? crypto.randomUUID();
@@ -326,6 +355,12 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 			restoredState?.lastActiveAt,
 			skillsManager,
 		);
+		skillsManager?.onCatalogChange((change) => {
+			const hint = renderSkillsCatalogHint(change);
+			if (hint != null) {
+				stderr.write(hint);
+			}
+		});
 		let inferenceConfig: InferenceConfig = {
 			...DEFAULT_INFERENCE_CONFIG,
 		};
@@ -482,6 +517,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 		}
 	} finally {
 		rl?.close();
+		skillsManager?.stopWatching();
 		await registry.disconnectAll();
 	}
 }

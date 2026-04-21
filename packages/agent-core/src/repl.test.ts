@@ -240,6 +240,50 @@ describe("startRepl", () => {
 		});
 	});
 
+	it("starts and stops the skills watcher and prints catalog hints", async () => {
+		let catalogListener:
+			| ((change: {
+					added: readonly string[];
+					removed: readonly string[];
+					changed: readonly string[];
+			  }) => void)
+			| undefined;
+		const skillsManager = {
+			discover: vi.fn(async () => []),
+			startWatching: vi.fn(),
+			stopWatching: vi.fn(),
+			list: vi.fn(() => []),
+			postCompactRestore: vi.fn(() => ({ entries: [], totalTokens: 0 })),
+			getRecentSkillNames: vi.fn(() => []),
+			onCatalogChange: vi.fn((listener) => {
+				catalogListener = listener;
+				return () => undefined;
+			}),
+		};
+		mockQuestion.mockImplementationOnce(async () => {
+			catalogListener?.({
+				added: ["new-skill"],
+				removed: [],
+				changed: [],
+			});
+			return "/exit";
+		});
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: createMockProvider(() => createMockLanguageModel()),
+			modelId: "deepseek-chat",
+			skillsManager: skillsManager as never,
+		});
+
+		expect(skillsManager.startWatching).toHaveBeenCalledTimes(1);
+		expect(skillsManager.stopWatching).toHaveBeenCalledTimes(1);
+		expect(stderrWriteSpy).toHaveBeenCalledWith(
+			"📥 New skill discovered: new-skill\n",
+		);
+	});
+
 	it("clears history and sends only the fresh conversation", async () => {
 		mockQuestion
 			.mockResolvedValueOnce("hello")

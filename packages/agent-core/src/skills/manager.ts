@@ -1,3 +1,4 @@
+import { watch, type FSWatcher } from "node:fs";
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { isAbsolute, join, relative } from "node:path";
 import { estimateTokens } from "../context/tokens.js";
@@ -17,11 +18,20 @@ export interface SkillsManagerOptions {
 	readonly userRoots?: readonly string[];
 	readonly projectRoots?: readonly string[];
 	readonly pluginRoots?: readonly string[];
+	readonly watcherEnabled?: boolean;
+	readonly debounceMs?: number;
+	readonly watchFactory?: typeof watch;
 }
 
 interface RootEntry {
 	readonly source: SkillSource;
 	readonly path: string;
+}
+
+export interface SkillsCatalogChange {
+	readonly added: readonly string[];
+	readonly removed: readonly string[];
+	readonly changed: readonly string[];
 }
 
 interface LoadSkillOptions {
@@ -48,9 +58,17 @@ export class SkillsManager {
 	private readonly roots: readonly RootEntry[];
 	private descriptorByName: Map<string, SkillDescriptor> = new Map();
 	private discoveryOrder: readonly string[] = [];
-	private readonly changeListeners = new Set<() => void>();
+	private readonly changeListeners = new Set<
+		(change: SkillsCatalogChange) => void
+	>();
 	private recentSkillNames: readonly string[] = [];
 	private loadedSkillByName = new Map<string, LoadedSkill>();
+	private readonly watcherEnabled: boolean;
+	private readonly debounceMs: number;
+	private readonly watchFactory: typeof watch;
+	private activeWatchers: FSWatcher[] = [];
+	private pendingRescanTimer: ReturnType<typeof setTimeout> | null = null;
+	private watching = false;
 
 	constructor(options: SkillsManagerOptions) {
 		const roots: RootEntry[] = [];
@@ -67,18 +85,13 @@ export class SkillsManager {
 			roots.push({ source: "bundled", path });
 		}
 		this.roots = roots;
+		this.watcherEnabled = options.watcherEnabled ?? true;
+		this.debounceMs = options.debounceMs ?? 200;
+		this.watchFactory = options.watchFactory ?? watch;
 	}
 
 	async discover(): Promise<readonly SkillDescriptor[]> {
-		const previousOrder = this.discoveryOrder.join(",");
-		const previousDescriptors = this.discoveryOrder
-			.map((name) => {
-				const descriptor = this.descriptorByName.get(name);
-				return descriptor == null
-					? name
-					: `${descriptor.name}:${descriptor.path}:${descriptor.source}`;
-			})
-			.join(",");
+		const previousDescriptorsByName = this.descriptorByName;
 		const byName = new Map<string, SkillDescriptor>();
 		const order: string[] = [];
 
@@ -120,19 +133,16 @@ export class SkillsManager {
 
 		this.descriptorByName = byName;
 		this.discoveryOrder = order;
-		const nextOrder = order.join(",");
-		const nextDescriptors = order
-			.map((name) => {
-				const descriptor = byName.get(name) as SkillDescriptor;
-				return `${descriptor.name}:${descriptor.path}:${descriptor.source}`;
-			})
-			.join(",");
+		this.recentSkillNames = this.recentSkillNames.filter((name) => byName.has(name));
+		this.evictUnreferencedLoadedSkills();
+		const change = diffCatalog(previousDescriptorsByName, byName);
 		if (
-			previousOrder !== nextOrder ||
-			previousDescriptors !== nextDescriptors
+			change.added.length > 0 ||
+			change.removed.length > 0 ||
+			change.changed.length > 0
 		) {
 			for (const listener of this.changeListeners) {
-				listener();
+				listener(change);
 			}
 		}
 		return order.map((name) => byName.get(name) as SkillDescriptor);
@@ -198,10 +208,43 @@ export class SkillsManager {
 			skill.descriptor.name,
 			...this.recentSkillNames.filter((entry) => entry !== skill.descriptor.name),
 		].slice(0, maxEntries);
+		this.evictUnreferencedLoadedSkills();
 	}
 
 	getRecentSkillNames(): readonly string[] {
 		return this.recentSkillNames;
+	}
+
+	startWatching(paths?: readonly string[]): void {
+		if (!this.watcherEnabled || this.watching) {
+			return;
+		}
+
+		const watchRoots =
+			paths?.filter((path) => path.length > 0) ??
+			this.roots
+				.filter((root) => root.source === "user" || root.source === "project")
+				.map((root) => root.path);
+		if (watchRoots.length === 0) {
+			return;
+		}
+
+		this.activeWatchers = watchRoots.map((path) =>
+			this.createWatcher(path),
+		);
+		this.watching = true;
+	}
+
+	stopWatching(): void {
+		if (this.pendingRescanTimer != null) {
+			clearTimeout(this.pendingRescanTimer);
+			this.pendingRescanTimer = null;
+		}
+		for (const watcher of this.activeWatchers) {
+			watcher.close();
+		}
+		this.activeWatchers = [];
+		this.watching = false;
 	}
 
 	postCompactRestore(
@@ -251,12 +294,83 @@ export class SkillsManager {
 		};
 	}
 
-	onCatalogChange(listener: () => void): () => void {
+	onCatalogChange(listener: (change: SkillsCatalogChange) => void): () => void {
 		this.changeListeners.add(listener);
 		return () => {
 			this.changeListeners.delete(listener);
 		};
 	}
+
+	private scheduleRescan(): void {
+		if (!this.watching) {
+			return;
+		}
+		if (this.pendingRescanTimer != null) {
+			clearTimeout(this.pendingRescanTimer);
+		}
+		this.pendingRescanTimer = setTimeout(() => {
+			this.pendingRescanTimer = null;
+			void this.discover();
+		}, this.debounceMs);
+	}
+
+	private evictUnreferencedLoadedSkills(): void {
+		const allowed = new Set(this.recentSkillNames);
+		for (const name of this.loadedSkillByName.keys()) {
+			if (!allowed.has(name)) {
+				this.loadedSkillByName.delete(name);
+			}
+		}
+	}
+
+	private createWatcher(path: string): FSWatcher {
+		const onEvent = () => {
+			this.scheduleRescan();
+		};
+		try {
+			return this.watchFactory(path, { recursive: true }, onEvent);
+		} catch {
+			return this.watchFactory(path, {}, onEvent);
+		}
+	}
+}
+
+function descriptorSignature(descriptor: SkillDescriptor): string {
+	return JSON.stringify({
+		name: descriptor.name,
+		description: descriptor.description,
+		path: descriptor.path,
+		source: descriptor.source,
+		frontmatter: descriptor.frontmatter,
+	});
+}
+
+function diffCatalog(
+	previousByName: ReadonlyMap<string, SkillDescriptor>,
+	nextByName: ReadonlyMap<string, SkillDescriptor>,
+): SkillsCatalogChange {
+	const added: string[] = [];
+	const removed: string[] = [];
+	const changed: string[] = [];
+
+	for (const [name, next] of nextByName) {
+		const previous = previousByName.get(name);
+		if (previous == null) {
+			added.push(name);
+			continue;
+		}
+		if (descriptorSignature(previous) !== descriptorSignature(next)) {
+			changed.push(name);
+		}
+	}
+
+	for (const name of previousByName.keys()) {
+		if (!nextByName.has(name)) {
+			removed.push(name);
+		}
+	}
+
+	return { added, removed, changed };
 }
 
 function applySourceTrustDefault(
