@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parseSkillFrontmatter, parseSkillMarkdown } from "./frontmatter.js";
@@ -159,28 +159,32 @@ metadata:
 		});
 	});
 
-	it("parses real upstream skill fixtures without translation", () => {
-		const fixturePaths = [
-			fileURLToPath(
-				new URL(
-					"../../../../upstreams/llm-vercel-ai/skills/add-provider-package/SKILL.md",
-					import.meta.url,
-				),
+	const upstreamFixturePaths = [
+		fileURLToPath(
+			new URL(
+				"../../../../upstreams/llm-vercel-ai/skills/add-provider-package/SKILL.md",
+				import.meta.url,
 			),
-			fileURLToPath(
-				new URL(
-					"../../../../upstreams/llm-vercel-ai/skills/adr-skill/SKILL.md",
-					import.meta.url,
-				),
+		),
+		fileURLToPath(
+			new URL(
+				"../../../../upstreams/llm-vercel-ai/skills/adr-skill/SKILL.md",
+				import.meta.url,
 			),
-		];
+		),
+	];
+	const upstreamsAvailable = upstreamFixturePaths.every((p) => existsSync(p));
 
-		for (const fixturePath of fixturePaths) {
-			const parsed = parseSkillMarkdown(readFileSync(fixturePath, "utf8"));
-			expect(parsed.frontmatter.name).toMatch(/^[a-z0-9-]+$/);
-			expect(parsed.frontmatter.description.length).toBeGreaterThan(0);
-		}
-	});
+	it.skipIf(!upstreamsAvailable)(
+		"parses real upstream skill fixtures without translation",
+		() => {
+			for (const fixturePath of upstreamFixturePaths) {
+				const parsed = parseSkillMarkdown(readFileSync(fixturePath, "utf8"));
+				expect(parsed.frontmatter.name).toMatch(/^[a-z0-9-]+$/);
+				expect(parsed.frontmatter.description.length).toBeGreaterThan(0);
+			}
+		},
+	);
 
 	it("rejects markdown without frontmatter block", () => {
 		expect(() => parseSkillMarkdown("# no frontmatter")).toThrow(
