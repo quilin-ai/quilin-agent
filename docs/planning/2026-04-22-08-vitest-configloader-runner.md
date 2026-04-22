@@ -5,9 +5,15 @@ owner: Claude + Codex
 created: 2026-04-22
 last_updated: 2026-04-22
 completed_at: 2026-04-22
-closure_commits: []
+closure_commits:
+  - 5f9dd22  # 本决策实施：package.json test script 固化 --configLoader runner
 predecessors:
   - docs/planning/2026-04-22-07-skills-b3b-phase-4.md  # P4-b 实证触发这条固化
+verified_at: 2026-04-22
+threat_surface_delta:
+  new_ingress: []
+  new_egress: []
+  new_persistence: []
 ---
 
 # Vitest v4 `configLoader=runner` 固化决策
