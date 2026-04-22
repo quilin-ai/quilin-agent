@@ -4,6 +4,7 @@ status: planning
 owner: Claude (plan) + Codex (impl when unblocked)
 created: 2026-04-22
 last_updated: 2026-04-22
+reviewed_by: Codex  # 2026-04-22 cross-review，Q1/Q2/Q3 已达成 consensus，2 处纠错已采纳
 predecessors:
   - docs/planning/00-implementation-plan.md  # §Iteration E §E1 列 5 项 deliverable
   - docs/planning/benchmark-roadmap.md  # Alive/Success/Aspirational 三档阈值 + E1 门禁清单
@@ -57,12 +58,14 @@ threat_surface_delta:
 - 不做 dockerize / 完整沙箱（Iter F mesh/WASM 再谈）
 - 不做 resume / retry / parallel run（E1 先线性单跑）
 
-## 为什么是 SWE-bench **Lite** 不是 **Verified**
+## 为什么是 SWE-bench **Lite** 不是 **Verified**（口径对齐）
+
+**重要**：`readme.md` / `00-implementation-plan.md` / `benchmark-roadmap.md` 里 pinned leaderboard 口径**仍然是 SWE-bench Verified**，本 E1 用 Lite **不是改 pinned 口径**。Lite 在 E1 的身份是 **harness validation surrogate**（验证 harness 管道能跑通），**不是**参赛榜单替换。E2 正式冲榜时按 pinned 口径用 Verified 全量。
 
 - **Lite = 300 题**（Verified 500 题），是 public 过滤子集，task definitions 一致、评分器相同
 - Lite 环境更轻，跑 10 题成本 <$5，Verified 10 题可能 >$15
 - `00-implementation-plan.md` 只写 "10 题 SWE-bench"，没指定 Lite/Verified；Lite 10 题等价于 Verified 10 题的 harness 测试，但成本 1/3
-- E2 正式参赛再升级到 Verified 全量
+- **E1 出口闭合时**要在 closure doc 里显式声明 "Lite 只是 E1 surrogate，pinned=Verified 不变"，防止口径 drift
 
 ## Phases
 
@@ -76,10 +79,11 @@ threat_surface_delta:
 ### Phase E1-a — `benchmarks/` 目录 + dataset 下载器
 
 - **做什么**：
-  - 建 `benchmarks/` workspace（pnpm workspace 或独立 uv workspace，二选一按最终 scope 决）
+  - 建 `benchmarks/` **TS pnpm workspace**（Q1 consensus：E1-a/b/c 走 TS，E1-d 才走 Python）
   - `benchmarks/swe-bench-lite/dataset.ts`：封装 `datasets/princeton-nlp/SWE-bench_lite` 加载（从 huggingface 或 github mirror 取 jsonl），落本地 `.benchmarks/datasets/swe-bench-lite/` 缓存
   - `.gitignore` 添加 `.benchmarks/`
   - `scripts/fetch-benchmark.ts`：一次性下载 + checksum 验证
+  - **`runAgentLoop` 公共 export**（E1-a blocker）：`packages/agent-core/src/loop.ts:24` 有 `export async function runAgentLoop(...)` 但 `packages/agent-core/src/index.ts` 未 re-export。**默认方案**（采纳 Codex 2026-04-22 consensus）：补 public re-export 到 `index.ts`（加 `export * from "./loop.js"` 或显式 `export { runAgentLoop, type AgentLoopOptions }`），这样 `benchmarks/runner.ts` 可以直接 `import { runAgentLoop } from "@quilin/agent-core"`。**fallback**：允许 benchmarks/ 临时直连 `@quilin/agent-core/loop.js` 内部路径，但必须标注 tech debt（impl 时注释写清）
 - **不做什么**：不跑任务，不调 LLM
 - **威胁面 delta**（本 phase 独立填；在开工前 PR review 时加到 `frontmatter.threat_surface_delta`）：
   - 新增 ingress：dataset 下载（huggingface / github mirror, untrusted），缓解 = checksum-verify + offline-cache
@@ -152,21 +156,39 @@ threat_surface_delta:
 - [ ] `benchmark-roadmap.md` 门禁 "10 题小样本 run 过" 和 "cost tracking 数值已记录" 打 ✅
 - [ ] 写 `2026-04-??-??-iter-e1-closure.md` 记录首批 10 题实测 cost（回馈 benchmark-roadmap §Open Questions）
 
-## Open Questions（planning 阶段需要先答 3 条）
+## Resolved Decisions（2026-04-22 Claude↔Codex cross-review consensus）
 
-1. **benchmarks/ 放 TS 还是 Python？**
-   - TS 优点：沿用 agent-core 的 observability + token 事件 + 同一 runtime，Bun exec 调度方便
-   - Python 优点：SWE-bench 官方评分器是 Python（`swebench` pip package），evaluator 必须 Python；dataset 下载 `datasets` library 也是 Python first-class
-   - **初步建议**：**混合**。runner + cost tracker 放 TS（`benchmarks/` pnpm workspace），evaluator adapter 放 Python（`providers/benchmark-eval/` uv workspace），TS 通过 `shell_exec` 调 Python CLI。拖到 E2 再决定是否合并。
-   - **拦路虎**：需要 Codex 确认 `packages/agent-core` 已有的 `runAgentLoop` 能不能以 library 形式被 `benchmarks/runner.ts` 直接调（看 `index.ts` 有没有暴露 entry point）
+> 原 Open Questions 已经通过 AgentBridge 对称异步 review 收敛。以下是 3 题的最终决策 + 理由。disagreements 以 Codex independent view 为准。
 
-2. **agent task 喂什么 prompt？**
-   - 直接喂 `problem_statement`？还是加 system prompt 约束 "你的输出必须是 git diff 格式 patch"？
-   - **初步建议**：E1-c 先用 minimal prompt（只 problem_statement），patch 提取交给 post-processing（让 agent 写 `shell_exec git diff` 输出 patch）。E2 再优化 prompt engineering。
+### Q1 — `benchmarks/` 语言选型 → **Hybrid，切分精确**
 
-3. **10 题怎么选？**
-   - 随机 seed vs 手选？
-   - **初步建议**：随机 seed=42 取 10 题，保留 seed 以便 reproducible。手选偏 "好对付" 会扭曲 cost baseline。
+- **E1-a / E1-b / E1-c 走 TS**（`benchmarks/` pnpm workspace）：dataset fetch/cache、task loader、runner、cost tracker 都放 TS
+- **E1-d 走 Python**（`providers/benchmark-eval/` uv workspace，或 `benchmarks/evaluator/` 下独立 python subdir 待 E1-d 实施时决）：只把 evaluator adapter 放 Python，调用官方 `swebench` 评分器
+- **理由（Codex consensus）**：E1 MVP 的出口是 "10 题 no-crash + cost.jsonl + patch-gen≥50%"，核心复杂度在 **调 agent loop + 记 token/cost**，这部分离 TS runtime 最近；把 runner 放 Python 只会把 agent-core 调用又包一层进程边界，徒增 orchestration 成本
+- **拦路虎实证**（Codex 2026-04-22 现场实证 + Claude 复核）：`packages/agent-core/src/loop.ts:24` 导出 `runAgentLoop`，但 `packages/agent-core/src/index.ts` 未 re-export —— **E1-a 必须先解决 public re-export**（见 E1-a section）
+
+### Q2 — agent 喂什么 prompt → **C-lite（非 bare，非全开）**
+
+- **C-lite 协议**：
+  - 输入 = issue `problem_statement` + 隔离 repo 工作目录 + **允许 agent 自主 grep/read**
+  - **工具白名单限 read-only 子集**：`file_read` / `file_list` / `shell_exec`（仅 git/rg/sed/cat 等只读命令） / patch 产出路径约束
+  - **关闭**：`web_fetch`（benchmark 隔离面禁对外网络）、`file_write`（只允许 patch 产出路径）、 `skill_create` / `shell_exec`（write 类子命令）
+  - **system prompt 硬约束**（实施时写死）：
+    1. "你在一个隔离 repo 工作目录中"
+    2. "你可以自行读文件和运行只读命令定位问题"
+    3. "最终必须通过生成 git patch 作为结果"
+    4. "不要求自跑完整评分，只要求留下有效 patch"
+- **为什么不是 A (bare issue)**：agent 不知道交付格式，E1 失败时分不清 "loop 不行" vs "agent 没被告知要产 patch"
+- **为什么不是 B (预处理 grep context)**：烘焙上下文会作弊，测不到 agent loop 真实能力
+- **为什么不是 C (全开 tool-use)**：会测到 tool policy 的影响（比如网络抓 Stack Overflow），不是 loop baseline；$10 ceiling 也会很快失真
+- **Codex 独立判断理由（已采纳）**：E1 要的是 loop baseline，不是 tool-policy 研究面，所以必须把工具面锁死到 benchmark-safe read-only
+
+### Q3 — 10 题怎么选 → **SWE-bench Lite 前 10 题**（不是 seed=42 随机，不是手选）
+
+- **决策**：取 Lite dataset 按官方顺序前 10 题（可用 `.slice(0, 10)`）
+- **理由（Codex consensus）**：E1 不是能力评估，是 harness bootstrap。最重要的是 **零设计摩擦 + 可复现 + 比较面固定**。随机 seed=42 看似科学，实际上会平白引入"为什么是这 10 题"的讨论面
+- **对长尾风险的处理**：如果前 10 题真撞到某个 repo 全打不过，那是 E1 的**有价值发现**（说明 harness 没问题，但 agent 在某类问题上有系统性短板），不是缺点。E2 扩到 Verified 再解决代表性问题
+- **不做**：seed-based 随机 sampling、手选"好对付"的题（会扭曲 cost/pass-rate baseline）
 
 ## 不写进本文的东西（Codex cross-review 强调别稀释因果链）
 
@@ -177,12 +199,15 @@ threat_surface_delta:
 
 ## Blockers
 
-- **等 Codex cross-review 过后才可以进入 E1-a 实施**。本 doc 落地后的下一步是 Codex review + 答 3 条 Open Questions，之后才拆 E1-a tracking doc 开工。
+- **无**。2026-04-22 Codex cross-review 后 3 题 consensus 达成，2 处纠错（Lite=surrogate / `runAgentLoop` export）已回填，Docs Lint + CI 全绿（HEAD `22e5b2f`），E1-a 可以开工。
 
 ## Next Action
 
-1. Claude push 本 doc（planning only），等 Codex cross-review
-2. Codex 答 3 条 Open Questions + mark disagreements
-3. 双方 consensus 后，Claude 或 Codex 起 `2026-04-??-??-iter-e1-a-benchmarks-workspace.md` 进入实施
-4. E1-a / -b / -c 顺次跑，每 phase 独立 closure doc
-5. E1-c 跑通 10 题后，回填 `benchmark-roadmap.md` "首批实测 cost" 数据点
+**本 planning doc 到此收口。** 后续执行分工：
+
+1. ✅ Claude push 本 doc（planning only） — done `a38f2a6`
+2. ✅ Codex 答 3 条 Open Questions + 2 处纠错 — done（2026-04-22 AgentBridge）
+3. ✅ Claude 回填 consensus 到本 doc + push — done（本次 commit）
+4. **→ Codex 起 `2026-04-??-??-iter-e1-a-benchmarks-workspace.md` tracking doc，进入 E1-a 实施**（benchmarks/ workspace + dataset fetch + `runAgentLoop` public re-export）
+5. E1-a / -b / -c 顺次跑，每 phase 独立 closure doc，Claude 负责 cross-review
+6. E1-c 跑通 10 题后，回填 `benchmark-roadmap.md` "首批实测 cost" 数据点，写 `iter-e1-closure.md`
