@@ -57,7 +57,7 @@ resume:
 
 # 测试
 test:
-    cd packages/agent-core && QUILIN_ENV=test bun run vitest run
+    cd packages/agent-core && QUILIN_ENV=test bun run test
 
 # Lint + Format
 lint:

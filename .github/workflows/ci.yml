@@ -23,7 +23,7 @@ jobs:
       - run: cd providers/memory && uv sync --extra dev
       - run: cd packages/agent-core && bun run biome check src/
       - run: cd packages/agent-core && bunx tsc --noEmit --pretty false
-      - run: cd packages/agent-core && bun run vitest run
+      - run: cd packages/agent-core && bun run test
 
   python:
     name: Python

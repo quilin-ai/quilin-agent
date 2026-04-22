@@ -6,8 +6,8 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "bun build src/index.ts --outdir dist --target node",
-    "test": "vitest run",
-    "test:watch": "vitest",
+    "test": "vitest run --configLoader runner",
+    "test:watch": "vitest --configLoader runner",
     "lint": "biome check src/",
     "format": "biome format --write src/"
   },
