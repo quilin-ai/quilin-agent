@@ -3,19 +3,19 @@ import {
 	DEFAULT_CONTEXT_BUDGET,
 } from "./context/manager.js";
 import {
-	stripReasoningFromMessages,
 	sanitizeReasoningParts,
+	stripReasoningFromMessages,
 } from "./context/reasoning-sanitizer.js";
 import { getLoggerRuntimeMode, logger } from "./logger.js";
+import { executeToolCalls } from "./loop-tool-calls.js";
 import {
+	type AgentLoopConfig,
 	AgentLoopError,
 	createAssistantMessage,
 	DEFAULT_MAX_TOTAL_TOKENS,
 	DEFAULT_MAX_TURNS,
 	recordLoopSpan,
-	type AgentLoopConfig,
 } from "./loop-types.js";
-import { executeToolCalls } from "./loop-tool-calls.js";
 import { saveCheckpointState } from "./state/checkpoint-writer.js";
 import type { Message } from "./state/types.js";
 import { ToolRouter } from "./tools/router.js";
@@ -97,12 +97,12 @@ export async function runAgentLoop(
 			outboundRequest.messages,
 		);
 
-			const response = await llm.chat(
-				outboundMessages,
-				config.tools ?? [],
-				inferenceConfig,
-				"prompt" in outboundRequest ? outboundRequest.prompt : undefined,
-			);
+		const response = await llm.chat(
+			outboundMessages,
+			config.tools ?? [],
+			inferenceConfig,
+			"prompt" in outboundRequest ? outboundRequest.prompt : undefined,
+		);
 		await recordLoopSpan(config.hooks, "loop.llm.chat", {
 			turnCount,
 			finishReason: response.finishReason,

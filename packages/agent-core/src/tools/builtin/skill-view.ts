@@ -1,14 +1,21 @@
 import { z } from "zod";
 import { createSkillsGuard } from "../../skills/guard.js";
 import type { SkillsManager } from "../../skills/manager.js";
-import type { SkillSource, SkillTrustLevel, SkillsGuard } from "../../skills/types.js";
+import type {
+	SkillSource,
+	SkillsGuard,
+	SkillTrustLevel,
+} from "../../skills/types.js";
 import type { ToolWithMetadata } from "../tool-metadata.js";
 import type { ToolResult } from "../types.js";
 
 const DEFAULT_MAX_BODY_CHARS = 100_000;
 const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
 
-function createErrorResult(message: string, extra?: Record<string, unknown>): ToolResult {
+function createErrorResult(
+	message: string,
+	extra?: Record<string, unknown>,
+): ToolResult {
 	return {
 		toolCallId: "builtin-skill-view",
 		content: JSON.stringify(

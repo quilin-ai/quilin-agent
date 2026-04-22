@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { createWebFetchTool } from "./web-fetch.js";
 
-function createResolver(
-	records: Record<string, readonly string[]>,
-) {
-	return vi.fn(async (hostname: string) => records[hostname] ?? ["93.184.216.34"]);
+function createResolver(records: Record<string, readonly string[]>) {
+	return vi.fn(
+		async (hostname: string) => records[hostname] ?? ["93.184.216.34"],
+	);
 }
 
 describe("builtin web_fetch tool", () => {
@@ -22,13 +22,14 @@ describe("builtin web_fetch tool", () => {
 	});
 
 	it("uses the injected fetcher and returns response metadata", async () => {
-		const fetcher = vi.fn(async () =>
-			new Response("hello world", {
-				status: 200,
-				headers: {
-					"content-type": "text/plain",
-				},
-			}),
+		const fetcher = vi.fn(
+			async () =>
+				new Response("hello world", {
+					status: 200,
+					headers: {
+						"content-type": "text/plain",
+					},
+				}),
 		);
 		const tool = createWebFetchTool({ fetcher });
 
@@ -60,13 +61,14 @@ describe("builtin web_fetch tool", () => {
 	});
 
 	it("marks HTTP errors and truncates oversized bodies", async () => {
-		const errorFetcher = vi.fn(async () =>
-			new Response("internal error", {
-				status: 500,
-				headers: {
-					"content-type": "text/plain",
-				},
-			}),
+		const errorFetcher = vi.fn(
+			async () =>
+				new Response("internal error", {
+					status: 500,
+					headers: {
+						"content-type": "text/plain",
+					},
+				}),
 		);
 		const errorTool = createWebFetchTool({ fetcher: errorFetcher });
 
@@ -81,13 +83,14 @@ describe("builtin web_fetch tool", () => {
 			body: "internal error",
 		});
 
-		const truncatingFetcher = vi.fn(async () =>
-			new Response("abcdefghijklmnopqrstuvwxyz", {
-				status: 200,
-				headers: {
-					"content-type": "text/plain",
-				},
-			}),
+		const truncatingFetcher = vi.fn(
+			async () =>
+				new Response("abcdefghijklmnopqrstuvwxyz", {
+					status: 200,
+					headers: {
+						"content-type": "text/plain",
+					},
+				}),
 		);
 		const truncatingTool = createWebFetchTool({
 			fetcher: truncatingFetcher,
@@ -153,16 +156,14 @@ describe("builtin web_fetch tool", () => {
 	});
 
 	it("re-validates redirects and blocks redirects into private targets", async () => {
-		const fetcher = vi
-			.fn()
-			.mockResolvedValueOnce(
-				new Response(null, {
-					status: 302,
-					headers: {
-						location: "http://169.254.169.254/latest/meta-data/",
-					},
-				}),
-			);
+		const fetcher = vi.fn().mockResolvedValueOnce(
+			new Response(null, {
+				status: 302,
+				headers: {
+					location: "http://169.254.169.254/latest/meta-data/",
+				},
+			}),
+		);
 		const resolver = createResolver({
 			"safe.example": ["93.184.216.34"],
 			"169.254.169.254": ["169.254.169.254"],
@@ -181,16 +182,18 @@ describe("builtin web_fetch tool", () => {
 	});
 
 	it("uses timeout and manual redirect handling for each fetch hop", async () => {
-		const fetcher = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-			expect(init?.redirect).toBe("manual");
-			expect(init?.signal).toBeInstanceOf(AbortSignal);
+		const fetcher = vi.fn(
+			async (_url: string | URL | Request, init?: RequestInit) => {
+				expect(init?.redirect).toBe("manual");
+				expect(init?.signal).toBeInstanceOf(AbortSignal);
 
-			return new Promise<Response>((_resolve, reject) => {
-				init?.signal?.addEventListener("abort", () => {
-					reject(init.signal?.reason ?? new Error("aborted"));
+				return new Promise<Response>((_resolve, reject) => {
+					init?.signal?.addEventListener("abort", () => {
+						reject(init.signal?.reason ?? new Error("aborted"));
+					});
 				});
-			});
-		});
+			},
+		);
 		const resolver = createResolver({
 			"slow.example": ["93.184.216.34"],
 		});
@@ -253,13 +256,14 @@ describe("builtin web_fetch tool", () => {
 	});
 
 	it("strips sensitive auth headers when target host is not allowlisted", async () => {
-		const fetcher = vi.fn(async () =>
-			new Response("ok", {
-				status: 200,
-				headers: {
-					"content-type": "text/plain",
-				},
-			}),
+		const fetcher = vi.fn(
+			async () =>
+				new Response("ok", {
+					status: 200,
+					headers: {
+						"content-type": "text/plain",
+					},
+				}),
 		);
 		const resolver = vi.fn(async () => [
 			{

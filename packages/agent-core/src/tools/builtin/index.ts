@@ -1,3 +1,6 @@
+import type { WriteAuthority } from "../../safety/write-authority.js";
+import type { SkillsManager } from "../../skills/manager.js";
+import type { ToolWithMetadata } from "../tool-metadata.js";
 import {
 	createFileListTool,
 	createFileReadTool,
@@ -15,9 +18,6 @@ import {
 } from "./skill-manage.js";
 import { createSkillViewTool } from "./skill-view.js";
 import { createWebFetchTool, type WebFetchToolOptions } from "./web-fetch.js";
-import type { WriteAuthority } from "../../safety/write-authority.js";
-import type { SkillsManager } from "../../skills/manager.js";
-import type { ToolWithMetadata } from "../tool-metadata.js";
 
 export interface BuiltinToolOptions {
 	readonly fileRead?: FileReadToolOptions;

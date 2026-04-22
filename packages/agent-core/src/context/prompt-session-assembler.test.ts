@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { describe, expect, test } from "vitest";
+import type { SkillDescriptor } from "../skills/types.js";
 import { PromptBuilder } from "./prompt-builder.js";
 import { PromptSessionAssembler } from "./prompt-session-assembler.js";
 import {
@@ -7,7 +8,6 @@ import {
 	createPostCompactSkillsSection,
 	createSkillsCatalogSection,
 } from "./skills-catalog-section.js";
-import type { SkillDescriptor } from "../skills/types.js";
 
 function stableHash(value: string): string {
 	return createHash("sha256").update(value).digest("hex").slice(0, 16);
@@ -223,7 +223,7 @@ describe("PromptSessionAssembler", () => {
 									body: "beta body",
 									tokenEstimate: 3,
 								},
-						  ]
+							]
 						: [],
 					totalTokens: justCompacted ? 3 : 0,
 				}),

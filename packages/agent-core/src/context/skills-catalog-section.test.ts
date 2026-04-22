@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { SkillDescriptor } from "../skills/types.js";
+import type { BuildContext } from "./prompt-types.js";
 import {
 	createHotSkillsSection,
 	createPostCompactSkillsSection,
 	createSkillsCatalogSection,
 } from "./skills-catalog-section.js";
-import type { BuildContext } from "./prompt-types.js";
 
 function makeDescriptor(name: string): SkillDescriptor {
 	return {

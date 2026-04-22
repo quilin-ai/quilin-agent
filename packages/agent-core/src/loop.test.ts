@@ -1782,7 +1782,10 @@ describe("runAgentLoop", () => {
 			{
 				llm: { chat },
 				hooks: {
-					recordSpan: async (name: string, attributes?: Record<string, unknown>) => {
+					recordSpan: async (
+						name: string,
+						attributes?: Record<string, unknown>,
+					) => {
 						spans.push({ name, attributes });
 					},
 				},
@@ -1863,7 +1866,10 @@ describe("runAgentLoop", () => {
 			{
 				llm: { chat },
 				hooks: {
-					recordSpan: async (name: string, attributes?: Record<string, unknown>) => {
+					recordSpan: async (
+						name: string,
+						attributes?: Record<string, unknown>,
+					) => {
 						spans.push({ name, attributes });
 					},
 				},

@@ -1,15 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-	WriteAuthority,
 	type AuditRecord,
+	WriteAuthority,
 	type WriteAuthorityOptions,
 	type WriteDecision,
 	type WriteRequest,
 } from "./write-authority.js";
 
-function createRequest(
-	overrides: Partial<WriteRequest> = {},
-): WriteRequest {
+function createRequest(overrides: Partial<WriteRequest> = {}): WriteRequest {
 	return {
 		tool: "shell_exec",
 		riskLevel: "low",

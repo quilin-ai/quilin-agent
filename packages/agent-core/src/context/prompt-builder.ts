@@ -3,8 +3,8 @@ import type {
 	AssembledPrompt,
 	BuildContext,
 	PromptProfile,
-	PromptSegment,
 	PromptSection,
+	PromptSegment,
 } from "./prompt-types.js";
 import { estimateTokens } from "./tokens.js";
 
@@ -72,20 +72,20 @@ export class PromptBuilder {
 					: content;
 			const finalTokens = estimateTokens(finalContent);
 
-				sectionTokens[section.name] = finalTokens;
+			sectionTokens[section.name] = finalTokens;
 
-				const rendered = `<!-- ${section.name} -->\n${finalContent}`;
-				segments.push({
-					id: section.name,
-					role: "system",
-					text: rendered,
-					stability: section.updateFrequency,
-					source: "prompt-section",
-					cacheEligible: section.updateFrequency !== "per_turn",
-				});
-				if (section.updateFrequency === "per_turn") {
-					dynamicParts.push(rendered);
-					continue;
+			const rendered = `<!-- ${section.name} -->\n${finalContent}`;
+			segments.push({
+				id: section.name,
+				role: "system",
+				text: rendered,
+				stability: section.updateFrequency,
+				source: "prompt-section",
+				cacheEligible: section.updateFrequency !== "per_turn",
+			});
+			if (section.updateFrequency === "per_turn") {
+				dynamicParts.push(rendered);
+				continue;
 			}
 
 			staticParts.push(rendered);
@@ -93,29 +93,29 @@ export class PromptBuilder {
 
 		const staticPrefix = staticParts.join("\n\n");
 		const dynamicSuffix = dynamicParts.join("\n\n");
-			const totalTokens = Object.values(sectionTokens).reduce(
-				(sum, tokenCount) => sum + tokenCount,
-				0,
-			);
-			const lastCacheEligibleSegmentIndex = [...segments]
-				.map((segment, index) => ({ segment, index }))
-				.reverse()
-				.find(({ segment }) => segment.cacheEligible)?.index;
+		const totalTokens = Object.values(sectionTokens).reduce(
+			(sum, tokenCount) => sum + tokenCount,
+			0,
+		);
+		const lastCacheEligibleSegmentIndex = [...segments]
+			.map((segment, index) => ({ segment, index }))
+			.reverse()
+			.find(({ segment }) => segment.cacheEligible)?.index;
 
-			return {
-				segments,
-				recommendedBreakpoints:
-					lastCacheEligibleSegmentIndex == null
-						? []
-						: [
-								{
-									segmentIndex: lastCacheEligibleSegmentIndex,
-									reason: "system-tail",
-								},
-							],
-				staticPrefix,
-				dynamicSuffix,
-				sectionTokens,
+		return {
+			segments,
+			recommendedBreakpoints:
+				lastCacheEligibleSegmentIndex == null
+					? []
+					: [
+							{
+								segmentIndex: lastCacheEligibleSegmentIndex,
+								reason: "system-tail",
+							},
+						],
+			staticPrefix,
+			dynamicSuffix,
+			sectionTokens,
 			totalTokens,
 		};
 	}

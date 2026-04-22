@@ -2,9 +2,7 @@ import type { LanguageModel } from "ai";
 import { vi } from "vitest";
 import type { createProvider } from "../llm/provider.js";
 
-type GenerateTextResult = Awaited<
-	ReturnType<typeof import("ai").generateText>
->;
+type GenerateTextResult = Awaited<ReturnType<typeof import("ai").generateText>>;
 
 type StreamTextResult = ReturnType<typeof import("ai").streamText>;
 
@@ -22,7 +20,9 @@ export function createMockLanguageModel(
 	} as unknown as LanguageModel;
 }
 
-export function mockGenerateTextResult(overrides: Record<string, unknown> = {}) {
+export function mockGenerateTextResult(
+	overrides: Record<string, unknown> = {},
+) {
 	return overrides as unknown as GenerateTextResult;
 }
 
@@ -31,7 +31,9 @@ export function mockStreamTextResult(overrides: Record<string, unknown> = {}) {
 }
 
 export function createMockProvider(
-	modelFactory: (requestedModelId: string) => LanguageModel = (requestedModelId) =>
+	modelFactory: (requestedModelId: string) => LanguageModel = (
+		requestedModelId,
+	) =>
 		createMockLanguageModel({
 			provider: "deepseek",
 			modelId: requestedModelId,
@@ -44,7 +46,9 @@ export function createMockProvider(
 			languageModel: vi.fn((requestedModelId: string) =>
 				modelFactory(requestedModelId),
 			),
-			chatModel: vi.fn((requestedModelId: string) => modelFactory(requestedModelId)),
+			chatModel: vi.fn((requestedModelId: string) =>
+				modelFactory(requestedModelId),
+			),
 			completionModel: vi.fn((requestedModelId: string) =>
 				modelFactory(requestedModelId),
 			),

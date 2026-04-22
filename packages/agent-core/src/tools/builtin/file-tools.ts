@@ -35,7 +35,11 @@ const BASENAME_SENSITIVE_FILE_PATTERNS = [
 	/\.pem$/i,
 	/\.key$/i,
 ];
-const SYSTEM_SENSITIVE_EXACT_PATHS = ["/etc/shadow", "/etc/passwd", "/etc/sudoers"];
+const SYSTEM_SENSITIVE_EXACT_PATHS = [
+	"/etc/shadow",
+	"/etc/passwd",
+	"/etc/sudoers",
+];
 const SYSTEM_SENSITIVE_PREFIXES = ["/root"];
 
 function createSuccessResult(
@@ -94,7 +98,9 @@ async function isSensitivePath(filePath: string): Promise<boolean> {
 	const homePath = normalizePath(await resolvePathIfPossible(getHomePath()));
 	const fileName = basename(normalizedPath);
 
-	if (BASENAME_SENSITIVE_FILE_PATTERNS.some((pattern) => pattern.test(fileName))) {
+	if (
+		BASENAME_SENSITIVE_FILE_PATTERNS.some((pattern) => pattern.test(fileName))
+	) {
 		return true;
 	}
 
@@ -181,7 +187,9 @@ async function readNumberedLines(
 		for await (const line of lineReader) {
 			bytesRead += Buffer.byteLength(line, "utf8") + 1;
 			if (bytesRead > maxBytes) {
-				throw new Error(`File exceeds maxBytes limit: ${bytesRead} > ${maxBytes}`);
+				throw new Error(
+					`File exceeds maxBytes limit: ${bytesRead} > ${maxBytes}`,
+				);
 			}
 
 			lineNumber += 1;
@@ -226,7 +234,11 @@ async function listEntriesRecursively(
 	currentPath: string,
 	prefix = "",
 ): Promise<
-	Array<{ readonly name: string; readonly path: string; readonly type: "file" | "directory" }>
+	Array<{
+		readonly name: string;
+		readonly path: string;
+		readonly type: "file" | "directory";
+	}>
 > {
 	const entries = await readdir(currentPath, { withFileTypes: true });
 	const collected: Array<{
@@ -261,9 +273,10 @@ async function listEntriesRecursively(
 async function resolveAllowedRoots(
 	allowedRoots: readonly string[] | undefined,
 ): Promise<readonly string[]> {
-	const roots = allowedRoots == null || allowedRoots.length === 0
-		? [process.cwd()]
-		: [...allowedRoots];
+	const roots =
+		allowedRoots == null || allowedRoots.length === 0
+			? [process.cwd()]
+			: [...allowedRoots];
 
 	return Promise.all(
 		roots.map(async (root) => {
@@ -337,7 +350,11 @@ export function createFileReadTool(
 		category: "programmatic",
 		riskLevel: "read",
 		execute: async (args) => {
-			const { path, offset = 0, limit } = args as {
+			const {
+				path,
+				offset = 0,
+				limit,
+			} = args as {
 				path: string;
 				offset?: number;
 				limit?: number;
@@ -508,11 +525,13 @@ export function createFileListTool(
 
 				const entries = recurse
 					? await listEntriesRecursively(absolutePath, resolvedPath)
-					: (await readdir(resolvedPath, { withFileTypes: true })).map((entry) => ({
-							name: entry.name,
-							path: join(absolutePath, entry.name),
-							type: entry.isDirectory() ? "directory" : "file",
-						}));
+					: (await readdir(resolvedPath, { withFileTypes: true })).map(
+							(entry) => ({
+								name: entry.name,
+								path: join(absolutePath, entry.name),
+								type: entry.isDirectory() ? "directory" : "file",
+							}),
+						);
 				const filtered = entries
 					.filter((entry) => matcher == null || matcher.test(entry.name))
 					.sort((left, right) => left.name.localeCompare(right.name));

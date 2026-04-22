@@ -24,7 +24,16 @@ const ALLOWED_ENV_KEYS = new Set([
 	"PWD",
 ]);
 
-const CONTROL_OPERATOR_TOKENS = new Set(["|", "||", "&", "&&", ";", "<", ">", ">>"]);
+const CONTROL_OPERATOR_TOKENS = new Set([
+	"|",
+	"||",
+	"&",
+	"&&",
+	";",
+	"<",
+	">",
+	">>",
+]);
 const SHELL_WRAPPER_EXECUTABLES = new Set([
 	"bash",
 	"csh",
@@ -115,7 +124,8 @@ function findBlockedCommandReason(
 	executable: string,
 	args: readonly string[],
 ): string | undefined {
-	const executableBase = executable.split(/[\\/]/).pop()?.toLowerCase() ?? executable.toLowerCase();
+	const executableBase =
+		executable.split(/[\\/]/).pop()?.toLowerCase() ?? executable.toLowerCase();
 
 	if (FORK_BOMB_PATTERN.test(command)) {
 		return "fork bomb patterns are not allowed";
@@ -136,8 +146,9 @@ function findBlockedCommandReason(
 		return "eval execution is not allowed";
 	}
 
-	const hasRecursiveForceFlag = args.some((arg) =>
-		/^-[^-]*r[^-]*f[^-]*$/i.test(arg) || /^-[^-]*f[^-]*r[^-]*$/i.test(arg),
+	const hasRecursiveForceFlag = args.some(
+		(arg) =>
+			/^-[^-]*r[^-]*f[^-]*$/i.test(arg) || /^-[^-]*f[^-]*r[^-]*$/i.test(arg),
 	);
 	const targetsDangerousLocation = args.some((arg) => {
 		return (
@@ -284,10 +295,8 @@ async function defaultShellRunner(
 			return {
 				stdout: shellError.stdout ?? "",
 				stderr: shellError.stderr || shellError.message,
-				exitCode:
-					typeof shellError.code === "number" ? shellError.code : null,
-				timedOut:
-					shellError.killed === true && shellError.signal === "SIGTERM",
+				exitCode: typeof shellError.code === "number" ? shellError.code : null,
+				timedOut: shellError.killed === true && shellError.signal === "SIGTERM",
 			};
 		}
 
@@ -358,8 +367,9 @@ export function createShellExecTool(
 			}
 
 			const normalizedAllowlist =
-				options.executableAllowlist?.map((item) => item.trim()).filter(Boolean) ??
-				[];
+				options.executableAllowlist
+					?.map((item) => item.trim())
+					.filter(Boolean) ?? [];
 			if (
 				normalizedAllowlist.length > 0 &&
 				!normalizedAllowlist.includes(executable)
@@ -388,15 +398,15 @@ export function createShellExecTool(
 				summary: command,
 				detail: command,
 				origin: options.origin ?? "agent",
+			});
+			if (writeDecision.kind !== "allow") {
+				return createErrorResult("builtin-shell-exec", {
+					error:
+						writeDecision.kind === "deny"
+							? writeDecision.reason
+							: writeDecision.prompt,
 				});
-				if (writeDecision.kind !== "allow") {
-					return createErrorResult("builtin-shell-exec", {
-						error:
-							writeDecision.kind === "deny"
-								? writeDecision.reason
-								: writeDecision.prompt,
-					});
-				}
+			}
 
 			const runner = options.runner ?? defaultShellRunner;
 			const result = await runner(executable, argv, {

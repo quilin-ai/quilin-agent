@@ -47,11 +47,16 @@ function makeDescriptor(
 	overrides: DescriptorOverrides = {},
 ): SkillDescriptor {
 	const overrideFrontmatter = overrides.frontmatter ?? {};
-	const frontmatter = Object.assign({}, descriptor.frontmatter, {
-		name,
-		description: `Skill ${name} description`,
-		mandatory: false,
-	}, overrideFrontmatter);
+	const frontmatter = Object.assign(
+		{},
+		descriptor.frontmatter,
+		{
+			name,
+			description: `Skill ${name} description`,
+			mandatory: false,
+		},
+		overrideFrontmatter,
+	);
 
 	return {
 		...descriptor,
@@ -70,9 +75,13 @@ describe("renderSkillsCatalog", () => {
 		expect(xml).toContain("<available_skills>");
 		expect(xml).toContain('name="web-scraping"');
 		expect(xml).toContain('source="bundled"');
-		expect(xml).toContain("Extract structured data from websites and return machine-usab");
+		expect(xml).toContain(
+			"Extract structured data from websites and return machine-usab",
+		);
 		expect(xml).not.toContain("JSON output.");
-		expect(xml).toContain('when_to_use="User asks to scrape or extract from a URL"');
+		expect(xml).toContain(
+			'when_to_use="User asks to scrape or extract from a URL"',
+		);
 		expect(xml).toContain('allowed_tools="web_fetch,web_search"');
 	});
 
@@ -128,13 +137,10 @@ describe("renderSkillsCatalog", () => {
 	});
 
 	it("filters out skills below the minimum trust level", () => {
-		const xml = renderSkillsCatalog(
-			[descriptor],
-			{
-				...baseTurnContext,
-				minTrustLevel: "trusted",
-			},
-		);
+		const xml = renderSkillsCatalog([descriptor], {
+			...baseTurnContext,
+			minTrustLevel: "trusted",
+		});
 
 		expect(xml).toBe("<available_skills />");
 	});

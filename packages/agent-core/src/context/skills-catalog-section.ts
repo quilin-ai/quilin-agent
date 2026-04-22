@@ -42,7 +42,8 @@ function toTurnContext(ctx: BuildContext): SkillsCatalogTurnContext {
 }
 
 function shouldRenderPostCompact(ctx: BuildContext): boolean {
-	const compaction = (ctx.sessionState.compaction ?? {}) as CompactionSessionState;
+	const compaction = (ctx.sessionState.compaction ??
+		{}) as CompactionSessionState;
 	return compaction.justCompacted === true;
 }
 

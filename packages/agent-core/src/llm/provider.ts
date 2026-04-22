@@ -25,10 +25,19 @@ function readDeepSeekUsage(value: unknown): DeepSeekUsagePayload | undefined {
 	return usage;
 }
 
-function toDeepSeekMetadata(
-	usage: DeepSeekUsagePayload | undefined,
-): { deepseek: { cacheReadTokens?: number; cacheWriteTokens?: number; cacheSource: "native" } } | undefined {
-	if (usage?.prompt_cache_hit_tokens == null && usage?.prompt_cache_miss_tokens == null) {
+function toDeepSeekMetadata(usage: DeepSeekUsagePayload | undefined):
+	| {
+			deepseek: {
+				cacheReadTokens?: number;
+				cacheWriteTokens?: number;
+				cacheSource: "native";
+			};
+	  }
+	| undefined {
+	if (
+		usage?.prompt_cache_hit_tokens == null &&
+		usage?.prompt_cache_miss_tokens == null
+	) {
 		return undefined;
 	}
 

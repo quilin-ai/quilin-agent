@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AgentState } from "./types.js";
 import {
 	buildCheckpointState,
 	saveCheckpointState,
 } from "./checkpoint-writer.js";
+import type { AgentState } from "./types.js";
 
 function makeState(overrides: Partial<AgentState> = {}): AgentState {
 	return {

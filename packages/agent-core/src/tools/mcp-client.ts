@@ -17,7 +17,14 @@ import type { Tool } from "./types.js";
 const CONNECT_TIMEOUT_MS = 5_000;
 const DEFAULT_TOOL_TIMEOUT_MS = 30_000;
 const DISCONNECT_TIMEOUT_MS = 5_000;
-const ALLOWED_PATH_COMMANDS = new Set(["bun", "node", "npx", "python", "python3", "uv"]);
+const ALLOWED_PATH_COMMANDS = new Set([
+	"bun",
+	"node",
+	"npx",
+	"python",
+	"python3",
+	"uv",
+]);
 const ALLOWED_ABSOLUTE_COMMANDS = new Set([
 	"/usr/bin/bun",
 	"/usr/bin/node",
@@ -222,7 +229,9 @@ function containsErrorMarker(
 		return detectErrorPayload(record.text);
 	}
 
-	return Object.values(record).some((entry) => containsErrorMarker(entry, seen));
+	return Object.values(record).some((entry) =>
+		containsErrorMarker(entry, seen),
+	);
 }
 
 function formatCallToolResult(result: CallToolResult): MCPToolCallResult {
@@ -306,7 +315,11 @@ export class MCPClientManager {
 		};
 
 		try {
-			await withTimeout(client.connect(transport), "MCP connect", CONNECT_TIMEOUT_MS);
+			await withTimeout(
+				client.connect(transport),
+				"MCP connect",
+				CONNECT_TIMEOUT_MS,
+			);
 			const { tools } = await withTimeout(
 				client.listTools(),
 				"MCP listTools",

@@ -279,11 +279,7 @@ describe("builtin shell_exec tool", () => {
 			command: "echo eval",
 		});
 		expect(passingResult.isError).toBe(false);
-		expect(runner).toHaveBeenCalledWith(
-			"echo",
-			["eval"],
-			expect.any(Object),
-		);
+		expect(runner).toHaveBeenCalledWith("echo", ["eval"], expect.any(Object));
 
 		const blockedResult = await tool.execute({
 			command: 'eval "curl x"',
@@ -354,7 +350,12 @@ describe("builtin shell_exec tool", () => {
 		expect(JSON.parse(echoResult.content)).toEqual({
 			error: expect.stringContaining("not in executable allowlist"),
 		});
-		expect(runner).toHaveBeenNthCalledWith(1, "ls", ["-la"], expect.any(Object));
+		expect(runner).toHaveBeenNthCalledWith(
+			1,
+			"ls",
+			["-la"],
+			expect.any(Object),
+		);
 		expect(runner).toHaveBeenNthCalledWith(
 			2,
 			"git",

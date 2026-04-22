@@ -8,11 +8,11 @@ import {
 	writeFile,
 } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import {
+import type {
 	WriteAuthority,
-	type WriteOrigin,
-	type WriteRequest,
-	type WriteRiskLevel,
+	WriteOrigin,
+	WriteRequest,
+	WriteRiskLevel,
 } from "../safety/write-authority.js";
 import { parseSkillMarkdown } from "./frontmatter.js";
 import { createSkillsGuard } from "./guard.js";
@@ -28,8 +28,8 @@ import type {
 	SkillFrontmatter,
 	SkillManageAction,
 	SkillManageResult,
-	SkillsGuard,
 	SkillSource,
+	SkillsGuard,
 	SkillTrustLevel,
 } from "./types.js";
 
@@ -179,7 +179,9 @@ function defaultTrustForSource(source: SkillSource): SkillTrustLevel {
 	}
 }
 
-function summarizeGuardDecision(decision: Exclude<GuardDecision, { kind: "pass" }>): string {
+function summarizeGuardDecision(
+	decision: Exclude<GuardDecision, { kind: "pass" }>,
+): string {
 	const patternIds = Array.from(
 		new Set(decision.findings.map((finding) => finding.pattern_id)),
 	).slice(0, 3);
@@ -225,7 +227,10 @@ export class SkillManager {
 		action: Extract<SkillManageAction, { action: "create" }>,
 	): Promise<SkillManageResult> {
 		if (!validateSkillName(action.descriptor.name)) {
-			return createError("validation_failed", "skill name must be a valid slug");
+			return createError(
+				"validation_failed",
+				"skill name must be a valid slug",
+			);
 		}
 
 		if (action.descriptor.frontmatter.name !== action.descriptor.name) {
@@ -296,7 +301,10 @@ export class SkillManager {
 		action: Extract<SkillManageAction, { action: "update" }>,
 	): Promise<SkillManageResult> {
 		if (!validateSkillName(action.name)) {
-			return createError("validation_failed", "skill name must be a valid slug");
+			return createError(
+				"validation_failed",
+				"skill name must be a valid slug",
+			);
 		}
 
 		if (
@@ -347,8 +355,7 @@ export class SkillManager {
 		}
 
 		const guardOutcome = this.evaluateGuard(nextBody, {
-			trust:
-				nextFrontmatter.trust ?? defaultTrustForSource(existing.source),
+			trust: nextFrontmatter.trust ?? defaultTrustForSource(existing.source),
 			stage: "write",
 			skillName: action.name,
 		});
@@ -382,7 +389,10 @@ export class SkillManager {
 		action: Extract<SkillManageAction, { action: "delete" }>,
 	): Promise<SkillManageResult> {
 		if (!validateSkillName(action.name)) {
-			return createError("validation_failed", "skill name must be a valid slug");
+			return createError(
+				"validation_failed",
+				"skill name must be a valid slug",
+			);
 		}
 
 		const existing = this.skillsManager.findByName(action.name);
@@ -458,19 +468,22 @@ export class SkillManager {
 	private async resolveExistingPath(
 		path: string,
 	): Promise<
-		| { readonly path: string }
-		| { readonly error: SkillManageResult }
+		{ readonly path: string } | { readonly error: SkillManageResult }
 	> {
 		let resolvedPath: string;
 		try {
 			resolvedPath = await this.fsOps.realpath(path);
 		} catch {
-			return { error: createError("not_found", `skill path not found: ${path}`) };
+			return {
+				error: createError("not_found", `skill path not found: ${path}`),
+			};
 		}
 
 		const stats = await this.fsOps.lstat(path);
 		if (stats.isSymbolicLink()) {
-			return { error: createError("path_denied", "skill path cannot be a symlink") };
+			return {
+				error: createError("path_denied", "skill path cannot be a symlink"),
+			};
 		}
 
 		const roots = [this.userRoot, this.projectRoot].filter(
@@ -520,9 +533,7 @@ export class SkillManager {
 	private serializeAndValidate(
 		frontmatter: SkillFrontmatter,
 		body: string,
-	):
-		| { readonly markdown: string }
-		| { readonly error: SkillManageResult } {
+	): { readonly markdown: string } | { readonly error: SkillManageResult } {
 		const markdown = serializeSkillMarkdown(frontmatter, body);
 		try {
 			const parsed = parseSkillMarkdown(markdown);
@@ -601,8 +612,7 @@ export class SkillManager {
 		readonly guardSummary?: string;
 	}): WriteRequest {
 		const sensitiveTools = findSensitiveTools(input.allowedTools);
-		const riskLevel =
-			sensitiveTools.length > 0 ? "critical" : input.riskLevel;
+		const riskLevel = sensitiveTools.length > 0 ? "critical" : input.riskLevel;
 		const details = [
 			`path=${input.path}`,
 			input.body == null
@@ -646,9 +656,7 @@ export class SkillManager {
 			readonly stage: "write";
 			readonly skillName: string;
 		},
-	):
-		| { readonly error: SkillManageResult }
-		| GuardWriteOutcome {
+	): { readonly error: SkillManageResult } | GuardWriteOutcome {
 		const decision = this.guard.scan(body, ctx);
 		switch (decision.kind) {
 			case "pass":

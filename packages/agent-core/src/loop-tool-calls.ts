@@ -6,7 +6,7 @@ import { logger } from "./logger.js";
 import { AgentLoopError, type LoopHooks } from "./loop-types.js";
 import { saveCheckpointState } from "./state/checkpoint-writer.js";
 import type { AgentState, Checkpoint, Message } from "./state/types.js";
-import { ToolRouter } from "./tools/router.js";
+import type { ToolRouter } from "./tools/router.js";
 import type { ToolCall } from "./tools/types.js";
 
 export interface ExecuteToolCallsOptions {

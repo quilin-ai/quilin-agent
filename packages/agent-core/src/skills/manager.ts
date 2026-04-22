@@ -1,4 +1,4 @@
-import { watch, type FSWatcher } from "node:fs";
+import { type FSWatcher, watch } from "node:fs";
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { isAbsolute, join, relative } from "node:path";
 import { estimateTokens } from "../context/tokens.js";
@@ -133,7 +133,9 @@ export class SkillsManager {
 
 		this.descriptorByName = byName;
 		this.discoveryOrder = order;
-		this.recentSkillNames = this.recentSkillNames.filter((name) => byName.has(name));
+		this.recentSkillNames = this.recentSkillNames.filter((name) =>
+			byName.has(name),
+		);
 		this.evictUnreferencedLoadedSkills();
 		const change = diffCatalog(previousDescriptorsByName, byName);
 		if (
@@ -206,7 +208,9 @@ export class SkillsManager {
 		this.loadedSkillByName.set(skill.descriptor.name, skill);
 		this.recentSkillNames = [
 			skill.descriptor.name,
-			...this.recentSkillNames.filter((entry) => entry !== skill.descriptor.name),
+			...this.recentSkillNames.filter(
+				(entry) => entry !== skill.descriptor.name,
+			),
 		].slice(0, maxEntries);
 		this.evictUnreferencedLoadedSkills();
 	}
@@ -229,9 +233,7 @@ export class SkillsManager {
 			return;
 		}
 
-		this.activeWatchers = watchRoots.map((path) =>
-			this.createWatcher(path),
-		);
+		this.activeWatchers = watchRoots.map((path) => this.createWatcher(path));
 		this.watching = true;
 	}
 

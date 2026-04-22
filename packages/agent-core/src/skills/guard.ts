@@ -1,14 +1,11 @@
-import {
-	type GuardDecision,
-	type GuardFinding,
-	type GuardSeverity,
-	type SkillsGuard,
-	type SkillTrustLevel,
+import { THREAT_PATTERNS, type ThreatPattern } from "./threat-patterns.js";
+import type {
+	GuardDecision,
+	GuardFinding,
+	GuardSeverity,
+	SkillsGuard,
+	SkillTrustLevel,
 } from "./types.js";
-import {
-	THREAT_PATTERNS,
-	type ThreatPattern,
-} from "./threat-patterns.js";
 
 const MAX_MATCH_CHARS = 120;
 const DEFAULT_MAX_FINDINGS = 50;
@@ -21,7 +18,9 @@ const SEVERITY_RANK: Record<GuardSeverity, number> = {
 
 type PolicyDecision = GuardDecision["kind"];
 
-type PolicyMatrix = Readonly<Record<SkillTrustLevel, Readonly<Record<GuardSeverity, PolicyDecision>>>>;
+type PolicyMatrix = Readonly<
+	Record<SkillTrustLevel, Readonly<Record<GuardSeverity, PolicyDecision>>>
+>;
 
 const DEFAULT_POLICY_MATRIX: PolicyMatrix = {
 	builtin: {

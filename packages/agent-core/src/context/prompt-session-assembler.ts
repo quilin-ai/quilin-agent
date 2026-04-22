@@ -1,5 +1,5 @@
 import type { Message } from "../state/types.js";
-import { PromptBuilder } from "./prompt-builder.js";
+import type { PromptBuilder } from "./prompt-builder.js";
 import type { AssembledPrompt, BuildContext } from "./prompt-types.js";
 import {
 	decoratePreciseTemporalUserInput,
@@ -67,7 +67,7 @@ export class PromptSessionAssembler {
 				this.options.lastSessionEndedAt == null
 					? null
 					: new Date(this.options.lastSessionEndedAt),
-			};
+		};
 
 		const latestMessage = input.transcript.at(-1);
 		const externalSessionState = this.options.getSessionState?.() ?? {};

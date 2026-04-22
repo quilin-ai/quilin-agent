@@ -1,7 +1,7 @@
+import type { WatchListener } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { WatchListener } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SkillsManager } from "./manager.js";
 
@@ -214,9 +214,11 @@ trust: trusted
 		manager.recordViewedSkill(await manager.load("alpha"), 1);
 		manager.recordViewedSkill(await manager.load("beta"), 1);
 
-		const loadedSkillByName = (manager as unknown as {
-			loadedSkillByName: Map<string, unknown>;
-		}).loadedSkillByName;
+		const loadedSkillByName = (
+			manager as unknown as {
+				loadedSkillByName: Map<string, unknown>;
+			}
+		).loadedSkillByName;
 		expect(manager.getRecentSkillNames()).toEqual(["beta"]);
 		expect([...loadedSkillByName.keys()]).toEqual(["beta"]);
 	});
@@ -231,9 +233,11 @@ trust: trusted
 		await rm(join(userRoot, "alpha"), { recursive: true, force: true });
 		await manager.discover();
 
-		const loadedSkillByName = (manager as unknown as {
-			loadedSkillByName: Map<string, unknown>;
-		}).loadedSkillByName;
+		const loadedSkillByName = (
+			manager as unknown as {
+				loadedSkillByName: Map<string, unknown>;
+			}
+		).loadedSkillByName;
 		expect(manager.getRecentSkillNames()).toEqual([]);
 		expect(loadedSkillByName.size).toBe(0);
 	});

@@ -1,7 +1,4 @@
-import type {
-	GuardSeverity,
-	GuardThreatCategory,
-} from "./types.js";
+import type { GuardSeverity, GuardThreatCategory } from "./types.js";
 
 export interface ThreatPattern {
 	readonly id: string;
@@ -12,22 +9,16 @@ export interface ThreatPattern {
 	readonly references: readonly string[];
 }
 
-const OWASP_LLM01 =
-	"https://genai.owasp.org/llmrisk/llm01-prompt-injection/";
+const OWASP_LLM01 = "https://genai.owasp.org/llmrisk/llm01-prompt-injection/";
 const OWASP_LLM02 =
 	"https://genai.owasp.org/llmrisk/llm02-sensitive-information-disclosure/";
 const OWASP_LLM05 =
 	"https://genai.owasp.org/llmrisk/llm05-improper-output-handling/";
-const OWASP_LLM06 =
-	"https://genai.owasp.org/llmrisk/llm06-excessive-agency/";
-const MITRE_T1059 =
-	"https://attack.mitre.org/techniques/T1059/";
-const MITRE_T1547 =
-	"https://attack.mitre.org/techniques/T1547/";
-const MITRE_T1005 =
-	"https://attack.mitre.org/techniques/T1005/";
-const MITRE_T1027 =
-	"https://attack.mitre.org/techniques/T1027/";
+const OWASP_LLM06 = "https://genai.owasp.org/llmrisk/llm06-excessive-agency/";
+const MITRE_T1059 = "https://attack.mitre.org/techniques/T1059/";
+const MITRE_T1547 = "https://attack.mitre.org/techniques/T1547/";
+const MITRE_T1005 = "https://attack.mitre.org/techniques/T1005/";
+const MITRE_T1027 = "https://attack.mitre.org/techniques/T1027/";
 
 export const THREAT_PATTERNS: readonly ThreatPattern[] = [
 	{
@@ -59,7 +50,8 @@ export const THREAT_PATTERNS: readonly ThreatPattern[] = [
 		category: "data_exfiltration",
 		severity: "medium",
 		regex: /\bcurl\b[^\n]*https?:\/\/[^\s]+|wget\s+https?:\/\/[^\s]+/giu,
-		rationale: "Outbound HTTP transfer can be used to exfiltrate captured data.",
+		rationale:
+			"Outbound HTTP transfer can be used to exfiltrate captured data.",
 		references: [OWASP_LLM02, OWASP_LLM06],
 	},
 	{
@@ -75,15 +67,18 @@ export const THREAT_PATTERNS: readonly ThreatPattern[] = [
 		category: "prompt_injection",
 		severity: "medium",
 		regex: /ignore (?:all |any |the )?(?:previous|prior|above) instructions/giu,
-		rationale: "Instruction override language is the canonical prompt injection form.",
+		rationale:
+			"Instruction override language is the canonical prompt injection form.",
 		references: [OWASP_LLM01],
 	},
 	{
 		id: "PROMPT-INJECT-002",
 		category: "prompt_injection",
 		severity: "medium",
-		regex: /you are now (?:in )?(?:developer mode|dan|jailbroken|system mode)/giu,
-		rationale: "Role-reassignment language attempts to subvert system behavior.",
+		regex:
+			/you are now (?:in )?(?:developer mode|dan|jailbroken|system mode)/giu,
+		rationale:
+			"Role-reassignment language attempts to subvert system behavior.",
 		references: [OWASP_LLM01],
 	},
 	{
@@ -99,7 +94,8 @@ export const THREAT_PATTERNS: readonly ThreatPattern[] = [
 		category: "prompt_injection",
 		severity: "medium",
 		regex: /\[\[\s*system prompt\s*\]\]|\[\[\s*override\s*\]\]/giu,
-		rationale: "Explicit system-prompt targeting suggests prompt extraction or override.",
+		rationale:
+			"Explicit system-prompt targeting suggests prompt extraction or override.",
 		references: [OWASP_LLM01],
 	},
 	{
@@ -107,7 +103,8 @@ export const THREAT_PATTERNS: readonly ThreatPattern[] = [
 		category: "prompt_injection",
 		severity: "medium",
 		regex: /do not mention this instruction|reveal (?:the )?system prompt/giu,
-		rationale: "Stealth or prompt-reveal requests are common injection indicators.",
+		rationale:
+			"Stealth or prompt-reveal requests are common injection indicators.",
 		references: [OWASP_LLM01],
 	},
 	{
@@ -147,7 +144,8 @@ export const THREAT_PATTERNS: readonly ThreatPattern[] = [
 		category: "destructive_ops",
 		severity: "high",
 		regex: /\b(?:shutdown|reboot)\b\s+(?:-h|\/r|now)/giu,
-		rationale: "Host shutdown and reboot commands are destructive service actions.",
+		rationale:
+			"Host shutdown and reboot commands are destructive service actions.",
 		references: [OWASP_LLM05, MITRE_T1059],
 	},
 	{
@@ -186,7 +184,8 @@ export const THREAT_PATTERNS: readonly ThreatPattern[] = [
 		id: "PERSIST-005",
 		category: "persistence",
 		severity: "medium",
-		regex: /\breg(?:\.exe)?\b[^\n]*\\Run\b|\bHKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\b/giu,
+		regex:
+			/\breg(?:\.exe)?\b[^\n]*\\Run\b|\bHKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\b/giu,
 		rationale: "Windows Run keys are a standard persistence location.",
 		references: [OWASP_LLM06, MITRE_T1547],
 	},
@@ -195,7 +194,8 @@ export const THREAT_PATTERNS: readonly ThreatPattern[] = [
 		category: "obfuscation",
 		severity: "medium",
 		regex: /\bbase64\s+-d\b[^\n]*\|\s*(?:sh|bash|zsh|pwsh|powershell)\b/giu,
-		rationale: "Decoded-and-piped execution hides intent behind encoded payloads.",
+		rationale:
+			"Decoded-and-piped execution hides intent behind encoded payloads.",
 		references: [OWASP_LLM05, MITRE_T1027],
 	},
 	{
@@ -203,7 +203,8 @@ export const THREAT_PATTERNS: readonly ThreatPattern[] = [
 		category: "obfuscation",
 		severity: "medium",
 		regex: /\beval\s*\(\s*(?:atob|Buffer\.from)\b/giu,
-		rationale: "Runtime decoding followed by eval is a common obfuscation chain.",
+		rationale:
+			"Runtime decoding followed by eval is a common obfuscation chain.",
 		references: [OWASP_LLM05, MITRE_T1027],
 	},
 	{
@@ -219,7 +220,8 @@ export const THREAT_PATTERNS: readonly ThreatPattern[] = [
 		category: "obfuscation",
 		severity: "medium",
 		regex: /[\u200b-\u200f\u202a-\u202e]+/gu,
-		rationale: "Zero-width and bidi control characters can conceal malicious text.",
+		rationale:
+			"Zero-width and bidi control characters can conceal malicious text.",
 		references: [OWASP_LLM01, MITRE_T1027],
 	},
 	{
@@ -227,7 +229,8 @@ export const THREAT_PATTERNS: readonly ThreatPattern[] = [
 		category: "obfuscation",
 		severity: "high",
 		regex: /\bfromcharcode\b|\bcharcodeat\b|\bpowershell\b[^\n]*-enc\b/giu,
-		rationale: "Encoded PowerShell and charcode reconstruction are high-signal obfuscation patterns.",
+		rationale:
+			"Encoded PowerShell and charcode reconstruction are high-signal obfuscation patterns.",
 		references: [OWASP_LLM05, MITRE_T1027],
 	},
 ];
@@ -236,13 +239,15 @@ export const CATEGORY_INDEX = new Map<
 	GuardThreatCategory,
 	readonly ThreatPattern[]
 >(
-	([
-		"data_exfiltration",
-		"prompt_injection",
-		"destructive_ops",
-		"persistence",
-		"obfuscation",
-	] as const).map((category) => [
+	(
+		[
+			"data_exfiltration",
+			"prompt_injection",
+			"destructive_ops",
+			"persistence",
+			"obfuscation",
+		] as const
+	).map((category) => [
 		category,
 		THREAT_PATTERNS.filter((pattern) => pattern.category === category),
 	]),

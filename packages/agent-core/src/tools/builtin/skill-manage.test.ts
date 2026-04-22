@@ -5,8 +5,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { WriteAuthority } from "../../safety/write-authority.js";
 import { renderSkillsCatalog } from "../../skills/catalog-renderer.js";
 import { SkillsManager } from "../../skills/manager.js";
-import { createBuiltinTools } from "./index.js";
 import { ToolRouter } from "../router.js";
+import { createBuiltinTools } from "./index.js";
 
 const createdDirs: string[] = [];
 
@@ -18,7 +18,9 @@ async function createTempDir(): Promise<string> {
 
 afterEach(async () => {
 	await Promise.all(
-		createdDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })),
+		createdDirs
+			.splice(0)
+			.map((dir) => rm(dir, { recursive: true, force: true })),
 	);
 });
 
@@ -26,7 +28,10 @@ describe("builtin skill_manage tool", () => {
 	it("registers skill_manage when skillsManager and writeAuthority are available", () => {
 		const tools = createBuiltinTools({
 			skillsManager: new SkillsManager({}),
-			writeAuthority: new WriteAuthority({ mode: "ask", confirm: async () => true }),
+			writeAuthority: new WriteAuthority({
+				mode: "ask",
+				confirm: async () => true,
+			}),
 		});
 
 		expect(tools.map((tool) => tool.name)).toContain("skill_manage");
@@ -38,7 +43,10 @@ describe("builtin skill_manage tool", () => {
 		await skillsManager.discover();
 		const tools = createBuiltinTools({
 			skillsManager,
-			writeAuthority: new WriteAuthority({ mode: "ask", confirm: async () => true }),
+			writeAuthority: new WriteAuthority({
+				mode: "ask",
+				confirm: async () => true,
+			}),
 			skillManage: {
 				userRoot,
 			},
@@ -85,7 +93,10 @@ describe("builtin skill_manage tool", () => {
 		const skillsManager = new SkillsManager({ userRoots: [userRoot] });
 		const tools = createBuiltinTools({
 			skillsManager,
-			writeAuthority: new WriteAuthority({ mode: "ask", confirm: async () => true }),
+			writeAuthority: new WriteAuthority({
+				mode: "ask",
+				confirm: async () => true,
+			}),
 			skillManage: {
 				userRoot,
 			},

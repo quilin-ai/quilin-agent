@@ -131,7 +131,10 @@ export class MCPRegistry {
 
 	private rebuildShortNameIndex(): void {
 		this.shortNameIndex.clear();
-		for (const tool of [...this.builtinTools.values(), ...this.serverTools.values()]) {
+		for (const tool of [
+			...this.builtinTools.values(),
+			...this.serverTools.values(),
+		]) {
 			const shortName = getShortName(tool);
 			if (!this.shortNameIndex.has(shortName)) {
 				this.shortNameIndex.set(shortName, tool);

@@ -91,7 +91,10 @@ function normalizeMandatory(descriptor: SkillDescriptor): SkillDescriptor {
 	};
 }
 
-function compareSkillNames(left: SkillDescriptor, right: SkillDescriptor): number {
+function compareSkillNames(
+	left: SkillDescriptor,
+	right: SkillDescriptor,
+): number {
 	if (left.name < right.name) {
 		return -1;
 	}
@@ -115,10 +118,7 @@ function extractKeywords(input: string): readonly string[] {
 		.filter((keyword) => keyword.length > 0);
 }
 
-function scoreKeywordHits(
-	text: string,
-	keywords: readonly string[],
-): number {
+function scoreKeywordHits(text: string, keywords: readonly string[]): number {
 	if (keywords.length === 0) {
 		return 0;
 	}
@@ -169,7 +169,10 @@ function filterActiveSkills(
 ): readonly SkillDescriptor[] {
 	return descriptors
 		.filter((descriptor) =>
-			covers(turnContext.availableToolNames, descriptor.frontmatter.requiresTools),
+			covers(
+				turnContext.availableToolNames,
+				descriptor.frontmatter.requiresTools,
+			),
 		)
 		.filter((descriptor) =>
 			covers(
@@ -238,9 +241,10 @@ export function renderHotSkillsCatalog(
 	descriptors: readonly SkillDescriptor[],
 	turnContext: SkillsCatalogTurnContext,
 ): string {
-	const filteredDescriptors = filterActiveSkills(descriptors, turnContext).filter(
-		(descriptor) => !isStableSkill(descriptor),
-	);
+	const filteredDescriptors = filterActiveSkills(
+		descriptors,
+		turnContext,
+	).filter((descriptor) => !isStableSkill(descriptor));
 
 	const rankedDescriptors = filteredDescriptors
 		.map((descriptor) => ({

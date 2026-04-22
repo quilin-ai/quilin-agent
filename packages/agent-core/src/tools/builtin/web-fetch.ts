@@ -60,7 +60,11 @@ interface UndiciAgentConstructor {
 			readonly lookup: (
 				hostname: string,
 				options: unknown,
-				callback: (error: Error | null, address: string, family: number) => void,
+				callback: (
+					error: Error | null,
+					address: string,
+					family: number,
+				) => void,
 			) => void;
 		};
 	}): DispatcherResource;
@@ -174,7 +178,7 @@ async function defaultResolver(hostname: string): Promise<ResolverResult> {
 async function resolveAndCheckIP(
 	url: URL,
 	resolver: IPResolver = defaultResolver,
-) : Promise<ResolvedAddress> {
+): Promise<ResolvedAddress> {
 	const addresses = (await resolver(url.hostname)).map((address) => {
 		if (typeof address !== "string") {
 			return address;
@@ -253,7 +257,10 @@ function getRedirectRequest(
 	method: "GET" | "POST",
 	body: string | undefined,
 ) {
-	if (status === 303 || ((status === 301 || status === 302) && method === "POST")) {
+	if (
+		status === 303 ||
+		((status === 301 || status === 302) && method === "POST")
+	) {
 		return {
 			method: "GET" as const,
 			body: undefined,
@@ -310,7 +317,8 @@ function sanitizeHeaders(
 
 function validateResponseContentType(response: Response): string {
 	const contentType = response.headers.get("content-type") ?? "";
-	const normalizedContentType = contentType.split(";")[0]?.trim().toLowerCase() ?? "";
+	const normalizedContentType =
+		contentType.split(";")[0]?.trim().toLowerCase() ?? "";
 
 	if (
 		normalizedContentType === "" ||
@@ -412,7 +420,12 @@ export function createWebFetchTool(
 		category: "programmatic",
 		riskLevel: "read",
 		execute: async (args) => {
-			const { url, method = "GET", body, headers } = args as {
+			const {
+				url,
+				method = "GET",
+				body,
+				headers,
+			} = args as {
 				url: string;
 				method?: "GET" | "POST";
 				body?: string;
@@ -439,7 +452,9 @@ export function createWebFetchTool(
 			const resolver = options.resolver ?? defaultResolver;
 			const dispatcherFactory =
 				options.dispatcherFactory ??
-				(options.fetcher == null ? createDefaultDispatcherFactory() : undefined);
+				(options.fetcher == null
+					? createDefaultDispatcherFactory()
+					: undefined);
 			const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 			const maxRedirects = options.maxRedirects ?? DEFAULT_MAX_REDIRECTS;
 			const maxResponseBytes =
@@ -506,7 +521,10 @@ export function createWebFetchTool(
 
 					const contentType = validateResponseContentType(response);
 					validateResponseLength(response, maxResponseBytes);
-					const responseBody = await readResponseText(response, maxResponseBytes);
+					const responseBody = await readResponseText(
+						response,
+						maxResponseBytes,
+					);
 					const truncatedBody = truncateText(
 						responseBody,
 						options.maxBodyChars ?? DEFAULT_MAX_BODY_CHARS,

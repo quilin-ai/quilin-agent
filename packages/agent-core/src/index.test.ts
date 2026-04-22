@@ -72,14 +72,16 @@ describe("main", () => {
 		const provider = createMockProvider(() => model);
 		vi.mocked(createProvider).mockReturnValue(provider);
 		vi.mocked(getDefaultModel).mockReturnValue("deepseek-chat");
-		vi.mocked(generateText).mockResolvedValue(mockGenerateTextResult({
-			text: "Quilin Agent online.",
-			usage: {
-				promptTokens: 18,
-				completionTokens: 5,
-			},
-			finishReason: "stop",
-		}));
+		vi.mocked(generateText).mockResolvedValue(
+			mockGenerateTextResult({
+				text: "Quilin Agent online.",
+				usage: {
+					promptTokens: 18,
+					completionTokens: 5,
+				},
+				finishReason: "stop",
+			}),
+		);
 		mockConnect.mockResolvedValue([{ name: "memory_recall" }]);
 		mockDisconnect.mockResolvedValue(undefined);
 
@@ -137,14 +139,16 @@ describe("main", () => {
 		const serviceRunner = vi.fn().mockResolvedValue(undefined);
 		vi.mocked(createProvider).mockReturnValue(provider);
 		vi.mocked(getDefaultModel).mockReturnValue("deepseek-chat");
-		vi.mocked(generateText).mockResolvedValue(mockGenerateTextResult({
-			text: "Quilin Agent online.",
-			usage: {
-				inputTokens: 21,
-				outputTokens: 6,
-			},
-			finishReason: "stop",
-		}));
+		vi.mocked(generateText).mockResolvedValue(
+			mockGenerateTextResult({
+				text: "Quilin Agent online.",
+				usage: {
+					inputTokens: 21,
+					outputTokens: 6,
+				},
+				finishReason: "stop",
+			}),
+		);
 		mockConnect.mockResolvedValue([{ name: "memory_recall" }]);
 
 		const { main } = await import("./index.js");
@@ -176,14 +180,16 @@ describe("main", () => {
 		const provider = createMockProvider(() => model);
 		vi.mocked(createProvider).mockReturnValue(provider);
 		vi.mocked(getDefaultModel).mockReturnValue("deepseek-chat");
-		vi.mocked(generateText).mockResolvedValue(mockGenerateTextResult({
-			text: "Quilin Agent online.",
-			usage: {
-				promptTokens: 18,
-				completionTokens: 5,
-			},
-			finishReason: "stop",
-		}));
+		vi.mocked(generateText).mockResolvedValue(
+			mockGenerateTextResult({
+				text: "Quilin Agent online.",
+				usage: {
+					promptTokens: 18,
+					completionTokens: 5,
+				},
+				finishReason: "stop",
+			}),
+		);
 		mockConnect.mockResolvedValue([{ name: "memory_recall" }]);
 		mockDisconnect.mockResolvedValue(undefined);
 		process.argv = [
@@ -211,14 +217,16 @@ describe("main", () => {
 		const provider = createMockProvider(() => model);
 		vi.mocked(createProvider).mockReturnValue(provider);
 		vi.mocked(getDefaultModel).mockReturnValue("deepseek-chat");
-		vi.mocked(generateText).mockResolvedValue(mockGenerateTextResult({
-			text: "Quilin Agent online.",
-			usage: {
-				promptTokens: 18,
-				completionTokens: 5,
-			},
-			finishReason: "stop",
-		}));
+		vi.mocked(generateText).mockResolvedValue(
+			mockGenerateTextResult({
+				text: "Quilin Agent online.",
+				usage: {
+					promptTokens: 18,
+					completionTokens: 5,
+				},
+				finishReason: "stop",
+			}),
+		);
 		mockConnect.mockResolvedValue([{ name: "memory_recall" }]);
 		mockDisconnect.mockResolvedValue(undefined);
 		mockCheckpointList.mockResolvedValue(["latest-session", "older-session"]);

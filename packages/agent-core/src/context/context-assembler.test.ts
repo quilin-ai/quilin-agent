@@ -1,9 +1,9 @@
 import { describe, expect, test } from "vitest";
 import { TokenBudgetAllocator } from "./budget.js";
-import { ContextAssembler } from "./draft/context-assembler.js";
 import { createDefaultPromptSections } from "./default-sections.js";
-import { PromptBuilder } from "./prompt-builder.js";
+import { ContextAssembler } from "./draft/context-assembler.js";
 import type { ContextSource } from "./draft/source-types.js";
+import { PromptBuilder } from "./prompt-builder.js";
 
 function createAssembler() {
 	const builder = new PromptBuilder();

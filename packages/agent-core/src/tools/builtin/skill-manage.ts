@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { z } from "zod";
-import { WriteAuthority } from "../../safety/write-authority.js";
+import type { WriteAuthority } from "../../safety/write-authority.js";
 import { SkillManager } from "../../skills/manage.js";
 import type { SkillsManager } from "../../skills/manager.js";
 import type {
@@ -136,9 +136,7 @@ export function createSkillManageTool(
 		writeAuthority: options.writeAuthority,
 		userRoot: options.userRoot ?? resolve(homedir(), ".quilin/skills"),
 		projectRoot:
-			options.projectRoot == null
-				? undefined
-				: resolve(options.projectRoot),
+			options.projectRoot == null ? undefined : resolve(options.projectRoot),
 	});
 
 	return {
@@ -150,7 +148,9 @@ export function createSkillManageTool(
 		parameters: skillManageSchema,
 		async execute(args: unknown): Promise<ToolResult> {
 			try {
-				const action = toSkillManageAction(args as z.infer<typeof skillManageSchema>);
+				const action = toSkillManageAction(
+					args as z.infer<typeof skillManageSchema>,
+				);
 				const result = await manager.manage(action);
 				if (!result.ok) {
 					return createErrorResult(result.detail);

@@ -316,7 +316,9 @@ describe("MCPRegistry", () => {
 
 		const getAllToolsSpy = vi.spyOn(registry, "getAllTools");
 
-		expect(registry.findTool("memory_recall")?.name).toBe("memory/memory_recall");
+		expect(registry.findTool("memory_recall")?.name).toBe(
+			"memory/memory_recall",
+		);
 		expect(getAllToolsSpy).not.toHaveBeenCalled();
 	});
 });

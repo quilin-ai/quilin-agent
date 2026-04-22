@@ -27,14 +27,16 @@ describe("VercelLLMClient", () => {
 	});
 
 	it("maps messages and usage through generateText", async () => {
-		vi.mocked(generateText).mockResolvedValue(mockGenerateTextResult({
-			text: "hello from model",
-			usage: {
-				promptTokens: 12,
-				completionTokens: 34,
-			},
-			finishReason: "stop",
-		}));
+		vi.mocked(generateText).mockResolvedValue(
+			mockGenerateTextResult({
+				text: "hello from model",
+				usage: {
+					promptTokens: 12,
+					completionTokens: 34,
+				},
+				finishReason: "stop",
+			}),
+		);
 
 		const client = new VercelLLMClient(model);
 
@@ -92,21 +94,23 @@ describe("VercelLLMClient", () => {
 	});
 
 	it("maps provider metadata cache usage when generic usage omits cache breakdown", async () => {
-		vi.mocked(generateText).mockResolvedValue(mockGenerateTextResult({
-			text: "hello from cache",
-			usage: {
-				promptTokens: 12,
-				completionTokens: 34,
-			},
-			providerMetadata: {
-				deepseek: {
-					cacheReadTokens: 21,
-					cacheWriteTokens: 8,
-					cacheSource: "native",
+		vi.mocked(generateText).mockResolvedValue(
+			mockGenerateTextResult({
+				text: "hello from cache",
+				usage: {
+					promptTokens: 12,
+					completionTokens: 34,
 				},
-			},
-			finishReason: "stop",
-		}));
+				providerMetadata: {
+					deepseek: {
+						cacheReadTokens: 21,
+						cacheWriteTokens: 8,
+						cacheSource: "native",
+					},
+				},
+				finishReason: "stop",
+			}),
+		);
 
 		const client = new VercelLLMClient(model);
 
@@ -132,14 +136,16 @@ describe("VercelLLMClient", () => {
 			provider: "anthropic",
 			modelId: "claude-sonnet-4-5",
 		});
-		vi.mocked(generateText).mockResolvedValue(mockGenerateTextResult({
-			text: "cached",
-			usage: {
-				promptTokens: 6,
-				completionTokens: 2,
-			},
-			finishReason: "stop",
-		}));
+		vi.mocked(generateText).mockResolvedValue(
+			mockGenerateTextResult({
+				text: "cached",
+				usage: {
+					promptTokens: 6,
+					completionTokens: 2,
+				},
+				finishReason: "stop",
+			}),
+		);
 
 		const client = new VercelLLMClient(anthropicModel);
 
@@ -218,14 +224,16 @@ describe("VercelLLMClient", () => {
 				: deepseekChatModel,
 		);
 		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-		vi.mocked(generateText).mockResolvedValue(mockGenerateTextResult({
-			text: "reasoned",
-			usage: {
-				promptTokens: 9,
-				completionTokens: 3,
-			},
-			finishReason: "stop",
-		}));
+		vi.mocked(generateText).mockResolvedValue(
+			mockGenerateTextResult({
+				text: "reasoned",
+				usage: {
+					promptTokens: 9,
+					completionTokens: 3,
+				},
+				finishReason: "stop",
+			}),
+		);
 
 		const client = new VercelLLMClient({
 			model: deepseekChatModel,
@@ -264,14 +272,16 @@ describe("VercelLLMClient", () => {
 				: deepseekChatModel,
 		);
 		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-		vi.mocked(generateText).mockResolvedValue(mockGenerateTextResult({
-			text: "reasoned",
-			usage: {
-				promptTokens: 9,
-				completionTokens: 3,
-			},
-			finishReason: "stop",
-		}));
+		vi.mocked(generateText).mockResolvedValue(
+			mockGenerateTextResult({
+				text: "reasoned",
+				usage: {
+					promptTokens: 9,
+					completionTokens: 3,
+				},
+				finishReason: "stop",
+			}),
+		);
 
 		const client = new VercelLLMClient({
 			model: deepseekChatModel,
@@ -300,14 +310,16 @@ describe("VercelLLMClient", () => {
 			provider: "anthropic",
 			modelId: "claude-3-7-sonnet-latest",
 		});
-		vi.mocked(generateText).mockResolvedValue(mockGenerateTextResult({
-			text: "thinking",
-			usage: {
-				promptTokens: 7,
-				completionTokens: 5,
-			},
-			finishReason: "stop",
-		}));
+		vi.mocked(generateText).mockResolvedValue(
+			mockGenerateTextResult({
+				text: "thinking",
+				usage: {
+					promptTokens: 7,
+					completionTokens: 5,
+				},
+				finishReason: "stop",
+			}),
+		);
 
 		const client = new VercelLLMClient(anthropicModel);
 
@@ -338,35 +350,37 @@ describe("VercelLLMClient", () => {
 			provider: "anthropic",
 			modelId: "claude-3-7-sonnet-latest",
 		});
-		vi.mocked(generateText).mockResolvedValue(mockGenerateTextResult({
-			text: "final answer",
-			reasoning: [
-				{
-					type: "reasoning",
-					text: "step one",
-					providerMetadata: {
-						anthropic: {
-							signature: "sig-1",
+		vi.mocked(generateText).mockResolvedValue(
+			mockGenerateTextResult({
+				text: "final answer",
+				reasoning: [
+					{
+						type: "reasoning",
+						text: "step one",
+						providerMetadata: {
+							anthropic: {
+								signature: "sig-1",
+							},
 						},
 					},
-				},
-				{
-					type: "reasoning",
-					text: "step two",
-					providerMetadata: {
-						anthropic: {
-							signature: "sig-2",
+					{
+						type: "reasoning",
+						text: "step two",
+						providerMetadata: {
+							anthropic: {
+								signature: "sig-2",
+							},
 						},
 					},
+				],
+				reasoningText: "step onestep two",
+				usage: {
+					promptTokens: 7,
+					completionTokens: 5,
 				},
-			],
-			reasoningText: "step onestep two",
-			usage: {
-				promptTokens: 7,
-				completionTokens: 5,
-			},
-			finishReason: "stop",
-		}));
+				finishReason: "stop",
+			}),
+		);
 
 		const client = new VercelLLMClient(anthropicModel);
 
@@ -399,20 +413,22 @@ describe("VercelLLMClient", () => {
 			provider: "anthropic",
 			modelId: "claude-3-7-sonnet-latest",
 		});
-		vi.mocked(generateText).mockResolvedValue(mockGenerateTextResult({
-			text: "final answer",
-			reasoning: [
-				{
-					type: "reasoning",
-					text: "unsigned block",
+		vi.mocked(generateText).mockResolvedValue(
+			mockGenerateTextResult({
+				text: "final answer",
+				reasoning: [
+					{
+						type: "reasoning",
+						text: "unsigned block",
+					},
+				],
+				usage: {
+					promptTokens: 7,
+					completionTokens: 5,
 				},
-			],
-			usage: {
-				promptTokens: 7,
-				completionTokens: 5,
-			},
-			finishReason: "stop",
-		}));
+				finishReason: "stop",
+			}),
+		);
 
 		const client = new VercelLLMClient(anthropicModel);
 
@@ -441,25 +457,27 @@ describe("VercelLLMClient", () => {
 			provider: "openai",
 			modelId: "o4-mini",
 		});
-		vi.mocked(generateText).mockResolvedValue(mockGenerateTextResult({
-			text: "final answer",
-			reasoning: [
-				{
-					type: "reasoning",
-					text: "summary block",
-					providerMetadata: {
-						openai: {
-							itemId: "item-1",
+		vi.mocked(generateText).mockResolvedValue(
+			mockGenerateTextResult({
+				text: "final answer",
+				reasoning: [
+					{
+						type: "reasoning",
+						text: "summary block",
+						providerMetadata: {
+							openai: {
+								itemId: "item-1",
+							},
 						},
 					},
+				],
+				usage: {
+					promptTokens: 7,
+					completionTokens: 5,
 				},
-			],
-			usage: {
-				promptTokens: 7,
-				completionTokens: 5,
-			},
-			finishReason: "stop",
-		}));
+				finishReason: "stop",
+			}),
+		);
 
 		const client = new VercelLLMClient(openaiModel);
 
@@ -489,14 +507,16 @@ describe("VercelLLMClient", () => {
 			provider: "openai",
 			modelId: "o4-mini",
 		});
-		vi.mocked(generateText).mockResolvedValue(mockGenerateTextResult({
-			text: "reasoned",
-			usage: {
-				promptTokens: 7,
-				completionTokens: 5,
-			},
-			finishReason: "stop",
-		}));
+		vi.mocked(generateText).mockResolvedValue(
+			mockGenerateTextResult({
+				text: "reasoned",
+				usage: {
+					promptTokens: 7,
+					completionTokens: 5,
+				},
+				finishReason: "stop",
+			}),
+		);
 
 		const client = new VercelLLMClient(openaiModel);
 
@@ -524,14 +544,16 @@ describe("VercelLLMClient", () => {
 			modelId: "o4-mini",
 		});
 		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-		vi.mocked(generateText).mockResolvedValue(mockGenerateTextResult({
-			text: "reasoned",
-			usage: {
-				promptTokens: 7,
-				completionTokens: 5,
-			},
-			finishReason: "stop",
-		}));
+		vi.mocked(generateText).mockResolvedValue(
+			mockGenerateTextResult({
+				text: "reasoned",
+				usage: {
+					promptTokens: 7,
+					completionTokens: 5,
+				},
+				finishReason: "stop",
+			}),
+		);
 
 		const client = new VercelLLMClient(openaiModel);
 
@@ -549,14 +571,16 @@ describe("VercelLLMClient", () => {
 	});
 
 	it("maps non-stop finish reasons to length", async () => {
-		vi.mocked(generateText).mockResolvedValue(mockGenerateTextResult({
-			text: "truncated",
-			usage: {
-				promptTokens: 1,
-				completionTokens: 2,
-			},
-			finishReason: "length",
-		}));
+		vi.mocked(generateText).mockResolvedValue(
+			mockGenerateTextResult({
+				text: "truncated",
+				usage: {
+					promptTokens: 1,
+					completionTokens: 2,
+				},
+				finishReason: "length",
+			}),
+		);
 
 		const client = new VercelLLMClient(model);
 
@@ -570,21 +594,23 @@ describe("VercelLLMClient", () => {
 	});
 
 	it("maps tool calls from generateText", async () => {
-		vi.mocked(generateText).mockResolvedValue(mockGenerateTextResult({
-			text: "",
-			usage: {
-				promptTokens: 1,
-				completionTokens: 2,
-			},
-			finishReason: "tool-calls",
-			toolCalls: [
-				{
-					toolCallId: "call-1",
-					toolName: "memory_recall",
-					input: { query: "小明" },
+		vi.mocked(generateText).mockResolvedValue(
+			mockGenerateTextResult({
+				text: "",
+				usage: {
+					promptTokens: 1,
+					completionTokens: 2,
 				},
-			],
-		}));
+				finishReason: "tool-calls",
+				toolCalls: [
+					{
+						toolCallId: "call-1",
+						toolName: "memory_recall",
+						input: { query: "小明" },
+					},
+				],
+			}),
+		);
 
 		const client = new VercelLLMClient(model);
 
@@ -616,14 +642,16 @@ describe("VercelLLMClient", () => {
 	});
 
 	it("maps assistant tool calls and tool results back into AI SDK messages", async () => {
-		vi.mocked(generateText).mockResolvedValue(mockGenerateTextResult({
-			text: "你叫小明。",
-			usage: {
-				promptTokens: 8,
-				completionTokens: 9,
-			},
-			finishReason: "stop",
-		}));
+		vi.mocked(generateText).mockResolvedValue(
+			mockGenerateTextResult({
+				text: "你叫小明。",
+				usage: {
+					promptTokens: 8,
+					completionTokens: 9,
+				},
+				finishReason: "stop",
+			}),
+		);
 
 		const client = new VercelLLMClient(model);
 
@@ -713,38 +741,40 @@ describe("StreamingLLMClient", () => {
 			modelId: "deepseek-reasoner",
 		});
 
-		vi.mocked(streamText).mockReturnValue(mockStreamTextResult({
-			fullStream: (async function* () {
-				yield { type: "reasoning-start", id: "r-1" };
-				yield { type: "reasoning-delta", id: "r-1", delta: "step " };
-				yield { type: "reasoning-delta", id: "r-1", delta: "one" };
-				yield { type: "tool-input-start", id: "call-1", toolName: "search" };
-				yield { type: "tool-input-delta", id: "call-1", delta: '{"q":' };
-				yield { type: "tool-input-delta", id: "call-1", delta: '"hi"}' };
-				yield { type: "tool-input-end", id: "call-1" };
-				yield {
-					type: "tool-call",
-					toolCallId: "call-1",
-					toolName: "search",
-					input: { q: "hi" },
-				};
-				yield {
-					type: "tool-result",
-					toolCallId: "call-1",
-					toolName: "search",
-					output: { answer: "ok" },
-				};
-				yield { type: "text-start", id: "t-1" };
-				yield { type: "text-delta", id: "t-1", delta: "hel" };
-				yield { type: "text-delta", id: "t-1", delta: "lo" };
-				yield { type: "text-end", id: "t-1" };
-			})(),
-			usage: Promise.resolve({
-				promptTokens: 5,
-				completionTokens: 7,
+		vi.mocked(streamText).mockReturnValue(
+			mockStreamTextResult({
+				fullStream: (async function* () {
+					yield { type: "reasoning-start", id: "r-1" };
+					yield { type: "reasoning-delta", id: "r-1", delta: "step " };
+					yield { type: "reasoning-delta", id: "r-1", delta: "one" };
+					yield { type: "tool-input-start", id: "call-1", toolName: "search" };
+					yield { type: "tool-input-delta", id: "call-1", delta: '{"q":' };
+					yield { type: "tool-input-delta", id: "call-1", delta: '"hi"}' };
+					yield { type: "tool-input-end", id: "call-1" };
+					yield {
+						type: "tool-call",
+						toolCallId: "call-1",
+						toolName: "search",
+						input: { q: "hi" },
+					};
+					yield {
+						type: "tool-result",
+						toolCallId: "call-1",
+						toolName: "search",
+						output: { answer: "ok" },
+					};
+					yield { type: "text-start", id: "t-1" };
+					yield { type: "text-delta", id: "t-1", delta: "hel" };
+					yield { type: "text-delta", id: "t-1", delta: "lo" };
+					yield { type: "text-end", id: "t-1" };
+				})(),
+				usage: Promise.resolve({
+					promptTokens: 5,
+					completionTokens: 7,
+				}),
+				finishReason: Promise.resolve("stop"),
 			}),
-			finishReason: Promise.resolve("stop"),
-		}));
+		);
 
 		const client = new StreamingLLMClient(streamingModel, (event) => {
 			events.push(event);
@@ -808,35 +838,37 @@ describe("StreamingLLMClient", () => {
 
 	it("buffers tool-input deltas until the tool name is known", async () => {
 		const events: unknown[] = [];
-		vi.mocked(streamText).mockReturnValue(mockStreamTextResult({
-			fullStream: (async function* () {
-				yield { type: "tool-input-delta", id: "call-1", delta: '{"q":' };
-				yield {
-					type: "tool-input-start",
-					id: "call-1",
-					toolName: "search",
-				};
-				yield { type: "tool-input-delta", id: "call-1", delta: '"hi"}' };
-				yield {
-					type: "tool-call",
-					toolCallId: "call-1",
-					toolName: "search",
-					input: { q: "hi" },
-				};
-			})(),
-			usage: Promise.resolve({
-				promptTokens: 5,
-				completionTokens: 7,
+		vi.mocked(streamText).mockReturnValue(
+			mockStreamTextResult({
+				fullStream: (async function* () {
+					yield { type: "tool-input-delta", id: "call-1", delta: '{"q":' };
+					yield {
+						type: "tool-input-start",
+						id: "call-1",
+						toolName: "search",
+					};
+					yield { type: "tool-input-delta", id: "call-1", delta: '"hi"}' };
+					yield {
+						type: "tool-call",
+						toolCallId: "call-1",
+						toolName: "search",
+						input: { q: "hi" },
+					};
+				})(),
+				usage: Promise.resolve({
+					promptTokens: 5,
+					completionTokens: 7,
+				}),
+				finishReason: Promise.resolve("tool-calls"),
+				toolCalls: Promise.resolve([
+					{
+						toolCallId: "call-1",
+						toolName: "search",
+						input: { q: "hi" },
+					},
+				]),
 			}),
-			finishReason: Promise.resolve("tool-calls"),
-			toolCalls: Promise.resolve([
-				{
-					toolCallId: "call-1",
-					toolName: "search",
-					input: { q: "hi" },
-				},
-			]),
-		}));
+		);
 
 		const client = new StreamingLLMClient(model, (event) => {
 			events.push(event);
@@ -878,43 +910,45 @@ describe("StreamingLLMClient", () => {
 			modelId: "claude-3-7-sonnet-latest",
 		});
 
-		vi.mocked(streamText).mockReturnValue(mockStreamTextResult({
-			fullStream: (async function* () {
-				yield { type: "reasoning-start", id: "r-1" };
-				yield { type: "reasoning-delta", id: "r-1", delta: "step one" };
-				yield {
-					type: "reasoning-delta",
-					id: "r-1",
-					delta: "",
-					providerMetadata: {
-						anthropic: {
-							signature: "sig-1",
+		vi.mocked(streamText).mockReturnValue(
+			mockStreamTextResult({
+				fullStream: (async function* () {
+					yield { type: "reasoning-start", id: "r-1" };
+					yield { type: "reasoning-delta", id: "r-1", delta: "step one" };
+					yield {
+						type: "reasoning-delta",
+						id: "r-1",
+						delta: "",
+						providerMetadata: {
+							anthropic: {
+								signature: "sig-1",
+							},
 						},
-					},
-				};
-				yield { type: "reasoning-end", id: "r-1" };
-				yield { type: "text-delta", id: "t-1", delta: "partial " };
-				yield { type: "reasoning-start", id: "r-2" };
-				yield { type: "reasoning-delta", id: "r-2", delta: "step two" };
-				yield {
-					type: "reasoning-delta",
-					id: "r-2",
-					delta: "",
-					providerMetadata: {
-						anthropic: {
-							signature: "sig-2",
+					};
+					yield { type: "reasoning-end", id: "r-1" };
+					yield { type: "text-delta", id: "t-1", delta: "partial " };
+					yield { type: "reasoning-start", id: "r-2" };
+					yield { type: "reasoning-delta", id: "r-2", delta: "step two" };
+					yield {
+						type: "reasoning-delta",
+						id: "r-2",
+						delta: "",
+						providerMetadata: {
+							anthropic: {
+								signature: "sig-2",
+							},
 						},
-					},
-				};
-				yield { type: "reasoning-end", id: "r-2" };
-				yield { type: "text-delta", id: "t-1", delta: "answer" };
-			})(),
-			usage: Promise.resolve({
-				promptTokens: 5,
-				completionTokens: 7,
+					};
+					yield { type: "reasoning-end", id: "r-2" };
+					yield { type: "text-delta", id: "t-1", delta: "answer" };
+				})(),
+				usage: Promise.resolve({
+					promptTokens: 5,
+					completionTokens: 7,
+				}),
+				finishReason: Promise.resolve("stop"),
 			}),
-			finishReason: Promise.resolve("stop"),
-		}));
+		);
 
 		const client = new StreamingLLMClient(anthropicModel);
 
@@ -939,23 +973,25 @@ describe("StreamingLLMClient", () => {
 	});
 
 	it("maps streamed provider metadata cache usage", async () => {
-		vi.mocked(streamText).mockReturnValue(mockStreamTextResult({
-			fullStream: (async function* () {
-				yield { type: "text-delta", id: "t-1", delta: "hi" };
-			})(),
-			usage: Promise.resolve({
-				promptTokens: 5,
-				completionTokens: 7,
+		vi.mocked(streamText).mockReturnValue(
+			mockStreamTextResult({
+				fullStream: (async function* () {
+					yield { type: "text-delta", id: "t-1", delta: "hi" };
+				})(),
+				usage: Promise.resolve({
+					promptTokens: 5,
+					completionTokens: 7,
+				}),
+				providerMetadata: Promise.resolve({
+					deepseek: {
+						cacheReadTokens: 11,
+						cacheWriteTokens: 4,
+						cacheSource: "native",
+					},
+				}),
+				finishReason: Promise.resolve("stop"),
 			}),
-			providerMetadata: Promise.resolve({
-				deepseek: {
-					cacheReadTokens: 11,
-					cacheWriteTokens: 4,
-					cacheSource: "native",
-				},
-			}),
-			finishReason: Promise.resolve("stop"),
-		}));
+		);
 
 		const client = new StreamingLLMClient(model);
 
@@ -977,19 +1013,21 @@ describe("StreamingLLMClient", () => {
 	});
 
 	it("throws when fullStream emits an error chunk", async () => {
-		vi.mocked(streamText).mockReturnValue(mockStreamTextResult({
-			fullStream: (async function* () {
-				yield {
-					type: "error",
-					error: new Error("stream exploded"),
-				};
-			})(),
-			usage: Promise.resolve({
-				promptTokens: 3,
-				completionTokens: 4,
+		vi.mocked(streamText).mockReturnValue(
+			mockStreamTextResult({
+				fullStream: (async function* () {
+					yield {
+						type: "error",
+						error: new Error("stream exploded"),
+					};
+				})(),
+				usage: Promise.resolve({
+					promptTokens: 3,
+					completionTokens: 4,
+				}),
+				finishReason: Promise.resolve("stop"),
 			}),
-			finishReason: Promise.resolve("stop"),
-		}));
+		);
 
 		const client = new StreamingLLMClient(model);
 
@@ -1003,21 +1041,23 @@ describe("StreamingLLMClient", () => {
 	});
 
 	it("maps tool calls from streamText", async () => {
-		vi.mocked(streamText).mockReturnValue(mockStreamTextResult({
-			fullStream: (async function* () {})(),
-			usage: Promise.resolve({
-				promptTokens: 3,
-				completionTokens: 4,
+		vi.mocked(streamText).mockReturnValue(
+			mockStreamTextResult({
+				fullStream: (async function* () {})(),
+				usage: Promise.resolve({
+					promptTokens: 3,
+					completionTokens: 4,
+				}),
+				finishReason: Promise.resolve("tool-calls"),
+				toolCalls: Promise.resolve([
+					{
+						toolCallId: "call-2",
+						toolName: "memory_store",
+						input: { content: "我叫小明", tier: "short" },
+					},
+				]),
 			}),
-			finishReason: Promise.resolve("tool-calls"),
-			toolCalls: Promise.resolve([
-				{
-					toolCallId: "call-2",
-					toolName: "memory_store",
-					input: { content: "我叫小明", tier: "short" },
-				},
-			]),
-		}));
+		);
 
 		const client = new StreamingLLMClient(model);
 

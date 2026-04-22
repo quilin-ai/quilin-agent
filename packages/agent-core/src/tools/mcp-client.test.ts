@@ -102,9 +102,7 @@ describe.sequential("MCPClientManager", () => {
 		vi.useFakeTimers();
 		const manager = new MCPClientManager();
 		const slowClient = {
-			callTool: vi.fn(
-				() => new Promise<never>(() => undefined),
-			),
+			callTool: vi.fn(() => new Promise<never>(() => undefined)),
 		};
 
 		Object.assign(manager as object, {
@@ -299,9 +297,9 @@ describe.sequential("MCPClientManager", () => {
 				memoryStore?.parameters.safeParse({ content: "hello", tier: "working" })
 					.success,
 			).toBe(true);
-			expect(memoryStore?.parameters.safeParse({ tier: "working" }).success).toBe(
-				false,
-			);
+			expect(
+				memoryStore?.parameters.safeParse({ tier: "working" }).success,
+			).toBe(false);
 			expect(
 				memoryStore?.parameters.safeParse({ content: "hello", tier: "short" })
 					.success,

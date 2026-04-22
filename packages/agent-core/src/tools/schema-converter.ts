@@ -30,7 +30,10 @@ export interface JsonSchemaArray extends JsonSchemaBase {
 
 export type JsonSchema = JsonSchemaObject | JsonSchemaArray | JsonSchemaBase;
 
-function fallbackToUnknown(schema: JsonSchema, schemaType: string): z.ZodUnknown {
+function fallbackToUnknown(
+	schema: JsonSchema,
+	schemaType: string,
+): z.ZodUnknown {
 	logger.warn(
 		{
 			schemaType,
@@ -69,10 +72,10 @@ export function jsonSchemaToZod(schema: JsonSchema): z.ZodTypeAny {
 				schema.enum.length > 0 &&
 				schema.enum.every((value) => typeof value === "string")
 			) {
-				return z.enum([
-					schema.enum[0],
-					...schema.enum.slice(1),
-				] as [string, ...string[]]);
+				return z.enum([schema.enum[0], ...schema.enum.slice(1)] as [
+					string,
+					...string[],
+				]);
 			}
 			return z.string();
 		case "number":
@@ -90,9 +93,7 @@ export function jsonSchemaToZod(schema: JsonSchema): z.ZodTypeAny {
 		case "object": {
 			const objectSchema = schema as JsonSchemaObject;
 			const required = new Set<string>(objectSchema.required ?? []);
-			return z.object(
-				toRequiredShape(objectSchema.properties ?? {}, required),
-			);
+			return z.object(toRequiredShape(objectSchema.properties ?? {}, required));
 		}
 		default:
 			return fallbackToUnknown(schema, schema.type ?? "unknown");

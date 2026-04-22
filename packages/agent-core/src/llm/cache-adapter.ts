@@ -71,33 +71,33 @@ function toSdkMessage(message: Message): ModelMessage[] {
 				})),
 			];
 
-				return [
-					{
-						role: "assistant",
-						content,
-					} satisfies ModelMessage,
-				];
-			}
+			return [
+				{
+					role: "assistant",
+					content,
+				} satisfies ModelMessage,
+			];
+		}
 
 		case "tool": {
 			if (message.toolCallId == null || message.name == null) {
 				return [];
 			}
 
-				return [
-					{
-						role: "tool",
+			return [
+				{
+					role: "tool",
 					content: [
 						{
 							type: "tool-result",
 							toolCallId: message.toolCallId,
 							toolName: message.name,
-								output: parseToolOutput(message.content),
-							},
-						],
-					} satisfies ModelMessage,
-				];
-			}
+							output: parseToolOutput(message.content),
+						},
+					],
+				} satisfies ModelMessage,
+			];
+		}
 
 		default:
 			return [];

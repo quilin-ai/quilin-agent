@@ -1,8 +1,8 @@
 import {
-	mkdtemp,
 	mkdir,
-	readFile,
+	mkdtemp,
 	readdir,
+	readFile,
 	rm,
 	symlink,
 	writeFile,
@@ -257,7 +257,11 @@ describe("builtin file tools", () => {
 			"export const deep = true;\n",
 			"utf8",
 		);
-		await writeFile(join(tempDir, "docs", "guide", "intro.md"), "# intro\n", "utf8");
+		await writeFile(
+			join(tempDir, "docs", "guide", "intro.md"),
+			"# intro\n",
+			"utf8",
+		);
 		const tool = createFileListTool({ allowedRoots: [tempDir] });
 
 		const tsResult = await tool.execute({
@@ -332,7 +336,11 @@ describe("builtin file tools", () => {
 
 		vi.stubEnv("HOME", fakeHome);
 		await mkdir(awsDir, { recursive: true });
-		await writeFile(credentialsPath, "[default]\naws_access_key_id=test\n", "utf8");
+		await writeFile(
+			credentialsPath,
+			"[default]\naws_access_key_id=test\n",
+			"utf8",
+		);
 
 		const tool = createFileReadTool({ allowedRoots: [fakeHome] });
 		const result = await tool.execute({ path: credentialsPath });

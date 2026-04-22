@@ -64,7 +64,9 @@ function createSubject(options: {
 
 afterEach(async () => {
 	await Promise.all(
-		createdDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })),
+		createdDirs
+			.splice(0)
+			.map((dir) => rm(dir, { recursive: true, force: true })),
 	);
 });
 
@@ -89,7 +91,10 @@ describe("SkillManager", () => {
 			}),
 		});
 		expect(skillsManager.findByName("new-skill")).toBeDefined();
-		const markdown = await readFile(join(userRoot, "new-skill", "SKILL.md"), "utf8");
+		const markdown = await readFile(
+			join(userRoot, "new-skill", "SKILL.md"),
+			"utf8",
+		);
 		expect(markdown).toContain("name: new-skill");
 		expect(markdown).toContain("# New Skill");
 	});
@@ -320,7 +325,10 @@ describe("SkillManager", () => {
 		});
 
 		expect(result.ok).toBe(true);
-		const markdown = await readFile(join(userRoot, "update-me", "SKILL.md"), "utf8");
+		const markdown = await readFile(
+			join(userRoot, "update-me", "SKILL.md"),
+			"utf8",
+		);
 		const parsed = parseSkillMarkdown(markdown);
 		expect(parsed.frontmatter.description).toBe("Updated description");
 		expect(parsed.frontmatter.allowedTools).toEqual(["web_fetch"]);
@@ -699,7 +707,8 @@ describe("SkillManager", () => {
 		const guard: SkillsGuard = {
 			scan: vi.fn(() => ({
 				kind: "deny" as const,
-				detail: "skills_guard denied denied-create due to matched threat patterns",
+				detail:
+					"skills_guard denied denied-create due to matched threat patterns",
 				findings: [
 					{
 						category: "destructive_ops" as const,
