@@ -6,7 +6,10 @@
     { "pattern": "^https?://.*\\.internal" },
     { "pattern": "^mailto:" },
     { "pattern": "^upstreams/" },
-    { "pattern": "^#" }
+    { "pattern": "^#" },
+    { "pattern": "^/Users/" },
+    { "pattern": "^https?://zhuanlan\\.zhihu\\.com" },
+    { "pattern": "^https?://openai\\.com/index/" }
   ],
   "replacementPatterns": [
     {

@@ -79,7 +79,7 @@ Iter D 要引入 Agent Mesh —— Quilin 实例之间（或 Quilin ↔ 异构 a
 - [A2A Protocol spec v1.0 (2026-04)](https://a2a-protocol.org/latest/specification/)
 - [Google Cloud: A2A upgrade announcement](https://cloud.google.com/blog/products/ai-machine-learning/agent2agent-protocol-is-getting-an-upgrade)
 - [MCP 2026 transport roadmap](https://blog.modelcontextprotocol.io/posts/2025-12-19-mcp-transport-future/)（MCP 官方说明 A2A 是互补协议）
-- [Microsoft Semantic Kernel A2A integration](https://learn.microsoft.com/en-us/semantic-kernel/concepts/agents)（作为生态采用参考）
+- [Microsoft Semantic Kernel Agent Framework](https://learn.microsoft.com/en-us/semantic-kernel/frameworks/agent/)（作为生态采用参考）
 
 ---
 
