@@ -1,10 +1,11 @@
 ---
 title: Skills B3b Phase 4 — Post-compact 恢复 + file watcher (tracking)
-status: in-progress
-owner: Codex (draft) + Claude (review)
+status: completed
+owner: Codex (impl) + Claude (review / §8.1 commit)
 created: 2026-04-22
 last_updated: 2026-04-22
-closure_commits: []
+completed_at: 2026-04-22
+closure_commits: [1f74adb, 93141c5]
 predecessors:
   - docs/planning/2026-04-21-01-skills-b3b-activation.md  # Phase 4 总 spec (§Phases L179-199)
   - docs/planning/2026-04-22-04-skills-b3b-phase-1.md     # hot_skills / stable prefix / P1 closure
@@ -226,18 +227,18 @@ interface PostCompactRestoreOptions {
 
 ## 完成定义(Phase 4 done)
 
-- [ ] P4-a / P4-b 代码合入 master,无 tsc error
-- [ ] `postCompactRestore()` 契约成立: ≤5 skills / ≤5K each / ≤25K total
-- [ ] restore 块位于 `<hot_skills>` 之后,且 `staticPrefix` hash 不变
-- [ ] `skill_view` 成功调用会更新 `sessionState.skills.recentSkillNames`（newest-first、去重、bounded）
-- [ ] watcher 经过 200ms debounce 后可触发 catalog 热更新
-- [ ] `manager.test.ts` / `repl.test.ts` / `context` 集成测试补齐
-- [ ] **R-03 token budget contract** 通过
-- [ ] `bunx vitest run` 全绿
-- [ ] CI tsc hard gate 通过
-- [ ] `2026-04-21-01-skills-b3b-activation.md §Phases L179 Phase 4` ⏳ → ✅
-- [ ] 本文件 status:`planning` → `in-progress` → `completed`
-- [ ] closure_commits 回填 P4-a / P4-b commit hash
+- [x] P4-a / P4-b 代码合入 master,无 tsc error（`1f74adb` + `93141c5`,tsc exit 0）
+- [x] `postCompactRestore()` 契约成立: ≤5 skills / ≤5K each / ≤25K total（`manager.ts` L234+,`manager.test.ts` 覆盖）
+- [x] restore 块位于 `<hot_skills>` 之后,且 `staticPrefix` hash 不变（`skills-catalog-section.ts` `POST_COMPACT_SKILLS_ORDER=60`）
+- [x] `skill_view` 成功调用会更新 `sessionState.skills.recentSkillNames`（newest-first、去重、bounded）（`skill-view.ts` → `recordViewedSkill` → `repl.ts getSessionState`）
+- [x] watcher 经过 200ms debounce 后可触发 catalog 热更新（`manager.ts scheduleRescan` + `manager.test.ts` fake-timer 用例）
+- [x] `manager.test.ts` / `repl.test.ts` / `context` 集成测试补齐（P4-a +7 / P4-b +6 用例）
+- [x] **R-03 token budget contract** 通过（`estimateTokens` per-candidate + 总预算 short-circuit）
+- [x] `vitest run --configLoader runner` 全绿（41 files / 358 tests）
+- [x] CI tsc hard gate 通过（本地 `bunx tsc --noEmit -p packages/agent-core/tsconfig.json` exit 0,CI 同配置）
+- [x] `2026-04-21-01-skills-b3b-activation.md §Phases L181 Phase 4` ⏳ → ✅（本 closure 同步翻转）
+- [x] 本文件 status:`in-progress` → `completed`
+- [x] closure_commits 回填 `1f74adb`(P4-a) / `93141c5`(P4-b)
 
 ## 风险
 
