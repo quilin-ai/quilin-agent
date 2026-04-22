@@ -622,7 +622,7 @@ observability:
 
 #### 9. Lunary
 - **定位**：开源 GenAI 监控 + 分析 + prompt 管理平台
-- **GitHub**：[lunary-ai/lunary](https://github.com/lunary-ai/lunary)
+- **GitHub**：lunary-ai/lunary（repo 已下线，2026-04-22 验证 404）
 - **核心特性**：Apache 2.0 开源、自托管友好；聊天回放（对话历史时间线）；用户分析（用户粒度的使用统计）；内置 PII 脱敏和内容过滤
 - **局限**：功能集相对有限，更适合聊天机器人场景而非复杂 Agent
 
