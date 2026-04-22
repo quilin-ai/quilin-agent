@@ -12,6 +12,8 @@ import { MCPClientManager } from "./tools/mcp-client.js";
 export * from "./context/index.js";
 export * from "./llm/client.js";
 export * from "./llm/provider.js";
+export { runAgentLoop } from "./loop.js";
+export type { AgentLoopConfig, LoopHooks } from "./loop-types.js";
 export * from "./repl.js";
 export * from "./safety/write-authority.js";
 export * from "./state/checkpoint.js";

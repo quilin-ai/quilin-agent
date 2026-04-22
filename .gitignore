@@ -49,6 +49,7 @@ target/
 
 # === Data ===
 data/
+.benchmarks/
 
 # === IDE ===
 .idea/
