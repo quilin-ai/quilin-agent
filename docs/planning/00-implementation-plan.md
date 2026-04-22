@@ -1,8 +1,8 @@
 # Quilin Agent 实现规划
 
 > **状态（2026-04-22 实证更新）**：
-> - Phase 0 ✅ v0.0.3 | Iter A ✅ v0.1.0-iter-a | **Iter B 进行中**
-> - Iter B 当前落点：B1 ✅、B2 ✅、B3a ✅、**B3b ✅ Phase 0/1/2/3/4**。技能细节以 `docs/planning/2026-04-21-01-skills-b3b-activation.md` 和 `docs/engineering/13-skills/README.md` 为准。
+> - Phase 0 ✅ v0.0.3 | Iter A ✅ v0.1.0-iter-a | **Iter B 基本完成**（B1 ✅ / B2 ✅ / B3a ✅ / B3b ✅ Phase 0-4；tiny-classifier spike 已降级到 Iter D 研究）；Iter C 尚未开工，Iter E1 harness 已开工（planning doc `2026-04-22-10-iter-e1-harness-bootstrap.md`）
+> - Iter B 当前落点：B1 ✅、B2 ✅、B3a ✅、**B3b ✅ Phase 0/1/2/3/4**（post-compact 恢复 + file watcher：`1f74adb` / `93141c5`）。技能细节以 `docs/planning/2026-04-21-01-skills-b3b-activation.md` 和 `docs/engineering/13-skills/README.md` 为准。
 > - `loop.ts` **191 LOC**（commit `776300e` 把 helpers 抽到 `loop-types.ts`，CC-01 <200 契约已守住；演进链 407 → 212 (`0464377`) → 191 (`776300e`)）
 > - OmniMem L3a observer gate 仍失败（recall 21.4% / 中文 0%）；Iter D Sprint 0 决定 ML-first 或降级 opt-in
 >
@@ -17,7 +17,7 @@
 - 核心架构决策已定稿（ADR-001）
 - Phase 0 已完成（v0.0.3）：Agent Loop + OmniMem MCP + REPL + 78 tests
 - Iter A 已完成（v0.1.0-iter-a）：上下文工程 + 提示词工程（PromptBuilder, ContextAssembler, InjectionScanner, TemporalAwareness, MemoryBridge）+ 91 tests
-- Iter B 进行中：B1 tool substrate ✅；B2 Safety Policy ✅（WriteAuthority + pre/post hooks + Two-Strike + classifier 均已合并）；B3a Skills Core ✅；B3b Activation 已完成 Phase 0/1/2/3/4（条件激活 + CRUD + skills_guard + post-compact 恢复 + file watcher 全部落地）
+- Iter B 基本完成：B1 tool substrate ✅；B2 Safety Policy ✅（WriteAuthority + pre/post hooks + Two-Strike + classifier 均已合并；tiny-classifier spike 降级到 Iter D 研究实验）；B3a Skills Core ✅；B3b Activation 已完成 Phase 0/1/2/3/4（条件激活 + CRUD + skills_guard + post-compact 恢复 + file watcher 全部落地）。下一迭代视优先级在 Iter C（Planning Core）或 Iter E1（benchmark harness 已由 Codex 开工）之间切入。
 
 ---
 
@@ -224,7 +224,7 @@ Iter F: Scale-Out + Memory Depth + Self-Evolution
 | **1** | 条件激活 + KV-cache friendly catalog(稳定前缀 lex-sort + `<hot_skills>` ≤10 可变段,D-13) | ✅ `a9ef022` / `86f4512` / `338c607` |
 | **2** | `skill_manage` CRUD + WriteAuthority 集成(R-01 critical,落盘单一 gate) | ✅ `b5a9474` / `a5140da` / `29d6c18` |
 | **3** | skills_guard 内容扫描 + 4 级信任策略(builtin/trusted/community/agent-created) | ✅ `c2954f6` / `35886f3` / `0fae827` |
-| **4** | Post-compact 恢复(保留最近 5 个 ≤25K token) + file watcher 热发现 | ⏳ pending(tracking doc `2026-04-22-07-skills-b3b-phase-4.md` 规划中) |
+| **4** | Post-compact 恢复(保留最近 5 个 ≤25K token) + file watcher 热发现 | ✅ `1f74adb`（P4-a postCompactRestore + recentSkillNames）/ `93141c5`（P4-b watcher lifecycle + catalog diff + cache eviction）— tracking doc：`2026-04-22-07-skills-b3b-phase-4.md` |
 
 **Phase 0-4 已完成**：frontmatter schema v2 reader、条件激活 + stable prefix / hot_skills、`skill_manage` CRUD + WriteAuthority、skills_guard + 4 级信任策略 × 4 级严重度矩阵、post-compact 恢复（≤5/≤5K/≤25K）+ file watcher 生命周期（200ms debounce + catalog diff + cache eviction）全部落地。reader / trust 分层 / CRUD / guard / restore / watcher 细节留在对应 tracking doc，不在本计划文档重复展开。
 
