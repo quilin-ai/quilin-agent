@@ -71,8 +71,8 @@ threat_surface_delta:
 
 | # | 名称 | 状态 | Owner | Commit | 备注 |
 |---|---|---|---|---|---|
-| E1-a | `benchmarks/` 目录 + dataset 下载器 | pending | Codex | — | 纯 infra，无 LLM 调用 |
-| E1-b | SWE-bench Lite task loader + golden patch loader | pending | Codex | — | 读 jsonl，parse，exposez iterator |
+| E1-a | `benchmarks/` 目录 + dataset 下载器 | ✅ completed | Codex | `2bb25d7` | 纯 infra，无 LLM 调用；tracking: `2026-04-22-11-iter-e1-a-benchmarks-workspace.md` |
+| E1-b | SWE-bench Lite task loader + golden patch loader | in-progress → closing | Claude（Codex token-depleted） | pending commit | 读 jsonl，parse，expose iterator；tracking: `2026-04-22-12-iter-e1-b-task-loader.md` |
 | E1-c | Runner + cost tracker + 10 题线性跑通 | pending | Codex | — | 本 E1 的 verification 出口 |
 | E1-d | Evaluator adapter（调 SWE-bench 官方评分器，per-task pass/fail） | pending | Codex | — | 可选插件 — E2 开工前必备但 MVP 可留 stub |
 
