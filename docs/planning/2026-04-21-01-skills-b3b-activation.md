@@ -1,6 +1,6 @@
 ---
 title: Iter B3b — Skills Activation (M1)
-status: in-progress
+status: completed
 owner: Claude (plan) + Codex (impl)
 created: 2026-04-21
 last_updated: 2026-04-22
@@ -80,8 +80,8 @@ B3b 不做：M2+ 的 Plugin 平台、Background nudge 自进化、ToolSearch 延
 |---|---|---|---|---|---|
 | 0 | Frontmatter schema v2 + D-17 kebab-case alias | ✅ completed | Codex | `bc93f42` | parser 解锁 M1 字段 + `metadata.quilin.*` + source-based trust defaults；CC-03 从本 phase 剥离为独立 cluster |
 | 1 | 条件激活 + KV-cache friendly catalog (D-13) | ✅ completed | Codex | `338c607` | 稳定前缀 lex-sort + `<hot_skills>` ≤10;tracking:`2026-04-22-04-skills-b3b-phase-1.md`(P1-a `a9ef022` / P1-b `86f4512` / P1-c `338c607`) |
-| 2 | skill_manage CRUD + WriteAuthority 集成 | ⏳ pending | Codex | — | **R-01 critical**：落盘必须过单一 WriteAuthority gate |
-| 3 | skills_guard 内容扫描 + 4 级信任策略 | ⏳ pending | Codex | — | 借用 07 分类器基础设施；trust=agent-created 自动 ask |
+| 2 | skill_manage CRUD + WriteAuthority 集成 | ✅ completed | Codex | `b5a9474` + `a5140da` + `29d6c18`（closure `da70737`）| **R-01 critical**：落盘过单一 WriteAuthority gate 已落地；tracking: `2026-04-22-05-skills-b3b-phase-2.md` |
+| 3 | skills_guard 内容扫描 + 4 级信任策略 | ✅ completed | Codex | `c2954f6` + `35886f3` + `0fae827`（closure `8270997`）| 借用 07 分类器基础设施；trust=agent-created 自动 ask；tracking: `2026-04-22-06-skills-b3b-phase-3.md` |
 | 4 | Post-compact 恢复 + file watcher | ✅ completed | Codex | `1f74adb` + `93141c5` | P4-a post-compact 恢复（≤5 skills / ≤5K each / ≤25K total）+ P4-b watcher 生命周期 + 200ms debounce + catalog diff + cache eviction;tracking:`2026-04-22-07-skills-b3b-phase-4.md` |
 
 ### Phase 0 — Frontmatter schema v2 + kebab-case alias ✅
