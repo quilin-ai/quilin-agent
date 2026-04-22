@@ -8,7 +8,7 @@ import threading
 import uuid
 from pathlib import Path
 
-from .types import MemoryRecord, MemoryTier, VALID_MEMORY_TIERS
+from .types import VALID_MEMORY_TIERS, MemoryRecord, MemoryTier
 
 ASCII_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_]+")
 CJK_RUN_PATTERN = re.compile(r"[\u4e00-\u9fff]+")
