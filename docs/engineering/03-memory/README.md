@@ -242,11 +242,13 @@ prompt cache 的稳定前缀是 Mastra OM 的核心创新点；**我们保留并
 
 #### A.8  迭代规划（M0 → M1 → M2）
 
+> **归属变更（2026-04-22）**：原计划放在 Iter C（Sprint 1/2/3），2026-04-17 路线图重排后 Memory Depth 主体实现整体并入 **Iter F**（与 Scale-Out / Self-Evolution 同期），以 [`docs/planning/00-implementation-plan.md`](../../planning/00-implementation-plan.md) 为准。Iter D Sprint 0 pre-work 只做 L3a go/no-go spike + ADR-004 起草，不落生产代码。
+
 | Milestone | 范围 | 判决指标 | 预估工作量 |
 |-----------|------|---------|-----------|
-| **M0**（Iter C Sprint 1） | L1 + L2 verbatim + L3a Observation（rule-first + LLM 兜底） + L3c 基础向量/BM25 召回 + 融合 rerank（无 KG） | AMB 四轴基线；LongMemEval ≥ 85% | 3-4 周 |
-| **M1**（Iter C Sprint 2） | 加 L3b Lazy Temporal KG + Learnable Reranker + prompt cache block-level invalidation | LongMemEval ≥ 92%；成本比 M0 ≤ 1.3x | 2-3 周 |
-| **M2**（Iter C Sprint 3） | 加 L2 冷热分层归档 + Consolidator idle loop + per-user weight profile | LongMemEval ≥ 95%；容量 ≥ 10 万条 / 用户；p95 召回 < 300ms | 2 周 |
+| **M0**（Iter F Sprint 1） | L1 + L2 verbatim + L3a Observation（rule-first + LLM 兜底） + L3c 基础向量/BM25 召回 + 融合 rerank（无 KG） | AMB 四轴基线；LongMemEval ≥ 85% | 3-4 周 |
+| **M1**（Iter F Sprint 2） | 加 L3b Lazy Temporal KG + Learnable Reranker + prompt cache block-level invalidation | LongMemEval ≥ 92%；成本比 M0 ≤ 1.3x | 2-3 周 |
+| **M2**（Iter F Sprint 3） | 加 L2 冷热分层归档 + Consolidator idle loop + per-user weight profile | LongMemEval ≥ 95%；容量 ≥ 10 万条 / 用户；p95 召回 < 300ms | 2 周 |
 
 **每个 M 都必须**：
 - 通过 AMB 四轴量化验证

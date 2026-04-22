@@ -96,7 +96,7 @@ Iter A: Grounded Context ✅ — v0.1.0-iter-a
     │  （02-Context 主轴 + 03-light 集成）
     │
     ▼
-Iter B: Useful Tools + Skills + Safety（进行中）
+Iter B: Useful Tools + Skills + Safety ✅（基本完成，tiny-classifier spike 降级到 Iter D 研究）
     │  B1 工具基座 ✅ / B2 安全策略 ✅ / B3a Skills Core ✅ M0 / B3b Phase 0-4 ✅
     │
     ▼
@@ -183,7 +183,7 @@ Iter F: Scale-Out + Memory Depth + Self-Evolution
 
 ---
 
-### Iteration B: Useful Tools + Skills + Safety（进行中）
+### Iteration B: Useful Tools + Skills + Safety ✅（基本完成）
 
 **主轴**：`05-Tool` + `13-Skills`　**搭配**：`07-Safety-lite`
 
@@ -470,7 +470,7 @@ Benchmark 验证层（Iter E 独立 iter）
 
 ## 12 活跃工程领域 × 迭代映射
 
-| # | 领域 | Phase 0 ✅ | Iter A ✅ | Iter B 🚧 | Iter C | Iter D | Iter E | Iter F |
+| # | 领域 | Phase 0 ✅ | Iter A ✅ | Iter B ✅ | Iter C | Iter D | Iter E | Iter F |
 |---|------|-----------|--------|--------|--------|--------|--------|--------|
 | 01 | LLM 接入 | LLMClient + Streaming | — | — | 动态 InferenceConfig + ThinkingMode | — | cost tracking 集成 | — |
 | 02 | 上下文 | BasicContextManager（单源） | **多源组装 + budget + temporal** | tool descriptor 注入 | planning context 注入 | — | — | memory context 增强 |
