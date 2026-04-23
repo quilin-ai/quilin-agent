@@ -1,0 +1,70 @@
+[
+  {
+    "id": "working-001",
+    "content": "Keep the current plan tree in working memory.",
+    "content_type": "text",
+    "layer": "working",
+    "metadata": {
+      "schema_version": 1,
+      "source": "planner",
+      "score": 0.91
+    },
+    "embedding": null,
+    "created_at": "2026-04-23T09:00:00+00:00",
+    "last_accessed": "2026-04-23T09:00:00+00:00",
+    "access_count": 0,
+    "importance_score": 0.55
+  },
+  {
+    "id": "episodic-001",
+    "content": "Checkpoint saved after the executor finished step 3.",
+    "content_type": "text",
+    "layer": "episodic",
+    "metadata": {
+      "schema_version": 1,
+      "source": "checkpoint-writer",
+      "staleness": "fresh"
+    },
+    "embedding": null,
+    "created_at": "2026-04-23T09:05:00+00:00",
+    "last_accessed": "2026-04-23T09:05:00+00:00",
+    "access_count": 1,
+    "importance_score": 0.72
+  },
+  {
+    "id": "semantic-001",
+    "content": "The user prefers concise review summaries with concrete risks first.",
+    "content_type": "text",
+    "layer": "semantic",
+    "metadata": {
+      "schema_version": 1,
+      "source": "reflection",
+      "score": 0.99
+    },
+    "embedding": [
+      0.12,
+      0.34,
+      0.56
+    ],
+    "created_at": "2026-04-23T09:10:00+00:00",
+    "last_accessed": "2026-04-23T09:10:00+00:00",
+    "access_count": 3,
+    "importance_score": 0.93
+  },
+  {
+    "id": "skill-001",
+    "content": "tool=memory_store success_count=4 failure_count=1",
+    "content_type": "text",
+    "layer": "skill",
+    "metadata": {
+      "schema_version": 1,
+      "source": "skill-telemetry",
+      "staleness": "stable"
+    },
+    "embedding": null,
+    "created_at": "2026-04-23T09:15:00+00:00",
+    "last_accessed": "2026-04-23T09:15:00+00:00",
+    "access_count": 4,
+    "importance_score": 0.61
+  }
+]

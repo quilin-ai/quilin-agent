@@ -7,7 +7,8 @@ import uuid
 from pathlib import Path
 
 from omnimem import store as store_module
-from omnimem.store import OmniMemStore
+from omnimem.store import MemoryStore, OmniMemStore
+from omnimem.types import MemoryItem
 
 
 async def test_store_returns_record_with_uuid() -> None:
@@ -32,6 +33,59 @@ async def test_store_generates_unique_ids() -> None:
     r1 = await store.store("first")
     r2 = await store.store("second")
     assert r1.id != r2.id
+
+
+async def test_omnimem_store_implements_memory_store_protocol() -> None:
+    store = OmniMemStore(db_path=":memory:")
+    assert isinstance(store, MemoryStore)
+
+
+async def test_add_get_update_delete_and_count_contract() -> None:
+    store = OmniMemStore(db_path=":memory:")
+    memory = MemoryItem(
+        content="remember this",
+        layer="episodic",
+        metadata={"schema_version": 1, "source": "test"},
+    )
+
+    memory_id = await store.add(memory)
+    fetched = await store.get(memory_id)
+    assert fetched == memory
+
+    await store.update(memory_id, "remember that")
+    updated = await store.get(memory_id)
+    assert updated is not None
+    assert updated.content == "remember that"
+    assert updated.embedding is None
+    assert await store.count({"layer": "episodic"}) == 1
+
+    await store.delete(memory_id)
+    assert await store.get(memory_id) is None
+    assert await store.count({"layer": "episodic"}) == 0
+
+
+async def test_search_list_by_layer_and_clear_layer() -> None:
+    store = OmniMemStore(db_path=":memory:")
+    await store.store("working note", tier="working")
+    await store.store(
+        "semantic insight",
+        tier="semantic",
+        metadata={"schema_version": 1, "source": "reflection"},
+    )
+    await store.store("semantic backup", tier="semantic")
+
+    semantic_results = await store.search("semantic", filters={"layer": "semantic"})
+    assert [item.content for item in semantic_results] == [
+        "semantic insight",
+        "semantic backup",
+    ]
+
+    listed = await store.list_by_layer("semantic", limit=10, offset=0)
+    assert [item.layer for item in listed] == ["semantic", "semantic"]
+
+    cleared = await store.clear_layer("semantic")
+    assert cleared == 2
+    assert await store.count({"layer": "semantic"}) == 0
 
 
 async def test_recall_empty_query_returns_all() -> None:
