@@ -63,19 +63,38 @@
 | `providers/memory/src/omnimem/observer.py` | `157` |
 | `docs/research/arm-l-observer-spike-report.md` | `161` |
 
-#### 第二轮 L3a 切片（§11.3）— S4 gate 记录
+#### 第二轮并行切片（§11.3）— 已完成（2026-04-24）
 
-| 路线 | 任务 | 当前状态 | 实证 |
-|---|---|---|---|
-| L3a | S4 Arm L Spike Gate | **blocked 记录已形成**，不是 pass/fail | `ANTHROPIC_API_KEY` unset（`test -n` exit `1`）；`ollama` absent（`command -v` exit `1`）；`localhost:11434/api/tags` curl exit `7`；1039 样本 dataset 已存在 |
-| L3a | M0.9b | **blocked/deferred**；不实现 ML-first 生产 observer，也不把资源 blocked 误判为 d3 fail | 继续沿用 M0.7 no-op contract；Memory M0 硬门槛仍排除 L3a |
+| 路线 | 任务 | 状态 | commits | 实证 |
+|---|---|---|---|---|
+| Iter C | C1.4 / C1.5 / C1.6 / C1.7 / C1.8 | ✅ 完成 | `726802a` / `8b7c183` / `8275b2b` / `e82bd1f` / `3357c91` | `cd packages/agent-core && pnpm tsc --noEmit` exit `0`；`pnpm test` = `410 passed`, `0 skipped` |
+| Iter M | M0.6 / M0.8 / M0.10 | ✅ 完成 | `1797737` / `de3fb31` / `dce589a` | `cd providers/memory && uv run pytest -q` = `71 passed`；1000-row BM25 p95 `0.349ms`；fused recall p95 `0.174ms`；AMB harness p95 `5.795ms` |
+| L3a | S4 Arm L Spike Gate | ✅ blocked gate 记录已形成；不是 pass/fail | `a1800c6` | `ANTHROPIC_API_KEY` unset（`test -n` exit `1`）；`ollama` absent（`command -v` exit `1`）；`localhost:11434/api/tags` curl exit `7`；1039 样本 dataset 已存在 |
+| L3a | M0.9b | ✅ blocked/deferred 边界已冻结 | `a1800c6` | 不实现 ML-first 生产 observer；不把资源 blocked 误判为 d3 fail；继续沿用 M0.7 no-op contract；Memory M0 硬门槛仍排除 L3a |
+| 同步 | 不含 L3a 的 M0 硬门槛验收 | ✅ 初步闭合 | 同上 | Planning M0 线性 mock 集成已通过；Memory M0 L1/L2 + FTS/BM25 + 融合召回 + AMB 替代证据已通过；LongMemEval 按 O3 记录为数据集 blocked |
 
-剩余风险：
+第二轮核心文件 LOC 实证：
 
-- M0.9a 是资源 blocked，不是 gate pass/fail；解锁后仍需跑 Arm L 推理并产出 recall/FPR/p95/cost。
-- S4 当前只关闭"资源 blocked gate 记录"，不关闭 Arm L pass/fail 决策；M0.9b 必须等实测 Arm L 后再选 ML-first 或 d3 opt-in/default-off。
-- S1 的 `task_context?` 仍是预留扩展位，M0.8 融合召回前不承诺完整 task-context aware ranking。
-- S2 已冻结 checkpoint metadata 与失败事件字段，但 C1.6 executor 尚未把 checkpoint writer 失败路径接成端到端事件。
+| 文件 | LOC |
+|---|---:|
+| `packages/agent-core/src/planning/planner.ts` | `65` |
+| `packages/agent-core/src/planning/decompose.ts` | `157` |
+| `packages/agent-core/src/planning/executor.ts` | `356` |
+| `packages/agent-core/src/planning/termination.ts` | `292` |
+| `packages/agent-core/src/planning/planning.integration.test.ts` | `215` |
+| `providers/memory/src/omnimem/retriever.py` | `219` |
+| `providers/memory/tests/test_retriever.py` | `164` |
+| `providers/memory/tests/test_memory_baseline.py` | `43` |
+| `providers/memory/benchmarks/amb_baseline.py` | `217` |
+| `docs/research/arm-l-observer-spike-report.md` | `161` |
+
+第二轮收口后的剩余风险：
+
+- M0.9a 仍是资源 blocked，不是 Arm L pass/fail；解锁后仍需跑 Arm L 推理并产出 recall/FPR/p95/cost，再决定 M0.9b 的 ML-first 或 d3 opt-in/default-off 路径。
+- S1 的 `MemoryItem.metadata.source/score/staleness/schema_version` 已由 M0.8 融合召回回填并有测试；`task_context?` 仍是后续 M1 task-aware ranking 的预留扩展位。
+- S2 的 checkpoint 成功/失败路径已在 TS executor mock 中验证；尚未和 `providers/memory` 做真实跨进程端到端联调。
+- LongMemEval 数据集未 vendored 到仓库，本轮按 O3 以 AMB 四轴离线 harness 作为 M0.10 替代证据。
+- 第三方 MCP / Skills CLI config loader 仍未接入；底层 API 已有，CLI 产品路径需另开切片。
 
 ## 1. 当前共识
 
