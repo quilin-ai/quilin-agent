@@ -96,6 +96,35 @@
 - LongMemEval 数据集未 vendored 到仓库，本轮按 O3 以 AMB 四轴离线 harness 作为 M0.10 替代证据。
 - 第三方 MCP / Skills CLI config loader 仍未接入；底层 API 已有，CLI 产品路径需另开切片。
 
+#### 第三轮并行切片（§15 方案 A 三路并行）— 已完成（2026-04-24）
+
+| 路线 | 任务 | 状态 | commit | 实证 |
+|---|---|---|---|---|
+| Halley (C-track) | C2.5 PlanReviewRecord writer + audit/goal-drift/replan | ✅ 完成 | `3b60904` | `wc -l packages/agent-core/src/planning/memory-writer.ts` = `223`；6 禁字段 NEGATIVE + sha256 stable id 测试通过 |
+| Hooke (M-track) | M1.2 retriever / M1.3-4 KG / M1.5 server+store 语义 guard | ✅ 完成 | `77e399a` | `cd providers/memory && uv run pytest -q` = `86 passed`；planning_review + planning_state 双向 NEGATIVE 测试覆盖 |
+| Pascal (Config-track) | CLI→env→.quilin→builtin 四级加载器 | ✅ 完成 | `4496cb4` | `wc -l packages/agent-core/src/config/loader.ts` = `398`；zod strict schema + builtin fallback 保留既有 REPL 行为 |
+| Cross-cutting | ADR-005 反向链接（HIGH-1 闭合） | ✅ 完成 | `0b79520` | `docs/engineering/03-memory/README.md` + `docs/planning/00-implementation-plan.md` 已链接至 ADR-005 |
+| 同步 | S3 PlanReviewRecord schema 冻结 | ✅ 对齐 | `77e399a` / `3b60904` | `store.py` 验证 `layer=semantic` + `content_type=json` + `schema_version=1` + `run_id` 对齐；TS writer 同轨字段 |
+
+第三轮核心文件 LOC 实证：
+
+| 文件 | LOC |
+|---|---:|
+| `packages/agent-core/src/planning/memory-writer.ts` | `223` |
+| `packages/agent-core/src/planning/audit.ts` | `99` |
+| `packages/agent-core/src/planning/goal-drift.ts` | `152` |
+| `packages/agent-core/src/planning/replan.ts` | `233` |
+| `packages/agent-core/src/planning/decompose.ts` | `273` |
+| `packages/agent-core/src/planning/state.ts` | `242` |
+| `packages/agent-core/src/config/loader.ts` | `398` |
+| `providers/memory/src/omnimem/retriever.py` | `493` |
+| `providers/memory/src/omnimem/kg.py` | `477` |
+| `providers/memory/src/omnimem/server.py` | `186` |
+| `providers/memory/src/omnimem/store.py` | `1036` ⚠ 超 800 软线 — §16.1 follow-up |
+| `providers/memory/tests/test_planning_integration.py` | `121` |
+
+第三轮收口后的剩余风险与 follow-up → 见 §16。
+
 ## 1. 当前共识
 
 - Memory 从 Iter F 抽出为独立 Iter M，与 Iter C 并行开工。
@@ -779,3 +808,62 @@ M2.6 / M2.7 ↔ Iter F soul.md 写路径
 3. 主线程保持响应；Claude 对每个 subagent 完成提交做 review（状态实证 + detect_changes）
 4. S3 同步点：C2.5 与 M1.5 任一方启动前，两 track owner 在 AgentBridge 对齐 schema fixture
 5. 三路全部闭合 → docs-track 回写 §0.1 + 第三轮切片行 → commit → 提醒用户开新 session 跑方向 5（lint sweep）
+
+## 16. Follow-up（本轮后续任务）
+
+> 第三轮切片（§15）落地后的遗留事项。每条都有明确触发条件与 DoD；不要在本文档里继续追加定义,改到各自 follow-up task 或新开 planning doc。
+
+### 16.1 `providers/memory/src/omnimem/store.py` 拆分（SOFT-1）
+
+- **现状**：`wc -l providers/memory/src/omnimem/store.py` = `1036`，超 800 软线 236 行。本轮为避免 M1.2-M1.5 功能 commit 混入纯机械重构而延后。
+- **建议切分**（Codex 提案）：
+  - `store_schema.py`：schema migration + `_ensure_schema` + `PRAGMA` 设置。
+  - `store_validation.py`：`_validate_planning_review_payload` + `_validate_semantic_ingestion_contract` + forbidden keys 常量。
+  - `store.py`：保留 CRUD + FTS + recall + MCP-facing API。
+- **DoD**：拆后 `uv run pytest -q` 仍 `86 passed`；三个文件 LOC 都 ≤ 400；public API 签名不变（`store.MemoryStore.store()` / `recall()` / etc.）。
+- **Trigger**：下一轮独立开一个小 slice，不要塞进 M1.6 / M1.7 功能 commit。
+
+### 16.2 `test_planning_integration.py` NEGATIVE 分支扩展（SOFT-2）
+
+- **现状**：本轮覆盖 4 条路径（POSITIVE / planning_review+events / planning_state+events / MCP round-trip）；6 禁字段里只个别枚举，layer/content_type/schema_version 不匹配尚未单独 NEGATIVE。
+- **建议补齐**（预计 +8 条）：
+  - 6 禁字段各单独一条 `planning_review` NEGATIVE（checkpoints / phase / budget / currentLeafId / plan 各一）——events 已覆盖。
+  - `layer="episodic"` + `source="planning_review"` 应拒。
+  - `content_type="text"` + `source="planning_review"` 应拒。
+  - `schema_version=2`（未知版本）应拒。
+  - `run_id` missing / mismatch 与 payload 应拒。
+- **DoD**：每条都验证 `raises ValueError` + 未写入 SQLite。
+- **Trigger**：M1.6 / M1.7 开始前或 §16.1 拆分时顺便补。
+
+### 16.3 Benchmark 数据目录结构（SOFT-3）
+
+- **现状**：`.benchmarks/e1a-smoke/` 存放 SWE-bench-Lite manifest + test.jsonl 作为 **input dataset**（M0.9a Arm L spike 残留），本轮未 commit。
+- **决策项**：区分 input dataset / output artifact 目录，避免混存：
+  - 建议 `providers/memory/benchmarks/datasets/` 放 input（如需纳入版本控制，考虑 Git LFS 或 manifest-only 记录 + 下载脚本）。
+  - 建议 `providers/memory/benchmarks/.output/` 放运行产物，默认 `.gitignore`。
+- **DoD**：新规则写入 `providers/memory/benchmarks/README.md`；现有 `.benchmarks/` 迁移或保留 `.gitignore` 决定成文。
+- **Trigger**：Arm L Spike 解锁 / LongMemEval 数据接入任一事件触发。
+
+### 16.4 `packages/agent-core/src/config/loader.ts` YAML 解析器（SOFT-4）
+
+- **现状**：`wc -l` = `398`，包含一个手写 minimal YAML parser（§parseYamlLike）。MVP 够用但不覆盖 YAML 1.2 完整语法（多行字符串、anchor、flow sequence 等）。
+- **决策项**：
+  - A) 继续保留手写，只在 config 场景内用，文档里说明"仅支持受限 YAML 子集"。
+  - B) 替换为 `yaml` npm 包，loader.ts 拆 `loader.ts` / `yaml-parser.ts` / `schema.ts`（已独立）。
+- **DoD**：若选 B，loader.ts ≤ 250 行，`pnpm test` 保留 integration test 集通过。
+- **Trigger**：真实项目有 config 写入并出现 parser 边角问题时触发。
+
+### 16.5 S2 跨进程 checkpoint 端到端联调（HIGH-from-Planning-review）
+
+- **现状**：Planning review 指出 S2 checkpoint 只在 TS executor mock 内通过，未和 `providers/memory` 的 SQLite store 做真实跨进程联调。
+- **DoD**：TS 侧触发 `checkpoint_saved` → MCP `memory_store` → `uv run` 的 Python 进程持久化到 `~/.quilin/memory.db` → TS 侧 `memory_recall` 能读回并校验 `checkpoint.stateSnapshot` 结构。
+- **Trigger**：M1.6 任务或独立 S2-e2e slice；不是本轮 blocker（Planning review HIGH-1 已标明）。
+
+### 16.6 Review 补齐本轮新代码（Q2 follow-up）
+
+- **现状**：`docs/review/2026-04-24-{01,02,03}-*.md` 覆盖 C0.1-C1.8 / M0.1-M0.10 / cross-cutting 7 commits，**不含**本轮 §15 新代码（Pascal `4496cb4` / Hooke `77e399a` / Halley `3b60904`）。
+- **DoD**：新开 `docs/review/YYYY-MM-DD-NN-third-slice-review.md`，覆盖三路 commits，重点审计：
+  - Halley: `memory-writer.ts` 6 禁字段 + sha256 id stability + MCP error fallback；`audit.ts` / `goal-drift.ts` / `replan.ts` 对 ADR-004 L3a 阈值的引用；`state.ts` 新增 3 种 event 的 reducer 纯性。
+  - Hooke: `retriever.py` RRF 融合正确性、`kg.py` 递归 CTE SQL 语义、`store.py` semantic guard 覆盖路径、§16.1 拆分前状态。
+  - Pascal: `loader.ts` 四级优先级 + `buildCapabilitiesRuntime` REPL wire 的回退语义。
+- **Trigger**：本 follow-up 收尾前必须跑完，不能静默进入下一轮切片。
