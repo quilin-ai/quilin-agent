@@ -26,6 +26,49 @@
 | ADR-004 最新相关 commit | `1f0bfe9 docs(l3a): v3 observer spike report + ADR-004 decision` |
 | Iter F 仍包含 Idle Evolution，默认关闭、需显式 opt-in | `docs/planning/00-implementation-plan.md` Iteration F |
 
+### 0.1 当前执行进展（2026-04-23）
+
+> 本节只记录已落地事实与实证，任务定义仍以 §4 / §5 / §9 / §11 为准。
+
+#### Day 0 契约冻结（§11.1）— 已完成
+
+| 任务 | 状态 | commit | 实证 |
+|---|---|---|---|
+| S0 契约冻结 | ✅ 完成 | `d9ebdf3 docs(adr): ADR-005 memory contracts skeleton` | `wc -l docs/adr/adr-005-memory-contracts.md` = `131` |
+| C0.1 Planning 类型 | ✅ 完成 | `c1856c0 feat(planning): freeze LLMPlannerResponse / PlanningState contracts (C0.1)` | `pnpm tsc --noEmit` exit `0`；`pnpm test` 通过 |
+| M0.1 Memory 契约 | ✅ 完成 | `cc125ca feat(memory): MemoryItem + MemoryStore Protocol + fixture (M0.1)` | `uv run pytest -q` 通过 |
+| C0.2 TS Memory adapter | ✅ 完成 | `6b8544e feat(memory): TS memory adapter stub (C0.2)` | TS/Python fixture JSON shape 对齐测试通过 |
+| M0.4 API 兼容性 | ✅ 完成 | `33e7466 feat(memory): MCP server recall/store compatibility (M0.4)` | `memory_store(layer=...)` 与 legacy `tier` 兼容测试通过 |
+
+补充文档落点：`c2f36c7 docs(planning): add Iter C/M parallel breakdown` 将本计划纳入版本控制，并修正 ADR-005 规范源路径为 `docs/adr/adr-005-memory-contracts.md`。
+
+#### 第一轮并行切片（§11.2）— 已完成
+
+| 路线 | 任务 | 状态 | commits | 实证 |
+|---|---|---|---|---|
+| Iter C | C1.1 / C1.2 / C1.3 | ✅ 完成 | `49b48f5` / `144e829` / `7028e1b` | `cd packages/agent-core && pnpm tsc --noEmit` exit `0`；`pnpm test` = `388 passed`, `0 skipped` |
+| Iter M | M0.2 / M0.3 / M0.5 | ✅ 完成 | `66fc714` / `a5640ac` / `1a3957d` | `cd providers/memory && uv run pytest -q` = `65 passed` |
+| L3a | M0.7 / M0.9a | ✅ M0.7 完成；M0.9a blocked | `b515dfa` / `bb76f9f` | Observer no-op contract 测试通过；Arm L blocked：`ANTHROPIC_API_KEY` unset、`ollama` absent、`localhost:11434` 连接失败；1039 样本 dataset 存在 |
+| 同步 | S1 / S2 | ✅ 初步对齐 | 同上 | S1：`MemoryItem.metadata.schema_version/source/score/staleness` 与 TS `MemoryClient.recall()` 已对齐；S2：episodic checkpoint metadata `run_id/event_seq/phase/task_hash/schema_version` 与独立 `checkpoint_failed` 事件字段已对齐 |
+
+第一轮核心文件 LOC 实证：
+
+| 文件 | LOC |
+|---|---:|
+| `packages/agent-core/src/planning/intent.ts` | `98` |
+| `packages/agent-core/src/planning/budget.ts` | `199` |
+| `packages/agent-core/src/planning/context.ts` | `59` |
+| `providers/memory/src/omnimem/working.py` | `87` |
+| `providers/memory/src/omnimem/episodic.py` | `166` |
+| `providers/memory/src/omnimem/observer.py` | `157` |
+| `docs/research/arm-l-observer-spike-report.md` | `121` |
+
+剩余风险：
+
+- M0.9a 是资源 blocked，不是 gate pass/fail；解锁后仍需跑 Arm L 推理并产出 recall/FPR/p95/cost。
+- S1 的 `task_context?` 仍是预留扩展位，M0.8 融合召回前不承诺完整 task-context aware ranking。
+- S2 已冻结 checkpoint metadata 与失败事件字段，但 C1.6 executor 尚未把 checkpoint writer 失败路径接成端到端事件。
+
 ## 1. 当前共识
 
 - Memory 从 Iter F 抽出为独立 Iter M，与 Iter C 并行开工。
