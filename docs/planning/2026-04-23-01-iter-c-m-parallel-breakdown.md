@@ -106,6 +106,7 @@
 | Cross-cutting | ADR-005 反向链接（HIGH-1 闭合） | ✅ 完成 | `0b79520` | `docs/engineering/03-memory/README.md` + `docs/planning/00-implementation-plan.md` 已链接至 ADR-005 |
 | 同步 | S3 PlanReviewRecord schema 冻结 | ✅ 对齐 | `77e399a` / `3b60904` | `store.py` 验证 `layer=semantic` + `content_type=json` + `schema_version=1` + `run_id` 对齐；TS writer 同轨字段 |
 | Review gate | §16.6 Q2 follow-up third-slice review | ✅ 完成并修复 | `docs/review/2026-04-24-04-third-slice-review.md` | BLOCKING `0` / HIGH `0` / MEDIUM `1` / LOW `2`；MEDIUM/LOW 已修复或文档化；§16.6 gate 可闭合 |
+| Direction 5 | lint sweep | ✅ 完成 | `a1276b8` | `just check` 通过；`just lint-py` 通过；`cd packages/agent-core && pnpm tsc --noEmit` exit `0`；`pnpm test` = `444 passed`；`cd providers/memory && uv run pytest -q` = `98 passed` |
 
 第三轮核心文件 LOC 实证：
 
@@ -794,7 +795,7 @@ M2.6 / M2.7 ↔ Iter F soul.md 写路径
 | M1.1 | Arm L spike 拿到 recall/FPR/p95 数据；`ANTHROPIC_API_KEY` 或 ollama 任一可用 |
 | M1.7 / M1.8 / S8 | `docs/adr/adr-007-identity-files.md` draft 产出（O8） |
 | 方向 4 Arm L gate | 同 M1.1 |
-| 方向 5 lint sweep | 本轮 C/M/Config 三路全部 commit、master 干净后单独启动 |
+| 方向 5 lint sweep | ✅ 已完成：`a1276b8`；`just check` + `just lint-py` + TS/Python 全量测试通过 |
 
 ### 15.8 执行纪律
 
