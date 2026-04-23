@@ -25,6 +25,7 @@ export type RiskLevel = "low" | "medium" | "high";
 
 export interface SubTask {
 	readonly id: string;
+	readonly action: string;
 	readonly name: string;
 	readonly description: string;
 	readonly estimatedTokens: number;
@@ -32,6 +33,8 @@ export interface SubTask {
 	readonly preconditions: ReadonlyArray<string>;
 	readonly effects: ReadonlyArray<string>;
 	readonly skillHint?: string;
+	readonly arguments?: Readonly<Record<string, unknown>>;
+	readonly depth?: number;
 	readonly writeScope?: MemoryWriteScope;
 	readonly risk?: RiskLevel;
 }

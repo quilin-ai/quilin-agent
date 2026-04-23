@@ -23,6 +23,7 @@ function makePlan(): LinearPlan {
 		subtasks: [
 			{
 				id: "step-1",
+				action: "web_search",
 				name: "Search competitors",
 				description: "Collect competitor snapshots",
 				estimatedTokens: 180,
@@ -153,6 +154,32 @@ describe("MainLLMPlanner", () => {
 			source: "audit",
 			latencyMs: 0,
 			reasoningDigest: "No tools are needed.",
+		});
+	});
+
+	it("reuses the linear decomposer for planSketch responses", async () => {
+		const planner = new MainLLMPlanner({
+			deliberate: vi.fn(async () => ({
+				planSketch: makePlan(),
+			})),
+		});
+
+		await expect(
+			planner.decompose(
+				{
+					planSketch: makePlan(),
+				},
+				DEFAULT_CONTEXT,
+			),
+		).resolves.toEqual({
+			kind: "linear",
+			subtasks: [
+				expect.objectContaining({
+					id: "step-1",
+					action: "web_search",
+					writeScope: "working",
+				}),
+			],
 		});
 	});
 });

@@ -1,7 +1,8 @@
 # Arm L Observer Spike Report (M0.9a)
 
 > Date: 2026-04-23
-> Status: blocked by missing Arm L inference resource
+> Status: blocked by missing Arm L inference resource; S4 records this as
+> blocked, not pass or fail
 
 ## Scope
 
@@ -92,6 +93,43 @@ Metrics are therefore not measured in this run:
 | cost | N/A - blocked before inference |
 
 Gate judgment: **blocked**, not pass or fail.
+
+## S4 Arm L Spike Gate Record
+
+S4 is closed for the current resource state as an executable gate record, not
+as an Arm L technical pass/fail decision:
+
+| Gate item | Current record |
+|---|---|
+| Dataset readiness | ready: fixed 1039-sample fixture exists and is readable |
+| Resource readiness | blocked: `ANTHROPIC_API_KEY` unset, `ollama` absent, `localhost:11434` unavailable |
+| Arm L metrics | unmeasured because inference did not start |
+| Gate status | **blocked**, not pass or fail |
+| M0.9b path | **blocked/deferred**; do not implement ML-first production observer yet |
+| M0 hard gate | unchanged: L3a remains outside L1/L2 + FTS/BM25 + fusion retrieval gates |
+
+This is also not enough evidence to choose d3 opt-in/default-off as the final
+observer strategy. ADR-004 only permits that branch after a measured Arm L
+failure, not after missing local or API resources.
+
+After the blocker is removed, rerun the non-secret resource checks and record
+only set/unset or exit codes:
+
+```bash
+test -n "$ANTHROPIC_API_KEY"
+command -v ollama
+curl -sSf http://localhost:11434/api/tags
+```
+
+Then run an ADR-approved Arm L inference pipeline over
+`docs/research/fixtures/rule-first-observer/dataset.json` and publish:
+
+| Required output | Gate use |
+|---|---|
+| recall | compare to ADR-004 `>= 60%` |
+| FPR | compare to ADR-004 `<= 3%` |
+| p95 latency | compare to ADR-004 `<= 50 ms` |
+| cost | record as deployment qualifier, not the hard gate |
 
 ## Prior Comparable Context
 

@@ -61,11 +61,19 @@
 | `providers/memory/src/omnimem/working.py` | `87` |
 | `providers/memory/src/omnimem/episodic.py` | `166` |
 | `providers/memory/src/omnimem/observer.py` | `157` |
-| `docs/research/arm-l-observer-spike-report.md` | `121` |
+| `docs/research/arm-l-observer-spike-report.md` | `159` |
+
+#### 第二轮 L3a 切片（§11.3）— S4 gate 记录
+
+| 路线 | 任务 | 当前状态 | 实证 |
+|---|---|---|---|
+| L3a | S4 Arm L Spike Gate | **blocked 记录已形成**，不是 pass/fail | `ANTHROPIC_API_KEY` unset（`test -n` exit `1`）；`ollama` absent（`command -v` exit `1`）；`localhost:11434/api/tags` curl exit `7`；1039 样本 dataset 已存在 |
+| L3a | M0.9b | **blocked/deferred**；不实现 ML-first 生产 observer，也不把资源 blocked 误判为 d3 fail | 继续沿用 M0.7 no-op contract；Memory M0 硬门槛仍排除 L3a |
 
 剩余风险：
 
 - M0.9a 是资源 blocked，不是 gate pass/fail；解锁后仍需跑 Arm L 推理并产出 recall/FPR/p95/cost。
+- S4 当前只关闭"资源 blocked gate 记录"，不关闭 Arm L pass/fail 决策；M0.9b 必须等实测 Arm L 后再选 ML-first 或 d3 opt-in/default-off。
 - S1 的 `task_context?` 仍是预留扩展位，M0.8 融合召回前不承诺完整 task-context aware ranking。
 - S2 已冻结 checkpoint metadata 与失败事件字段，但 C1.6 executor 尚未把 checkpoint writer 失败路径接成端到端事件。
 
@@ -282,7 +290,7 @@ M2 验收门槛：
 | M0.7 | Observer 接口 + no-op 实现 | `providers/memory/src/omnimem/observer.py`；`test_observer_contract.py` | 冻结 `observe(turn) -> ObservationCandidate[]`；默认 no-op；Planning 不依赖 | M0.1 | M0.9a、M0.9b |
 | M0.8 | 融合重排 v0 | 扩展 `retriever.py` | working 直拼 + episodic/BM25 排序；RRF / 简单加权评分可确定；返回 source/layer/score | M0.6 | M0.10、M1.3 |
 | M0.9a | Arm L（tier-1 小模型）spike 执行 | `.spike/observer-arm-l/` 或 ADR 批准的 spike 路径；spike 报告 | 复用 1039 数据集；输出 recall/FPR/p95/cost；门槛按 ADR-004 145-146 行（`recall ≥ 60% / FPR ≤ 3% / p95 ≤ 50ms`）；成本条件由 ADR-006 定稿 | M0.7、ADR-004 | S4、M0.9b |
-| M0.9b | L3a 生产实现路径 | `observer.py`；实现测试；可选 ADR-006 | Arm L 过 → ML-first observer；Arm L 未过 → d3 opt-in no-op/默认关闭；不影响 M0 硬门槛 | M0.9a | M1.1 |
+| M0.9b | L3a 生产实现路径 | `observer.py`；实现测试；可选 ADR-006 | Arm L 过 → ML-first observer；Arm L 实测未过 → d3 opt-in no-op/默认关闭；**Arm L 资源 blocked → 当前 blocked/deferred，不实现生产 observer**；不影响 M0 硬门槛 | M0.9a | M1.1 |
 | M0.10 | M0 AMB/LongMemEval 基线测评 | `providers/memory/tests/test_memory_baseline.py` 或 `providers/memory/benchmarks/amb_baseline.py` | AMB 四轴输出 accuracy/speed/cost/usability（**硬门槛**）；LongMemEval ≥ 85%（**目标门槛**，O3 已决：数据集不可用时写 blocked 原因 + 以 AMB 四轴作为替代证据） | M0.8；M0.9b 可选 | M1 |
 
 M0 硬门槛：
@@ -379,7 +387,7 @@ ADR-004：d2 条件性 ML-first
 | 不受 Arm L 阻塞 | C0–C3 全部 Planning 任务 | 无 |
 | 不受 Arm L 阻塞 | M0.1–M0.8、M0.10 除 L3a 外的基线 | 无 |
 | 仅接口 | M0.7 | 可立即开工 |
-| 受 Arm L 结果阻塞 | M0.9b | 依赖 M0.9a |
+| 受 Arm L 结果阻塞 | M0.9b | 依赖 M0.9a；当前 M0.9a 资源 blocked，因此 M0.9b blocked/deferred |
 | 部分阻塞 | M1.1 | ingestion 路径取决于 ML-first 还是 opt-in |
 | 部分阻塞 | M1.2 | KG schema 可先开工；observation 源绑定需等 |
 | 部分影响 | M1.3 | 检索的优雅降级可先开工；observation 打分需等 |
@@ -390,7 +398,7 @@ ADR-004：d2 条件性 ML-first
 | ID | 目的 | 产出 |
 |---|---|---|
 | M0.9a | 跑 Arm L spike | `.spike/observer-arm-l/`、结果 JSON/日志、spike 报告 |
-| M0.9b | 实现最终 L3a 路径 | Arm L 过则 ML-first；否则 opt-in / 默认关闭 no-op |
+| M0.9b | 实现最终 L3a 路径 | Arm L 过则 ML-first；Arm L 实测失败则 opt-in / 默认关闭 no-op；Arm L 资源 blocked 时 deferred |
 
 ### 6.4 S4 重命名
 
@@ -401,11 +409,30 @@ S4 内容：
 
 | 项 | 决策 |
 |---|---|
-| Arm L 门槛结果 | pass/fail（按 ADR-004 `60/3/50`） |
-| ADR 状态 | 是否需要 ADR-006 |
-| M0.9b 实现路径 | ML-first 或 d3 opt-in / 默认关闭 |
+| Arm L 门槛结果 | pass/fail/blocked（按 ADR-004 `60/3/50`；blocked 不是 pass/fail） |
+| ADR 状态 | 是否需要 ADR-006；当前资源 blocked 不足以定稿 ADR-006 |
+| M0.9b 实现路径 | ML-first、d3 opt-in / 默认关闭，或资源 blocked 时 blocked/deferred |
 | 03-memory 更新 | L3a 默认行为 |
 | 07-safety 更新 | 仅当 opt-in 路径改变权限语义时 |
+
+当前 S4 记录（M0.9a `bb76f9f` 后复核）：
+
+| 项 | 记录 |
+|---|---|
+| Gate 判定 | **blocked**，不是 pass/fail |
+| 资源证据 | `test -n "$ANTHROPIC_API_KEY"` exit `1`；`command -v ollama` exit `1`；`curl -sSf http://localhost:11434/api/tags` exit `7` |
+| 数据集证据 | `docs/research/fixtures/rule-first-observer/dataset.json` 可读，`1039` 样本 |
+| M0.9b 当前状态 | **blocked/deferred**；不实现 ML-first 生产 observer；不引入 LLM API 调用 |
+| 默认行为 | 保持 M0.7 `NoOpMemoryObserver` contract；observer 失败/no-op 不影响 L1/L2/召回 |
+
+解除 blocker 后必须重跑：
+
+| 类型 | 命令或输出 |
+|---|---|
+| API 资源检查 | `test -n "$ANTHROPIC_API_KEY"`，只记录 set/unset 或 exit code，不打印 secret |
+| 本地资源检查 | `command -v ollama`；`curl -sSf http://localhost:11434/api/tags` |
+| Arm L 推理 | 对 1039 样本跑 ADR 批准的 `.spike/observer-arm-l/` 或等价管线 |
+| 指标 | recall、FPR、p95 latency、cost；前三项按 ADR-004 `60/3/50` 判定，cost 只作部署 qualifier |
 
 ## 7. Idle-Budget 决策
 
@@ -479,7 +506,7 @@ Iter D OTel 迁移路径：
 | S1 recall 签名同步 | C1.3 前、M0.4 后 | `MemoryStore.recall(query, task_context?) -> MemoryItem[]`；元数据 `layer/source/score/staleness/schema_version` | C1.3、M0.4、M0.8 | Planning 的 context 注入会挂 |
 | S2 checkpoint/episodic schema 同步 | C1.6 前、M0.5 后 | checkpoint 元数据：`run_id/event_seq/phase/task_hash/schema_version`；**失败事件独立**（`checkpoint_failed` with `error_code/ts`，O5 已决） | C1.6、M0.5 | pause/resume/debug 无法恢复 |
 | S3 semantic 写入纪律同步 | C2.5 / M1.5 前 | Planning 复盘总结 schema；运行中状态禁止写 semantic | C2.5、M1.5 | semantic tier 被污染 |
-| S4 Arm L Spike Gate | M0.9a 后、M0.9b / M1.1 前 | Arm L 结果；是否需要 ADR-006；ML-first vs opt-in 路径；阈值以 ADR-004 `60/3/50` 为准 | M0.9a、M0.9b、M1.1 | L3a 默认行为不明 |
+| S4 Arm L Spike Gate | M0.9a 后、M0.9b / M1.1 前 | Arm L 结果或 blocked gate 记录；是否需要 ADR-006；ML-first vs opt-in vs blocked/deferred 路径；阈值以 ADR-004 `60/3/50` 为准 | M0.9a、M0.9b、M1.1 | 把资源 blocked 误当 pass/fail，导致 L3a 默认行为被提前定稿 |
 | S5 DAG/委派元数据同步 | C3.4 前、M1.6 后 | DAG 子任务/writeScope/riskLevel 元数据；委派的 parent/child run id | C3.1、C3.4、M1.6 | 多 Agent 轨迹无法召回或归因 |
 | S6 Idle Stub 边界 | M2.2 前 | `IdleBudgetProvider` stub 范围；真实 idle loop 留到 Iter F | M2.2、M2.3、10-self-evolution spec | Iter M 吞掉 Self-Evolution 的范围 |
 | S7 Iter E 就绪 | C3.5 / M2.5 后 | Planning 轨迹、Memory 召回 metric、可观测性 hook | C3.5、M2.5、08-observability | Iter E 仍然没有可测量的 Agent |
@@ -549,7 +576,7 @@ M2.6 / M2.7 ↔ Iter F soul.md 写路径
 |---|---|
 | Iter C | C1.4、C1.5、C1.6、C1.7、C1.8 |
 | Iter M | M0.6、M0.8、M0.10 |
-| L3a | S4、M0.9b |
+| L3a | S4 blocked gate 记录；M0.9b blocked/deferred，待 Arm L 实测后再实现 |
 | 同步 | 不含 L3a 的 M0 硬门槛验收 |
 
 ### 11.4 M1 切片
@@ -584,7 +611,7 @@ M2.6 / M2.7 ↔ Iter F soul.md 写路径
 
 | 里程碑 | 验收 |
 |---|---|
-| M M0 | L1 + L2 + FTS/BM25 + 融合召回；1000 条 p95 < 100ms；LongMemEval 目标 ≥ 85%；L3a 排除在硬门槛外 |
+| M M0 | L1 + L2 + FTS/BM25 + 融合召回；1000 条 p95 < 100ms；LongMemEval 目标 ≥ 85%；L3a / M0.9b blocked 不计入硬门槛 |
 | M M1 | 懒加载 KG + 混合检索；Reranker 用本地 SQLite event log；LongMemEval 目标 ≥ 92%；成本 ≤ M0 × 1.3；**UserProfile Store + user.md 双向镜像可用** |
 | M M2 | 冷热归档；idle-budget stub；Consolidator dry-run；按用户画像；10 万条/用户 p95 < 300ms；LongMemEval 目标 ≥ 95%；**soul.md 静态加载进 ContextAssembler（只读）** |
 
@@ -613,7 +640,7 @@ M2.6 / M2.7 ↔ Iter F soul.md 写路径
 | 领域 | 建议 |
 |---|---|
 | 契约来源 | ADR-005（O2 已决，S0 同日起草）+ 本计划 + 03-memory + 04-planning §2.9.2；ADR-005 为规范源 |
-| L3a | 沿用 ADR-004 的条件性 d2；M0.9a 跑 Arm L spike；M0.9b 根据结果选 ML-first 或 opt-in/默认关闭 |
+| L3a | 沿用 ADR-004 的条件性 d2；M0.9a 跑 Arm L spike；当前 S4 记录为资源 blocked，M0.9b blocked/deferred；解除 blocker 并实测后再选 ML-first 或 opt-in/默认关闭 |
 | Arm L 门槛 | 以 ADR-004 `recall ≥ 60% / FPR ≤ 3% / p95 ≤ 50ms` 为准；成本条件由 ADR-006 定稿 |
 | M0 硬门槛 | 只算 L1/L2 + FTS/BM25 + 融合召回；L3a 排除 |
 | Idle-budget | 方案 C；Iter M M2 只做 stub/dry-run，真实 loop 留到 Iter F |

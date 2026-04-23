@@ -13,6 +13,7 @@ function makePlan(): LinearPlan {
 		subtasks: [
 			{
 				id: "step-1",
+				action: "read_context",
 				name: "Collect inputs",
 				description: "Read the request before acting",
 				estimatedTokens: 120,
