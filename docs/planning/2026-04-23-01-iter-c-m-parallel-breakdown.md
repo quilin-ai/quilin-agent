@@ -668,3 +668,114 @@ M2.6 / M2.7 ↔ Iter F soul.md 写路径
 | Identity files | `user.md` 本期完整交付（M1.7/M1.8，归 03-memory）；`soul.md` 本期只做只读加载 + schema 冻结（M2.6/M2.7，归 10-self-evolution），**自进化写路径留 Iter F** |
 | ADR-007 | **已决采纳（O8）**：M1.7 落地前产出 `adr-007-identity-files.md` draft，定 identity files 位置/格式/写入权/审批路径/git 入出/跨项目共享；final 审批可延到 Iter F 起动前 |
 | 全局决议 | §13 已决议事项 O1–O9 全部闭合；执行中若出现改变决策的证据，走 ADR 或 planning 修订，不再复开 O 编号 |
+
+## 15. 第三轮并行切片（方案 A 三路并行）任务书
+
+起草日期：2026-04-24。执行起点：commit `b5a4b09`（§11.3 闭合后 master 干净，27 commits ahead of origin/master）。
+
+### 15.1 本轮方案
+
+**方案 A：三路并行 = C-track ∥ M-track ∥ Config-track**，docs-track 由 Claude 串行跟进不进 packages/providers。
+
+本轮不触发契约变更；ADR-005 已冻结，本轮执行以 ADR-005 为规范源。
+
+### 15.2 本轮 In-scope / Out-of-scope
+
+| 条目 | 状态 | 理由 |
+|---|---|---|
+| C2.1–C2.5（Audit + L-Rearrange + L-Redecompose + goal-drift + semantic writer hook） | ✅ In-scope | §11.4 主干，依赖 C1.x 已全部就绪 |
+| M1.2–M1.6（KG schema + 混合检索 v1 + reranker event log + planning ingestion + cache 元数据） | ✅ In-scope | §11.4 主干，依赖 M0.5/M0.8 已就绪 |
+| Config-track CONFIG.1–CONFIG.4（Capability Config Loader） | ✅ In-scope（本轮新增） | 关闭 §11.3 row 97 剩余风险：第三方 MCP / Skills CLI config loader 未接入 |
+| M1.1（L3a 生产 ingestion） | ⏸ Defer | Arm L 资源 blocked（ANTHROPIC_API_KEY unset / ollama absent，S4 已记录）；解锁再启 |
+| M1.7（UserProfile Store + ProfileUpdater） | ⏸ Defer | ADR-007 draft 未产出（O8 已决需先产 draft） |
+| M1.8（user.md 双向镜像） | ⏸ Defer | 依赖 M1.7 |
+| S8 UserProfile schema 同步 | ⏸ Defer | 依赖 M1.7/M1.8 |
+| 方向 4（Arm L 1039 样本 gate） | ⏸ Blocked | 外部资源未就绪 |
+| 方向 5（lint/coverage 独立门禁 sweep） | ⏸ Defer to 收尾 | sweep 改动面大，和 in-flight 三路 track 会 merge 打架；留到本轮全部 commit 后单独一轮 |
+
+### 15.3 写边界（硬隔离，不可越界）
+
+| Track | 允许写入 | 禁止写入 |
+|---|---|---|
+| **C-track** | `packages/agent-core/src/planning/**`（新增 audit.ts / replan.ts / goal-drift.ts / memory-writer.ts 及其测试） | 非 planning 子目录；`providers/memory/**`；`docs/**`；`src/index.ts`（除非通过 docs-track 协调） |
+| **M-track** | `providers/memory/src/omnimem/**`（新增 kg.py / event_log.py / reranker.py 及扩展 retriever.py / server.py）；`providers/memory/tests/**`；`providers/memory/benchmarks/**` | `packages/agent-core/**`；`docs/**`；`.spike/**` |
+| **Config-track** | `packages/agent-core/src/config/**`（新建目录：types.ts / schema.ts / loader.ts + 测试）；`packages/agent-core/src/index.ts`（仅限 wire config 进 `main()`）；新增 fixture `packages/agent-core/src/test/fixtures/capabilities.*` | `packages/agent-core/src/planning/**`（C-track 专属）；`providers/memory/**`；`docs/**` |
+| **docs-track（Claude）** | `docs/**`（planning 回写、engineering spec 同步、ADR 追加）；本任务书自身 | `packages/**`；`providers/**`；`scripts/**`（除非用户显式指派） |
+
+两 track 若必须触碰同一文件（例如 C2.5 和 M1.5 都要 touch fixture），必须先在 AgentBridge 上对齐 schema + 拍定 owner，owner 写、另一方 read-only consume。
+
+### 15.4 任务明细
+
+#### C-track（packages/agent-core/src/planning/**）
+
+| ID | 交付物 | 验收标准（契约来源：§4.3） | 依赖 | 解锁 |
+|---|---|---|---|---|
+| C2.1 | `audit.ts` + `audit.test.ts` | audit 不改决策；记录 `intentHint/confidence`；一致率 metric fixture 可计算 | C1.4（已完成） | C2.5 |
+| C2.2 | `replan.ts` + `replan.test.ts`（L-Rearrange 本地修复） | tool 失败 / 前置条件缺失 / 重试耗尽都能触发正确 patch；不调用 G-Replan | C1.6（已完成） | C2.3 |
+| C2.3 | 扩展 `replan.ts` + `decompose.ts`（L-Redecompose） | 局部子树替换；不重写全局 plan；事件回放后状态一致 | C2.2 | C2.4 |
+| C2.4 | `goal-drift.ts` + `goal-drift.test.ts` | drift 触发覆盖率 100%；默认阈值 0.65 可配置；drift 事件可写 episodic | C1.2（已完成）、C2.3 | C2.5 |
+| C2.5 | `memory-writer.ts` + memory writer 测试 | 只把复盘后的稳定策略写入 semantic；运行中状态不写 semantic；Memory 不可用时降级为 event log；schema 与 M1.5 对齐 | C2.1、C2.4、M1.5 | S3 闭合 |
+
+#### M-track（providers/memory/**）
+
+| ID | 交付物 | 验收标准（契约来源：§5.2） | 依赖 | 解锁 |
+|---|---|---|---|---|
+| M1.2 | `kg.py` + `test_kg.py` | SQLite 边带 `valid_from/valid_to`；递归 CTE 支持 hop-N；默认懒加载，不 eager 抽取 | M0.5（已完成） | M1.3 |
+| M1.3 | 扩展 `retriever.py` + 测试 | BM25 + 语义/向量占位 + KG 子图 + RRF；缺向量/缺 KG 都能优雅降级；LongMemEval ≥ 92%（O3 目标门槛，blocked 时以 AMB 替代） | M0.8（已完成）、M1.2 | M1.4 |
+| M1.4 | `event_log.py` + `reranker.py` + 测试 | 本地 SQLite 记录检索/引用正样本；默认存 `query_hash + top-N retrieval metadata`，`query_raw` nullable 且 opt-in（O6）；不依赖 OTel；logistic regression 可先用固定权重；成本相对 M0 ≤ 1.3× | M1.3 | M2.4、Iter D OTel 迁移 |
+| M1.5 | `test_planning_integration.py` + schema 支持 | 接收 `source=planning_review/schema_version/run_id`；拒绝运行中的 `PlanningState` 写入 semantic；schema 与 C2.5 对齐 | M1.3、C2.5 | S3 闭合 |
+| M1.6 | 扩展 memory 结果元数据 | 召回结果带 `cache_key/block_version/source_layers`；即使没有缓存实现，Context 层也能消费 | M1.3 | M2 |
+
+#### Config-track（packages/agent-core/src/config/** + 有限 wire）
+
+背景：当前 `src/index.ts`（229 行）硬编码 OmniMem MCP，未实例化 `SkillsManager`；第三方 MCP / Skills CLI 接入路径缺失（§11.3 row 97）。
+
+| ID | 交付物 | 验收标准 | 依赖 | 解锁 |
+|---|---|---|---|---|
+| CONFIG.1 | `packages/agent-core/src/config/types.ts` + `schema.ts`（zod） | `CapabilitiesConfig` 类型冻结：`mcpServers: Record<string, McpServerConfig>`、`skills: SkillsConfig`、`schema_version: 1`；zod schema 往返 JSON 稳定；新字段必须可选 | 无 | CONFIG.2 |
+| CONFIG.2 | `packages/agent-core/src/config/loader.ts` + `loader.test.ts` | 默认搜索顺序：CLI `--config path` → `$QUILIN_CONFIG_PATH` → `.quilin/capabilities.{yaml,json}` → 内置默认（仅 OmniMem，向后兼容现状）；文件缺失 / schema 不通过走 fail-fast 明确错误；不 fallback 静默 | CONFIG.1 | CONFIG.3 |
+| CONFIG.3 | 改 `src/index.ts`（仅限 `main()` wire）+ `SkillsManager` 与 `MCPClientManager` 按 config 实例化 | 现有 410 个 TS 测试 + 71 个 Py 测试全部不退化；无 config 文件时行为等价于当前（OmniMem 硬编码） | CONFIG.2 | CONFIG.4 |
+| CONFIG.4 | `src/config/loader.integration.test.ts` + fixture `capabilities.yaml` / `capabilities.json` | 两个 fixture 端到端加载并实例化 SkillsManager + 一个 stub MCP；测试不启动真实子进程（走 mock） | CONFIG.3 | 产品可用 CLI |
+
+### 15.5 S-sync 同步点
+
+| 同步点 | 时机 | 对齐内容 | 责任方 |
+|---|---|---|---|
+| **S3 semantic 写入纪律** | C2.5 和 M1.5 任一方启动前 | `PlanReviewRecord` schema：`run_id / source=planning_review / schema_version / summary / stable_strategy`；运行中 `PlanningState` 禁写 semantic | C2.5 与 M1.5 owner 在 AgentBridge 对齐后由任一方 owner fixture，另一方 consume |
+| **M1.4 event log schema** | M1.4 启动前 | `query_hash`、top-N retrieval metadata 字段；`query_raw` nullable；opt-in flag `--persist-raw-query`（O6） | M-track owner |
+| ~~S8 UserProfile schema~~ | 本轮 defer | M1.7/M1.8 defer，S8 不进本轮 | — |
+
+### 15.6 验收门禁（每 track 收口前必跑）
+
+| 门禁 | 命令 | 通过标准 |
+|---|---|---|
+| TS 类型 | `cd packages/agent-core && pnpm tsc --noEmit` | exit 0 |
+| TS 测试 | `cd packages/agent-core && pnpm test` | 全部 passed，无新 skipped |
+| Py 测试 | `cd providers/memory && uv run pytest -q` | 全部 passed |
+| LOC 实证 | `wc -l <交付文件>` | 每个任务 commit message 附 LOC 片段 |
+| Phase ✅ 声明 | commit hash + 测试通过数 + tsc exit code | 引用到 §0.1 表格 |
+
+### 15.7 Blocked / Deferred 闭口条件
+
+| 条目 | 解除条件 |
+|---|---|
+| M1.1 | Arm L spike 拿到 recall/FPR/p95 数据；`ANTHROPIC_API_KEY` 或 ollama 任一可用 |
+| M1.7 / M1.8 / S8 | `docs/adr/adr-007-identity-files.md` draft 产出（O8） |
+| 方向 4 Arm L gate | 同 M1.1 |
+| 方向 5 lint sweep | 本轮 C/M/Config 三路全部 commit、master 干净后单独启动 |
+
+### 15.8 执行纪律
+
+- **Codex 派 subagent**：三路分别独立 subagent，默认 `run_in_background: true`；主线程保持响应
+- **谁写代码谁 commit**：C-track 的 commit author 是 Codex；Config-track 由 Codex 执行，Claude 不参与 packages/ 内代码写入；docs-track commit 由 Claude
+- **协作语言中文**：AgentBridge 协作消息中文
+- **状态声明实证纪律**：LOC 声明 → `wc -l`；代码缺失 → `Glob` + `Grep`；phase ✅ → commit hash + 测试通过数 + tsc/lint 结果；commit message 附实证片段
+- **收尾回写**：三路各自完成后，Claude 在 §0.1 追加"第三轮并行切片（§15）"表格，登记 commits + 实证；然后才启动方向 5
+
+### 15.9 启动序列
+
+1. 任务书（本节）由用户拍板后 Claude commit 到 master
+2. Codex 从 §15.4 读取三路任务，启动 3 个 subagent（run_in_background）
+3. 主线程保持响应；Claude 对每个 subagent 完成提交做 review（状态实证 + detect_changes）
+4. S3 同步点：C2.5 与 M1.5 任一方启动前，两 track owner 在 AgentBridge 对齐 schema fixture
+5. 三路全部闭合 → docs-track 回写 §0.1 + 第三轮切片行 → commit → 提醒用户开新 session 跑方向 5（lint sweep）
