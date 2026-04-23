@@ -1,6 +1,7 @@
 export * from "./audit.js";
 export * from "./budget.js";
 export * from "./context.js";
+export * from "./dag.js";
 export * from "./decompose.js";
 export * from "./executor.js";
 export * from "./goal-drift.js";
