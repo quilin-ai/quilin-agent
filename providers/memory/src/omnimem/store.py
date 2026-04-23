@@ -176,6 +176,19 @@ def _parse_datetime(raw_value: str | None) -> datetime:
     return datetime.fromisoformat(raw_value)
 
 
+def _coerce_filter_datetime(raw_value: object) -> datetime | None:
+    if raw_value is None:
+        return None
+
+    if isinstance(raw_value, datetime):
+        return raw_value
+
+    if isinstance(raw_value, str):
+        return datetime.fromisoformat(raw_value)
+
+    raise TypeError("datetime filters must be datetime or ISO 8601 strings")
+
+
 def _row_to_record(row: sqlite3.Row) -> MemoryRecord:
     return MemoryRecord(
         id=row["id"],
@@ -391,7 +404,10 @@ class OmniMemStore:
 
     def _count_sync(self, filters: dict[str, Any] | None = None) -> int:
         layer_filter = self._layer_filter(filters)
-        if filters and any(key in filters for key in ("metadata", "content_type")):
+        if filters and any(
+            key in filters
+            for key in ("metadata", "content_type", "created_after", "created_before")
+        ):
             items = self._search_sync("", limit=1_000_000, filters=filters)
             return len(items)
 
@@ -871,6 +887,14 @@ class OmniMemStore:
             for key, value in metadata_filters.items():
                 if item.metadata.get(key) != value:
                     return False
+
+        created_after = _coerce_filter_datetime(filters.get("created_after"))
+        if created_after is not None and item.created_at < created_after:
+            return False
+
+        created_before = _coerce_filter_datetime(filters.get("created_before"))
+        if created_before is not None and item.created_at > created_before:
+            return False
 
         return True
 
