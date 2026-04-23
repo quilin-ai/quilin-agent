@@ -2,6 +2,10 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { generateText } from "ai";
+import {
+	buildCapabilitiesRuntime,
+	loadCapabilitiesConfig,
+} from "./config/loader.js";
 import { createProvider, getDefaultModel } from "./llm/provider.js";
 import { normalizeTokenUsage } from "./llm/token-usage.js";
 import { configureLogger, logger } from "./logger.js";
@@ -180,35 +184,54 @@ export async function main(options: MainOptions = {}): Promise<void> {
 	}
 
 	if (runtimeMode === "repl") {
-		const mcpClient = new MCPClientManager();
 		const workspaceRoot = findWorkspaceRoot(
 			dirname(fileURLToPath(import.meta.url)),
 		);
+		const loadedCapabilities = await loadCapabilitiesConfig({
+			workspaceRoot,
+			argv: process.argv.slice(2),
+			env: process.env,
+		});
 		const sessionId = await resolveReplSessionId();
 		let shouldExit = false;
 
 		logger.info({ mode: "repl" }, "Starting CLI REPL...");
 
-		try {
-			logger.info("Connecting OmniMem MCP server...");
-			const tools = await mcpClient.connect({
-				command: "uv",
-				args: ["run", "python", "-m", "omnimem"],
-				cwd: join(workspaceRoot, "providers", "memory"),
-			});
-			logger.info({ toolCount: tools.length }, "OmniMem MCP connected");
+		if (loadedCapabilities.source.kind === "builtin") {
+			const mcpClient = new MCPClientManager();
+			try {
+				logger.info("Connecting OmniMem MCP server...");
+				const tools = await mcpClient.connect({
+					command: "uv",
+					args: ["run", "python", "-m", "omnimem"],
+					cwd: join(workspaceRoot, "providers", "memory"),
+				});
+				logger.info({ toolCount: tools.length }, "OmniMem MCP connected");
 
+				await startRepl({
+					provider,
+					modelId,
+					...(sessionId == null ? {} : { sessionId }),
+					tools,
+				});
+				shouldExit = true;
+			} finally {
+				await mcpClient.disconnect().catch((err) => {
+					logger.warn({ err }, "OmniMem MCP disconnect failed");
+				});
+			}
+		} else {
+			const capabilitiesRuntime = buildCapabilitiesRuntime(loadedCapabilities);
 			await startRepl({
 				provider,
 				modelId,
 				...(sessionId == null ? {} : { sessionId }),
-				tools,
+				mcpServers: capabilitiesRuntime.mcpServers,
+				...(capabilitiesRuntime.skillsManager == null
+					? {}
+					: { skillsManager: capabilitiesRuntime.skillsManager }),
 			});
 			shouldExit = true;
-		} finally {
-			await mcpClient.disconnect().catch((err) => {
-				logger.warn({ err }, "OmniMem MCP disconnect failed");
-			});
 		}
 
 		if (shouldExit) {

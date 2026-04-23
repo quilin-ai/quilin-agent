@@ -1,0 +1,16 @@
+schema_version: 1
+mcpServers:
+  stub-yaml:
+    command: node
+    args: [stub-server.js]
+    cwd: .
+    namespace: stub-yaml
+    defaultRiskLevel: exec
+skills:
+  enabled: true
+  bundledRoots: [./bundled-skills]
+  userRoots: [./user-skills]
+  projectRoots: [./project-skills]
+  pluginRoots: [./plugin-skills]
+  watcherEnabled: false
+  debounceMs: 250
