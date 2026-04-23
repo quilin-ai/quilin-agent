@@ -1,17 +1,27 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
-import re
 import sqlite3
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
+from .store_filters import layer_filter, matches_filters
+from .store_records import insert_memory
+from .store_schema import FTS_SCHEMA_COMPONENT as _FTS_SCHEMA_COMPONENT
+from .store_schema import FTS_SCHEMA_VERSION as _FTS_SCHEMA_VERSION
+from .store_schema import (
+    configure_connection,
+    ensure_store_schema,
+)
+from .store_search import build_keywords as _search_build_keywords
+from .store_search import candidate_rows, rebuild_fts_index, record_columns
+from .store_serialization import row_to_record as _row_to_record
+from .store_serialization import validate_memory_tier as _validate_memory_tier
+from .store_validation import validate_semantic_ingestion_contract
 from .types import (
-    VALID_MEMORY_TIERS,
     MemoryItem,
     MemoryLayer,
     MemoryRecord,
@@ -19,35 +29,8 @@ from .types import (
     validate_memory_layer,
 )
 
-ASCII_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_]+")
-CJK_RUN_PATTERN = re.compile(r"[\u4e00-\u9fff]+")
-
-RECALL_QUERY_EXPANSIONS = (
-    (
-        ("记得", "记住", "回忆", "想起", "以前", "之前"),
-        {"记得", "记忆", "名字", "称呼", "身份", "用户"},
-    ),
-    (
-        ("叫什么", "名字", "称呼", "我是谁", "是谁", "叫我"),
-        {"名字", "称呼", "身份", "用户"},
-    ),
-)
-FTS_SCHEMA_COMPONENT = "memory_records_fts"
-FTS_SCHEMA_VERSION = 1
-DEFAULT_MEMORY_METADATA = json.dumps({"schema_version": 1}, sort_keys=True)
-PLANNING_REVIEW_SOURCE = "planning_review"
-PLANNING_STATE_SOURCE = "planning_state"
-PLANNING_REVIEW_SCHEMA_VERSION = 1
-FORBIDDEN_PLANNING_RUNTIME_KEYS = frozenset(
-    {
-        "budget",
-        "checkpoints",
-        "currentLeafId",
-        "events",
-        "phase",
-        "plan",
-    }
-)
+FTS_SCHEMA_COMPONENT = _FTS_SCHEMA_COMPONENT
+FTS_SCHEMA_VERSION = _FTS_SCHEMA_VERSION
 
 
 @runtime_checkable
@@ -83,202 +66,8 @@ def _utcnow() -> datetime:
     return datetime.now(UTC)
 
 
-def _extract_cjk_terms(text: str) -> set[str]:
-    terms: set[str] = set()
-    for run in CJK_RUN_PATTERN.findall(text):
-        if len(run) <= 3:
-            terms.add(run)
-
-        for size in (2, 3):
-            if len(run) < size:
-                continue
-
-            for index in range(len(run) - size + 1):
-                terms.add(run[index : index + size])
-
-    return terms
-
-
-def _extract_search_terms(text: str) -> set[str]:
-    lowered = text.lower()
-    return set(ASCII_TOKEN_PATTERN.findall(lowered)) | _extract_cjk_terms(text)
-
-
-def _expand_query_terms(query: str) -> set[str]:
-    terms = _extract_search_terms(query)
-    for triggers, expansions in RECALL_QUERY_EXPANSIONS:
-        if any(trigger in query for trigger in triggers):
-            terms.update(expansions)
-
-    return terms
-
-
 def _build_keywords(content: str) -> str:
-    return " ".join(sorted(_extract_search_terms(content)))
-
-
-def _build_match_query(query: str) -> str | None:
-    terms = sorted(term for term in _expand_query_terms(query) if term)
-    if not terms:
-        return None
-
-    escaped_terms = []
-    for term in terms:
-        escaped = term.replace('"', '""')
-        escaped_terms.append(f'"{escaped}"')
-
-    return " OR ".join(escaped_terms)
-
-
-def _validate_memory_tier(tier: str) -> MemoryTier:
-    if tier not in VALID_MEMORY_TIERS:
-        valid_tiers = ", ".join(VALID_MEMORY_TIERS)
-        raise ValueError(f"Invalid memory tier: {tier}. Expected one of: {valid_tiers}")
-
-    return tier
-
-
-def _serialize_metadata(metadata: dict[str, object]) -> str:
-    return json.dumps(metadata, ensure_ascii=False, sort_keys=True)
-
-
-def _deserialize_metadata(metadata_json: str | None) -> dict[str, object]:
-    if not metadata_json:
-        return json.loads(DEFAULT_MEMORY_METADATA)
-
-    loaded = json.loads(metadata_json)
-    if not isinstance(loaded, dict):
-        return json.loads(DEFAULT_MEMORY_METADATA)
-
-    if "schema_version" not in loaded:
-        loaded["schema_version"] = 1
-
-    return dict(loaded)
-
-
-def _serialize_embedding(embedding: list[float] | None) -> str | None:
-    if embedding is None:
-        return None
-
-    return json.dumps(embedding)
-
-
-def _deserialize_embedding(embedding_json: str | None) -> list[float] | None:
-    if not embedding_json:
-        return None
-
-    loaded = json.loads(embedding_json)
-    if not isinstance(loaded, list):
-        return None
-
-    return [float(value) for value in loaded]
-
-
-def _parse_datetime(raw_value: str | None) -> datetime:
-    if not raw_value:
-        return _utcnow()
-
-    return datetime.fromisoformat(raw_value)
-
-
-def _coerce_filter_datetime(raw_value: object) -> datetime | None:
-    if raw_value is None:
-        return None
-
-    if isinstance(raw_value, datetime):
-        return raw_value
-
-    if isinstance(raw_value, str):
-        return datetime.fromisoformat(raw_value)
-
-    raise TypeError("datetime filters must be datetime or ISO 8601 strings")
-
-
-def _contains_forbidden_runtime_keys(payload: object) -> bool:
-    if isinstance(payload, dict):
-        for key, value in payload.items():
-            if key in FORBIDDEN_PLANNING_RUNTIME_KEYS:
-                return True
-            if _contains_forbidden_runtime_keys(value):
-                return True
-        return False
-
-    if isinstance(payload, list):
-        return any(_contains_forbidden_runtime_keys(item) for item in payload)
-
-    return False
-
-
-def _validate_planning_review_payload(content: str, *, run_id: str) -> None:
-    try:
-        payload = json.loads(content)
-    except json.JSONDecodeError as exc:
-        raise ValueError("planning_review semantic content must be valid JSON") from exc
-
-    if not isinstance(payload, dict):
-        raise ValueError("planning_review semantic content must be a top-level object")
-
-    if payload.get("run_id") != run_id:
-        raise ValueError("planning_review payload.run_id must match metadata.run_id")
-    if payload.get("source") != PLANNING_REVIEW_SOURCE:
-        raise ValueError("planning_review payload.source must be planning_review")
-    if payload.get("schema_version") != PLANNING_REVIEW_SCHEMA_VERSION:
-        raise ValueError("planning_review payload.schema_version must be 1")
-
-    summary = payload.get("summary")
-    if not isinstance(summary, str) or not summary.strip():
-        raise ValueError("planning_review payload.summary must be a non-empty string")
-
-    stable_strategy = payload.get("stable_strategy")
-    if not isinstance(stable_strategy, dict):
-        raise ValueError("planning_review payload.stable_strategy must be an object")
-
-    if _contains_forbidden_runtime_keys(payload):
-        raise ValueError("running PlanningState payloads cannot be stored in semantic memory")
-
-
-def _validate_semantic_ingestion_contract(
-    *,
-    layer: MemoryLayer,
-    content_type: str,
-    metadata: dict[str, object],
-    content: str,
-) -> None:
-    if metadata.get("source") == PLANNING_STATE_SOURCE:
-        if layer == "semantic":
-            raise ValueError("planning_state runtime payloads cannot be stored in semantic memory")
-        return
-
-    if metadata.get("source") != PLANNING_REVIEW_SOURCE:
-        return
-
-    if layer != "semantic":
-        raise ValueError("planning_review records must be stored in the semantic layer")
-    if content_type != "json":
-        raise ValueError("planning_review records must use content_type=json")
-    if metadata.get("schema_version") != PLANNING_REVIEW_SCHEMA_VERSION:
-        raise ValueError("planning_review metadata.schema_version must be 1")
-
-    run_id = metadata.get("run_id")
-    if not isinstance(run_id, str) or not run_id.strip():
-        raise ValueError("planning_review metadata.run_id must be a non-empty string")
-
-    _validate_planning_review_payload(content, run_id=run_id)
-
-
-def _row_to_record(row: sqlite3.Row) -> MemoryRecord:
-    return MemoryRecord(
-        id=row["id"],
-        content=row["content"],
-        content_type=row["content_type"],
-        layer=_validate_memory_tier(row["tier"]),
-        metadata=_deserialize_metadata(row["metadata_json"]),
-        embedding=_deserialize_embedding(row["embedding_json"]),
-        created_at=_parse_datetime(row["created_at"]),
-        last_accessed=_parse_datetime(row["last_accessed"]),
-        access_count=int(row["access_count"]),
-        importance_score=float(row["importance_score"]),
-    )
+    return _search_build_keywords(content)
 
 
 class OmniMemStore:
@@ -303,8 +92,13 @@ class OmniMemStore:
         self._conn.row_factory = sqlite3.Row
         self._lock = threading.Lock()
         self._closed = False
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._ensure_store_schema()
+        configure_connection(self._conn)
+        ensure_store_schema(
+            self._conn,
+            build_keywords=_build_keywords,
+            now=_utcnow,
+            rebuild_fts_index=self._rebuild_fts_index,
+        )
 
     async def __aenter__(self) -> OmniMemStore:
         return self
@@ -338,7 +132,7 @@ class OmniMemStore:
         return await asyncio.to_thread(self._add_sync, memory)
 
     def _add_sync(self, memory: MemoryItem) -> str:
-        _validate_semantic_ingestion_contract(
+        validate_semantic_ingestion_contract(
             layer=memory.layer,
             content_type=memory.content_type,
             metadata=dict(memory.metadata),
@@ -347,7 +141,7 @@ class OmniMemStore:
         with self._lock:
             self._conn.execute("BEGIN IMMEDIATE")
             with self._conn:
-                self._insert_memory_locked(memory)
+                insert_memory(self._conn, memory, build_keywords=_build_keywords)
 
         return memory.id
 
@@ -367,9 +161,13 @@ class OmniMemStore:
     ) -> list[MemoryItem]:
         effective_limit = max(limit, 0)
         with self._lock:
-            rows = self._candidate_rows(query, filters)
-            items = [_row_to_record(row) for row in rows]
-            filtered = [item for item in items if self._matches_filters(item, filters)]
+            rows = candidate_rows(
+                self._conn,
+                query=query,
+                layer_filter=layer_filter(filters),
+            )
+            items = [_row_to_record(row, now=_utcnow) for row in rows]
+            filtered = [item for item in items if matches_filters(item, filters)]
 
         return filtered[:effective_limit]
 
@@ -379,25 +177,15 @@ class OmniMemStore:
     def _get_sync(self, memory_id: str) -> MemoryItem | None:
         with self._lock:
             row = self._conn.execute(
-                """
-                SELECT
-                    id,
-                    content,
-                    tier,
-                    content_type,
-                    metadata_json,
-                    embedding_json,
-                    created_at,
-                    last_accessed,
-                    access_count,
-                    importance_score
+                f"""
+                SELECT {record_columns()}
                 FROM memory_records
                 WHERE id = ? AND deleted = 0
                 """,
                 (memory_id,),
             ).fetchone()
 
-        return None if row is None else _row_to_record(row)
+        return None if row is None else _row_to_record(row, now=_utcnow)
 
     async def update(self, memory_id: str, content: str) -> None:
         await asyncio.to_thread(self._update_sync, memory_id, content)
@@ -460,18 +248,8 @@ class OmniMemStore:
         resolved_layer = validate_memory_layer(layer)
         with self._lock:
             rows = self._conn.execute(
-                """
-                SELECT
-                    id,
-                    content,
-                    tier,
-                    content_type,
-                    metadata_json,
-                    embedding_json,
-                    created_at,
-                    last_accessed,
-                    access_count,
-                    importance_score
+                f"""
+                SELECT {record_columns()}
                 FROM memory_records
                 WHERE tier = ? AND deleted = 0
                 ORDER BY rowid ASC
@@ -480,13 +258,13 @@ class OmniMemStore:
                 (resolved_layer, max(limit, 0), max(offset, 0)),
             ).fetchall()
 
-        return [_row_to_record(row) for row in rows]
+        return [_row_to_record(row, now=_utcnow) for row in rows]
 
     async def count(self, filters: dict[str, Any] | None = None) -> int:
         return await asyncio.to_thread(self._count_sync, filters)
 
     def _count_sync(self, filters: dict[str, Any] | None = None) -> int:
-        layer_filter = self._layer_filter(filters)
+        resolved_layer_filter = layer_filter(filters)
         if filters and any(
             key in filters
             for key in ("metadata", "content_type", "created_after", "created_before")
@@ -495,7 +273,7 @@ class OmniMemStore:
             return len(items)
 
         with self._lock:
-            if layer_filter is None:
+            if resolved_layer_filter is None:
                 row = self._conn.execute(
                     """
                     SELECT COUNT(*)
@@ -510,7 +288,7 @@ class OmniMemStore:
                     FROM memory_records
                     WHERE deleted = 0 AND tier = ?
                     """,
-                    (layer_filter,),
+                    (resolved_layer_filter,),
                 ).fetchone()
 
         return int(row[0]) if row is not None else 0
@@ -550,9 +328,9 @@ class OmniMemStore:
 
     def _recall_sync(self, query: str) -> list[MemoryRecord]:
         with self._lock:
-            rows = self._candidate_rows(query, None)
+            rows = candidate_rows(self._conn, query=query, layer_filter=None)
 
-        return [_row_to_record(row) for row in rows]
+        return [_row_to_record(row, now=_utcnow) for row in rows]
 
     async def store(
         self,
@@ -590,7 +368,7 @@ class OmniMemStore:
             validate_memory_layer(layer) if layer is not None else _validate_memory_tier(tier)
         )
         resolved_metadata = dict(metadata or {})
-        _validate_semantic_ingestion_contract(
+        validate_semantic_ingestion_contract(
             layer=resolved_layer,
             content_type=content_type,
             metadata=resolved_metadata,
@@ -607,430 +385,9 @@ class OmniMemStore:
         with self._lock:
             self._conn.execute("BEGIN IMMEDIATE")
             with self._conn:
-                self._insert_memory_locked(record)
+                insert_memory(self._conn, record, build_keywords=_build_keywords)
 
         return record
 
-    def _insert_memory_locked(self, memory: MemoryItem) -> None:
-        metadata_json = _serialize_metadata(dict(memory.metadata))
-        embedding_json = _serialize_embedding(memory.embedding)
-        created_at = memory.created_at.isoformat()
-        last_accessed = memory.last_accessed.isoformat()
-        self._conn.execute(
-            """
-            INSERT INTO memory_records (
-                id,
-                content,
-                tier,
-                content_type,
-                metadata_json,
-                embedding_json,
-                created_at,
-                last_accessed,
-                access_count,
-                importance_score,
-                deleted
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
-            """,
-            (
-                memory.id,
-                memory.content,
-                memory.layer,
-                memory.content_type,
-                metadata_json,
-                embedding_json,
-                created_at,
-                last_accessed,
-                memory.access_count,
-                memory.importance_score,
-            ),
-        )
-        self._conn.execute(
-            """
-            INSERT INTO memory_records_fts (id, content, keywords)
-            VALUES (?, ?, ?)
-            """,
-            (memory.id, memory.content, _build_keywords(memory.content)),
-        )
-
-    def _ensure_store_schema(self) -> None:
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS memory_records (
-                id TEXT PRIMARY KEY,
-                content TEXT NOT NULL,
-                tier TEXT NOT NULL CHECK (
-                    tier IN ('working', 'episodic', 'semantic', 'skill')
-                ),
-                content_type TEXT NOT NULL DEFAULT 'text',
-                metadata_json TEXT NOT NULL DEFAULT '{"schema_version":1}',
-                embedding_json TEXT,
-                created_at TEXT NOT NULL,
-                last_accessed TEXT NOT NULL,
-                access_count INTEGER NOT NULL DEFAULT 0,
-                importance_score REAL NOT NULL DEFAULT 0.5,
-                deleted INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1))
-            )
-            """
-        )
-        self._ensure_memory_record_columns()
-        self._conn.execute(
-            """
-            CREATE VIRTUAL TABLE IF NOT EXISTS memory_records_fts USING fts5(
-                id UNINDEXED,
-                content,
-                keywords,
-                tokenize = 'unicode61'
-            )
-            """
-        )
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS schema_version (
-                component TEXT PRIMARY KEY,
-                version INTEGER NOT NULL
-            )
-            """
-        )
-        self._ensure_fts_schema()
-        self._conn.commit()
-
-    def _ensure_memory_record_columns(self) -> None:
-        columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(memory_records)")}
-        additions = (
-            (
-                "content_type",
-                "ALTER TABLE memory_records ADD COLUMN content_type TEXT NOT NULL DEFAULT 'text'",
-            ),
-            (
-                "metadata_json",
-                """
-                ALTER TABLE memory_records
-                ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{"schema_version":1}'
-                """,
-            ),
-            (
-                "embedding_json",
-                "ALTER TABLE memory_records ADD COLUMN embedding_json TEXT",
-            ),
-            (
-                "created_at",
-                "ALTER TABLE memory_records ADD COLUMN created_at TEXT",
-            ),
-            (
-                "last_accessed",
-                "ALTER TABLE memory_records ADD COLUMN last_accessed TEXT",
-            ),
-            (
-                "access_count",
-                "ALTER TABLE memory_records ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0",
-            ),
-            (
-                "importance_score",
-                """
-                ALTER TABLE memory_records
-                ADD COLUMN importance_score REAL NOT NULL DEFAULT 0.5
-                """,
-            ),
-            (
-                "deleted",
-                "ALTER TABLE memory_records ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0",
-            ),
-        )
-        for column_name, statement in additions:
-            if column_name in columns:
-                continue
-
-            self._conn.execute(statement)
-
-        timestamp = _utcnow().isoformat()
-        self._conn.execute(
-            """
-            UPDATE memory_records
-            SET content_type = 'text'
-            WHERE content_type IS NULL OR content_type = ''
-            """
-        )
-        self._conn.execute(
-            """
-            UPDATE memory_records
-            SET metadata_json = ?
-            WHERE metadata_json IS NULL OR trim(metadata_json) = ''
-            """,
-            (DEFAULT_MEMORY_METADATA,),
-        )
-        self._conn.execute(
-            """
-            UPDATE memory_records
-            SET created_at = ?
-            WHERE created_at IS NULL OR created_at = ''
-            """,
-            (timestamp,),
-        )
-        self._conn.execute(
-            """
-            UPDATE memory_records
-            SET last_accessed = created_at
-            WHERE last_accessed IS NULL OR last_accessed = ''
-            """,
-        )
-        self._conn.execute(
-            """
-            UPDATE memory_records
-            SET access_count = 0
-            WHERE access_count IS NULL
-            """
-        )
-        self._conn.execute(
-            """
-            UPDATE memory_records
-            SET importance_score = 0.5
-            WHERE importance_score IS NULL
-            """
-        )
-        self._conn.execute(
-            """
-            UPDATE memory_records
-            SET deleted = 0
-            WHERE deleted IS NULL
-            """
-        )
-
     def _rebuild_fts_index(self) -> None:
-        self._conn.execute("DELETE FROM memory_records_fts")
-        self._conn.execute(
-            """
-            INSERT INTO memory_records_fts (id, content, keywords)
-            SELECT id, content, ''
-            FROM memory_records
-            WHERE deleted = 0
-            """
-        )
-        rows = self._conn.execute(
-            """
-            SELECT id, content
-            FROM memory_records
-            WHERE deleted = 0
-            ORDER BY rowid ASC
-            """
-        ).fetchall()
-        for row in rows:
-            self._conn.execute(
-                """
-                UPDATE memory_records_fts
-                SET keywords = ?
-                WHERE id = ?
-                """,
-                (_build_keywords(row["content"]), row["id"]),
-            )
-
-    def _ensure_fts_schema(self) -> None:
-        if self._get_schema_version(FTS_SCHEMA_COMPONENT) >= FTS_SCHEMA_VERSION:
-            return
-
-        self._rebuild_fts_index()
-        self._conn.execute(
-            """
-            INSERT INTO schema_version (component, version)
-            VALUES (?, ?)
-            ON CONFLICT(component) DO UPDATE SET version = excluded.version
-            """,
-            (FTS_SCHEMA_COMPONENT, FTS_SCHEMA_VERSION),
-        )
-
-    def _get_schema_version(self, component: str) -> int:
-        row = self._conn.execute(
-            "SELECT version FROM schema_version WHERE component = ?",
-            (component,),
-        ).fetchone()
-        if row is None:
-            return 0
-
-        return int(row["version"])
-
-    def _candidate_rows(
-        self,
-        query: str,
-        filters: dict[str, Any] | None,
-    ) -> list[sqlite3.Row]:
-        layer_filter = self._layer_filter(filters)
-        if not query:
-            if layer_filter is None:
-                return self._conn.execute(
-                    """
-                    SELECT
-                        id,
-                        content,
-                        tier,
-                        content_type,
-                        metadata_json,
-                        embedding_json,
-                        created_at,
-                        last_accessed,
-                        access_count,
-                        importance_score
-                    FROM memory_records
-                    WHERE deleted = 0
-                    ORDER BY rowid ASC
-                    """
-                ).fetchall()
-
-            return self._conn.execute(
-                """
-                SELECT
-                    id,
-                    content,
-                    tier,
-                    content_type,
-                    metadata_json,
-                    embedding_json,
-                    created_at,
-                    last_accessed,
-                    access_count,
-                    importance_score
-                FROM memory_records
-                WHERE deleted = 0 AND tier = ?
-                ORDER BY rowid ASC
-                """,
-                (layer_filter,),
-            ).fetchall()
-
-        rows = self._recall_with_fts(query, layer_filter)
-        if rows:
-            return rows
-
-        like_query = f"%{query.lower()}%"
-        if layer_filter is None:
-            return self._conn.execute(
-                """
-                SELECT
-                    id,
-                    content,
-                    tier,
-                    content_type,
-                    metadata_json,
-                    embedding_json,
-                    created_at,
-                    last_accessed,
-                    access_count,
-                    importance_score
-                FROM memory_records
-                WHERE deleted = 0 AND lower(content) LIKE ?
-                ORDER BY rowid ASC
-                """,
-                (like_query,),
-            ).fetchall()
-
-        return self._conn.execute(
-            """
-            SELECT
-                id,
-                content,
-                tier,
-                content_type,
-                metadata_json,
-                embedding_json,
-                created_at,
-                last_accessed,
-                access_count,
-                importance_score
-            FROM memory_records
-            WHERE deleted = 0 AND tier = ? AND lower(content) LIKE ?
-            ORDER BY rowid ASC
-            """,
-            (layer_filter, like_query),
-        ).fetchall()
-
-    def _layer_filter(self, filters: dict[str, Any] | None) -> MemoryLayer | None:
-        if not filters:
-            return None
-
-        raw_layer = filters.get("layer", filters.get("tier"))
-        if raw_layer is None:
-            return None
-
-        return validate_memory_layer(str(raw_layer))
-
-    def _matches_filters(
-        self,
-        item: MemoryItem,
-        filters: dict[str, Any] | None,
-    ) -> bool:
-        if not filters:
-            return True
-
-        raw_layer = filters.get("layer", filters.get("tier"))
-        if raw_layer is not None and item.layer != validate_memory_layer(str(raw_layer)):
-            return False
-
-        content_type = filters.get("content_type")
-        if content_type is not None and item.content_type != content_type:
-            return False
-
-        metadata_filters = filters.get("metadata")
-        if isinstance(metadata_filters, dict):
-            for key, value in metadata_filters.items():
-                if item.metadata.get(key) != value:
-                    return False
-
-        created_after = _coerce_filter_datetime(filters.get("created_after"))
-        if created_after is not None and item.created_at < created_after:
-            return False
-
-        created_before = _coerce_filter_datetime(filters.get("created_before"))
-        return not (created_before is not None and item.created_at > created_before)
-
-    def _recall_with_fts(
-        self,
-        query: str,
-        layer_filter: MemoryLayer | None,
-    ) -> list[sqlite3.Row]:
-        match_query = _build_match_query(query)
-        if match_query is None:
-            return []
-
-        if layer_filter is None:
-            return self._conn.execute(
-                """
-                SELECT
-                    mr.id,
-                    mr.content,
-                    mr.tier,
-                    mr.content_type,
-                    mr.metadata_json,
-                    mr.embedding_json,
-                    mr.created_at,
-                    mr.last_accessed,
-                    mr.access_count,
-                    mr.importance_score
-                FROM memory_records_fts fts
-                JOIN memory_records mr ON mr.id = fts.id
-                WHERE memory_records_fts MATCH ? AND mr.deleted = 0
-                ORDER BY bm25(memory_records_fts), mr.rowid ASC
-                """,
-                (match_query,),
-            ).fetchall()
-
-        return self._conn.execute(
-            """
-            SELECT
-                mr.id,
-                mr.content,
-                mr.tier,
-                mr.content_type,
-                mr.metadata_json,
-                mr.embedding_json,
-                mr.created_at,
-                mr.last_accessed,
-                mr.access_count,
-                mr.importance_score
-            FROM memory_records_fts fts
-            JOIN memory_records mr ON mr.id = fts.id
-            WHERE memory_records_fts MATCH ?
-              AND mr.deleted = 0
-              AND mr.tier = ?
-            ORDER BY bm25(memory_records_fts), mr.rowid ASC
-            """,
-            (match_query, layer_filter),
-        ).fetchall()
+        rebuild_fts_index(self._conn, build_keywords_func=_build_keywords)
