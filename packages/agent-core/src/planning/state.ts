@@ -7,6 +7,9 @@ export interface BudgetLedger {
 	readonly turnSpent: number;
 	readonly turnBudget: number;
 	readonly retryTokenSpent: number;
+	readonly retryTokenBudget: number;
+	readonly stepSpent: number;
+	readonly stepBudget: number;
 }
 
 export type PlanPhase =
@@ -118,6 +121,9 @@ const EMPTY_BUDGET: BudgetLedger = {
 	turnSpent: 0,
 	turnBudget: 0,
 	retryTokenSpent: 0,
+	retryTokenBudget: 0,
+	stepSpent: 0,
+	stepBudget: 0,
 };
 
 export function createPlanningState(
