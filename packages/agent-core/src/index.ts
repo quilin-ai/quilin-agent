@@ -12,12 +12,37 @@ import { MCPClientManager } from "./tools/mcp-client.js";
 export * from "./context/index.js";
 export * from "./llm/client.js";
 export * from "./llm/provider.js";
+export * from "./memory/index.js";
 export * from "./repl.js";
 export * from "./safety/write-authority.js";
 export * from "./state/checkpoint.js";
 export * from "./tools/mcp-client.js";
 export * from "./tools/router.js";
 export * from "./types/index.js";
+export {
+	applyEvent,
+	createPlanningState,
+	type BudgetLedger,
+	type Checkpoint as PlanningCheckpoint,
+	type CheckpointFailedPayload,
+	type PlanPhase,
+	type PlanningEvent,
+	type PlanningState,
+} from "./planning/state.js";
+export {
+	type ClarificationRequest,
+	type DagPlan,
+	type Intent,
+	type IntentClassification,
+	type IntentClassifier,
+	type LLMPlannerResponse,
+	type LinearPlan,
+	type MemoryWriteScope,
+	type Plan,
+	type PlannerAudit,
+	type RiskLevel,
+	type SubTask,
+} from "./planning/types.js";
 
 const HEARTBEAT_INTERVAL_MS = 60_000;
 
