@@ -819,34 +819,24 @@ M2.6 / M2.7 ↔ Iter F soul.md 写路径
 
 ### 16.1 `providers/memory/src/omnimem/store.py` 拆分（SOFT-1）
 
-- **现状**：`wc -l providers/memory/src/omnimem/store.py` = `1036`，超 800 软线 236 行。本轮为避免 M1.2-M1.5 功能 commit 混入纯机械重构而延后。
-- **建议切分**（Codex 提案）：
-  - `store_schema.py`：schema migration + `_ensure_schema` + `PRAGMA` 设置。
-  - `store_validation.py`：`_validate_planning_review_payload` + `_validate_semantic_ingestion_contract` + forbidden keys 常量。
-  - `store.py`：保留 CRUD + FTS + recall + MCP-facing API。
-- **DoD**：拆后 `uv run pytest -q` 仍 `86 passed`；三个文件 LOC 都 ≤ 400；public API 签名不变（`store.MemoryStore.store()` / `recall()` / etc.）。
-- **Trigger**：下一轮独立开一个小 slice，不要塞进 M1.6 / M1.7 功能 commit。
+- **状态**：✅ 已闭合。
+- **commit**：`083088c refactor(memory): split store internals`。
+- **实证**：`store.py` = `393` LOC；`store_schema.py` = `235` LOC；`store_validation.py` = `91` LOC；`store_search.py` = `226` LOC；`store_serialization.py` = `75` LOC；`store_filters.py` = `56` LOC；`store_records.py` = `52` LOC。
+- **验证**：`cd providers/memory && uv run pytest -q` = `87 passed`（提交时实证）；public API 签名保持 `OmniMemStore.store()` / `recall()` 等入口不变。
 
 ### 16.2 `test_planning_integration.py` NEGATIVE 分支扩展（SOFT-2）
 
-- **现状**：本轮覆盖 4 条路径（POSITIVE / planning_review+events / planning_state+events / MCP round-trip）；6 禁字段里只个别枚举，layer/content_type/schema_version 不匹配尚未单独 NEGATIVE。
-- **建议补齐**（预计 +8 条）：
-  - 6 禁字段各单独一条 `planning_review` NEGATIVE（checkpoints / phase / budget / currentLeafId / plan 各一）——events 已覆盖。
-  - `layer="episodic"` + `source="planning_review"` 应拒。
-  - `content_type="text"` + `source="planning_review"` 应拒。
-  - `schema_version=2`（未知版本）应拒。
-  - `run_id` missing / mismatch 与 payload 应拒。
-- **DoD**：每条都验证 `raises ValueError` + 未写入 SQLite。
-- **Trigger**：M1.6 / M1.7 开始前或 §16.1 拆分时顺便补。
+- **状态**：✅ 已闭合。
+- **commit**：`7f120b6 test(memory): expand planning guard negatives`。
+- **实证**：`providers/memory/tests/test_planning_integration.py` = `255` LOC；新增 forbidden runtime keys、错误 layer/content_type/schema_version、metadata missing/mismatched `run_id` 等 NEGATIVE 覆盖。
+- **验证**：`cd providers/memory && uv run pytest tests/test_planning_integration.py -q` = `15 passed`；`uv run pytest tests/test_store.py tests/test_planning_integration.py -q` = `46 passed`（提交时实证）。
 
 ### 16.3 Benchmark 数据目录结构（SOFT-3）
 
-- **现状**：`.benchmarks/e1a-smoke/` 存放 SWE-bench-Lite manifest + test.jsonl 作为 **input dataset**（M0.9a Arm L spike 残留），本轮未 commit。
-- **决策项**：区分 input dataset / output artifact 目录，避免混存：
-  - 建议 `providers/memory/benchmarks/datasets/` 放 input（如需纳入版本控制，考虑 Git LFS 或 manifest-only 记录 + 下载脚本）。
-  - 建议 `providers/memory/benchmarks/.output/` 放运行产物，默认 `.gitignore`。
-- **DoD**：新规则写入 `providers/memory/benchmarks/README.md`；现有 `.benchmarks/` 迁移或保留 `.gitignore` 决定成文。
-- **Trigger**：Arm L Spike 解锁 / LongMemEval 数据接入任一事件触发。
+- **状态**：✅ 已闭合。
+- **commit**：`a4f3780 docs(memory): close benchmark and YAML follow-ups`；根 `.benchmarks/` 后续由 `521b4ae chore: ignore local benchmark scratch` 纳入本地 scratch ignore。
+- **决策**：`providers/memory/benchmarks/README.md` 规定 benchmark input datasets 与 output artifacts 分离；`providers/memory/benchmarks/.gitignore` 忽略运行输出。
+- **实证**：`providers/memory/benchmarks/README.md` = `32` LOC；`providers/memory/benchmarks/.gitignore` = `16` LOC；根 `.gitignore` 已忽略 `.benchmarks/`。
 
 ### 16.4 `packages/agent-core/src/config/loader.ts` YAML 解析器（SOFT-4）
 
