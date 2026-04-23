@@ -10,5 +10,6 @@ export * from "./memory-writer.js";
 export * from "./planner.js";
 export * from "./replan.js";
 export * from "./state.js";
+export * from "./strategy.js";
 export * from "./termination.js";
 export * from "./types.js";

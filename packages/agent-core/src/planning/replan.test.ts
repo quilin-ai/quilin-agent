@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { LinearPlan, PlanningEvent, SubTask } from "./index.js";
-import { applyLocalRearrange, applyLocalRedecompose } from "./replan.js";
+import {
+	applyGlobalReplan,
+	applyLocalRearrange,
+	applyLocalRedecompose,
+	computeGlobalReplanRate,
+} from "./replan.js";
 import { applyEvent, createPlanningState } from "./state.js";
 
 function makeStep(id: string, overrides: Partial<SubTask> = {}): SubTask {
@@ -198,5 +203,128 @@ describe("applyLocalRedecompose", () => {
 		expect(replayed).toEqual(direct);
 		expect(replayed.plan).toEqual(patch.plan);
 		expect(replayed.currentLeafId).toBe("table.collect");
+	});
+});
+
+describe("applyGlobalReplan", () => {
+	it("records a global replan trigger metric and replaces the whole plan", () => {
+		const previousPlan: LinearPlan = {
+			kind: "linear",
+			subtasks: [makeStep("search"), makeStep("draft")],
+		};
+		const nextPlan: LinearPlan = {
+			kind: "linear",
+			subtasks: [makeStep("reconfirm"), makeStep("rewrite")],
+		};
+
+		const patch = applyGlobalReplan(previousPlan, nextPlan, {
+			reason: "goal_drift",
+			currentLeafId: "reconfirm",
+			note: "goal changed after user correction",
+			production: true,
+		});
+
+		expect(patch).toMatchObject({
+			level: "G-Replan",
+			reason: "goal_drift",
+			note: "goal changed after user correction",
+			plan: nextPlan,
+			previousPlan,
+			currentLeafId: "reconfirm",
+			production: true,
+			metric: {
+				kind: "global_replan_triggered",
+				reason: "goal_drift",
+				production: true,
+			},
+		});
+	});
+
+	it("replays to the same state once the global replan event is appended", () => {
+		const previousPlan: LinearPlan = {
+			kind: "linear",
+			subtasks: [makeStep("search"), makeStep("draft")],
+		};
+		const nextPlan: LinearPlan = {
+			kind: "linear",
+			subtasks: [makeStep("scope"), makeStep("draft")],
+		};
+		const patch = applyGlobalReplan(previousPlan, nextPlan, {
+			reason: "external_context_changed",
+			currentLeafId: "scope",
+		});
+		const baseEvents: readonly PlanningEvent[] = [
+			{
+				seq: 1,
+				timestamp: 1_000,
+				kind: "task_decomposed",
+				payload: { plan: previousPlan },
+			},
+			{
+				seq: 2,
+				timestamp: 1_100,
+				kind: "subtask_started",
+				payload: { leafId: "draft" },
+			},
+		];
+		const replanEvent: PlanningEvent = {
+			seq: 3,
+			timestamp: 1_200,
+			kind: "replan",
+			payload: {
+				plan: patch.plan,
+				currentLeafId: patch.currentLeafId,
+			},
+		};
+
+		const direct = applyEvent(
+			baseEvents.reduce(applyEvent, createPlanningState("run-global-replan")),
+			replanEvent,
+		);
+		const replayed = [...baseEvents, replanEvent].reduce(
+			applyEvent,
+			createPlanningState("run-global-replan"),
+		);
+
+		expect(replayed).toEqual(direct);
+		expect(replayed.plan).toEqual(nextPlan);
+		expect(replayed.currentLeafId).toBe("scope");
+	});
+});
+
+describe("computeGlobalReplanRate", () => {
+	it("computes global replan trigger rates and the production <5% target", () => {
+		expect(
+			computeGlobalReplanRate([
+				{ hadGlobalReplan: true, production: true },
+				{ hadGlobalReplan: false, production: true },
+				{ hadGlobalReplan: false, production: true },
+				{ hadGlobalReplan: false, production: true },
+				{ hadGlobalReplan: false, production: true },
+				{ hadGlobalReplan: true, production: false },
+			]),
+		).toEqual({
+			totalRuns: 6,
+			globalReplanTriggers: 2,
+			triggerRate: 2 / 6,
+			productionRuns: 5,
+			productionGlobalReplanTriggers: 1,
+			productionTriggerRate: 1 / 5,
+			productionTargetRate: 0.05,
+			productionTargetMet: false,
+		});
+	});
+
+	it("treats an unobserved production sample set as target-met metric baseline", () => {
+		expect(computeGlobalReplanRate([])).toEqual({
+			totalRuns: 0,
+			globalReplanTriggers: 0,
+			triggerRate: 0,
+			productionRuns: 0,
+			productionGlobalReplanTriggers: 0,
+			productionTriggerRate: 0,
+			productionTargetRate: 0.05,
+			productionTargetMet: true,
+		});
 	});
 });

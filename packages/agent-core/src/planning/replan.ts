@@ -2,6 +2,7 @@ import { normalizeSubTask, replacePlanSubtree } from "./decompose.js";
 import type {
 	LinearPlan,
 	MemoryWriteScope,
+	Plan,
 	RiskLevel,
 	SubTask,
 } from "./types.js";
@@ -65,6 +66,59 @@ export interface LocalPlanPatch {
 	readonly plan: LinearPlan;
 	readonly currentLeafId: string | null;
 }
+
+export type GlobalReplanReason =
+	| "goal_drift"
+	| "budget_pressure"
+	| "repeated_local_repair"
+	| "external_context_changed"
+	| "manual_request";
+
+export interface GlobalReplanTrigger {
+	readonly reason: GlobalReplanReason;
+	readonly currentLeafId?: string | null;
+	readonly note?: string;
+	readonly production?: boolean;
+}
+
+export interface GlobalPlanPatch {
+	readonly level: "G-Replan";
+	readonly reason: GlobalReplanReason;
+	readonly note?: string;
+	readonly plan: Plan;
+	readonly previousPlan: Plan;
+	readonly currentLeafId: string | null;
+	readonly production: boolean;
+	readonly metric: GlobalReplanMetricObservation;
+}
+
+export interface GlobalReplanMetricObservation {
+	readonly kind: "global_replan_triggered";
+	readonly reason: GlobalReplanReason;
+	readonly production: boolean;
+}
+
+export interface GlobalReplanRateMetrics {
+	readonly totalRuns: number;
+	readonly globalReplanTriggers: number;
+	readonly triggerRate: number;
+	readonly productionRuns: number;
+	readonly productionGlobalReplanTriggers: number;
+	readonly productionTriggerRate: number;
+	readonly productionTargetRate: number;
+	readonly productionTargetMet: boolean;
+}
+
+export interface GlobalReplanRateOptions {
+	readonly productionTargetRate?: number;
+}
+
+export interface GlobalReplanRunSample {
+	readonly hadGlobalReplan: boolean;
+	readonly production?: boolean;
+}
+
+export const DEFAULT_GLOBAL_REPLAN_PRODUCTION_TARGET_RATE = 0.05;
 
 function findStepIndex(plan: LinearPlan, leafId: string): number {
 	const index = plan.subtasks.findIndex((step) => step.id === leafId);
@@ -228,5 +282,69 @@ export function applyLocalRedecompose(
 		],
 		plan: result.plan,
 		currentLeafId: result.insertedStepIds[0] ?? null,
+	};
+}
+
+function normalizeRate(value: number | undefined): number {
+	const resolved = value ?? DEFAULT_GLOBAL_REPLAN_PRODUCTION_TARGET_RATE;
+	if (!Number.isFinite(resolved) || resolved < 0 || resolved > 1) {
+		throw new RangeError("productionTargetRate must be between 0 and 1");
+	}
+	return resolved;
+}
+
+export function applyGlobalReplan(
+	previousPlan: Plan,
+	nextPlan: Plan,
+	trigger: GlobalReplanTrigger,
+): GlobalPlanPatch {
+	return {
+		level: "G-Replan",
+		reason: trigger.reason,
+		note: trigger.note,
+		plan: nextPlan,
+		previousPlan,
+		currentLeafId: trigger.currentLeafId ?? null,
+		production: trigger.production ?? false,
+		metric: {
+			kind: "global_replan_triggered",
+			reason: trigger.reason,
+			production: trigger.production ?? false,
+		},
+	};
+}
+
+export function computeGlobalReplanRate(
+	samples: ReadonlyArray<GlobalReplanRunSample>,
+	options: GlobalReplanRateOptions = {},
+): GlobalReplanRateMetrics {
+	const productionTargetRate = normalizeRate(options.productionTargetRate);
+	const globalReplanTriggers = samples.filter(
+		(sample) => sample.hadGlobalReplan,
+	).length;
+	const productionSamples = samples.filter(
+		(sample) => sample.production === true,
+	);
+	const productionGlobalReplanTriggers = productionSamples.filter(
+		(sample) => sample.hadGlobalReplan,
+	).length;
+
+	return {
+		totalRuns: samples.length,
+		globalReplanTriggers,
+		triggerRate:
+			samples.length === 0 ? 0 : globalReplanTriggers / samples.length,
+		productionRuns: productionSamples.length,
+		productionGlobalReplanTriggers,
+		productionTriggerRate:
+			productionSamples.length === 0
+				? 0
+				: productionGlobalReplanTriggers / productionSamples.length,
+		productionTargetRate,
+		productionTargetMet:
+			productionSamples.length === 0
+				? true
+				: productionGlobalReplanTriggers / productionSamples.length <
+					productionTargetRate,
 	};
 }
