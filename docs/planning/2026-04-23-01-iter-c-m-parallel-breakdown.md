@@ -108,6 +108,7 @@
 | Review gate | §16.6 Q2 follow-up third-slice review | ✅ 完成并修复 | `docs/review/2026-04-24-04-third-slice-review.md` | BLOCKING `0` / HIGH `0` / MEDIUM `1` / LOW `2`；MEDIUM/LOW 已修复或文档化；§16.6 gate 可闭合 |
 | Direction 5 | lint sweep | ✅ 完成 | `a1276b8` | `just check` 通过；`just lint-py` 通过；`cd packages/agent-core && pnpm tsc --noEmit` exit `0`；`pnpm test` = `444 passed`；`cd providers/memory && uv run pytest -q` = `98 passed` |
 | Iter C | C3.1 DAG plan 表示 | ✅ 完成 | `5ed938c` | `packages/agent-core/src/planning/dag.ts` + `dag.test.ts`；线性 plan 无损提升为 DAG、环检测、独立写集判定；`pnpm test src/planning/dag.test.ts` = `5 passed`；`pnpm test` = `449 passed`；`pnpm tsc --noEmit` exit `0` |
+| Iter M | M2.1 L2 冷热归档 schema | ✅ 完成 | `f8fde23` | `providers/memory/src/omnimem/archive.py` + `test_archive.py`；冷热策略、100k/user 容量目标、`zstd-stub` 冷区压缩元数据、SQLite manifest schema；`uv run pytest tests/test_archive.py -q` = `6 passed`；`uv run pytest -q` = `104 passed` |
 
 第三轮核心文件 LOC 实证：
 
