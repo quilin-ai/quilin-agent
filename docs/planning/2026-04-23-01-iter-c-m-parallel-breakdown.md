@@ -61,7 +61,7 @@
 | `providers/memory/src/omnimem/working.py` | `87` |
 | `providers/memory/src/omnimem/episodic.py` | `166` |
 | `providers/memory/src/omnimem/observer.py` | `157` |
-| `docs/research/arm-l-observer-spike-report.md` | `159` |
+| `docs/research/arm-l-observer-spike-report.md` | `161` |
 
 #### 第二轮 L3a 切片（§11.3）— S4 gate 记录
 

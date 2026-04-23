@@ -156,4 +156,6 @@ These are prior context only; they are not a fresh M0.9a Arm L run.
 
 This report does not implement the production L3a observer and does not change
 the Memory M0 hard gate. M0 remains scoped to L1/L2, FTS/BM25, and fusion
-retrieval, with L3a final implementation excluded until M0.9b.
+retrieval, with L3a final implementation excluded until M0.9b. While S4 is
+blocked, M0.9b remains blocked/deferred rather than a production implementation
+task.
