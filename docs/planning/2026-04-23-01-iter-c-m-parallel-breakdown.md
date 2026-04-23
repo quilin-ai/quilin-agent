@@ -848,11 +848,11 @@ M2.6 / M2.7 ↔ Iter F soul.md 写路径
 ### 16.4 `packages/agent-core/src/config/loader.ts` YAML 解析器（SOFT-4）
 
 - **现状**：`wc -l` = `398`，包含一个手写 minimal YAML parser（§parseYamlLike）。MVP 够用但不覆盖 YAML 1.2 完整语法（多行字符串、anchor、flow sequence 等）。
-- **决策项**：
-  - A) 继续保留手写，只在 config 场景内用，文档里说明"仅支持受限 YAML 子集"。
-  - B) 替换为 `yaml` npm 包，loader.ts 拆 `loader.ts` / `yaml-parser.ts` / `schema.ts`（已独立）。
-- **DoD**：若选 B，loader.ts ≤ 250 行，`pnpm test` 保留 integration test 集通过。
-- **Trigger**：真实项目有 config 写入并出现 parser 边角问题时触发。
+- **状态**：✅ 已闭合（决策：方案 A）。
+- **决策**：保留当前手写 minimal YAML parser，仅作为 capability config loader 的受限配置格式解析器使用；不引入新的 `yaml` npm 依赖，不拆分 / 重构 `loader.ts`。
+- **受限 YAML 子集**：仅支持 capability config fixture 需要的简单 mapping、缩进对象、布尔值、整数、inline string array（如 `["a", "b"]`）。
+- **明确不支持**：YAML 1.2 完整语法，包括但不限于多行字符串、anchor / alias、复杂 flow collection、tag、merge key、非字符串复杂 key。需要这些语法时必须改用 JSON，或另开任务评估引入正式 YAML parser。
+- **后续 Trigger**：真实项目 config 写入出现受限 parser 覆盖不了的边角问题，或用户配置需求明确要求 YAML 1.2 语义时，再重新评估方案 B；届时需补测试并保持 integration test 集通过。
 
 ### 16.5 S2 跨进程 checkpoint 端到端联调（HIGH-from-Planning-review）
 

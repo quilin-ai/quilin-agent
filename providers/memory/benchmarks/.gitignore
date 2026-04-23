@@ -1,0 +1,16 @@
+# Benchmark runtime artifacts are regenerated, not reviewed as source.
+.output/
+
+# Local Python execution cache.
+__pycache__/
+*.py[cod]
+
+# Keep datasets manifest-first. Raw payloads should be downloaded/generated or
+# governed by an explicit Git LFS decision before commit.
+datasets/**/*.zip
+datasets/**/*.tar
+datasets/**/*.tar.gz
+datasets/**/*.tgz
+datasets/**/*.jsonl
+datasets/**/*.sqlite
+datasets/**/*.db
