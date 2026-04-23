@@ -61,5 +61,8 @@ data/
 briefs/
 .spike/
 
+# === Local benchmark scratch ===
+.benchmarks/
+
 # Added by code-review-graph
 .code-review-graph/
