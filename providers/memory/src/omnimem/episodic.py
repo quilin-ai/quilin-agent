@@ -8,19 +8,16 @@ from .types import MemoryItem
 
 
 class SupportsMemoryStore(Protocol):
-    async def add(self, memory: MemoryItem) -> str:
-        ...
+    async def add(self, memory: MemoryItem) -> str: ...
 
     async def search(
         self,
         query: str,
         limit: int = 10,
         filters: dict[str, Any] | None = None,
-    ) -> list[MemoryItem]:
-        ...
+    ) -> list[MemoryItem]: ...
 
-    async def clear_layer(self, layer: str) -> int:
-        ...
+    async def clear_layer(self, layer: str) -> int: ...
 
 
 class EpisodicMemory:

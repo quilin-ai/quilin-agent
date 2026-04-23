@@ -50,9 +50,9 @@ function buildConfig(serverId: string): string {
 
 afterEach(async () => {
 	await Promise.all(
-		createdDirs.splice(0).map((directory) =>
-			rm(directory, { recursive: true, force: true }),
-		),
+		createdDirs
+			.splice(0)
+			.map((directory) => rm(directory, { recursive: true, force: true })),
 	);
 });
 
@@ -171,7 +171,9 @@ describe("loadCapabilitiesConfig", () => {
 		});
 
 		expect(loaded.source).toEqual({ kind: "builtin" });
-		expect(loaded.config).toEqual(createDefaultCapabilitiesConfig(workspaceRoot));
+		expect(loaded.config).toEqual(
+			createDefaultCapabilitiesConfig(workspaceRoot),
+		);
 	});
 
 	it("fails fast when an explicit config path does not exist", async () => {

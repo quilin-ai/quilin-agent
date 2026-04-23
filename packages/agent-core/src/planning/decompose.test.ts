@@ -1,18 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
 	createRedecomposedSubtasks,
-	decomposePlan,
 	DEFAULT_MAX_DECOMPOSE_DEPTH,
 	DEFAULT_MAX_DECOMPOSE_STEPS,
+	decomposePlan,
 	inferStepDepth,
 	replacePlanSubtree,
 } from "./decompose.js";
 import type { DagPlan, LinearPlan, SubTask } from "./types.js";
 
-function makeStep(
-	id: string,
-	overrides: Partial<SubTask> = {},
-): SubTask {
+function makeStep(id: string, overrides: Partial<SubTask> = {}): SubTask {
 	return {
 		id,
 		action: overrides.action ?? "web_search",
@@ -127,12 +124,12 @@ describe("decomposePlan", () => {
 
 	it("rejects missing plan sketches and invalid limits", () => {
 		expect(() => decomposePlan({ text: "no plan" })).toThrow(/planSketch/);
-		expect(() => decomposePlan({ kind: "linear", subtasks: [] }, { maxSteps: 0 })).toThrow(
-			/maxSteps/,
-		);
-		expect(() => decomposePlan({ kind: "linear", subtasks: [] }, { maxDepth: 0 })).toThrow(
-			/maxDepth/,
-		);
+		expect(() =>
+			decomposePlan({ kind: "linear", subtasks: [] }, { maxSteps: 0 }),
+		).toThrow(/maxSteps/);
+		expect(() =>
+			decomposePlan({ kind: "linear", subtasks: [] }, { maxDepth: 0 }),
+		).toThrow(/maxDepth/);
 	});
 });
 
@@ -210,10 +207,7 @@ describe("replacePlanSubtree", () => {
 			"table.collect",
 			"table.write",
 		]);
-		expect(result.insertedStepIds).toEqual([
-			"table.draft",
-			"table.finalize",
-		]);
+		expect(result.insertedStepIds).toEqual(["table.draft", "table.finalize"]);
 		expect(result.plan.subtasks.map((step) => step.id)).toEqual([
 			"search",
 			"table.draft",

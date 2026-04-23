@@ -1,7 +1,10 @@
-import type { LanguageModel } from "ai";
 import { fileURLToPath } from "node:url";
+import type { LanguageModel } from "ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createMockProvider, mockGenerateTextResult } from "../test/ai-fixtures.js";
+import {
+	createMockProvider,
+	mockGenerateTextResult,
+} from "../test/ai-fixtures.js";
 
 vi.mock("ai", () => ({
 	generateText: vi.fn(),
@@ -51,9 +54,16 @@ const mockSkillsManagerInstance = {
 
 vi.mock("../skills/manager.js", () => ({
 	SkillsManager: class MockSkillsManager {
+		discover = mockSkillsManagerInstance.discover;
+		startWatching = mockSkillsManagerInstance.startWatching;
+		stopWatching = mockSkillsManagerInstance.stopWatching;
+		onCatalogChange = mockSkillsManagerInstance.onCatalogChange;
+		list = mockSkillsManagerInstance.list;
+		postCompactRestore = mockSkillsManagerInstance.postCompactRestore;
+		getRecentSkillNames = mockSkillsManagerInstance.getRecentSkillNames;
+
 		constructor(options: unknown) {
 			mockSkillsManagerConstructor(options);
-			return mockSkillsManagerInstance as never;
 		}
 	},
 }));
@@ -138,10 +148,24 @@ describe("config loader integration", () => {
 		await main({ runtimeMode: "repl" });
 
 		expect(mockSkillsManagerConstructor).toHaveBeenCalledWith({
-			bundledRoots: [fileURLToPath(new URL("../test/fixtures/bundled-skills", import.meta.url))],
-			userRoots: [fileURLToPath(new URL("../test/fixtures/user-skills", import.meta.url))],
-			projectRoots: [fileURLToPath(new URL("../test/fixtures/project-skills", import.meta.url))],
-			pluginRoots: [fileURLToPath(new URL("../test/fixtures/plugin-skills", import.meta.url))],
+			bundledRoots: [
+				fileURLToPath(
+					new URL("../test/fixtures/bundled-skills", import.meta.url),
+				),
+			],
+			userRoots: [
+				fileURLToPath(new URL("../test/fixtures/user-skills", import.meta.url)),
+			],
+			projectRoots: [
+				fileURLToPath(
+					new URL("../test/fixtures/project-skills", import.meta.url),
+				),
+			],
+			pluginRoots: [
+				fileURLToPath(
+					new URL("../test/fixtures/plugin-skills", import.meta.url),
+				),
+			],
 			watcherEnabled: false,
 			debounceMs: 125,
 		});
@@ -160,7 +184,7 @@ describe("config loader integration", () => {
 					},
 				},
 			],
-			skillsManager: mockSkillsManagerInstance,
+			skillsManager: expect.objectContaining(mockSkillsManagerInstance),
 		});
 		expect(mockValidateMcpServerConfig).toHaveBeenCalledWith({
 			command: "node",
@@ -213,10 +237,24 @@ describe("config loader integration", () => {
 		await main({ runtimeMode: "repl" });
 
 		expect(mockSkillsManagerConstructor).toHaveBeenCalledWith({
-			bundledRoots: [fileURLToPath(new URL("../test/fixtures/bundled-skills", import.meta.url))],
-			userRoots: [fileURLToPath(new URL("../test/fixtures/user-skills", import.meta.url))],
-			projectRoots: [fileURLToPath(new URL("../test/fixtures/project-skills", import.meta.url))],
-			pluginRoots: [fileURLToPath(new URL("../test/fixtures/plugin-skills", import.meta.url))],
+			bundledRoots: [
+				fileURLToPath(
+					new URL("../test/fixtures/bundled-skills", import.meta.url),
+				),
+			],
+			userRoots: [
+				fileURLToPath(new URL("../test/fixtures/user-skills", import.meta.url)),
+			],
+			projectRoots: [
+				fileURLToPath(
+					new URL("../test/fixtures/project-skills", import.meta.url),
+				),
+			],
+			pluginRoots: [
+				fileURLToPath(
+					new URL("../test/fixtures/plugin-skills", import.meta.url),
+				),
+			],
 			watcherEnabled: false,
 			debounceMs: 250,
 		});
@@ -235,7 +273,7 @@ describe("config loader integration", () => {
 					},
 				},
 			],
-			skillsManager: mockSkillsManagerInstance,
+			skillsManager: expect.objectContaining(mockSkillsManagerInstance),
 		});
 		expect(mockValidateMcpServerConfig).toHaveBeenCalledWith({
 			command: "node",

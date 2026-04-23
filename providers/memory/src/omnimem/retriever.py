@@ -23,13 +23,11 @@ class BM25SearchStore(Protocol):
         query: str,
         limit: int = 10,
         filters: dict[str, Any] | None = None,
-    ) -> list[MemoryItem]:
-        ...
+    ) -> list[MemoryItem]: ...
 
 
 class WorkingMemorySource(Protocol):
-    async def get_recent(self, limit: int | None = None) -> list[MemoryItem]:
-        ...
+    async def get_recent(self, limit: int | None = None) -> list[MemoryItem]: ...
 
 
 class VectorSearchStore(Protocol):
@@ -38,8 +36,7 @@ class VectorSearchStore(Protocol):
         query: str,
         limit: int = 10,
         filters: dict[str, Any] | None = None,
-    ) -> list[MemoryItem]:
-        ...
+    ) -> list[MemoryItem]: ...
 
 
 class KnowledgeGraphStore(Protocol):
@@ -50,8 +47,7 @@ class KnowledgeGraphStore(Protocol):
         max_hops: int = 2,
         limit: int = 10,
         as_of: datetime | str | None = None,
-    ) -> list[KGSearchResult]:
-        ...
+    ) -> list[KGSearchResult]: ...
 
 
 class CandidateReranker(Protocol):
@@ -61,8 +57,7 @@ class CandidateReranker(Protocol):
         items: list[MemoryItem],
         *,
         task_context: dict[str, Any] | None = None,
-    ) -> list[MemoryItem]:
-        ...
+    ) -> list[MemoryItem]: ...
 
 
 class MemoryRetriever:
@@ -257,10 +252,7 @@ class MemoryRetriever:
             limit=max(effective_limit, self._kg_limit),
             as_of=as_of,
         )
-        return [
-            self._kg_result_to_memory_item(result)
-            for result in candidates[:effective_limit]
-        ]
+        return [self._kg_result_to_memory_item(result) for result in candidates[:effective_limit]]
 
     async def _retrieve_working(
         self,
@@ -431,9 +423,7 @@ class MemoryRetriever:
                 "seed_entity": result.seed_entity,
                 "memory_id": result.memory_id,
                 "valid_from": result.valid_from.isoformat(),
-                "valid_to": (
-                    result.valid_to.isoformat() if result.valid_to is not None else None
-                ),
+                "valid_to": (result.valid_to.isoformat() if result.valid_to is not None else None),
                 "staleness": "stale" if is_stale else "fresh",
                 "source_layers": ["kg"],
             },

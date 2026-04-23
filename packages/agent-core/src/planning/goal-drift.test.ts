@@ -1,16 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { applyEvent, createPlanningState } from "./state.js";
 import {
 	createGoalDriftEvent,
-	detectGoalDrift,
 	DEFAULT_GOAL_DRIFT_THRESHOLD,
+	detectGoalDrift,
 } from "./goal-drift.js";
-import type { PlanningEvent, PlanningState } from "./index.js";
+import type { PlanningState } from "./index.js";
+import { applyEvent, createPlanningState } from "./state.js";
 
-function makeState(
-	stepCount: number,
-	priorWarnings = 0,
-): PlanningState {
+function makeState(stepCount: number, priorWarnings = 0): PlanningState {
 	let state = createPlanningState("run-drift");
 	let seq = 0;
 

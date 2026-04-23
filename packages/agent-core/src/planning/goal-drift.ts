@@ -51,11 +51,13 @@ function normalizePositiveInteger(
 }
 
 function countStartedSteps(state: PlanningState): number {
-	return state.events.filter((event) => event.kind === "subtask_started").length;
+	return state.events.filter((event) => event.kind === "subtask_started")
+		.length;
 }
 
 export function countGoalDriftWarnings(state: PlanningState): number {
-	return state.events.filter((event) => event.kind === "goal_drift_detected").length;
+	return state.events.filter((event) => event.kind === "goal_drift_detected")
+		.length;
 }
 
 export function detectGoalDrift(
@@ -114,12 +116,11 @@ export function detectGoalDrift(
 		stepCount,
 		warningCount,
 		currentLeafId: state.currentLeafId,
-		reason:
-			!drifted
-				? null
-				: shouldReplan
-					? "warning_limit_reached"
-					: "similarity_below_threshold",
+		reason: !drifted
+			? null
+			: shouldReplan
+				? "warning_limit_reached"
+				: "similarity_below_threshold",
 	};
 }
 

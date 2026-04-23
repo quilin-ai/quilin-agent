@@ -1,6 +1,6 @@
-import { classifyIntent, type IntentDispatchOptions } from "./intent.js";
 import type { PlanContext } from "./context.js";
-import { decomposePlan, type DecomposeOptions } from "./decompose.js";
+import { type DecomposeOptions, decomposePlan } from "./decompose.js";
+import { classifyIntent, type IntentDispatchOptions } from "./intent.js";
 import type {
 	IntentClassification,
 	LLMPlannerResponse,

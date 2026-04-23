@@ -24,7 +24,6 @@ import {
 } from "./manager.js";
 import type {
 	GuardDecision,
-	SkillDescriptor,
 	SkillFrontmatter,
 	SkillManageAction,
 	SkillManageResult,

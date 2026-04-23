@@ -1,7 +1,4 @@
-import {
-	normalizeSubTask,
-	replacePlanSubtree,
-} from "./decompose.js";
+import { normalizeSubTask, replacePlanSubtree } from "./decompose.js";
 import type {
 	LinearPlan,
 	MemoryWriteScope,
@@ -88,7 +85,9 @@ function applyLeafChange(step: SubTask, change: LeafChange): SubTask {
 		preconditions: change.preconditions ?? step.preconditions,
 		effects: change.effects ?? step.effects,
 		skillHint:
-			change.skillHint === null ? undefined : (change.skillHint ?? step.skillHint),
+			change.skillHint === null
+				? undefined
+				: (change.skillHint ?? step.skillHint),
 		arguments: change.arguments ?? step.arguments,
 		writeScope: change.writeScope ?? step.writeScope,
 		risk: change.risk ?? step.risk,

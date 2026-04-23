@@ -161,7 +161,11 @@ describe("consumeBudget", () => {
 			charge: { tokens: 1 },
 			expected: { exceeded: "token", reason: "ResourceExhausted" },
 		},
-	])("returns a terminal decision when the %s budget is exceeded", ({ ledger, charge, expected }) => {
+	])("returns a terminal decision when the %s budget is exceeded", ({
+		ledger,
+		charge,
+		expected,
+	}) => {
 		const decision = consumeBudget(ledger, charge);
 
 		expect(decision).toMatchObject({

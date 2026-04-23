@@ -69,7 +69,10 @@ export type PlanningEvent =
 			readonly seq: number;
 			readonly timestamp: number;
 			readonly kind: "tool_called";
-			readonly payload: { readonly toolCall: ToolCall; readonly leafId?: string };
+			readonly payload: {
+				readonly toolCall: ToolCall;
+				readonly leafId?: string;
+			};
 	  }
 	| {
 			readonly seq: number;

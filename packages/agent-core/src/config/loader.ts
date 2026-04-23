@@ -2,8 +2,8 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { SkillsManager } from "../skills/manager.js";
-import * as mcpClientModule from "../tools/mcp-client.js";
 import type { MCPServerConfig as RuntimeMCPServerConfig } from "../tools/mcp-client.js";
+import * as mcpClientModule from "../tools/mcp-client.js";
 import type { MCPServerEntry } from "../tools/registry.js";
 import { capabilitiesConfigSchema } from "./schema.js";
 import {
@@ -169,7 +169,7 @@ function parseYamlLike(yamlText: string): Record<string, unknown> {
 		const key = line.slice(0, separatorIndex).trim();
 		const rawValue = line.slice(separatorIndex + 1);
 
-		while (stack.length > 1 && indent <= stack[stack.length - 1]!.indent) {
+		while (stack.length > 1 && indent <= stack[stack.length - 1].indent) {
 			stack.pop();
 		}
 
@@ -191,11 +191,12 @@ function parseYamlLike(yamlText: string): Record<string, unknown> {
 	return parsed;
 }
 
-function formatSchemaError(issues: readonly { path: PropertyKey[]; message: string }[]) {
+function formatSchemaError(
+	issues: readonly { path: PropertyKey[]; message: string }[],
+) {
 	return issues
 		.map((issue) => {
-			const location =
-				issue.path.length === 0 ? "root" : issue.path.join(".");
+			const location = issue.path.length === 0 ? "root" : issue.path.join(".");
 			return `${location}: ${issue.message}`;
 		})
 		.join("; ");
@@ -283,21 +284,22 @@ function buildSkillsManager(
 	return new SkillsManager({
 		...(config.skills.bundledRoots == null
 			? {}
-			: { bundledRoots: resolveStringArray(config.skills.bundledRoots, baseDir) }),
+			: {
+					bundledRoots: resolveStringArray(config.skills.bundledRoots, baseDir),
+				}),
 		...(config.skills.userRoots == null
 			? {}
 			: { userRoots: resolveStringArray(config.skills.userRoots, baseDir) }),
 		...(config.skills.projectRoots == null
 			? {}
 			: {
-					projectRoots: resolveStringArray(
-						config.skills.projectRoots,
-						baseDir,
-					),
+					projectRoots: resolveStringArray(config.skills.projectRoots, baseDir),
 				}),
 		...(config.skills.pluginRoots == null
 			? {}
-			: { pluginRoots: resolveStringArray(config.skills.pluginRoots, baseDir) }),
+			: {
+					pluginRoots: resolveStringArray(config.skills.pluginRoots, baseDir),
+				}),
 		...(config.skills.watcherEnabled == null
 			? {}
 			: { watcherEnabled: config.skills.watcherEnabled }),

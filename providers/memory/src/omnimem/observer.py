@@ -137,8 +137,7 @@ def normalize_observation_turn(turn: ObservationTurnInput) -> ObservationTurn:
 
 @runtime_checkable
 class MemoryObserver(Protocol):
-    async def observe(self, turn: ObservationTurnInput) -> list[ObservationCandidate]:
-        ...
+    async def observe(self, turn: ObservationTurnInput) -> list[ObservationCandidate]: ...
 
 
 class NoOpMemoryObserver:

@@ -188,7 +188,8 @@ export function replayPlanningEvents(
 }
 
 function countStartedSteps(state: PlanningState): number {
-	return state.events.filter((event) => event.kind === "subtask_started").length;
+	return state.events.filter((event) => event.kind === "subtask_started")
+		.length;
 }
 
 function lastTerminationReason(state: PlanningState): string | null {

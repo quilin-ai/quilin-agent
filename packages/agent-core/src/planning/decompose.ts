@@ -66,7 +66,11 @@ export function isSameOrNestedStepId(
 	);
 }
 
-function prefixSubTaskId(parentId: string, childId: string, index: number): string {
+function prefixSubTaskId(
+	parentId: string,
+	childId: string,
+	index: number,
+): string {
 	const trimmed = childId.trim();
 	if (trimmed.length === 0) {
 		return `${parentId}.${index + 1}`;
@@ -93,7 +97,9 @@ function topologicalSort(plan: DagPlan): readonly SubTask[] {
 	const order = new Map(plan.subtasks.map((step, index) => [step.id, index]));
 	const stepsById = new Map(plan.subtasks.map((step) => [step.id, step]));
 	const incomingCount = new Map(plan.subtasks.map((step) => [step.id, 0]));
-	const outgoing = new Map(plan.subtasks.map((step) => [step.id, [] as string[]]));
+	const outgoing = new Map(
+		plan.subtasks.map((step) => [step.id, [] as string[]]),
+	);
 
 	for (const [from, to] of plan.edges) {
 		if (!stepsById.has(from) || !stepsById.has(to)) {
@@ -106,7 +112,9 @@ function topologicalSort(plan: DagPlan): readonly SubTask[] {
 
 	const queue = plan.subtasks
 		.filter((step) => (incomingCount.get(step.id) ?? 0) === 0)
-		.sort((left, right) => (order.get(left.id) ?? 0) - (order.get(right.id) ?? 0))
+		.sort(
+			(left, right) => (order.get(left.id) ?? 0) - (order.get(right.id) ?? 0),
+		)
 		.map((step) => step.id);
 	const sorted: SubTask[] = [];
 
@@ -163,8 +171,7 @@ export function createRedecomposedSubtasks(
 
 	return replacements.map((step, index) => {
 		const prefixedId = prefixSubTaskId(target.id, step.id, index);
-		const fallbackPreconditions =
-			index === 0 ? target.preconditions : [];
+		const fallbackPreconditions = index === 0 ? target.preconditions : [];
 		const fallbackEffects =
 			index === replacements.length - 1 ? target.effects : [];
 
@@ -172,9 +179,13 @@ export function createRedecomposedSubtasks(
 			...step,
 			id: prefixedId,
 			preconditions:
-				step.preconditions.length > 0 ? step.preconditions : fallbackPreconditions,
+				step.preconditions.length > 0
+					? step.preconditions
+					: fallbackPreconditions,
 			effects: step.effects.length > 0 ? step.effects : fallbackEffects,
-			depth: step.depth ?? Math.max(targetDepth + 1, inferStepDepth({ id: prefixedId })),
+			depth:
+				step.depth ??
+				Math.max(targetDepth + 1, inferStepDepth({ id: prefixedId })),
 			writeScope: step.writeScope ?? target.writeScope,
 			risk: step.risk ?? target.risk,
 		});
@@ -186,13 +197,17 @@ export function replacePlanSubtree(
 	targetLeafId: string,
 	replacements: ReadonlyArray<SubTask>,
 ): SubtreeReplacementResult {
-	const targetIndex = plan.subtasks.findIndex((step) => step.id === targetLeafId);
+	const targetIndex = plan.subtasks.findIndex(
+		(step) => step.id === targetLeafId,
+	);
 	if (targetIndex === -1) {
 		throw new Error(`unknown leafId: ${targetLeafId}`);
 	}
 
 	const matchedIndices = plan.subtasks
-		.map((step, index) => (isSameOrNestedStepId(targetLeafId, step.id) ? index : -1))
+		.map((step, index) =>
+			isSameOrNestedStepId(targetLeafId, step.id) ? index : -1,
+		)
 		.filter((index) => index >= 0);
 
 	if (matchedIndices.length === 0) {

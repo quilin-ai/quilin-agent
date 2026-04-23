@@ -1,15 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { applyEvent, createPlanningState } from "./state.js";
-import {
-	applyLocalRearrange,
-	applyLocalRedecompose,
-} from "./replan.js";
 import type { LinearPlan, PlanningEvent, SubTask } from "./index.js";
+import { applyLocalRearrange, applyLocalRedecompose } from "./replan.js";
+import { applyEvent, createPlanningState } from "./state.js";
 
-function makeStep(
-	id: string,
-	overrides: Partial<SubTask> = {},
-): SubTask {
+function makeStep(id: string, overrides: Partial<SubTask> = {}): SubTask {
 	return {
 		id,
 		action: overrides.action ?? "web_search",

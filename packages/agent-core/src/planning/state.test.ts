@@ -1,8 +1,8 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import {
 	applyEvent,
-	createPlanningState,
 	type CheckpointFailedPayload,
+	createPlanningState,
 	type PlanningEvent,
 	type PlanningState,
 } from "./state.js";

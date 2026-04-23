@@ -186,7 +186,10 @@ function tokenizeCommand(command: string): string[] {
 	let escaped = false;
 
 	for (let index = 0; index < trimmed.length; index += 1) {
-		const character = trimmed[index]!;
+		const character = trimmed[index];
+		if (character == null) {
+			continue;
+		}
 
 		if (escaped) {
 			current += character;

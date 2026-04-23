@@ -11,9 +11,7 @@ export const mcpServerConfigSchema = z
 		args: stringArraySchema,
 		cwd: nonEmptyStringSchema.optional(),
 		namespace: nonEmptyStringSchema.regex(MCP_SERVER_ID_PATTERN).optional(),
-		defaultRiskLevel: z
-			.enum(["read", "write", "exec", "high-risk"])
-			.optional(),
+		defaultRiskLevel: z.enum(["read", "write", "exec", "high-risk"]).optional(),
 		enabled: z.boolean().optional(),
 	})
 	.strict();

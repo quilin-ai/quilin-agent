@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
-import {
-	computeAuditAgreement,
-	observePlannerAudit,
-} from "./audit.js";
-import type { LLMPlannerResponse, LinearPlan } from "./types.js";
+import { computeAuditAgreement, observePlannerAudit } from "./audit.js";
+import type { LinearPlan, LLMPlannerResponse } from "./types.js";
 
 function makePlan(): LinearPlan {
 	return {

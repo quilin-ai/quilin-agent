@@ -1,7 +1,4 @@
-import {
-	classifyIntent,
-	deriveStructuralIntent,
-} from "./intent.js";
+import { classifyIntent, deriveStructuralIntent } from "./intent.js";
 import type {
 	Intent,
 	IntentClassification,

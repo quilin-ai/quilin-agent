@@ -66,7 +66,11 @@ export function dispatchIntent(
 		options.auditConfidenceThreshold ?? DEFAULT_AUDIT_CONFIDENCE_THRESHOLD;
 
 	if (
-		shouldUseAuditIntent(response, structuralIntent, auditConfidenceThreshold) &&
+		shouldUseAuditIntent(
+			response,
+			structuralIntent,
+			auditConfidenceThreshold,
+		) &&
 		response.audit != null
 	) {
 		return {
@@ -95,4 +99,3 @@ export class StructuralIntentClassifier implements IntentClassifier {
 		return dispatchIntent(response, this.options);
 	}
 }
-

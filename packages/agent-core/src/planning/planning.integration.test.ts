@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
+import type { SkillDescriptor } from "../skills/types.js";
+import type { ToolCall, ToolResult } from "../tools/types.js";
 import { createBudgetLedger } from "./budget.js";
 import { buildPlanContext } from "./context.js";
 import { LinearPlanExecutor } from "./executor.js";
 import { MainLLMPlanner } from "./planner.js";
-import { detectTermination } from "./termination.js";
 import type { PlanningEvent } from "./state.js";
-import type { ToolCall, ToolResult } from "../tools/types.js";
-import type { SkillDescriptor } from "../skills/types.js";
+import { detectTermination } from "./termination.js";
 import type { LLMPlannerResponse, SubTask } from "./types.js";
 
 function makeSkillDescriptor(name: string): SkillDescriptor {
@@ -148,7 +148,9 @@ describe("planning M0 integration", () => {
 						isError: false,
 					};
 				},
-				draft_recommendation: async (toolCall: ToolCall): Promise<ToolResult> => {
+				draft_recommendation: async (
+					toolCall: ToolCall,
+				): Promise<ToolResult> => {
 					toolOrder.push(toolCall.name);
 					return {
 						toolCallId: toolCall.id,
@@ -204,9 +206,9 @@ describe("planning M0 integration", () => {
 			"working",
 			"episodic",
 		]);
-		expect(execution.state.events.some((event) => event.kind === "replan")).toBe(
-			false,
-		);
+		expect(
+			execution.state.events.some((event) => event.kind === "replan"),
+		).toBe(false);
 		expect(termination).toMatchObject({
 			shouldTerminate: true,
 			reason: "Success",

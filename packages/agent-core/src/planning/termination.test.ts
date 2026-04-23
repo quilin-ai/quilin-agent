@@ -1,16 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_EXECUTOR_MAX_STEPS } from "./executor.js";
 import {
-	DEAD_LOOP_FIXTURE,
-	detectTermination,
-	replayPlanningEvents,
-} from "./termination.js";
-import {
 	applyEvent,
 	createPlanningState,
 	type PlanningEvent,
 	type PlanningState,
 } from "./state.js";
+import {
+	DEAD_LOOP_FIXTURE,
+	detectTermination,
+	replayPlanningEvents,
+} from "./termination.js";
 import type { LinearPlan, SubTask } from "./types.js";
 
 function makeStep(id: string): SubTask {
@@ -37,7 +37,10 @@ function makePlan(count: number): LinearPlan {
 	};
 }
 
-function replay(runId: string, events: readonly PlanningEvent[]): PlanningState {
+function replay(
+	runId: string,
+	events: readonly PlanningEvent[],
+): PlanningState {
 	return events.reduce(applyEvent, createPlanningState(runId));
 }
 

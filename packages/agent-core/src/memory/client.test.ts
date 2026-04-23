@@ -68,13 +68,15 @@ describe("MemoryItem fixture compatibility", () => {
 
 		fixture.forEach(assertMemoryItemShape);
 
-		expect(
-			new Set(fixture.map((item) => item.layer)),
-		).toEqual(new Set<MemoryLayer>(ALL_LAYERS));
+		expect(new Set(fixture.map((item) => item.layer))).toEqual(
+			new Set<MemoryLayer>(ALL_LAYERS),
+		);
 	});
 
 	it("keeps the client contract readonly-compatible with fixture items", async () => {
-		const fixture = JSON.parse(await readFile(FIXTURE_URL, "utf8")) as MemoryItem[];
+		const fixture = JSON.parse(
+			await readFile(FIXTURE_URL, "utf8"),
+		) as MemoryItem[];
 		expectTypeOf(fixture).toMatchTypeOf<MemoryItem[]>();
 		expect(fixture[0]?.metadata.schema_version).toBe(1);
 	});

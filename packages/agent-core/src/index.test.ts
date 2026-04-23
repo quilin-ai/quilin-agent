@@ -1,4 +1,3 @@
-import type { LanguageModel } from "ai";
 import { generateText } from "ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createProvider, getDefaultModel } from "./llm/provider.js";

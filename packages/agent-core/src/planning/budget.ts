@@ -96,7 +96,10 @@ function resolveRetryTokenBudget(input: BudgetLedgerInput): number {
 }
 
 export function createBudgetLedger(input: BudgetLedgerInput): BudgetLedger {
-	const tokenBudget = assertNonNegativeInteger(input.tokenBudget, "tokenBudget");
+	const tokenBudget = assertNonNegativeInteger(
+		input.tokenBudget,
+		"tokenBudget",
+	);
 	const turnBudget = assertNonNegativeInteger(input.turnBudget, "turnBudget");
 	const stepBudget = assertNonNegativeInteger(input.stepBudget, "stepBudget");
 	const retryTokenBudget = resolveRetryTokenBudget({
@@ -186,14 +189,16 @@ export function consumeBudget(
 ): BudgetDecision {
 	const nextBudget: BudgetLedger = {
 		...budget,
-		tokenSpent: budget.tokenSpent + assertNonNegativeInteger(charge.tokens, "tokens"),
-		turnSpent: budget.turnSpent + assertNonNegativeInteger(charge.turns, "turns"),
+		tokenSpent:
+			budget.tokenSpent + assertNonNegativeInteger(charge.tokens, "tokens"),
+		turnSpent:
+			budget.turnSpent + assertNonNegativeInteger(charge.turns, "turns"),
 		retryTokenSpent:
 			budget.retryTokenSpent +
 			assertNonNegativeInteger(charge.retryTokens, "retryTokens"),
-		stepSpent: budget.stepSpent + assertNonNegativeInteger(charge.steps, "steps"),
+		stepSpent:
+			budget.stepSpent + assertNonNegativeInteger(charge.steps, "steps"),
 	};
 
 	return evaluateBudget(nextBudget);
 }
-

@@ -2,12 +2,12 @@ import { createHash } from "node:crypto";
 import type { ToolCall, ToolResult } from "../tools/types.js";
 import {
 	applyEvent,
-	createPlanningState,
 	type Checkpoint,
 	type CheckpointFailedPayload,
-	type PlanPhase,
+	createPlanningState,
 	type PlanningEvent,
 	type PlanningState,
+	type PlanPhase,
 } from "./state.js";
 import type { IntentClassification, LinearPlan, SubTask } from "./types.js";
 
@@ -100,7 +100,11 @@ function createErrorResult(toolCall: ToolCall, errorCode: string): ToolResult {
 	};
 }
 
-function createToolCall(runId: string, step: SubTask, stepIndex: number): ToolCall {
+function createToolCall(
+	runId: string,
+	step: SubTask,
+	stepIndex: number,
+): ToolCall {
 	return {
 		id: `${runId}:${step.id}:${stepIndex + 1}`,
 		name: step.action,

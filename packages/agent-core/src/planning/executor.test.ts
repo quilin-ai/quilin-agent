@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+import type { ToolCall, ToolResult } from "../tools/types.js";
 import {
 	createTaskHash,
 	DEFAULT_EXECUTOR_MAX_STEPS,
 	LinearPlanExecutor,
 } from "./executor.js";
-import type { ToolCall, ToolResult } from "../tools/types.js";
 import type {
 	IntentClassification,
 	LinearPlan,
@@ -97,18 +97,18 @@ describe("LinearPlanExecutor", () => {
 			kind: "terminated",
 			payload: { reason: "Success" },
 		});
-		expect(emittedEvents.filter((event) => event.kind === "subtask_started")).toHaveLength(
-			3,
-		);
-		expect(emittedEvents.filter((event) => event.kind === "tool_called")).toHaveLength(
-			3,
-		);
-		expect(emittedEvents.filter((event) => event.kind === "tool_returned")).toHaveLength(
-			3,
-		);
-		expect(emittedEvents.filter((event) => event.kind === "subtask_done")).toHaveLength(
-			3,
-		);
+		expect(
+			emittedEvents.filter((event) => event.kind === "subtask_started"),
+		).toHaveLength(3);
+		expect(
+			emittedEvents.filter((event) => event.kind === "tool_called"),
+		).toHaveLength(3);
+		expect(
+			emittedEvents.filter((event) => event.kind === "tool_returned"),
+		).toHaveLength(3);
+		expect(
+			emittedEvents.filter((event) => event.kind === "subtask_done"),
+		).toHaveLength(3);
 	});
 
 	it("writes tool_returned + local_repair when a step fails", async () => {

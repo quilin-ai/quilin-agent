@@ -1,21 +1,21 @@
 {
-  "schema_version": 1,
-  "mcpServers": {
-    "stub-json": {
-      "command": "node",
-      "args": ["stub-server.js"],
-      "cwd": ".",
-      "namespace": "stub-json",
-      "defaultRiskLevel": "read"
-    }
-  },
-  "skills": {
-    "enabled": true,
-    "bundledRoots": ["./bundled-skills"],
-    "userRoots": ["./user-skills"],
-    "projectRoots": ["./project-skills"],
-    "pluginRoots": ["./plugin-skills"],
-    "watcherEnabled": false,
-    "debounceMs": 125
-  }
+	"schema_version": 1,
+	"mcpServers": {
+		"stub-json": {
+			"command": "node",
+			"args": ["stub-server.js"],
+			"cwd": ".",
+			"namespace": "stub-json",
+			"defaultRiskLevel": "read"
+		}
+	},
+	"skills": {
+		"enabled": true,
+		"bundledRoots": ["./bundled-skills"],
+		"userRoots": ["./user-skills"],
+		"projectRoots": ["./project-skills"],
+		"pluginRoots": ["./plugin-skills"],
+		"watcherEnabled": false,
+		"debounceMs": 125
+	}
 }

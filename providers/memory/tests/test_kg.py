@@ -42,9 +42,7 @@ async def test_subgraph_search_deduplicates_repeated_seed_entities() -> None:
 
     await graph.add_edge("alice", "works_with", "bob", valid_from=now)
 
-    results = await graph.subgraph_search(
-        ["alice", "Alice", "alice"], max_hops=1, limit=10
-    )
+    results = await graph.subgraph_search(["alice", "Alice", "alice"], max_hops=1, limit=10)
 
     assert [(result.seed_entity, result.subject, result.object) for result in results] == [
         ("alice", "alice", "bob")

@@ -56,10 +56,7 @@ class LearnableReranker:
         if self._event_log is not None:
             stats = await self._event_log.citation_stats([item.id for item in items])
 
-        scored = [
-            (item, self._score_item(item, stats.get(item.id)))
-            for item in items
-        ]
+        scored = [(item, self._score_item(item, stats.get(item.id))) for item in items]
         scored.sort(key=lambda pair: (-pair[1], pair[0].id))
 
         reranked: list[MemoryItem] = []

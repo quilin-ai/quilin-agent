@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
 	classifyIntent,
-	dispatchIntent,
 	deriveStructuralIntent,
+	dispatchIntent,
 	StructuralIntentClassifier,
 } from "./intent.js";
-import type { LLMPlannerResponse, LinearPlan } from "./types.js";
+import type { LinearPlan, LLMPlannerResponse } from "./types.js";
 
 function makePlan(): LinearPlan {
 	return {

@@ -8,8 +8,7 @@ from .types import MemoryItem
 
 
 class EpisodicCandidateStore(Protocol):
-    async def compress_and_add(self, memory: MemoryItem) -> MemoryItem:
-        ...
+    async def compress_and_add(self, memory: MemoryItem) -> MemoryItem: ...
 
 
 class WorkingMemory:
