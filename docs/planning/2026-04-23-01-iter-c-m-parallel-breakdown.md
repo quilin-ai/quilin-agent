@@ -720,9 +720,9 @@ M2.6 / M2.7 ↔ Iter F soul.md 写路径
 | M1.2–M1.6（KG schema + 混合检索 v1 + reranker event log + planning ingestion + cache 元数据） | ✅ In-scope | §11.4 主干，依赖 M0.5/M0.8 已就绪 |
 | Config-track CONFIG.1–CONFIG.4（Capability Config Loader） | ✅ In-scope（本轮新增） | 关闭 §11.3 row 97 剩余风险：第三方 MCP / Skills CLI config loader 未接入 |
 | M1.1（L3a 生产 ingestion） | ⏸ Defer | Arm L 资源 blocked（ANTHROPIC_API_KEY unset / ollama absent，S4 已记录）；解锁再启 |
-| M1.7（UserProfile Store + ProfileUpdater） | ⏸ Defer | ADR-007 draft 未产出（O8 已决需先产 draft） |
-| M1.8（user.md 双向镜像） | ⏸ Defer | 依赖 M1.7 |
-| S8 UserProfile schema 同步 | ⏸ Defer | 依赖 M1.7/M1.8 |
+| M1.7（UserProfile Store + ProfileUpdater） | ✅ Unblocked | ADR-007 draft 已产出：`docs/adr/adr-007-identity-files.md`；可启动实现 |
+| M1.8（user.md 双向镜像） | ⏸ Defer | 依赖 M1.7 实现完成 |
+| S8 UserProfile schema 同步 | ⏸ Defer | ADR-007 已冻结边界；schema 仍依赖 M1.7/M1.8 实现落地 |
 | 方向 4（Arm L 1039 样本 gate） | ⏸ Blocked | 外部资源未就绪 |
 | 方向 5（lint/coverage 独立门禁 sweep） | ⏸ Defer to 收尾 | sweep 改动面大，和 in-flight 三路 track 会 merge 打架；留到本轮全部 commit 后单独一轮 |
 
@@ -793,7 +793,7 @@ M2.6 / M2.7 ↔ Iter F soul.md 写路径
 | 条目 | 解除条件 |
 |---|---|
 | M1.1 | Arm L spike 拿到 recall/FPR/p95 数据；`ANTHROPIC_API_KEY` 或 ollama 任一可用 |
-| M1.7 / M1.8 / S8 | `docs/adr/adr-007-identity-files.md` draft 产出（O8） |
+| M1.7 / M1.8 / S8 | ✅ ADR-007 draft 已产出；下一步实现 M1.7 后闭合 M1.8/S8 |
 | 方向 4 Arm L gate | 同 M1.1 |
 | 方向 5 lint sweep | ✅ 已完成：`a1276b8`；`just check` + `just lint-py` + TS/Python 全量测试通过 |
 
