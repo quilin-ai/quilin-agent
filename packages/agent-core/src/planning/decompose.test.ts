@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+	createRedecomposedSubtasks,
 	decomposePlan,
 	DEFAULT_MAX_DECOMPOSE_DEPTH,
 	DEFAULT_MAX_DECOMPOSE_STEPS,
 	inferStepDepth,
+	replacePlanSubtree,
 } from "./decompose.js";
 import type { DagPlan, LinearPlan, SubTask } from "./types.js";
 
@@ -131,5 +133,92 @@ describe("decomposePlan", () => {
 		expect(() => decomposePlan({ kind: "linear", subtasks: [] }, { maxDepth: 0 })).toThrow(
 			/maxDepth/,
 		);
+	});
+});
+
+describe("createRedecomposedSubtasks", () => {
+	it("prefixes child ids and inherits the leaf contract for first/last subtasks", () => {
+		const target = makeStep("table", {
+			preconditions: ["competitors_found"],
+			effects: ["comparison_table_ready"],
+			writeScope: "working",
+			risk: "medium",
+		});
+
+		const subtasks = createRedecomposedSubtasks(target, [
+			makeStep("collect", {
+				preconditions: [],
+				effects: ["rows_collected"],
+				writeScope: undefined,
+				risk: undefined,
+			}),
+			makeStep("write", {
+				preconditions: ["rows_collected"],
+				effects: [],
+				writeScope: undefined,
+				risk: undefined,
+			}),
+		]);
+
+		expect(subtasks).toEqual([
+			expect.objectContaining({
+				id: "table.collect",
+				preconditions: ["competitors_found"],
+				effects: ["rows_collected"],
+				writeScope: "working",
+				risk: "medium",
+				depth: 2,
+			}),
+			expect.objectContaining({
+				id: "table.write",
+				preconditions: ["rows_collected"],
+				effects: ["comparison_table_ready"],
+				writeScope: "working",
+				risk: "medium",
+				depth: 2,
+			}),
+		]);
+	});
+});
+
+describe("replacePlanSubtree", () => {
+	it("replaces only the target subtree and leaves sibling steps untouched", () => {
+		const plan: LinearPlan = {
+			kind: "linear",
+			subtasks: [
+				makeStep("search"),
+				makeStep("table"),
+				makeStep("table.collect"),
+				makeStep("table.write"),
+				makeStep("recommend"),
+			],
+		};
+
+		const result = replacePlanSubtree(plan, "table", [
+			makeStep("draft", {
+				preconditions: [],
+				effects: ["table_draft_ready"],
+			}),
+			makeStep("finalize", {
+				preconditions: ["table_draft_ready"],
+				effects: [],
+			}),
+		]);
+
+		expect(result.replacedStepIds).toEqual([
+			"table",
+			"table.collect",
+			"table.write",
+		]);
+		expect(result.insertedStepIds).toEqual([
+			"table.draft",
+			"table.finalize",
+		]);
+		expect(result.plan.subtasks.map((step) => step.id)).toEqual([
+			"search",
+			"table.draft",
+			"table.finalize",
+			"recommend",
+		]);
 	});
 });

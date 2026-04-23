@@ -21,6 +21,14 @@ export interface DecomposeResult {
 	readonly maxDepthApplied: number;
 }
 
+export interface SubtreeReplacementResult {
+	readonly plan: LinearPlan;
+	readonly replacedStepIds: ReadonlyArray<string>;
+	readonly insertedStepIds: ReadonlyArray<string>;
+}
+
+const STEP_ID_DELIMITERS = [".", "/", ">"] as const;
+
 function normalizePositiveInteger(
 	value: number | undefined,
 	fallback: number,
@@ -46,7 +54,32 @@ export function inferStepDepth(step: Pick<SubTask, "id" | "depth">): number {
 	return Math.max(1, segments.length);
 }
 
-function normalizeSubTask(step: SubTask): SubTask {
+export function isSameOrNestedStepId(
+	rootId: string,
+	candidateId: string,
+): boolean {
+	return (
+		candidateId === rootId ||
+		STEP_ID_DELIMITERS.some((delimiter) =>
+			candidateId.startsWith(`${rootId}${delimiter}`),
+		)
+	);
+}
+
+function prefixSubTaskId(parentId: string, childId: string, index: number): string {
+	const trimmed = childId.trim();
+	if (trimmed.length === 0) {
+		return `${parentId}.${index + 1}`;
+	}
+
+	if (isSameOrNestedStepId(parentId, trimmed)) {
+		return trimmed;
+	}
+
+	return `${parentId}.${trimmed.replace(/^[./>]+/u, "")}`;
+}
+
+export function normalizeSubTask(step: SubTask): SubTask {
 	return {
 		...step,
 		arguments: step.arguments ?? {},
@@ -116,6 +149,89 @@ function getPlanSketch(
 
 function toLinearSteps(plan: LinearPlan | DagPlan): readonly SubTask[] {
 	return plan.kind === "linear" ? plan.subtasks : topologicalSort(plan);
+}
+
+export function createRedecomposedSubtasks(
+	target: SubTask,
+	replacements: ReadonlyArray<SubTask>,
+): readonly SubTask[] {
+	if (replacements.length === 0) {
+		throw new Error("replacement subtasks are required for L-Redecompose");
+	}
+
+	const targetDepth = inferStepDepth(target);
+
+	return replacements.map((step, index) => {
+		const prefixedId = prefixSubTaskId(target.id, step.id, index);
+		const fallbackPreconditions =
+			index === 0 ? target.preconditions : [];
+		const fallbackEffects =
+			index === replacements.length - 1 ? target.effects : [];
+
+		return normalizeSubTask({
+			...step,
+			id: prefixedId,
+			preconditions:
+				step.preconditions.length > 0 ? step.preconditions : fallbackPreconditions,
+			effects: step.effects.length > 0 ? step.effects : fallbackEffects,
+			depth: step.depth ?? Math.max(targetDepth + 1, inferStepDepth({ id: prefixedId })),
+			writeScope: step.writeScope ?? target.writeScope,
+			risk: step.risk ?? target.risk,
+		});
+	});
+}
+
+export function replacePlanSubtree(
+	plan: LinearPlan,
+	targetLeafId: string,
+	replacements: ReadonlyArray<SubTask>,
+): SubtreeReplacementResult {
+	const targetIndex = plan.subtasks.findIndex((step) => step.id === targetLeafId);
+	if (targetIndex === -1) {
+		throw new Error(`unknown leafId: ${targetLeafId}`);
+	}
+
+	const matchedIndices = plan.subtasks
+		.map((step, index) => (isSameOrNestedStepId(targetLeafId, step.id) ? index : -1))
+		.filter((index) => index >= 0);
+
+	if (matchedIndices.length === 0) {
+		throw new Error(`subtree not found for leafId: ${targetLeafId}`);
+	}
+
+	for (let index = 1; index < matchedIndices.length; index += 1) {
+		const previous = matchedIndices[index - 1];
+		const current = matchedIndices[index];
+		if (previous == null || current == null || current !== previous + 1) {
+			throw new Error(`subtree for ${targetLeafId} must remain contiguous`);
+		}
+	}
+
+	const target = plan.subtasks[targetIndex];
+	if (target == null) {
+		throw new Error(`unknown leafId: ${targetLeafId}`);
+	}
+
+	const nextSubtasks = createRedecomposedSubtasks(target, replacements);
+	const startIndex = matchedIndices[0] ?? targetIndex;
+	const endIndex = matchedIndices.at(-1) ?? targetIndex;
+	const replacedStepIds = matchedIndices
+		.map((index) => plan.subtasks[index])
+		.filter((step): step is SubTask => step != null)
+		.map((step) => step.id);
+
+	return {
+		plan: {
+			kind: "linear",
+			subtasks: [
+				...plan.subtasks.slice(0, startIndex),
+				...nextSubtasks,
+				...plan.subtasks.slice(endIndex + 1),
+			],
+		},
+		replacedStepIds,
+		insertedStepIds: nextSubtasks.map((step) => step.id),
+	};
 }
 
 export function decomposePlan(

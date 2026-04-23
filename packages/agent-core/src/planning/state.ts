@@ -35,6 +35,17 @@ export interface CheckpointFailedPayload {
 	readonly ts: number;
 }
 
+export interface GoalDriftDetectedPayload {
+	readonly run_id: string;
+	readonly similarity: number;
+	readonly threshold: number;
+	readonly step_count: number;
+	readonly warning_count: number;
+	readonly current_leaf_id: string | null;
+	readonly should_replan: boolean;
+	readonly reason: string;
+}
+
 export type PlanningEvent =
 	| {
 			readonly seq: number;
@@ -96,6 +107,12 @@ export type PlanningEvent =
 			readonly timestamp: number;
 			readonly kind: "checkpoint_failed";
 			readonly payload: CheckpointFailedPayload;
+	  }
+	| {
+			readonly seq: number;
+			readonly timestamp: number;
+			readonly kind: "goal_drift_detected";
+			readonly payload: GoalDriftDetectedPayload;
 	  }
 	| {
 			readonly seq: number;
@@ -209,6 +226,7 @@ export function applyEvent(
 				events,
 			};
 		case "checkpoint_failed":
+		case "goal_drift_detected":
 			return {
 				...state,
 				events,
