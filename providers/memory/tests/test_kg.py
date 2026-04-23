@@ -36,6 +36,21 @@ async def test_subgraph_search_supports_recursive_hop_queries() -> None:
     assert results[1].path.endswith("bob -> manages -> carol")
 
 
+async def test_subgraph_search_deduplicates_repeated_seed_entities() -> None:
+    graph = TemporalKnowledgeGraph(db_path=":memory:")
+    now = datetime(2026, 4, 24, tzinfo=UTC)
+
+    await graph.add_edge("alice", "works_with", "bob", valid_from=now)
+
+    results = await graph.subgraph_search(
+        ["alice", "Alice", "alice"], max_hops=1, limit=10
+    )
+
+    assert [(result.seed_entity, result.subject, result.object) for result in results] == [
+        ("alice", "alice", "bob")
+    ]
+
+
 async def test_subgraph_search_respects_validity_windows() -> None:
     graph = TemporalKnowledgeGraph(db_path=":memory:")
     await graph.add_edge(

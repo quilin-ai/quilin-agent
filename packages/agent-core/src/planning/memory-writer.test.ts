@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { createPlanningState } from "./state.js";
 import {
 	createPlanReviewMemoryItem,
 	PLAN_REVIEW_SCHEMA_VERSION,
@@ -7,6 +6,7 @@ import {
 	validatePlanReviewRecord,
 	writePlanReviewRecord,
 } from "./memory-writer.js";
+import { createPlanningState } from "./state.js";
 
 const FIXED_DATE = new Date("2026-04-24T08:00:00.000Z");
 
@@ -30,9 +30,9 @@ describe("validatePlanReviewRecord", () => {
 	});
 
 	it("rejects raw PlanningState payloads and transient planning fields", () => {
-		expect(() => validatePlanReviewRecord(createPlanningState("run-live"))).toThrow(
-			/running PlanningState/,
-		);
+		expect(() =>
+			validatePlanReviewRecord(createPlanningState("run-live")),
+		).toThrow(/running PlanningState/);
 		expect(() =>
 			validatePlanReviewRecord({
 				...makeReview(),
@@ -139,5 +139,32 @@ describe("writePlanReviewRecord", () => {
 			review: makeReview(),
 		});
 		expect(eventLogger).toHaveBeenCalledWith(result.fallback);
+	});
+
+	it("does not throw when fallback logging fails", async () => {
+		const eventLogger = vi.fn(async () => {
+			throw new Error("fallback log unavailable");
+		});
+
+		const result = await writePlanReviewRecord(makeReview(), {
+			eventLogger,
+			now: () => FIXED_DATE,
+		});
+
+		expect(result.status).toBe("fallback_logged");
+		expect(result.fallback).toEqual({
+			kind: "planning_review_fallback",
+			reason: "memory_unavailable",
+			error_code: undefined,
+			logger_error_code: "FALLBACK_LOG_UNAVAILABLE",
+			created_at: FIXED_DATE.toISOString(),
+			review: makeReview(),
+		});
+		expect(eventLogger).toHaveBeenCalledWith(
+			expect.objectContaining({
+				kind: "planning_review_fallback",
+				reason: "memory_unavailable",
+			}),
+		);
 	});
 });

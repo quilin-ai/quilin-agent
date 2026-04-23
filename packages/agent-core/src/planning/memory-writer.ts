@@ -18,6 +18,7 @@ export interface PlanReviewFallbackRecord {
 	readonly kind: "planning_review_fallback";
 	readonly reason: "memory_unavailable" | "store_failed";
 	readonly error_code?: string;
+	readonly logger_error_code?: string;
 	readonly created_at: string;
 	readonly review: PlanReviewRecord;
 }
@@ -37,13 +38,13 @@ export interface PlanReviewWriteResult {
 	readonly fallback?: PlanReviewFallbackRecord;
 }
 
-function isPlainObject(
-	value: unknown,
-): value is Record<string, unknown> {
+function isPlainObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function hasTransientPlanningStateShape(record: Record<string, unknown>): boolean {
+function hasTransientPlanningStateShape(
+	record: Record<string, unknown>,
+): boolean {
 	return (
 		typeof record.runId === "string" &&
 		Array.isArray(record.events) &&
@@ -53,9 +54,14 @@ function hasTransientPlanningStateShape(record: Record<string, unknown>): boolea
 }
 
 function hasForbiddenTransientFields(record: Record<string, unknown>): boolean {
-	return ["events", "checkpoints", "phase", "budget", "currentLeafId", "plan"].some(
-		(field) => field in record,
-	);
+	return [
+		"events",
+		"checkpoints",
+		"phase",
+		"budget",
+		"currentLeafId",
+		"plan",
+	].some((field) => field in record);
 }
 
 function toErrorCode(error: unknown): string {
@@ -82,11 +88,15 @@ export function validatePlanReviewRecord(input: unknown): PlanReviewRecord {
 	}
 
 	if (hasTransientPlanningStateShape(input)) {
-		throw new Error("running PlanningState cannot be written to semantic memory");
+		throw new Error(
+			"running PlanningState cannot be written to semantic memory",
+		);
 	}
 
 	if (hasForbiddenTransientFields(input)) {
-		throw new Error("transient planning fields are not allowed in PlanReviewRecord");
+		throw new Error(
+			"transient planning fields are not allowed in PlanReviewRecord",
+		);
 	}
 
 	const runId = input.run_id;
@@ -183,8 +193,15 @@ async function writeFallback(
 		review: record,
 	};
 
-	await options.eventLogger?.(fallback);
-	return fallback;
+	try {
+		await options.eventLogger?.(fallback);
+		return fallback;
+	} catch (error) {
+		return {
+			...fallback,
+			logger_error_code: toErrorCode(error),
+		};
+	}
 }
 
 export async function writePlanReviewRecord(

@@ -285,7 +285,7 @@ class TemporalKnowledgeGraph:
         if effective_limit == 0:
             return []
 
-        seeds = [entity.casefold() for entity in entities if entity]
+        seeds = sorted({entity.casefold() for entity in entities if entity})
         if not seeds:
             return []
 
