@@ -101,7 +101,7 @@
 | 路线 | 任务 | 状态 | commit | 实证 |
 |---|---|---|---|---|
 | Halley (C-track) | C2.5 PlanReviewRecord writer + audit/goal-drift/replan | ✅ 完成 | `3b60904` | `wc -l packages/agent-core/src/planning/memory-writer.ts` = `223`；6 禁字段 NEGATIVE + sha256 stable id 测试通过 |
-| Hooke (M-track) | M1.2 retriever / M1.3-4 KG / M1.5 server+store 语义 guard | ✅ 完成 | `77e399a` | `cd providers/memory && uv run pytest -q` = `86 passed`；planning_review + planning_state 双向 NEGATIVE 测试覆盖 |
+| Hooke (M-track) | M1.2 KG / M1.3 hybrid retriever / M1.4 event log + reranker / M1.5 semantic guard / M1.6 recall metadata | ✅ 完成 | `77e399a` | `cd providers/memory && uv run pytest -q` = `86 passed`；`event_log.py` = `439` LOC；`reranker.py` = `134` LOC；`retriever.py` 回填 `cache_key/block_version/source_layers`；planning_review + planning_state 双向 NEGATIVE 测试覆盖 |
 | Pascal (Config-track) | CLI→env→.quilin→builtin 四级加载器 | ✅ 完成 | `4496cb4` | `wc -l packages/agent-core/src/config/loader.ts` = `398`；zod strict schema + builtin fallback 保留既有 REPL 行为 |
 | Cross-cutting | ADR-005 反向链接（HIGH-1 闭合） | ✅ 完成 | `0b79520` | `docs/engineering/03-memory/README.md` + `docs/planning/00-implementation-plan.md` 已链接至 ADR-005 |
 | 同步 | S3 PlanReviewRecord schema 冻结 | ✅ 对齐 | `77e399a` / `3b60904` | `store.py` 验证 `layer=semantic` + `content_type=json` + `schema_version=1` + `run_id` 对齐；TS writer 同轨字段 |
@@ -120,6 +120,8 @@
 | `packages/agent-core/src/config/loader.ts` | `398` |
 | `providers/memory/src/omnimem/retriever.py` | `493` |
 | `providers/memory/src/omnimem/kg.py` | `477` |
+| `providers/memory/src/omnimem/event_log.py` | `439` |
+| `providers/memory/src/omnimem/reranker.py` | `134` |
 | `providers/memory/src/omnimem/server.py` | `186` |
 | `providers/memory/src/omnimem/store.py` | `1036` ⚠ 超 800 软线 — §16.1 follow-up |
 | `providers/memory/tests/test_planning_integration.py` | `121` |
