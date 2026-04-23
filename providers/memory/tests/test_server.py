@@ -209,7 +209,15 @@ async def test_memory_store_error_path(
 ) -> None:
     """memory_store should surface a sanitized MCP error result."""
 
-    async def _raise_on_store(content: str, tier: str = "working") -> None:
+    async def _raise_on_store(
+        content: str,
+        tier: str = "working",
+        *,
+        layer: str | None = None,
+        metadata: dict[str, object] | None = None,
+        content_type: str = "text",
+    ) -> None:
+        del content, tier, layer, metadata, content_type
         raise sqlite3.OperationalError("unable to open database file /tmp/private.db")
 
     monkeypatch.setattr(store, "store", _raise_on_store)  # type: ignore[attr-defined]

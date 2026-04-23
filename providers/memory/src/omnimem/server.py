@@ -38,6 +38,8 @@ async def _memory_store_with_store(
     content: str,
     tier: MemoryTier = "working",
     layer: MemoryLayer | None = None,
+    metadata: dict[str, object] | None = None,
+    content_type: str = "text",
 ) -> str:
     """Store a new memory record.
 
@@ -47,9 +49,20 @@ async def _memory_store_with_store(
     """
     try:
         if layer is None:
-            record = await store.store(content, tier=tier)
+            record = await store.store(
+                content,
+                tier=tier,
+                metadata=metadata,
+                content_type=content_type,
+            )
         else:
-            record = await store.store(content, tier=tier, layer=layer)
+            record = await store.store(
+                content,
+                tier=tier,
+                layer=layer,
+                metadata=metadata,
+                content_type=content_type,
+            )
     except Exception as exc:
         _raise_memory_operation_error("memory_store", exc)
 
@@ -94,10 +107,19 @@ async def memory_store(
     tier: MemoryTier = "working",
     *,
     layer: MemoryLayer | None = None,
+    metadata: dict[str, object] | None = None,
+    content_type: str = "text",
 ) -> str:
     """Legacy direct helper that opens a store per call."""
     async with OmniMemStore() as store:
-        return await _memory_store_with_store(store, content, tier, layer)
+        return await _memory_store_with_store(
+            store,
+            content,
+            tier,
+            layer,
+            metadata,
+            content_type,
+        )
 
 
 def create_server(store: OmniMemStore | None = None) -> FastMCP:
@@ -133,6 +155,8 @@ def create_server(store: OmniMemStore | None = None) -> FastMCP:
         content: str,
         tier: MemoryTier = "working",
         layer: MemoryLayer | None = None,
+        metadata: dict[str, object] | None = None,
+        content_type: str = "text",
         ctx: Context[object, Any, object] | None = None,
     ) -> str:
         """Store a new memory record.
@@ -147,6 +171,8 @@ def create_server(store: OmniMemStore | None = None) -> FastMCP:
             content,
             tier,
             layer,
+            metadata,
+            content_type,
         )
 
     return server

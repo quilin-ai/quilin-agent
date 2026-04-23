@@ -191,19 +191,25 @@ async def test_count_respects_layer_metadata_and_content_type_filters() -> None:
     await store.store("semantic json", tier="semantic", content_type="json")
 
     assert await store.count({"layer": "episodic"}) == 3
-    assert await store.count(
-        {
-            "layer": "episodic",
-            "metadata": {"session_id": "session-1"},
-        }
-    ) == 2
-    assert await store.count(
-        {
-            "layer": "episodic",
-            "metadata": {"session_id": "session-1"},
-            "content_type": "json",
-        }
-    ) == 1
+    assert (
+        await store.count(
+            {
+                "layer": "episodic",
+                "metadata": {"session_id": "session-1"},
+            }
+        )
+        == 2
+    )
+    assert (
+        await store.count(
+            {
+                "layer": "episodic",
+                "metadata": {"session_id": "session-1"},
+                "content_type": "json",
+            }
+        )
+        == 1
+    )
 
 
 async def test_recall_empty_query_returns_all() -> None:
@@ -300,9 +306,7 @@ async def test_store_persists_records_across_instances(tmp_path: Path) -> None:
 
     assert results == [
         next(
-            record
-            for record in await writer.recall("remember")
-            if record.content == "remember me"
+            record for record in await writer.recall("remember") if record.content == "remember me"
         )
     ]
 
@@ -398,12 +402,14 @@ async def test_store_offloads_blocking_db_work_from_event_loop(
 
 
 async def test_store_closes_via_async_context_manager() -> None:
+    import sqlite3
+
     import pytest
 
     async with OmniMemStore(db_path=":memory:") as store:
         await store.store("alpha")
 
-    with pytest.raises(Exception):
+    with pytest.raises(sqlite3.ProgrammingError):
         await store.reset()
 
 
@@ -433,9 +439,7 @@ async def test_reset_offloads_blocking_db_work_from_event_loop(
 async def test_store_keeps_main_and_fts_counts_aligned_under_concurrency() -> None:
     store = OmniMemStore(db_path=":memory:")
 
-    await asyncio.gather(
-        *[store.store(f"concurrent-{index}") for index in range(100)]
-    )
+    await asyncio.gather(*[store.store(f"concurrent-{index}") for index in range(100)])
 
     main_count = store._conn.execute(  # type: ignore[attr-defined]
         "SELECT COUNT(*) FROM memory_records"

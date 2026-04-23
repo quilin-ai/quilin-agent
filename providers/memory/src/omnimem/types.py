@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import NotRequired, TypedDict, cast
-from typing import Literal
+from typing import Literal, NotRequired, TypedDict, cast
 from uuid import uuid4
 
 MemoryLayer = Literal["working", "episodic", "semantic", "skill"]
@@ -23,6 +22,19 @@ class MemoryMetadata(TypedDict):
     source: NotRequired[str]
     score: NotRequired[float]
     staleness: NotRequired[str]
+    memory_source: NotRequired[str]
+    layer: NotRequired[str]
+    source_layers: NotRequired[list[str]]
+    cache_key: NotRequired[str]
+    block_version: NotRequired[str]
+    graph_distance: NotRequired[int]
+    valid_from: NotRequired[str]
+    valid_to: NotRequired[str | None]
+    retrieval_score: NotRequired[float]
+    reranker_score: NotRequired[float]
+    reranker_rank: NotRequired[int]
+    run_id: NotRequired[str]
+    stability_reason: NotRequired[str]
 
 
 def _utcnow() -> datetime:
@@ -46,9 +58,7 @@ def _normalize_metadata(metadata: dict[str, object] | MemoryMetadata | None) -> 
 def validate_memory_layer(layer: str) -> MemoryLayer:
     if layer not in VALID_MEMORY_LAYERS:
         valid_layers = ", ".join(VALID_MEMORY_LAYERS)
-        raise ValueError(
-            f"Invalid memory layer: {layer}. Expected one of: {valid_layers}"
-        )
+        raise ValueError(f"Invalid memory layer: {layer}. Expected one of: {valid_layers}")
 
     return cast(MemoryLayer, layer)
 
@@ -153,11 +163,8 @@ class MemoryItem:
                 else None
             ),
             access_count=int(cast(int | float, payload.get("access_count", 0))),
-            importance_score=float(
-                cast(int | float, payload.get("importance_score", 0.5))
-            ),
+            importance_score=float(cast(int | float, payload.get("importance_score", 0.5))),
         )
 
 
 MemoryRecord = MemoryItem
-

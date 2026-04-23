@@ -11,11 +11,11 @@ from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 from .types import (
+    VALID_MEMORY_TIERS,
     MemoryItem,
     MemoryLayer,
     MemoryRecord,
     MemoryTier,
-    VALID_MEMORY_TIERS,
     validate_memory_layer,
 )
 
@@ -35,43 +35,48 @@ RECALL_QUERY_EXPANSIONS = (
 FTS_SCHEMA_COMPONENT = "memory_records_fts"
 FTS_SCHEMA_VERSION = 1
 DEFAULT_MEMORY_METADATA = json.dumps({"schema_version": 1}, sort_keys=True)
+PLANNING_REVIEW_SOURCE = "planning_review"
+PLANNING_STATE_SOURCE = "planning_state"
+PLANNING_REVIEW_SCHEMA_VERSION = 1
+FORBIDDEN_PLANNING_RUNTIME_KEYS = frozenset(
+    {
+        "budget",
+        "checkpoints",
+        "currentLeafId",
+        "events",
+        "phase",
+        "plan",
+    }
+)
 
 
 @runtime_checkable
 class MemoryStore(Protocol):
-    async def add(self, memory: MemoryItem) -> str:
-        ...
+    async def add(self, memory: MemoryItem) -> str: ...
 
     async def search(
         self,
         query: str,
         limit: int = 10,
         filters: dict[str, Any] | None = None,
-    ) -> list[MemoryItem]:
-        ...
+    ) -> list[MemoryItem]: ...
 
-    async def get(self, memory_id: str) -> MemoryItem | None:
-        ...
+    async def get(self, memory_id: str) -> MemoryItem | None: ...
 
-    async def update(self, memory_id: str, content: str) -> None:
-        ...
+    async def update(self, memory_id: str, content: str) -> None: ...
 
-    async def delete(self, memory_id: str) -> None:
-        ...
+    async def delete(self, memory_id: str) -> None: ...
 
     async def list_by_layer(
         self,
         layer: MemoryLayer,
         limit: int = 50,
         offset: int = 0,
-    ) -> list[MemoryItem]:
-        ...
+    ) -> list[MemoryItem]: ...
 
-    async def count(self, filters: dict[str, Any] | None = None) -> int:
-        ...
+    async def count(self, filters: dict[str, Any] | None = None) -> int: ...
 
-    async def clear_layer(self, layer: MemoryLayer) -> int:
-        ...
+    async def clear_layer(self, layer: MemoryLayer) -> int: ...
 
 
 def _utcnow() -> datetime:
@@ -189,6 +194,78 @@ def _coerce_filter_datetime(raw_value: object) -> datetime | None:
     raise TypeError("datetime filters must be datetime or ISO 8601 strings")
 
 
+def _contains_forbidden_runtime_keys(payload: object) -> bool:
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if key in FORBIDDEN_PLANNING_RUNTIME_KEYS:
+                return True
+            if _contains_forbidden_runtime_keys(value):
+                return True
+        return False
+
+    if isinstance(payload, list):
+        return any(_contains_forbidden_runtime_keys(item) for item in payload)
+
+    return False
+
+
+def _validate_planning_review_payload(content: str, *, run_id: str) -> None:
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise ValueError("planning_review semantic content must be valid JSON") from exc
+
+    if not isinstance(payload, dict):
+        raise ValueError("planning_review semantic content must be a top-level object")
+
+    if payload.get("run_id") != run_id:
+        raise ValueError("planning_review payload.run_id must match metadata.run_id")
+    if payload.get("source") != PLANNING_REVIEW_SOURCE:
+        raise ValueError("planning_review payload.source must be planning_review")
+    if payload.get("schema_version") != PLANNING_REVIEW_SCHEMA_VERSION:
+        raise ValueError("planning_review payload.schema_version must be 1")
+
+    summary = payload.get("summary")
+    if not isinstance(summary, str) or not summary.strip():
+        raise ValueError("planning_review payload.summary must be a non-empty string")
+
+    stable_strategy = payload.get("stable_strategy")
+    if not isinstance(stable_strategy, dict):
+        raise ValueError("planning_review payload.stable_strategy must be an object")
+
+    if _contains_forbidden_runtime_keys(payload):
+        raise ValueError("running PlanningState payloads cannot be stored in semantic memory")
+
+
+def _validate_semantic_ingestion_contract(
+    *,
+    layer: MemoryLayer,
+    content_type: str,
+    metadata: dict[str, object],
+    content: str,
+) -> None:
+    if metadata.get("source") == PLANNING_STATE_SOURCE:
+        if layer == "semantic":
+            raise ValueError("planning_state runtime payloads cannot be stored in semantic memory")
+        return
+
+    if metadata.get("source") != PLANNING_REVIEW_SOURCE:
+        return
+
+    if layer != "semantic":
+        raise ValueError("planning_review records must be stored in the semantic layer")
+    if content_type != "json":
+        raise ValueError("planning_review records must use content_type=json")
+    if metadata.get("schema_version") != PLANNING_REVIEW_SCHEMA_VERSION:
+        raise ValueError("planning_review metadata.schema_version must be 1")
+
+    run_id = metadata.get("run_id")
+    if not isinstance(run_id, str) or not run_id.strip():
+        raise ValueError("planning_review metadata.run_id must be a non-empty string")
+
+    _validate_planning_review_payload(content, run_id=run_id)
+
+
 def _row_to_record(row: sqlite3.Row) -> MemoryRecord:
     return MemoryRecord(
         id=row["id"],
@@ -261,6 +338,12 @@ class OmniMemStore:
         return await asyncio.to_thread(self._add_sync, memory)
 
     def _add_sync(self, memory: MemoryItem) -> str:
+        _validate_semantic_ingestion_contract(
+            layer=memory.layer,
+            content_type=memory.content_type,
+            metadata=dict(memory.metadata),
+            content=memory.content,
+        )
         with self._lock:
             self._conn.execute("BEGIN IMMEDIATE")
             with self._conn:
@@ -504,15 +587,20 @@ class OmniMemStore:
         importance_score: float = 0.5,
     ) -> MemoryRecord:
         resolved_layer = (
-            validate_memory_layer(layer)
-            if layer is not None
-            else _validate_memory_tier(tier)
+            validate_memory_layer(layer) if layer is not None else _validate_memory_tier(tier)
+        )
+        resolved_metadata = dict(metadata or {})
+        _validate_semantic_ingestion_contract(
+            layer=resolved_layer,
+            content_type=content_type,
+            metadata=resolved_metadata,
+            content=content,
         )
         record = MemoryRecord(
             content=content,
             content_type=content_type,
             layer=resolved_layer,
-            metadata=metadata,
+            metadata=resolved_metadata,
             embedding=embedding,
             importance_score=importance_score,
         )
@@ -609,9 +697,7 @@ class OmniMemStore:
         self._conn.commit()
 
     def _ensure_memory_record_columns(self) -> None:
-        columns = {
-            row["name"] for row in self._conn.execute("PRAGMA table_info(memory_records)")
-        }
+        columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(memory_records)")}
         additions = (
             (
                 "content_type",
@@ -893,10 +979,7 @@ class OmniMemStore:
             return False
 
         created_before = _coerce_filter_datetime(filters.get("created_before"))
-        if created_before is not None and item.created_at > created_before:
-            return False
-
-        return True
+        return not (created_before is not None and item.created_at > created_before)
 
     def _recall_with_fts(
         self,

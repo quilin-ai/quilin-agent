@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import time
+from datetime import UTC, datetime
 
+from omnimem.kg import TemporalKnowledgeGraph
 from omnimem.retriever import MemoryRetriever
 from omnimem.store import OmniMemStore
 from omnimem.types import MemoryItem
@@ -132,9 +134,15 @@ async def test_fused_retrieval_prepends_working_then_ranked_episodic() -> None:
     assert results[0].metadata["source"] == "working_direct"
     assert results[0].metadata["layer"] == "working"
     assert results[0].metadata["score"] == 1.0
+    assert results[0].metadata["cache_key"].startswith("memory-recall:")
+    assert results[0].metadata["block_version"] == "memory-recall-v1"
+    assert results[0].metadata["source_layers"] == ["working"]
     assert results[1].metadata["source"] == "bm25_fts"
     assert results[1].metadata["layer"] == "episodic"
     assert results[1].metadata["score"] >= results[2].metadata["score"]
+    assert results[1].metadata["cache_key"] == results[0].metadata["cache_key"]
+    assert results[1].metadata["block_version"] == "memory-recall-v1"
+    assert results[1].metadata["source_layers"] == ["episodic"]
 
 
 async def test_fused_retrieval_applies_task_context_filters_to_episodic() -> None:
@@ -162,3 +170,85 @@ async def test_fused_retrieval_applies_task_context_filters_to_episodic() -> Non
     assert [item.content for item in results] == ["checkpoint beta replay target"]
     assert results[0].metadata["source"] == "bm25_fts"
     assert results[0].metadata["layer"] == "episodic"
+    assert results[0].metadata["cache_key"].startswith("memory-recall:")
+    assert results[0].metadata["block_version"] == "memory-recall-v1"
+    assert results[0].metadata["source_layers"] == ["episodic"]
+
+
+class StubVectorStore:
+    def __init__(self, results: list[MemoryItem]) -> None:
+        self._results = results
+
+    async def search(
+        self,
+        query: str,
+        limit: int = 10,
+        filters: dict[str, object] | None = None,
+    ) -> list[MemoryItem]:
+        del query, filters
+        return self._results[:limit]
+
+
+async def test_hybrid_retrieval_fuses_bm25_vector_and_kg_results() -> None:
+    store = OmniMemStore(db_path=":memory:")
+    now = datetime(2026, 4, 24, tzinfo=UTC)
+    episodic = MemoryItem(
+        id="memory-episodic-1",
+        content="database migration playbook for quilin",
+        layer="episodic",
+        created_at=now,
+        last_accessed=now,
+    )
+    semantic = MemoryItem(
+        id="memory-semantic-1",
+        content="semantic preference: summarize migration risk first",
+        layer="semantic",
+        created_at=now,
+        last_accessed=now,
+    )
+    await store.add(episodic)
+    await store.add(semantic)
+
+    working = WorkingMemory(k=3)
+    await working.push(
+        MemoryItem(
+            content="working scratch about migration rollout",
+            layer="working",
+            created_at=now,
+            last_accessed=now,
+        )
+    )
+    vector = StubVectorStore([episodic, semantic])
+    kg = TemporalKnowledgeGraph(db_path=":memory:")
+    await kg.add_edge(
+        "migration",
+        "depends_on",
+        "approval",
+        valid_from=now,
+        memory_id="memory-semantic-1",
+    )
+
+    results = await MemoryRetriever(
+        store,
+        working=working,
+        vector=vector,
+        kg=kg,
+    ).retrieve("migration rollout", limit=4)
+
+    assert results[0].content == "working scratch about migration rollout"
+    assert results[0].metadata["source"] == "working_direct"
+    assert results[0].metadata["source_layers"] == ["working"]
+
+    hybrid_item = next(item for item in results if item.id == "memory-episodic-1")
+    assert hybrid_item.metadata["source"] == "hybrid_rrf"
+    assert hybrid_item.metadata["source_layers"] == ["episodic"]
+
+    semantic_item = next(item for item in results if item.id == "memory-semantic-1")
+    assert semantic_item.metadata["source_layers"] == ["semantic"]
+    assert semantic_item.metadata["cache_key"] == results[0].metadata["cache_key"]
+    assert semantic_item.metadata["block_version"] == "memory-recall-v1"
+
+    kg_item = next(item for item in results if item.metadata["source"] == "kg_subgraph")
+    assert kg_item.content == "migration depends_on approval"
+    assert kg_item.metadata["source_layers"] == ["kg"]
+    assert kg_item.metadata["graph_distance"] == 1
