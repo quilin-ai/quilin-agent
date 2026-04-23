@@ -1,6 +1,8 @@
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runAgentLoop } from "../loop.js";
+import { createTaskHash, LinearPlanExecutor } from "../planning/executor.js";
+import type { LinearPlan } from "../planning/types.js";
 import {
 	createMCPSpawnEnv,
 	MCPClientManager,
@@ -379,6 +381,201 @@ describe.sequential("MCPClientManager", () => {
 			});
 		} finally {
 			await secondManager.disconnect();
+		}
+	});
+
+	it("persists planning checkpoints through MCP OmniMem and recalls state snapshots", async () => {
+		const manager = new MCPClientManager();
+
+		try {
+			const tools = await manager.connect(createMemoryServerConfig());
+			const memoryStore = tools.find((tool) => tool.name === "memory_store");
+			const memoryRecall = tools.find((tool) => tool.name === "memory_recall");
+			if (memoryStore == null || memoryRecall == null) {
+				throw new Error("OmniMem MCP tools were not registered");
+			}
+
+			const runId = `run-checkpoint-${crypto.randomUUID()}`;
+			const task = "Persist S2 checkpoint";
+			const plan: LinearPlan = {
+				kind: "linear",
+				subtasks: [
+					{
+						id: "checkpoint-leaf",
+						action: "noop_tool",
+						name: "Save checkpoint",
+						description: "Complete one step so the executor emits a checkpoint",
+						estimatedTokens: 1,
+						estimatedSteps: 1,
+						preconditions: [],
+						effects: ["checkpoint persisted"],
+						arguments: { marker: runId },
+						writeScope: "episodic",
+						risk: "low",
+					},
+				],
+			};
+			const expectedTaskHash = createTaskHash(task, plan);
+			const emittedKinds: string[] = [];
+
+			const executor = new LinearPlanExecutor({
+				tools: {
+					noop_tool: async (toolCall) => ({
+						toolCallId: toolCall.id,
+						content: JSON.stringify({ ok: true, runId }),
+						isError: false,
+					}),
+				},
+				now: () => 1_777_000_000_000,
+				onEvent: (event) => {
+					emittedKinds.push(event.kind);
+				},
+				checkpointWriter: async (input) => {
+					const checkpointPayload = {
+						kind: "planning_checkpoint",
+						run_id: input.runId,
+						event_seq: input.eventSeq,
+						phase: input.phase,
+						task_hash: input.taskHash,
+						schema_version: input.schemaVersion,
+						stateSnapshot: input.state,
+					};
+					const storeResult = await memoryStore.execute({
+						content: JSON.stringify(checkpointPayload),
+						layer: "episodic",
+						content_type: "json",
+						metadata: {
+							schema_version: input.schemaVersion,
+							source: "planning_checkpoint",
+							run_id: input.runId,
+							event_seq: input.eventSeq,
+							phase: input.phase,
+							task_hash: input.taskHash,
+						},
+					});
+
+					expect(storeResult.isError).toBe(false);
+					const parsedStoreResult = JSON.parse(storeResult.content) as {
+						id?: unknown;
+					};
+					expect(typeof parsedStoreResult.id).toBe("string");
+
+					return {
+						id: parsedStoreResult.id as string,
+						storageRef: `omnimem://episodic/${input.runId}/${input.eventSeq}`,
+					};
+				},
+			});
+
+			const result = await executor.execute({
+				runId,
+				task,
+				plan,
+				intent: {
+					intent: "MULTI_STEP",
+					confidence: 0.99,
+					source: "structural",
+					latencyMs: 1,
+				},
+			});
+
+			expect(result.taskHash).toBe(expectedTaskHash);
+			expect(result.terminatedReason).toBe("Success");
+			expect(result.haltedOnError).toBe(false);
+			expect(emittedKinds).toContain("checkpoint_saved");
+			expect(emittedKinds).not.toContain("checkpoint_failed");
+			expect(result.state.checkpoints).toHaveLength(1);
+
+			const checkpoint = result.state.checkpoints[0];
+			expect(checkpoint).toEqual(
+				expect.objectContaining({
+					atEventSeq: 6,
+					stateSnapshot: expect.objectContaining({
+						runId,
+						phase: "executing",
+					}),
+					storageRef: `omnimem://episodic/${runId}/6`,
+				}),
+			);
+
+			const recallResult = await memoryRecall.execute({ query: runId });
+			expect(recallResult.isError).toBe(false);
+
+			const recalled = JSON.parse(recallResult.content) as {
+				records?: Array<{
+					id?: unknown;
+					content?: unknown;
+					content_type?: unknown;
+					layer?: unknown;
+					tier?: unknown;
+					metadata?: Record<string, unknown>;
+				}>;
+			};
+			const record = recalled.records?.find(
+				(item) => item.metadata?.run_id === runId,
+			);
+
+			expect(record).toEqual(
+				expect.objectContaining({
+					id: checkpoint.id,
+					content_type: "json",
+					layer: "episodic",
+					tier: "episodic",
+					metadata: expect.objectContaining({
+						schema_version: 1,
+						source: "planning_checkpoint",
+						run_id: runId,
+						event_seq: 6,
+						phase: "executing",
+						task_hash: expectedTaskHash,
+					}),
+				}),
+			);
+			if (typeof record?.content !== "string") {
+				throw new Error(
+					"checkpoint record content was not returned as JSON text",
+				);
+			}
+
+			const recalledCheckpoint = JSON.parse(record.content) as {
+				kind?: unknown;
+				run_id?: unknown;
+				event_seq?: unknown;
+				task_hash?: unknown;
+				stateSnapshot?: {
+					runId?: unknown;
+					phase?: unknown;
+					checkpoints?: unknown;
+					events?: Array<{ kind?: unknown; seq?: unknown }>;
+				};
+			};
+			expect(recalledCheckpoint).toEqual(
+				expect.objectContaining({
+					kind: "planning_checkpoint",
+					run_id: runId,
+					event_seq: 6,
+					task_hash: expectedTaskHash,
+				}),
+			);
+			expect(recalledCheckpoint.stateSnapshot).toEqual(
+				expect.objectContaining({
+					runId,
+					phase: "executing",
+					checkpoints: [],
+				}),
+			);
+			expect(
+				recalledCheckpoint.stateSnapshot?.events?.map((event) => event.kind),
+			).toEqual([
+				"intent_classified",
+				"task_decomposed",
+				"subtask_started",
+				"tool_called",
+				"tool_returned",
+				"subtask_done",
+			]);
+		} finally {
+			await manager.disconnect();
 		}
 	});
 

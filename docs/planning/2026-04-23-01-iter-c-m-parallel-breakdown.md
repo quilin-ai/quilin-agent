@@ -92,7 +92,7 @@
 
 - M0.9a 仍是资源 blocked，不是 Arm L pass/fail；解锁后仍需跑 Arm L 推理并产出 recall/FPR/p95/cost，再决定 M0.9b 的 ML-first 或 d3 opt-in/default-off 路径。
 - S1 的 `MemoryItem.metadata.source/score/staleness/schema_version` 已由 M0.8 融合召回回填并有测试；`task_context?` 仍是后续 M1 task-aware ranking 的预留扩展位。
-- S2 的 checkpoint 成功/失败路径已在 TS executor mock 中验证；尚未和 `providers/memory` 做真实跨进程端到端联调。
+- S2 checkpoint 跨进程端到端联调已补齐：TS `LinearPlanExecutor` 触发 `checkpoint_saved`，经 MCP `memory_store` 写入 `uv run python -m omnimem`，再由 TS `memory_recall` 读回并校验 `stateSnapshot`；实证见 §16.5。
 - LongMemEval 数据集未 vendored 到仓库，本轮按 O3 以 AMB 四轴离线 harness 作为 M0.10 替代证据。
 - 第三方 MCP / Skills CLI config loader 仍未接入；底层 API 已有，CLI 产品路径需另开切片。
 
@@ -856,9 +856,10 @@ M2.6 / M2.7 ↔ Iter F soul.md 写路径
 
 ### 16.5 S2 跨进程 checkpoint 端到端联调（HIGH-from-Planning-review）
 
-- **现状**：Planning review 指出 S2 checkpoint 只在 TS executor mock 内通过，未和 `providers/memory` 的 SQLite store 做真实跨进程联调。
-- **DoD**：TS 侧触发 `checkpoint_saved` → MCP `memory_store` → `uv run` 的 Python 进程持久化到 `~/.quilin/memory.db` → TS 侧 `memory_recall` 能读回并校验 `checkpoint.stateSnapshot` 结构。
-- **Trigger**：M1.6 任务或独立 S2-e2e slice；不是本轮 blocker（Planning review HIGH-1 已标明）。
+- **状态**：✅ 已闭合。
+- **原现状**：Planning review 指出 S2 checkpoint 只在 TS executor mock 内通过，未和 `providers/memory` 的 SQLite store 做真实跨进程联调。
+- **DoD 实证**：新增 `packages/agent-core/src/tools/mcp-client.test.ts` 用例 `persists planning checkpoints through MCP OmniMem and recalls state snapshots`，覆盖 TS `LinearPlanExecutor` 触发 `checkpoint_saved` → MCP `memory_store` → `uv run python -m omnimem` Python 进程持久化 → TS `memory_recall` 读回并校验 `stateSnapshot`。
+- **验证**：`cd packages/agent-core && pnpm exec biome check src/tools/mcp-client.test.ts` 通过；`cd packages/agent-core && pnpm test src/tools/mcp-client.test.ts` = `16 passed`（含新增跨进程 checkpoint 用例）。
 
 ### 16.6 Review 补齐本轮新代码（Q2 follow-up）
 
