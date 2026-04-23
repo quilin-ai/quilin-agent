@@ -8,7 +8,7 @@ from mcp.server.fastmcp import Context, FastMCP
 
 from .logging import logger
 from .store import OmniMemStore
-from .types import MemoryTier
+from .types import MemoryLayer, MemoryTier
 
 
 class MemoryOperationError(RuntimeError):
@@ -30,13 +30,14 @@ async def _memory_recall_with_store(store: OmniMemStore, query: str) -> str:
     except Exception as exc:
         _raise_memory_operation_error("memory_recall", exc)
 
-    return json.dumps({"records": [r.to_dict() for r in results]})
+    return json.dumps({"records": [r.to_wire_dict() for r in results]})
 
 
 async def _memory_store_with_store(
     store: OmniMemStore,
     content: str,
     tier: MemoryTier = "working",
+    layer: MemoryLayer | None = None,
 ) -> str:
     """Store a new memory record.
 
@@ -45,7 +46,10 @@ async def _memory_store_with_store(
         tier: Memory tier (default "working").
     """
     try:
-        record = await store.store(content, tier)
+        if layer is None:
+            record = await store.store(content, tier=tier)
+        else:
+            record = await store.store(content, tier=tier, layer=layer)
     except Exception as exc:
         _raise_memory_operation_error("memory_store", exc)
 
@@ -85,10 +89,15 @@ async def memory_recall(query: str) -> str:
         return await _memory_recall_with_store(store, query)
 
 
-async def memory_store(content: str, tier: MemoryTier = "working") -> str:
+async def memory_store(
+    content: str,
+    tier: MemoryTier = "working",
+    *,
+    layer: MemoryLayer | None = None,
+) -> str:
     """Legacy direct helper that opens a store per call."""
     async with OmniMemStore() as store:
-        return await _memory_store_with_store(store, content, tier)
+        return await _memory_store_with_store(store, content, tier, layer)
 
 
 def create_server(store: OmniMemStore | None = None) -> FastMCP:
@@ -123,6 +132,7 @@ def create_server(store: OmniMemStore | None = None) -> FastMCP:
     async def memory_store_tool(
         content: str,
         tier: MemoryTier = "working",
+        layer: MemoryLayer | None = None,
         ctx: Context[object, Any, object] | None = None,
     ) -> str:
         """Store a new memory record.
@@ -130,8 +140,14 @@ def create_server(store: OmniMemStore | None = None) -> FastMCP:
         Args:
             content: The text content to store.
             tier: Memory tier (default "working").
+            layer: Canonical memory layer. Takes precedence over tier.
         """
-        return await _memory_store_with_store(await resolve_store(ctx), content, tier)
+        return await _memory_store_with_store(
+            await resolve_store(ctx),
+            content,
+            tier,
+            layer,
+        )
 
     return server
 

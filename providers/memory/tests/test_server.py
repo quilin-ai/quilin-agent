@@ -16,6 +16,28 @@ def _decode_call_tool_result(result: object) -> dict[str, object]:
     return json.loads(metadata["result"])
 
 
+def _assert_memory_item_record(
+    record: dict[str, object],
+    *,
+    content: str,
+    layer: str,
+    memory_id: str | None = None,
+) -> None:
+    if memory_id is not None:
+        assert record["id"] == memory_id
+
+    assert record["content"] == content
+    assert record["layer"] == layer
+    assert record["tier"] == layer
+    assert record["content_type"] == "text"
+    assert record["metadata"] == {"schema_version": 1}
+    assert record["embedding"] is None
+    assert isinstance(record["created_at"], str)
+    assert isinstance(record["last_accessed"], str)
+    assert record["access_count"] == 0
+    assert record["importance_score"] == 0.5
+
+
 async def _call_tool_request(server: object, name: str, arguments: dict[str, object]):
     handler = server._mcp_server.request_handlers[CallToolRequest]  # type: ignore[attr-defined]
     return await handler(
@@ -47,13 +69,57 @@ async def test_memory_store_tool_returns_id(server: object) -> None:
 
 
 async def test_memory_store_tool_with_tier(server: object) -> None:
-    result = _decode_call_tool_result(
+    store_result = _decode_call_tool_result(
         await server.call_tool(  # type: ignore[attr-defined]
             "memory_store",
             {"content": "important", "tier": "semantic"},
         )
     )
-    assert "id" in result
+    recall_result = _decode_call_tool_result(
+        await server.call_tool("memory_recall", {"query": "important"})  # type: ignore[attr-defined]
+    )
+
+    assert "id" in store_result
+    _assert_memory_item_record(
+        recall_result["records"][0],  # type: ignore[index]
+        content="important",
+        layer="semantic",
+        memory_id=store_result["id"],  # type: ignore[arg-type]
+    )
+
+
+async def test_memory_store_tool_accepts_canonical_layer(server: object) -> None:
+    await server.call_tool(  # type: ignore[attr-defined]
+        "memory_store",
+        {"content": "checkpoint", "layer": "episodic"},
+    )
+
+    recall_result = _decode_call_tool_result(
+        await server.call_tool("memory_recall", {"query": "checkpoint"})  # type: ignore[attr-defined]
+    )
+
+    _assert_memory_item_record(
+        recall_result["records"][0],  # type: ignore[index]
+        content="checkpoint",
+        layer="episodic",
+    )
+
+
+async def test_memory_store_tool_prefers_layer_over_tier(server: object) -> None:
+    await server.call_tool(  # type: ignore[attr-defined]
+        "memory_store",
+        {"content": "stable preference", "tier": "working", "layer": "semantic"},
+    )
+
+    recall_result = _decode_call_tool_result(
+        await server.call_tool("memory_recall", {"query": "stable preference"})  # type: ignore[attr-defined]
+    )
+
+    _assert_memory_item_record(
+        recall_result["records"][0],  # type: ignore[index]
+        content="stable preference",
+        layer="semantic",
+    )
 
 
 async def test_memory_recall_tool_returns_records(server: object) -> None:
@@ -70,6 +136,9 @@ async def test_memory_recall_tool_returns_records(server: object) -> None:
         assert "id" in record
         assert "content" in record
         assert "tier" in record
+        assert "layer" in record
+        assert "metadata" in record
+        assert record["metadata"] == {"schema_version": 1}
 
 
 async def test_memory_recall_tool_empty_query(server: object) -> None:
@@ -106,11 +175,12 @@ async def test_roundtrip_store_then_recall(server: object) -> None:
     )
     records = recall_result["records"]
     assert len(records) == 1
-    assert records[0] == {
-        "id": stored_id,
-        "content": "my memory",
-        "tier": "episodic",
-    }
+    _assert_memory_item_record(
+        records[0],  # type: ignore[index]
+        memory_id=stored_id,  # type: ignore[arg-type]
+        content="my memory",
+        layer="episodic",
+    )
 
 
 async def test_memory_recall_error_path(
@@ -167,13 +237,12 @@ async def test_create_server_uses_injected_store_isolation() -> None:
         await right_server.call_tool("memory_recall", {"query": "left"})
     )
 
-    assert left_result["records"] == [
-        {
-            "id": left_result["records"][0]["id"],  # type: ignore[index]
-            "content": "left only",
-            "tier": "working",
-        }
-    ]
+    assert len(left_result["records"]) == 1
+    _assert_memory_item_record(
+        left_result["records"][0],  # type: ignore[index]
+        content="left only",
+        layer="working",
+    )
     assert right_result["records"] == []
 
 
