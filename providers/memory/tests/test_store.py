@@ -64,6 +64,36 @@ async def test_add_get_update_delete_and_count_contract() -> None:
     assert await store.count({"layer": "episodic"}) == 0
 
 
+async def test_delete_is_soft_and_removes_deleted_rows_from_queries() -> None:
+    store = OmniMemStore(db_path=":memory:")
+    memory = MemoryItem(
+        content="checkpoint result",
+        layer="episodic",
+        metadata={"schema_version": 1, "session_id": "session-1"},
+    )
+
+    memory_id = await store.add(memory)
+    await store.delete(memory_id)
+
+    assert await store.get(memory_id) is None
+    assert await store.recall("checkpoint") == []
+    assert await store.search("checkpoint", filters={"layer": "episodic"}) == []
+    assert await store.list_by_layer("episodic") == []
+    assert await store.count({"layer": "episodic"}) == 0
+
+    row = store._conn.execute(  # type: ignore[attr-defined]
+        "SELECT deleted FROM memory_records WHERE id = ?",
+        (memory_id,),
+    ).fetchone()
+    assert row[0] == 1
+
+    fts_row = store._conn.execute(  # type: ignore[attr-defined]
+        "SELECT COUNT(*) FROM memory_records_fts WHERE id = ?",
+        (memory_id,),
+    ).fetchone()
+    assert fts_row[0] == 0
+
+
 async def test_search_list_by_layer_and_clear_layer() -> None:
     store = OmniMemStore(db_path=":memory:")
     await store.store("working note", tier="working")
@@ -86,6 +116,94 @@ async def test_search_list_by_layer_and_clear_layer() -> None:
     cleared = await store.clear_layer("semantic")
     assert cleared == 2
     assert await store.count({"layer": "semantic"}) == 0
+
+
+async def test_search_supports_layer_alias_metadata_and_content_type_filters() -> None:
+    store = OmniMemStore(db_path=":memory:")
+    await store.store(
+        "checkpoint alpha",
+        tier="episodic",
+        metadata={
+            "schema_version": 1,
+            "session_id": "session-1",
+            "user_id": "user-1",
+        },
+        content_type="json",
+    )
+    await store.store(
+        "checkpoint beta",
+        tier="episodic",
+        metadata={
+            "schema_version": 1,
+            "session_id": "session-2",
+            "user_id": "user-1",
+        },
+        content_type="text",
+    )
+    await store.store("checkpoint working", tier="working")
+
+    filtered = await store.search(
+        "checkpoint",
+        filters={
+            "tier": "episodic",
+            "metadata": {"session_id": "session-1", "user_id": "user-1"},
+            "content_type": "json",
+        },
+    )
+
+    assert [item.content for item in filtered] == ["checkpoint alpha"]
+
+
+async def test_list_by_layer_supports_pagination_in_row_order() -> None:
+    store = OmniMemStore(db_path=":memory:")
+    for index in range(5):
+        await store.store(f"semantic-{index}", tier="semantic")
+
+    first_page = await store.list_by_layer("semantic", limit=2, offset=0)
+    second_page = await store.list_by_layer("semantic", limit=2, offset=2)
+    third_page = await store.list_by_layer("semantic", limit=2, offset=4)
+
+    assert [item.content for item in first_page] == ["semantic-0", "semantic-1"]
+    assert [item.content for item in second_page] == ["semantic-2", "semantic-3"]
+    assert [item.content for item in third_page] == ["semantic-4"]
+
+
+async def test_count_respects_layer_metadata_and_content_type_filters() -> None:
+    store = OmniMemStore(db_path=":memory:")
+    await store.store(
+        "session one json",
+        tier="episodic",
+        metadata={"schema_version": 1, "session_id": "session-1"},
+        content_type="json",
+    )
+    await store.store(
+        "session one text",
+        tier="episodic",
+        metadata={"schema_version": 1, "session_id": "session-1"},
+        content_type="text",
+    )
+    await store.store(
+        "session two json",
+        tier="episodic",
+        metadata={"schema_version": 1, "session_id": "session-2"},
+        content_type="json",
+    )
+    await store.store("semantic json", tier="semantic", content_type="json")
+
+    assert await store.count({"layer": "episodic"}) == 3
+    assert await store.count(
+        {
+            "layer": "episodic",
+            "metadata": {"session_id": "session-1"},
+        }
+    ) == 2
+    assert await store.count(
+        {
+            "layer": "episodic",
+            "metadata": {"session_id": "session-1"},
+            "content_type": "json",
+        }
+    ) == 1
 
 
 async def test_recall_empty_query_returns_all() -> None:
