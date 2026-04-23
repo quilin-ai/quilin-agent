@@ -102,6 +102,9 @@ Iter B: Useful Tools + Skills + Safety ✅（基本完成，tiny-classifier spik
     ▼
 Iter C: Planning Core
     │  04-Planning + 01-动态 InferenceConfig + 07-内建验证
+    │  Memory 从 Iter F 抽出为独立 Iter M 并行推进
+    │  → 契约源：[ADR-005 Memory Contracts](../adr/adr-005-memory-contracts.md)
+    │  → 并行切片计划：[2026-04-23-01-iter-c-m-parallel-breakdown.md](./2026-04-23-01-iter-c-m-parallel-breakdown.md)
     │
     ▼
 Iter D: Operability + Rust 基础设施

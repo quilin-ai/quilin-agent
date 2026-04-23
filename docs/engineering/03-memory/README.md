@@ -8,6 +8,8 @@
 > OmniMem 4 层分级记忆系统详细规格
 >
 > **ADR-001 对齐说明**：核心语言已决策为 TypeScript，OmniMem 将封装为 Python MCP Server（ML 依赖），TS 核心通过 MCP stdio 调用。本文档中的 Python 代码示例仅表达设计意图。`quilin/` 路径为规划参考。详见 [ADR-001](../../adr/adr-001-core-loop-and-language.md)。
+>
+> **ADR-005 契约源**：Memory 跨语言契约（`MemoryItem` 字段 / layer 枚举 / metadata schema 版本 / `MemoryStore` Protocol / `store()`/`recall()`/`reflect()` / tier 语义 / 异步感知）以 [ADR-005 Memory Contracts](../../adr/adr-005-memory-contracts.md) 为**规范源**；本 spec §A.5/§A.6 为规范源的详细工程展开，冲突时以 ADR-005 为准。新字段必须可选，删除/重命名字段须走新 ADR 或计划修订。L3a 观察者决策参见 [ADR-004](../../adr/adr-004-l3a-observer-strategy.md)。
 
 ---
 
