@@ -3,6 +3,7 @@ export * from "./budget.js";
 export * from "./context.js";
 export * from "./dag.js";
 export * from "./decompose.js";
+export * from "./delegation.js";
 export * from "./executor.js";
 export * from "./goal-drift.js";
 export * from "./intent.js";

@@ -3,11 +3,19 @@ import type { SkillDescriptor } from "../skills/types.js";
 import type { ToolCall, ToolResult } from "../tools/types.js";
 import { createBudgetLedger } from "./budget.js";
 import { buildPlanContext } from "./context.js";
+import { type DelegationDecision, evaluateDelegation } from "./delegation.js";
 import { LinearPlanExecutor } from "./executor.js";
 import { MainLLMPlanner } from "./planner.js";
+import { applyGlobalReplan, toReplanEventPayload } from "./replan.js";
 import type { PlanningEvent } from "./state.js";
+import { applyEvent } from "./state.js";
 import { detectTermination } from "./termination.js";
-import type { LLMPlannerResponse, SubTask } from "./types.js";
+import type {
+	DagPlan,
+	LinearPlan,
+	LLMPlannerResponse,
+	SubTask,
+} from "./types.js";
 
 function makeSkillDescriptor(name: string): SkillDescriptor {
 	return {
@@ -27,6 +35,29 @@ function makeSkillDescriptor(name: string): SkillDescriptor {
 
 function makeStep(step: SubTask): SubTask {
 	return step;
+}
+
+function makeLongTaskStep(
+	index: number,
+	overrides: Partial<SubTask> = {},
+): SubTask {
+	const id = overrides.id ?? `step-${String(index).padStart(2, "0")}`;
+	return {
+		id,
+		action: overrides.action ?? "long_task_step",
+		name: overrides.name ?? `Long task step ${index}`,
+		description: overrides.description ?? `Execute long task step ${index}`,
+		estimatedTokens: overrides.estimatedTokens ?? 25,
+		estimatedSteps: overrides.estimatedSteps ?? 1,
+		preconditions:
+			overrides.preconditions ?? (index === 1 ? [] : [`done:${index - 1}`]),
+		effects: overrides.effects ?? [`done:${index}`],
+		skillHint: overrides.skillHint,
+		arguments: overrides.arguments ?? { path: `artifact-${index}.md` },
+		depth: overrides.depth,
+		writeScope: overrides.writeScope ?? "working",
+		risk: overrides.risk ?? "low",
+	};
 }
 
 describe("planning M0 integration", () => {
@@ -212,6 +243,169 @@ describe("planning M0 integration", () => {
 		expect(termination).toMatchObject({
 			shouldTerminate: true,
 			reason: "Success",
+		});
+	});
+});
+
+describe("planning M2 integration", () => {
+	it("runs a 50+ step long-task mock with delegation policy and G-Replan fixture", async () => {
+		const delegatedStep = makeLongTaskStep(12, {
+			id: "delegated-research",
+			action: "delegate_subagent",
+			name: "Delegated research slice",
+			description: "Run an isolated research slice in a sub-agent",
+			estimatedSteps: 12,
+			preconditions: ["done:11"],
+			effects: ["delegated_research_done"],
+			arguments: { path: "delegated-research.md" },
+			writeScope: "episodic",
+			risk: "medium",
+		});
+		const steps: SubTask[] = Array.from({ length: 52 }, (_, index) =>
+			index === 11 ? delegatedStep : makeLongTaskStep(index + 1),
+		);
+		const linearPlan: LinearPlan = {
+			kind: "linear",
+			subtasks: steps,
+		};
+		const dagPlan: DagPlan = {
+			kind: "dag",
+			subtasks: steps,
+			edges: steps
+				.slice(1)
+				.map((step, index) => [steps[index]?.id ?? "", step.id]),
+		};
+		const delegationDecision = evaluateDelegation({
+			parentRunId: "run-c3-5",
+			candidateStep: delegatedStep,
+			plan: dagPlan,
+			mainAgentSteps: steps.filter((step) => step.id !== delegatedStep.id),
+			triggers: {
+				longRunningTask: true,
+				decomposableSubtask: true,
+				nonBlockingSupervisorRequired: true,
+				subAgentCapabilityAvailable: true,
+			},
+			subAgent: {
+				role: "long-task-worker",
+				goal: "Complete the delegated research slice and report checkpoints",
+			},
+		});
+		const delegationMock = vi.fn(
+			async (
+				_toolCall: ToolCall,
+				step: SubTask | null,
+			): Promise<ToolResult> => {
+				if (!delegationDecision.delegate || step == null) {
+					return {
+						toolCallId: _toolCall.id,
+						content: "delegation rejected",
+						isError: true,
+					};
+				}
+
+				return {
+					toolCallId: _toolCall.id,
+					content: JSON.stringify({
+						childRunId: delegationDecision.assignment.childRunId,
+						taskId: step.id,
+						status: "success",
+					}),
+					isError: false,
+				};
+			},
+		);
+		const longTaskMock = vi.fn(
+			async (
+				toolCall: ToolCall,
+				step: SubTask | null,
+			): Promise<ToolResult> => ({
+				toolCallId: toolCall.id,
+				content: JSON.stringify({ completed: step?.id ?? toolCall.id }),
+				isError: false,
+			}),
+		);
+		const events: PlanningEvent[] = [];
+		const executor = new LinearPlanExecutor({
+			tools: {
+				long_task_step: longTaskMock,
+				delegate_subagent: delegationMock,
+			},
+			maxSteps: 60,
+			onEvent: (event) => {
+				events.push(event);
+			},
+		});
+
+		const execution = await executor.execute({
+			runId: "run-c3-5",
+			task: "Execute a long M2 planning task with an isolated delegation slice",
+			plan: linearPlan,
+			intent: {
+				intent: "MULTI_STEP",
+				confidence: 0.99,
+				source: "structural",
+				latencyMs: 3,
+			},
+		});
+		const nextPlan: LinearPlan = {
+			kind: "linear",
+			subtasks: [
+				...steps.slice(0, 30),
+				makeLongTaskStep(53, {
+					id: "replanned-validation",
+					action: "long_task_step",
+					preconditions: ["done:30"],
+					effects: ["validation_done"],
+					arguments: { path: "validation.md" },
+					writeScope: "working",
+					risk: "low",
+				}),
+			],
+		};
+		const gReplanPatch = applyGlobalReplan(linearPlan, nextPlan, {
+			reason: "external_context_changed",
+			currentLeafId: "step-30",
+			note: "fixture path changed after checkpoint",
+			production: false,
+		});
+		const gReplanEvent: PlanningEvent = {
+			seq: execution.state.events.length + 1,
+			timestamp: 1,
+			kind: "replan",
+			payload: toReplanEventPayload(gReplanPatch),
+		};
+		const replannedState = applyEvent(execution.state, gReplanEvent);
+
+		expect(steps).toHaveLength(52);
+		expect(delegationDecision).toMatchObject({
+			delegate: true,
+			reason: "accepted",
+		} satisfies Partial<DelegationDecision>);
+		expect(delegationMock).toHaveBeenCalledTimes(1);
+		expect(longTaskMock).toHaveBeenCalledTimes(51);
+		expect(execution.outputs).toHaveLength(52);
+		expect(
+			events.filter((event) => event.kind === "subtask_done"),
+		).toHaveLength(52);
+		expect(execution.terminatedReason).toBe("Success");
+		expect(gReplanPatch).toMatchObject({
+			level: "G-Replan",
+			reason: "external_context_changed",
+			currentLeafId: "step-30",
+			metric: {
+				kind: "global_replan_triggered",
+				production: false,
+			},
+		});
+		expect(replannedState.plan).toBe(nextPlan);
+		expect(replannedState.events.at(-1)).toMatchObject({
+			kind: "replan",
+			payload: {
+				plan: nextPlan,
+				reason: "external_context_changed",
+				currentLeafId: "step-30",
+			},
 		});
 	});
 });
