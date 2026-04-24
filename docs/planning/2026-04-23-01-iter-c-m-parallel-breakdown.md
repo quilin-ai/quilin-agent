@@ -133,6 +133,30 @@
 
 第三轮收口后的剩余风险与 follow-up → 见 §16；第三轮 review 发现的新增 follow-up 已处理：Halley fallback logger 失败不再破坏 advisory writer（已修）、Pascal explicit config 与 builtin REPL 的 registry/namespace 语义差异已文档化、Hooke KG duplicate seed 已去重。
 
+#### 第四轮并行切片（C3 收尾 + M1.7-M2.6）— 已完成（2026-04-24）
+
+| 路线 | 任务 | 状态 | commit | 实证 |
+|---|---|---|---|---|
+| Lagrange (C-track) | C3.4 规则式委派策略接口 + C3.5 M2 长任务端到端集成 | ✅ 完成 | `d1dc308` | `packages/agent-core/src/planning/delegation.ts` + `delegation.test.ts` + `planning.integration.test.ts` 扩展；52 步 PlanAndExecute 场景 + 1 次委派 mock + G-Replan fixture；`pnpm tsc --noEmit` exit `0`；`pnpm test` = `62 files / 488 passed`；`pnpm exec biome check src` = `144 files clean` |
+| Epicurus (M-track) | M1.7 UserProfile Store + ProfileUpdater / M1.8 user.md 双向镜像 / M2.4 按用户检索权重画像 / M2.5 AMB 100k benchmark / M2.6 soul.md frontmatter schema | ✅ 完成 | `23837d4` | 5 条 M-track 任务一次 commit 落地：`profile_store.py` + `profile_updater.py` + `retrieval_profile.py` + `soul_schema.py`（+ 对应 tests）、`benchmarks/amb_100k.py`、`docs/engineering/10-self-evolution/soul-md-schema.md`、根 `.gitignore` 加 `.quilin/user.md / soul.md / *.local.md`；`uv run pytest -q` = `155 passed`；`uv run ruff check` clean；AMB 100k fixture `100000 records / top1=1.0 / p95=0.261ms`（硬门槛 `300ms`，远低于门槛） |
+| 跨路同步 | ADR-007 draft 对齐 | ✅ 对齐 | `23837d4` | `profile_store` / `profile_updater` 实现严格遵循 `docs/adr/adr-007-identity-files.md`；敏感字段白名单（真名 / 联系方式 / 位置 / tokens / 生日）默认不导出，`--include-sensitive` 单次显式解锁 |
+
+第四轮核心文件 LOC 实证：
+
+| 文件 | LOC |
+|---|---:|
+| `packages/agent-core/src/planning/delegation.ts` | 见 commit diff 550+/1- |
+| `providers/memory/src/omnimem/profile_store.py` | 见 commit diff 14 files / 1294+/3- |
+| `providers/memory/benchmarks/amb_100k.py` | 同上 |
+
+第四轮收口后的剩余任务：
+
+- **C3.6 成本路由探索性门控**：defer 到 Iter E，按 plan §4.4 决定
+- **M2.7 soul.md 静态加载**：M2.6 只做 schema + read-only 契约；M2.7 的 ContextAssembler 接入留到 Iter F（自进化写路径）
+- **M1.1 / M0.9b L3a 生产 observer**：Arm L 资源仍 blocked（`ANTHROPIC_API_KEY` unset / `ollama` absent / `localhost:11434` 拒连接）
+- **LongMemEval vendoring**：数据集未 vendored，当前 AMB 四轴 100k deterministic fixture 已满足 M2.5 硬门槛（p95 `0.261ms` / `< 300ms`），替代证据按 O3 写入
+- **`kg.py` / `retriever.py` 大文件拆分**（Track D 残余）：下一轮独立 sweep
+
 ## 1. 当前共识
 
 - Memory 从 Iter F 抽出为独立 Iter M，与 Iter C 并行开工。
