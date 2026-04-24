@@ -873,7 +873,7 @@ M2.6 / M2.7 ↔ Iter F soul.md 写路径
 
 ### 16.7 Codex code comprehensive review（`docs/review/2026-04-24-05`）
 
-- **状态**：✅ closed（当前工作树，待 Claude 提交 commit hash）。review gate 已闭合；Track A `4/4`、Track B `4/4`、Track C `6/6` 全部完成，Track D 仅保留 backlog。
+- **状态**：✅ closed（commits `0c5f02e` Track C 第一批 + `616620d` Track A/B/C 收口）。review gate 已闭合；Track A `4/4`、Track B `4/4`、Track C `6/6` 全部完成，Track D 仅保留 backlog。
 - **Review 文档**：`docs/review/2026-04-24-05-codex-code-comprehensive.md`
 - **Reviewer**：Claude + 3 并行 subagent（TS Planning `a38d534a36c01add0` / Python Memory `ad1ff15a01ec93147` / TS Config/Tools `a17a56146cef3bbfe`）
 - **范围**：plan §11/§15 启动以来 Codex 在 `packages/agent-core/` + `providers/memory/` 下的全部新代码（68 文件 / 10797 行增量）
@@ -883,9 +883,9 @@ M2.6 / M2.7 ↔ Iter F soul.md 写路径
   - **Track B 并发与生命周期**（MCPRegistry/MCPClientManager mutex / KG-Store DB 分离 / KG 防环正确性）
   - **Track C 正确性与观测性**（Planner zod / recall access 信号 / KG temporal UTC / fused recall 降级 / G-Replan metric 入事件流）
   - **Track D 可维护性清理**（REPL 两路合并 / capabilities schema 补齐 / YAML parser / 文件拆分 / LOW 条目）
-- **当前工作树进度（待 commit）**：
-  - Track A：A1-A4 已完成。
-  - Track B：B1-B4 已完成。
-  - Track C：C1-C6 已完成。
-- **实证（当前工作树，待 commit）**：`cd packages/agent-core && pnpm test` = `61 passed files / 471 tests`；`cd packages/agent-core && pnpm tsc --noEmit` exit `0`；`cd packages/agent-core && pnpm exec biome check src` exit `0`；`uv run --project providers/memory pytest providers/memory/tests -q` = `134 passed`；`uv run --project providers/memory ruff check providers/memory/src providers/memory/tests` exit `0`。
+- **已落 commit 进度**：
+  - Track A：A1-A4 已完成（`616620d`）。
+  - Track B：B1-B4 已完成（`616620d`）。
+  - Track C：C1-C2 / C3-C4 已完成（`616620d`）；C5-C6 已完成（`0c5f02e`）。
+- **实证（HEAD `616620d`）**：`cd packages/agent-core && pnpm test` = `61 passed files / 471 tests`；`cd packages/agent-core && pnpm tsc --noEmit` exit `0`；`cd packages/agent-core && pnpm exec biome check src` exit `0`；`uv run --project providers/memory pytest providers/memory/tests -q` = `134 passed`；`uv run --project providers/memory ruff check providers/memory/src providers/memory/tests` exit `0`。
 - **DoD**：Track A/B/C 已满足并完成；Track D 作为独立 backlog 后续处理。
