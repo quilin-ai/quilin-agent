@@ -5,6 +5,7 @@ import {
 	applyLocalRearrange,
 	applyLocalRedecompose,
 	computeGlobalReplanRate,
+	toReplanEventPayload,
 } from "./replan.js";
 import { applyEvent, createPlanningState } from "./state.js";
 
@@ -185,10 +186,7 @@ describe("applyLocalRedecompose", () => {
 			seq: 3,
 			timestamp: 1_200,
 			kind: "replan",
-			payload: {
-				plan: patch.plan,
-				currentLeafId: patch.currentLeafId,
-			},
+			payload: toReplanEventPayload(patch),
 		};
 
 		const direct = applyEvent(
@@ -271,10 +269,7 @@ describe("applyGlobalReplan", () => {
 			seq: 3,
 			timestamp: 1_200,
 			kind: "replan",
-			payload: {
-				plan: patch.plan,
-				currentLeafId: patch.currentLeafId,
-			},
+			payload: toReplanEventPayload(patch),
 		};
 
 		const direct = applyEvent(
@@ -289,11 +284,23 @@ describe("applyGlobalReplan", () => {
 		expect(replayed).toEqual(direct);
 		expect(replayed.plan).toEqual(nextPlan);
 		expect(replayed.currentLeafId).toBe("scope");
+		expect(replayed.events.at(-1)).toMatchObject({
+			kind: "replan",
+			payload: {
+				reason: "external_context_changed",
+				production: false,
+				metric: {
+					kind: "global_replan_triggered",
+					reason: "external_context_changed",
+					production: false,
+				},
+			},
+		});
 	});
 });
 
 describe("computeGlobalReplanRate", () => {
-	it("computes global replan trigger rates and the production <5% target", () => {
+	it("treats the production <=5% target as passing", () => {
 		expect(
 			computeGlobalReplanRate([
 				{ hadGlobalReplan: true, production: true },
@@ -301,12 +308,45 @@ describe("computeGlobalReplanRate", () => {
 				{ hadGlobalReplan: false, production: true },
 				{ hadGlobalReplan: false, production: true },
 				{ hadGlobalReplan: false, production: true },
+				{ hadGlobalReplan: false, production: true },
+				{ hadGlobalReplan: false, production: true },
+				{ hadGlobalReplan: false, production: true },
+				{ hadGlobalReplan: false, production: true },
+				{ hadGlobalReplan: false, production: true },
+				{ hadGlobalReplan: false, production: true },
+				{ hadGlobalReplan: false, production: true },
+				{ hadGlobalReplan: false, production: true },
+				{ hadGlobalReplan: false, production: true },
+				{ hadGlobalReplan: false, production: true },
+				{ hadGlobalReplan: false, production: true },
+				{ hadGlobalReplan: false, production: true },
+				{ hadGlobalReplan: false, production: true },
+				{ hadGlobalReplan: false, production: true },
+				{ hadGlobalReplan: false, production: true },
 				{ hadGlobalReplan: true, production: false },
 			]),
 		).toEqual({
-			totalRuns: 6,
+			totalRuns: 21,
 			globalReplanTriggers: 2,
-			triggerRate: 2 / 6,
+			triggerRate: 2 / 21,
+			productionRuns: 20,
+			productionGlobalReplanTriggers: 1,
+			productionTriggerRate: 1 / 20,
+			productionTargetRate: 0.05,
+			productionTargetMet: true,
+		});
+	});
+
+	it("marks the metric as failing when production global replans exceed the target", () => {
+		expect(
+			computeGlobalReplanRate([
+				{ hadGlobalReplan: true, production: true },
+				{ hadGlobalReplan: false, production: true },
+				{ hadGlobalReplan: false, production: true },
+				{ hadGlobalReplan: false, production: true },
+				{ hadGlobalReplan: false, production: true },
+			]),
+		).toMatchObject({
 			productionRuns: 5,
 			productionGlobalReplanTriggers: 1,
 			productionTriggerRate: 1 / 5,

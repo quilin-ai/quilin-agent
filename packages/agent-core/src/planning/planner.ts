@@ -1,14 +1,11 @@
 import type { PlanContext } from "./context.js";
 import { type DecomposeOptions, decomposePlan } from "./decompose.js";
 import { classifyIntent, type IntentDispatchOptions } from "./intent.js";
-import type {
-	IntentClassification,
-	LLMPlannerResponse,
-	Plan,
-} from "./types.js";
+import { parseLLMPlannerResponse } from "./types.js";
+import type { IntentClassification, LLMPlannerResponse, Plan } from "./types.js";
 
 export interface PlannerModel {
-	deliberate(context: PlanContext): Promise<LLMPlannerResponse>;
+	deliberate(context: PlanContext): Promise<unknown>;
 }
 
 export interface PlannerDeliberation {
@@ -33,7 +30,7 @@ export class MainLLMPlanner {
 	}
 
 	async deliberate(context: PlanContext): Promise<LLMPlannerResponse> {
-		return this.model.deliberate(context);
+		return parseLLMPlannerResponse(await this.model.deliberate(context));
 	}
 
 	classifyIntent(response: LLMPlannerResponse): IntentClassification {

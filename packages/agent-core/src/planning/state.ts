@@ -1,4 +1,8 @@
 import type { ToolCall } from "../tools/types.js";
+import type {
+	GlobalReplanMetricObservation,
+	GlobalReplanReason,
+} from "./replan.js";
 import type { IntentClassification, Plan } from "./types.js";
 
 export interface BudgetLedger {
@@ -97,6 +101,10 @@ export type PlanningEvent =
 			readonly payload: {
 				readonly plan: Plan;
 				readonly currentLeafId?: string | null;
+				readonly reason?: GlobalReplanReason;
+				readonly note?: string;
+				readonly production?: boolean;
+				readonly metric?: GlobalReplanMetricObservation;
 			};
 	  }
 	| {

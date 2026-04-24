@@ -52,6 +52,24 @@ describe("MainLLMPlanner", () => {
 		expect(deliberate).toHaveBeenCalledWith(DEFAULT_CONTEXT);
 	});
 
+	it("throws a clear error when the model returns an invalid planner payload", async () => {
+		const deliberate = vi.fn(async () => ({
+			planSketch: {
+				kind: "linear",
+				subtasks: [
+					{
+						id: "step-1",
+					},
+				],
+			},
+		}));
+		const planner = new MainLLMPlanner({ deliberate });
+
+		await expect(planner.deliberate(DEFAULT_CONTEXT)).rejects.toThrow(
+			/Invalid planner response from model: planSketch\.subtasks\[0\]\.action:/,
+		);
+	});
+
 	it.each<
 		readonly [
 			name: string,

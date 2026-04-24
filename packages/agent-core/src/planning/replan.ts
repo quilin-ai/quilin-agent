@@ -1,4 +1,5 @@
 import { normalizeSubTask, replacePlanSubtree } from "./decompose.js";
+import type { PlanningEvent } from "./state.js";
 import type {
 	LinearPlan,
 	MemoryWriteScope,
@@ -314,6 +315,26 @@ export function applyGlobalReplan(
 	};
 }
 
+export function toReplanEventPayload(
+	patch: LocalPlanPatch | GlobalPlanPatch,
+): Extract<PlanningEvent, { readonly kind: "replan" }>["payload"] {
+	if (patch.level === "G-Replan") {
+		return {
+			plan: patch.plan,
+			currentLeafId: patch.currentLeafId,
+			reason: patch.reason,
+			note: patch.note,
+			production: patch.production,
+			metric: patch.metric,
+		};
+	}
+
+	return {
+		plan: patch.plan,
+		currentLeafId: patch.currentLeafId,
+	};
+}
+
 export function computeGlobalReplanRate(
 	samples: ReadonlyArray<GlobalReplanRunSample>,
 	options: GlobalReplanRateOptions = {},
@@ -344,7 +365,7 @@ export function computeGlobalReplanRate(
 		productionTargetMet:
 			productionSamples.length === 0
 				? true
-				: productionGlobalReplanTriggers / productionSamples.length <
+				: productionGlobalReplanTriggers / productionSamples.length <=
 					productionTargetRate,
 	};
 }

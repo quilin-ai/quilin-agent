@@ -136,6 +136,48 @@ describe("applyEvent", () => {
 		});
 	});
 
+	it("preserves G-Replan metadata in the event log while updating the active plan", () => {
+		const initial = applyEvent(createPlanningState("run-global-replan"), {
+			seq: 1,
+			timestamp: 1_000,
+			kind: "task_decomposed",
+			payload: { plan: makePlan() },
+		});
+		const replacementPlan: LinearPlan = {
+			kind: "linear",
+			subtasks: [
+				{
+					...makePlan().subtasks[0],
+					id: "step-2",
+					name: "Re-scope task",
+				},
+			],
+		};
+		const event: PlanningEvent = {
+			seq: 2,
+			timestamp: 1_100,
+			kind: "replan",
+			payload: {
+				plan: replacementPlan,
+				currentLeafId: "step-2",
+				reason: "goal_drift",
+				production: true,
+				metric: {
+					kind: "global_replan_triggered",
+					reason: "goal_drift",
+					production: true,
+				},
+			},
+		};
+
+		const next = applyEvent(initial, event);
+
+		expect(next.plan).toEqual(replacementPlan);
+		expect(next.currentLeafId).toBe("step-2");
+		expect(next.phase).toBe("replanning");
+		expect(next.events.at(-1)).toEqual(event);
+	});
+
 	it("freezes the state contract as readonly arrays", () => {
 		expectTypeOf<PlanningState["events"]>().toEqualTypeOf<
 			ReadonlyArray<PlanningEvent>
