@@ -21,6 +21,15 @@ def _planning_review_payload(run_id: str) -> dict[str, object]:
     }
 
 
+def _planning_review_metadata(run_id: str) -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "source": "planning_review",
+        "run_id": run_id,
+        "stability_reason": "Validated stable review summary.",
+    }
+
+
 def _decode_call_tool_result(result: object) -> dict[str, object]:
     _content, metadata = result  # type: ignore[misc]
     return json.loads(metadata["result"])
@@ -53,11 +62,7 @@ async def test_store_accepts_planning_review_semantic_record() -> None:
     record = await store.store(
         json.dumps(_planning_review_payload(run_id)),
         tier="semantic",
-        metadata={
-            "schema_version": 1,
-            "source": "planning_review",
-            "run_id": run_id,
-        },
+        metadata=_planning_review_metadata(run_id),
         content_type="json",
     )
 
@@ -77,9 +82,7 @@ async def test_store_rejects_running_planning_state_payloads_for_semantic() -> N
             json.dumps(payload),
             tier="semantic",
             metadata={
-                "schema_version": 1,
-                "source": "planning_review",
-                "run_id": "run-review-2",
+                **_planning_review_metadata("run-review-2"),
             },
             content_type="json",
         )
@@ -110,9 +113,7 @@ async def test_store_rejects_forbidden_planning_runtime_keys_for_semantic(
         store,
         payload,
         metadata={
-            "schema_version": 1,
-            "source": "planning_review",
-            "run_id": run_id,
+            **_planning_review_metadata(run_id),
         },
         match="PlanningState",
     )
@@ -126,9 +127,7 @@ async def test_store_rejects_planning_review_outside_semantic_layer() -> None:
         store,
         _planning_review_payload(run_id),
         metadata={
-            "schema_version": 1,
-            "source": "planning_review",
-            "run_id": run_id,
+            **_planning_review_metadata(run_id),
         },
         tier="episodic",
         match="semantic layer",
@@ -143,9 +142,7 @@ async def test_store_rejects_planning_review_text_content_type() -> None:
         store,
         _planning_review_payload(run_id),
         metadata={
-            "schema_version": 1,
-            "source": "planning_review",
-            "run_id": run_id,
+            **_planning_review_metadata(run_id),
         },
         content_type="text",
         match="content_type=json",
@@ -156,15 +153,16 @@ async def test_store_rejects_planning_review_text_content_type() -> None:
     ("metadata", "payload", "match"),
     [
         (
-            {"schema_version": 2, "source": "planning_review", "run_id": "run-review-schema"},
+            {
+                **_planning_review_metadata("run-review-schema"),
+                "schema_version": 2,
+            },
             _planning_review_payload("run-review-schema"),
             "metadata.schema_version",
         ),
         (
             {
-                "schema_version": 1,
-                "source": "planning_review",
-                "run_id": "run-review-payload-schema",
+                **_planning_review_metadata("run-review-payload-schema"),
             },
             {
                 **_planning_review_payload("run-review-payload-schema"),
@@ -173,12 +171,12 @@ async def test_store_rejects_planning_review_text_content_type() -> None:
             "payload.schema_version",
         ),
         (
-            {"schema_version": 1, "source": "planning_review"},
+            {"schema_version": 1, "source": "planning_review", "stability_reason": "validated"},
             _planning_review_payload("run-review-missing-metadata"),
             "metadata.run_id",
         ),
         (
-            {"schema_version": 1, "source": "planning_review", "run_id": "run-review-metadata"},
+            _planning_review_metadata("run-review-metadata"),
             _planning_review_payload("run-review-payload"),
             "payload.run_id",
         ),
@@ -217,6 +215,7 @@ async def test_store_rejects_planning_state_source_for_semantic() -> None:
                 "schema_version": 1,
                 "source": "planning_state",
                 "run_id": "run-review-state",
+                "stability_reason": "invalid runtime payload",
             },
             content_type="json",
         )
@@ -226,7 +225,7 @@ async def test_store_rejects_planning_state_source_for_semantic() -> None:
     "metadata",
     [
         {"schema_version": 1},
-        {"schema_version": 1, "source": "checkpoint"},
+        {"schema_version": 1, "source": "checkpoint", "stability_reason": "checkpoint snapshot"},
     ],
 )
 async def test_store_rejects_runtime_planning_state_even_without_planning_source(
@@ -265,9 +264,7 @@ async def test_memory_store_tool_accepts_planning_review_schema_fields() -> None
                 "layer": "semantic",
                 "content_type": "json",
                 "metadata": {
-                    "schema_version": 1,
-                    "source": "planning_review",
-                    "run_id": run_id,
+                    **_planning_review_metadata(run_id),
                 },
             },
         )
@@ -284,3 +281,19 @@ async def test_memory_store_tool_accepts_planning_review_schema_fields() -> None
     assert recall_result["records"][0]["metadata"]["source"] == "direct_recall"  # type: ignore[index]
     assert recall_result["records"][0]["metadata"]["memory_source"] == "planning_review"  # type: ignore[index]
     assert recall_result["records"][0]["metadata"]["run_id"] == run_id  # type: ignore[index]
+
+
+async def test_store_rejects_semantic_records_without_stability_reason() -> None:
+    store = OmniMemStore(db_path=":memory:")
+
+    with pytest.raises(ValueError, match="stability_reason"):
+        await store.store(
+            json.dumps(_planning_review_payload("run-review-missing-stability")),
+            tier="semantic",
+            metadata={
+                "schema_version": 1,
+                "source": "planning_review",
+                "run_id": "run-review-missing-stability",
+            },
+            content_type="json",
+        )

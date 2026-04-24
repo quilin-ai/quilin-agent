@@ -18,6 +18,7 @@ RECALL_QUERY_EXPANSIONS = (
         {"名字", "称呼", "身份", "用户"},
     ),
 )
+MAX_EXPANDED_QUERY_TERMS = 64
 
 
 def build_keywords(content: str) -> str:
@@ -152,7 +153,10 @@ def expand_query_terms(query: str) -> set[str]:
         if any(trigger in query for trigger in triggers):
             terms.update(expansions)
 
-    return terms
+    if len(terms) <= MAX_EXPANDED_QUERY_TERMS:
+        return terms
+
+    return set(sorted(terms)[:MAX_EXPANDED_QUERY_TERMS])
 
 
 def extract_cjk_terms(text: str) -> set[str]:

@@ -18,6 +18,7 @@ from .store_schema import (
 )
 from .store_search import build_keywords as _search_build_keywords
 from .store_search import candidate_rows, rebuild_fts_index, record_columns
+from .store_serialization import deserialize_metadata as _deserialize_metadata
 from .store_serialization import row_to_record as _row_to_record
 from .store_serialization import validate_memory_tier as _validate_memory_tier
 from .store_validation import validate_semantic_ingestion_contract
@@ -168,6 +169,11 @@ class OmniMemStore:
             )
             items = [_row_to_record(row, now=_utcnow) for row in rows]
             filtered = [item for item in items if matches_filters(item, filters)]
+            returned = filtered[:effective_limit]
+            if returned:
+                accessed_at = _utcnow()
+                self._mark_accessed_locked([item.id for item in returned], accessed_at)
+                return [self._with_access_signal(item, accessed_at) for item in returned]
 
         return filtered[:effective_limit]
 
@@ -184,14 +190,36 @@ class OmniMemStore:
                 """,
                 (memory_id,),
             ).fetchone()
+            if row is None:
+                return None
 
-        return None if row is None else _row_to_record(row, now=_utcnow)
+            record = _row_to_record(row, now=_utcnow)
+            accessed_at = _utcnow()
+            self._mark_accessed_locked([memory_id], accessed_at)
+            return self._with_access_signal(record, accessed_at)
 
     async def update(self, memory_id: str, content: str) -> None:
         await asyncio.to_thread(self._update_sync, memory_id, content)
 
     def _update_sync(self, memory_id: str, content: str) -> None:
         with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT tier, content_type, metadata_json
+                FROM memory_records
+                WHERE id = ? AND deleted = 0
+                """,
+                (memory_id,),
+            ).fetchone()
+            if row is None:
+                return
+
+            validate_semantic_ingestion_contract(
+                layer=validate_memory_layer(row["tier"]),
+                content_type=row["content_type"],
+                metadata=_deserialize_metadata(row["metadata_json"]),
+                content=content,
+            )
             self._conn.execute("BEGIN IMMEDIATE")
             with self._conn:
                 self._conn.execute(
@@ -391,3 +419,33 @@ class OmniMemStore:
 
     def _rebuild_fts_index(self) -> None:
         rebuild_fts_index(self._conn, build_keywords_func=_build_keywords)
+
+    def _mark_accessed_locked(self, memory_ids: list[str], accessed_at: datetime) -> None:
+        if not memory_ids:
+            return
+
+        self._conn.execute("BEGIN IMMEDIATE")
+        with self._conn:
+            self._conn.executemany(
+                """
+                UPDATE memory_records
+                SET last_accessed = ?, access_count = access_count + 1
+                WHERE id = ? AND deleted = 0
+                """,
+                [(accessed_at.isoformat(), memory_id) for memory_id in memory_ids],
+            )
+
+    @staticmethod
+    def _with_access_signal(record: MemoryItem, accessed_at: datetime) -> MemoryItem:
+        return MemoryItem(
+            id=record.id,
+            content=record.content,
+            content_type=record.content_type,
+            layer=record.layer,
+            metadata=dict(record.metadata),
+            embedding=record.embedding,
+            created_at=record.created_at,
+            last_accessed=accessed_at,
+            access_count=record.access_count + 1,
+            importance_score=record.importance_score,
+        )

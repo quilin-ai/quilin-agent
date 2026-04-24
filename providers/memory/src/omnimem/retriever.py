@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from .kg import KGSearchResult
+from .logging import logger
 from .types import MemoryItem, MemoryLayer, validate_memory_layer
 
 DEFAULT_TOP_K = 10
@@ -130,12 +131,18 @@ class MemoryRetriever:
 
         context_filters = self._filters_from_task_context(task_context)
         bm25_items = await self.retrieve_bm25(query, limit=remaining, filters=context_filters)
-        vector_items = await self.retrieve_vector(
-            query,
-            limit=remaining,
-            filters=context_filters,
+        vector_items = await self._best_effort(
+            "vector",
+            self.retrieve_vector(
+                query,
+                limit=remaining,
+                filters=context_filters,
+            ),
         )
-        kg_items = await self.retrieve_kg(query, task_context=task_context, limit=remaining)
+        kg_items = await self._best_effort(
+            "kg",
+            self.retrieve_kg(query, task_context=task_context, limit=remaining),
+        )
 
         reranked = self._fuse_candidates(
             bm25_items,
@@ -145,10 +152,14 @@ class MemoryRetriever:
             block_version=RETRIEVAL_BLOCK_VERSION,
         )
         if self._reranker is not None and reranked:
-            reranked = await self._reranker.rerank(
-                query,
-                reranked,
-                task_context=task_context,
+            reranked = await self._best_effort(
+                "reranker",
+                self._reranker.rerank(
+                    query,
+                    reranked,
+                    task_context=task_context,
+                ),
+                fallback=reranked,
             )
 
         seen_ids = {item.id for item in working_items}
@@ -331,6 +342,21 @@ class MemoryRetriever:
         )
         digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
         return f"memory-recall:{digest}"
+
+    async def _best_effort(
+        self,
+        source: str,
+        operation: Any,
+        *,
+        fallback: list[MemoryItem] | None = None,
+    ) -> list[MemoryItem]:
+        try:
+            result = await operation
+        except Exception as exc:
+            logger.warn("memory retriever source failed", source=source, error=str(exc))
+            return [] if fallback is None else fallback
+
+        return list(result)
 
     def _fuse_candidates(
         self,

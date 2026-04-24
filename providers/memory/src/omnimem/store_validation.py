@@ -31,6 +31,7 @@ def validate_semantic_ingestion_contract(
 
     if layer == "semantic":
         _reject_semantic_runtime_payload(content_type=content_type, content=content)
+        _require_semantic_stability_metadata(metadata)
 
     if metadata.get("source") == PLANNING_STATE_SOURCE:
         return
@@ -94,6 +95,18 @@ def _validate_planning_review_payload(content: str, *, run_id: str) -> None:
 
     if _contains_forbidden_runtime_keys(payload):
         raise ValueError("running PlanningState payloads cannot be stored in semantic memory")
+
+
+def _require_semantic_stability_metadata(metadata: dict[str, object]) -> None:
+    source = metadata.get("source")
+    if not isinstance(source, str) or not source.strip():
+        raise ValueError("semantic memory metadata.source must be a non-empty string")
+
+    stability_reason = metadata.get("stability_reason")
+    if not isinstance(stability_reason, str) or not stability_reason.strip():
+        raise ValueError(
+            "semantic memory metadata.stability_reason must be a non-empty string"
+        )
 
 
 def _contains_forbidden_runtime_keys(payload: object) -> bool:

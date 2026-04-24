@@ -16,6 +16,8 @@ CJK_RUN_PATTERN = re.compile(r"[\u4e00-\u9fff]+")
 
 KG_SCHEMA_COMPONENT = "temporal_kg"
 KG_SCHEMA_VERSION = 1
+KG_DEFAULT_DB_NAME = "memory-kg.db"
+KG_BUSY_TIMEOUT_MS = 5_000
 
 
 def _utcnow() -> datetime:
@@ -30,8 +32,8 @@ def _resolve_db_path(db_path: str | None) -> str:
         return ":memory:"
 
     return os.environ.get(
-        "OMNIMEM_DB_PATH",
-        str(Path.home() / ".quilin" / "memory.db"),
+        "OMNIMEM_KG_PATH",
+        str(Path.home() / ".quilin" / KG_DEFAULT_DB_NAME),
     )
 
 
@@ -48,21 +50,35 @@ def _deserialize_metadata(metadata_json: str | None) -> dict[str, object]:
 
 
 def _format_datetime(value: datetime | None) -> str | None:
-    return None if value is None else value.isoformat()
+    return None if value is None else _normalize_utc_datetime(value).isoformat()
 
 
 def _parse_datetime(value: str | None) -> datetime | None:
-    return None if value is None else datetime.fromisoformat(value)
+    if value is None:
+        return None
+
+    return _normalize_utc_datetime(datetime.fromisoformat(value))
+
+
+def _normalize_utc_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+
+    return value.astimezone(UTC)
 
 
 def _normalize_datetime(value: datetime | str | None) -> datetime | None:
     if value is None:
         return None
     if isinstance(value, datetime):
-        return value
+        return _normalize_utc_datetime(value)
     if isinstance(value, str):
-        return datetime.fromisoformat(value)
+        return _normalize_utc_datetime(datetime.fromisoformat(value))
     raise TypeError("temporal bounds must be datetime or ISO 8601 strings")
+
+
+def _normalize_entity(value: str) -> str:
+    return value.casefold().replace("|", "").strip()
 
 
 def _extract_cjk_terms(text: str) -> set[str]:
@@ -130,6 +146,7 @@ class TemporalKnowledgeGraph:
         self._conn.row_factory = sqlite3.Row
         self._lock = threading.Lock()
         self._closed = False
+        self._conn.execute(f"PRAGMA busy_timeout={KG_BUSY_TIMEOUT_MS}")
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._ensure_schema()
 
@@ -285,7 +302,8 @@ class TemporalKnowledgeGraph:
         if effective_limit == 0:
             return []
 
-        seeds = sorted({entity.casefold() for entity in entities if entity})
+        normalized_entities = (_normalize_entity(entity) for entity in entities)
+        seeds = sorted({entity for entity in normalized_entities if entity})
         if not seeds:
             return []
 
@@ -298,13 +316,33 @@ class TemporalKnowledgeGraph:
             temporal_params = [temporal_value, temporal_value]
 
         placeholders = ", ".join(["(?)"] * len(seeds))
-        next_entity_expr = """
+        subject_key_expr = "LOWER(TRIM(REPLACE(e.subject, '|', '')))"
+        object_key_expr = "LOWER(TRIM(REPLACE(e.object, '|', '')))"
+        initial_current_entity_expr = f"""
             CASE
-                WHEN LOWER(e.subject) = LOWER(graph.current_entity) THEN e.object
+                WHEN {subject_key_expr} = seed.seed_entity THEN e.object
                 ELSE e.subject
             END
         """
-        visited_expr = f"'|' || LOWER({next_entity_expr}) || '|'"
+        initial_current_entity_key_expr = f"""
+            CASE
+                WHEN {subject_key_expr} = seed.seed_entity THEN {object_key_expr}
+                ELSE {subject_key_expr}
+            END
+        """
+        next_entity_expr = """
+            CASE
+                WHEN LOWER(TRIM(REPLACE(e.subject, '|', ''))) = graph.current_entity_key
+                    THEN e.object
+                ELSE e.subject
+            END
+        """
+        next_entity_key_expr = f"""
+            CASE
+                WHEN {subject_key_expr} = graph.current_entity_key THEN {object_key_expr}
+                ELSE {subject_key_expr}
+            END
+        """
         query_limit = effective_limit * max(max_hops, 1) * max(len(seeds), 1) * 4
         sql = f"""
             WITH RECURSIVE
@@ -324,16 +362,14 @@ class TemporalKnowledgeGraph:
                     e.metadata_json,
                     1 AS depth,
                     seed.seed_entity AS seed_entity,
-                    CASE
-                        WHEN LOWER(e.subject) = seed.seed_entity THEN e.object
-                        ELSE e.subject
-                    END AS current_entity,
+                    {initial_current_entity_expr} AS current_entity,
+                    {initial_current_entity_key_expr} AS current_entity_key,
                     e.subject || ' -> ' || e.predicate || ' -> ' || e.object AS path,
-                    '|' || LOWER(e.subject) || '|' || LOWER(e.object) || '|' AS visited
+                    json_array(seed.seed_entity, {initial_current_entity_key_expr}) AS visited
                 FROM kg_edges e
                 JOIN seed
-                  ON LOWER(e.subject) = seed.seed_entity
-                  OR LOWER(e.object) = seed.seed_entity
+                  ON {subject_key_expr} = seed.seed_entity
+                  OR {object_key_expr} = seed.seed_entity
                 WHERE {temporal_condition}
 
                 UNION ALL
@@ -351,6 +387,7 @@ class TemporalKnowledgeGraph:
                     graph.depth + 1 AS depth,
                     graph.seed_entity AS seed_entity,
                     {next_entity_expr} AS current_entity,
+                    {next_entity_key_expr} AS current_entity_key,
                     graph.path
                         || ' => '
                         || e.subject
@@ -358,14 +395,18 @@ class TemporalKnowledgeGraph:
                         || e.predicate
                         || ' -> '
                         || e.object AS path,
-                    graph.visited || LOWER({next_entity_expr}) || '|' AS visited
+                    json_insert(graph.visited, '$[#]', {next_entity_key_expr}) AS visited
                 FROM graph
                 JOIN kg_edges e
-                  ON LOWER(e.subject) = LOWER(graph.current_entity)
-                  OR LOWER(e.object) = LOWER(graph.current_entity)
+                  ON {subject_key_expr} = graph.current_entity_key
+                  OR {object_key_expr} = graph.current_entity_key
                 WHERE graph.depth < ?
                   AND {temporal_condition}
-                  AND instr(graph.visited, {visited_expr}) = 0
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM json_each(graph.visited)
+                      WHERE json_each.value = {next_entity_key_expr}
+                  )
             )
             SELECT
                 edge_id,
@@ -393,7 +434,7 @@ class TemporalKnowledgeGraph:
         seen: set[tuple[str, str]] = set()
         results: list[KGSearchResult] = []
         for row in rows:
-            dedupe_key = (row["edge_id"], row["seed_entity"])
+            dedupe_key = (row["edge_id"], row["current_entity"])
             if dedupe_key in seen:
                 continue
             seen.add(dedupe_key)
@@ -456,15 +497,27 @@ class TemporalKnowledgeGraph:
             )
             """
         )
-        self._conn.execute(
-            """
-            INSERT INTO schema_version (component, version)
-            VALUES (?, ?)
-            ON CONFLICT(component) DO UPDATE SET version = excluded.version
-            """,
-            (KG_SCHEMA_COMPONENT, KG_SCHEMA_VERSION),
-        )
+        current_version = self._get_schema_version(KG_SCHEMA_COMPONENT)
+        if current_version < KG_SCHEMA_VERSION:
+            self._conn.execute(
+                """
+                INSERT INTO schema_version (component, version)
+                VALUES (?, ?)
+                ON CONFLICT(component) DO UPDATE SET version = excluded.version
+                """,
+                (KG_SCHEMA_COMPONENT, KG_SCHEMA_VERSION),
+            )
         self._conn.commit()
+
+    def _get_schema_version(self, component: str) -> int:
+        row = self._conn.execute(
+            "SELECT version FROM schema_version WHERE component = ?",
+            (component,),
+        ).fetchone()
+        if row is None:
+            return 0
+
+        return int(row["version"])
 
 
 __all__ = [

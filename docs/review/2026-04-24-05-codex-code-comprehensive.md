@@ -18,13 +18,20 @@
 | LOW / INFO | 13 | 全栈零散 |
 | **总计** | **39** | 三路 |
 
-**已知 4 条 Batch 1 正在修的**（不重复报，在本文末尾单列对照）：
+**已知 4 条 Batch 1 / Batch 2 对照项**（不重复报，在本文末尾单列对照）：
 1. HIGH-A MCP `memory_recall` 绕 retriever envelope — ✅ Batch 1 已闭合（`0bb9f15`）
 2. HIGH-B semantic guard 通过缺失/伪造 `metadata.source` 绕过 — ✅ Batch 1 已闭合（`0bb9f15`，契约前移到 layer 级判断）
-3. MEDIUM-A vector/KG/reranker 异常中断 fused recall — ⏳ 待 Batch 2
-4. MEDIUM-B KG temporal validity ISO 字符串跨时区错 — ⏳ 待 Batch 2
+3. MEDIUM-A vector/KG/reranker 异常中断 fused recall — ✅ 当前工作树已闭合（best-effort degradation）
+4. MEDIUM-B KG temporal validity ISO 字符串跨时区错 — ✅ 当前工作树已闭合（UTC 规范化）
 
 **本次审计 Batch 1 范围外新增的**：35 条（包含 4 CRITICAL + 7 HIGH）。
+
+**状态更新（2026-04-24，当前工作树，待 commit）**：
+- Track A `4/4` 已修：tool metadata/name sanitize、semantic `source + stability_reason`、`update()` semantic 重验、MCP metadata whitelist、query 长度限制与 term cap。
+- Track B `4/4` 已修：`MCPRegistry` `register/unregister/disconnectAll` 串行化、`MCPClientManager` `connectInProgress` + lifecycle queue、KG 独立 DB + `busy_timeout=5000` + `_ensure_schema` 幂等、KG entity 归一化 + JSON visited 防环。
+- Track C `6/6` 已修：Planner runtime schema 校验、`_get_sync/_search_sync` access signal、KG temporal UTC 规范化、fused recall graceful degradation、`productionTargetMet <=`、G-Replan metric 入事件流。
+- 全量验证：`cd packages/agent-core && pnpm test` = `61 passed files / 471 tests`；`cd packages/agent-core && pnpm tsc --noEmit` exit `0`；`cd packages/agent-core && pnpm exec biome check src` exit `0`；`uv run --project providers/memory pytest providers/memory/tests -q` = `134 passed`；`uv run --project providers/memory ruff check providers/memory/src providers/memory/tests` exit `0`。
+- 结论：Track A/B/C 已满足本轮 gate；Track D 仅剩可维护性 backlog，不再阻塞下一轮切片。
 
 ---
 
@@ -39,6 +46,7 @@ Reviewer: general-purpose subagent，agentId `a38d534a36c01add0`。
 - **Contract**: CLAUDE.md "Input Validation — Never trust external data (API responses, user input, file content)"；Planner LLM 是未受信任的外部数据源。
 - **Risk**: M0 mock 路径看不到这个 bug，Iter A 接入真 Vercel AI SDK v6 立即暴露。planner 主循环未捕获 `TypeError` 会把 run 拖死，错误不在 `emit()` 事件里，observer 看不到归因。
 - **Recommendation**: `types.zod.ts` 把 `LLMPlannerResponse / SubTask / LinearPlan / DagPlan` 做成 `z.object(...)` schema；`planner.deliberate()` 返回前 `.safeParse()`，失败 → 抛 `PlannerInvalidResponseError` 走 `local_repair:invalid_llm_response`。
+- **Status (2026-04-24, current worktree)**: ✅ 已修。`packages/agent-core/src/planning/types.ts` 新增 runtime schema + `parseLLMPlannerResponse()`；`planner.ts` 已在 `deliberate()` 接 `safeParse`。
 
 ### [MEDIUM] (confidence: 9/10) `computeGlobalReplanRate.productionTargetMet` 严格 `<` 比较，边界误报
 
@@ -46,6 +54,7 @@ Reviewer: general-purpose subagent，agentId `a38d534a36c01add0`。
 - **Evidence**: `productionGlobalReplanTriggers / productionSamples.length < productionTargetRate`。
 - **Risk**: 恰好达到目标的窗口 dashboard 报 "未达标"。
 - **Recommendation**: 改 `<=`，spec 显式声明运算符。
+- **Status (2026-04-24, current worktree)**: ✅ 已修。`replan.ts` 已改为 `<=`，并补测试覆盖命中 `5%` 边界值。
 
 ### [MEDIUM] (confidence: 8/10) `applyGlobalReplan.metric` 字段仅在 patch，未入 `PlanningEvent` 事件流
 
@@ -54,6 +63,7 @@ Reviewer: general-purpose subagent，agentId `a38d534a36c01add0`。
 - **Contract**: 04-planning §2.6 "events as single source of truth"，关键指标只存非事件字段违反 event-sourced 原则。
 - **Risk**: Iter E benchmark observability 无法从事件流回放统计全局重规划。
 - **Recommendation**: `state.ts` `replan` event payload 增 `reason + production` optional 字段，或新增 `global_replan_triggered` event kind。
+- **Status (2026-04-24, current worktree)**: ✅ 已修。`replan` 事件 payload 已带 `reason / production / metric`，`state.ts` 与回放测试已对齐。
 
 ### [MEDIUM] (confidence: 7/10) Pre-flight `initialToolCalls` 失败静默吞
 
@@ -105,6 +115,7 @@ Reviewer: general-purpose subagent，agentId `ad1ff15a01ec93147`。
   1. KG 走独立文件 `OMNIMEM_KG_PATH` 默认 `~/.quilin/memory-kg.db`
   2. 或 `configure_connection` 加 `PRAGMA busy_timeout = 5000` + KG `_ensure_schema` 检查 `schema_version` 已存在就跳
   3. 或 MCP server 初始化时把同一 `sqlite3.Connection` 注入给 KG
+- **Status (2026-04-24, current worktree)**: ✅ 已修。`kg.py` 现使用独立 `OMNIMEM_KG_PATH`（默认 `~/.quilin/memory-kg.db`），连接启用 `busy_timeout=5000`，`_ensure_schema()` 改为按 `schema_version` 幂等初始化。
 
 ### [HIGH] (confidence: 8/10) recall 路径不更新 `last_accessed/access_count`，reranker recency 信号永远失效
 
@@ -113,6 +124,7 @@ Reviewer: general-purpose subagent，agentId `ad1ff15a01ec93147`。
 - **Contract**: `reranker.py:99-102` 用 `item.last_accessed` 计算 `recency_score`。
 - **Risk**: `recency_score` 在生产数据上基于 `created_at` 近似（因为 `last_accessed` 初值=`created_at` 且从不更新）→ rerank 学习信号系统性偏差。
 - **Recommendation**: `_get_sync/_search_sync` 命中后异步或同事务更新；若暂不实现需在 ADR-005 明写 "M0 不更新 access 信号"。
+- **Status (2026-04-24, current worktree)**: ✅ 已修。`store.py` 的 `_get_sync()` 与 `_search_sync()` 现会在返回命中记录前回写 `last_accessed/access_count`，并把更新后的信号反映到返回对象。
 
 ### [HIGH] (confidence: 8/10) KG 递归 CTE 用 `instr(visited, '|'...)` 防环，中文 / `|` 字符误判
 
@@ -126,6 +138,7 @@ Reviewer: general-purpose subagent，agentId `ad1ff15a01ec93147`。
   2. 含 `|` 字符的 entity 防环失效
   3. `graph.visited` 有长度上限，多跳大图时截断防环失效
 - **Recommendation**: entity 预归一化（小写 + 去 `|`），或用 JSON array + `json_each` 做 visited 集合；Python 侧再按 `(edge_id, current_entity)` 去重。
+- **Status (2026-04-24, current worktree)**: ✅ 已修。`kg.py` 现统一对 entity 做小写 + 去 `|` 预归一化，递归 CTE 改用 JSON array + `json_each` 维护 visited 集合，Python 侧再按 `(edge_id, entity)` 去重。
 
 ### [HIGH] (confidence: 7/10) `validate_semantic_ingestion_contract` 只强制 `source=planning_review` 时的字段，其他 semantic 写入放行
 
@@ -135,6 +148,7 @@ Reviewer: general-purpose subagent，agentId `ad1ff15a01ec93147`。
 - **Risk**: LLM 生成的结构化输出、人工脚本、future reflection agent 可以把任意 text/json 扔到 semantic 层，只要避开 PlanningState shape。ADR-005 契约空挡。
 - **Status**: Batch 1 已收紧一半（runtime payload 拦截扩到所有 semantic 写入），但白名单 source + `stability_reason` 必需性未覆盖。
 - **Recommendation**: `if layer == "semantic" and (not metadata.get("source") or not metadata.get("stability_reason")): raise ValueError(...)`，或白名单 source 集合 + schema_version 校验。
+- **Status (2026-04-24, current worktree)**: ✅ 已修。`store_validation.py` 现在对所有 semantic 写入要求 `metadata.source` 与 `metadata.stability_reason` 为非空字符串；PlanningState shape 检查继续前置，不依赖 `metadata.source`。
 
 ### [HIGH] (confidence: 8/10) `memory_store_tool` metadata 无白名单/深度校验，可伪造检索信号
 
@@ -145,6 +159,7 @@ Reviewer: general-purpose subagent，agentId `ad1ff15a01ec93147`。
   2. 超大 metadata（>MB 级）触发 `serialize_metadata/FTS` 性能退化
   3. `metadata.embedding` 碰撞字段写入让 reranker 读矛盾信号
 - **Recommendation**: `MemoryItem` 构造前加 `validate_metadata_contract`（白名单字段 + 长度/深度上限），对所有层生效。
+- **Status (2026-04-24, current worktree)**: ✅ 已修。`server.py` 对 MCP `metadata` 输入加了 top-level whitelist、递归深度/条目数/字符串长度/总字节数上限。
 
 ### [HIGH] (confidence: 7/10) `memory_recall_tool` 无 query 长度校验，DoS 向量
 
@@ -152,12 +167,14 @@ Reviewer: general-purpose subagent，agentId `ad1ff15a01ec93147`。
 - **Evidence**: `query: str` 无长度限制。`build_match_query` 接任意 token 数。`_like_rows` 走 `LIKE '%...%'` 全表扫。
 - **Risk**: 1MB 字符串 query → FTS/LIKE 退化；token 过多 → MATCH query 爆炸。
 - **Recommendation**: 入口 `if len(query) > MAX_RECALL_QUERY_LEN: raise`；`expand_query_terms` 限制 terms 数（≤ 64）。
+- **Status (2026-04-24, current worktree)**: ✅ 已修。`server.py` 限制 query `<= 512`；`store_search.py` 把展开 term 数限制到 `64`。
 
 ### [MEDIUM] (confidence: 9/10) `OmniMemStore.update` 不重跑 semantic 契约，留后门
 
 - **File**: `providers/memory/src/omnimem/store.py:190-212`
 - **Evidence**: `update(memory_id, content)` 只改 `content + embedding_json`，不 `validate_semantic_ingestion_contract`。攻击路径：先写 working 层无害记录 → `update` 成 PlanningState 原文 → 绕契约。
 - **Recommendation**: `update` 拒改 semantic，或重跑 validator（需要从 row 读 layer/content_type/metadata）。
+- **Status (2026-04-24, current worktree)**: ✅ 已修。`store.py` 在 `update()` 前会读取 row 的 `tier/content_type/metadata_json`，对 semantic 记录重跑 validator。
 
 ### [MEDIUM] (confidence: 8/10) `_count_sync` 慢路径：遍历所有行到 Python 再 `len`
 
@@ -170,7 +187,7 @@ Reviewer: general-purpose subagent，agentId `ad1ff15a01ec93147`。
 
 - **File**: `providers/memory/src/omnimem/kg.py:292-298`
 - **Evidence**: `temporal_condition = "e.valid_from <= ? AND (e.valid_to IS NULL OR e.valid_to >= ?)"`，`temporal_value = resolved_as_of.isoformat()`。`_format_datetime/_parse_datetime` 都没规范化到 UTC。
-- **Status**: Batch 2 正在修（MEDIUM-B），这里补 `add_edge_sync` 侧证据：修复时同时把 `resolved_valid_from.isoformat()` 替换为 `.astimezone(UTC).isoformat()`。
+- **Status (2026-04-24, current worktree)**: ✅ 已修。`kg.py` 已在写入与查询两端统一走 UTC 规范化，`valid_from/valid_to/as_of` 比较不再依赖原始 ISO offset 字符串排序。
 
 ### [MEDIUM] (confidence: 7/10) `EpisodicMemory.load_checkpoint` 的 `event_seq` 类型不健壮
 
@@ -244,6 +261,7 @@ Reviewer: general-purpose subagent，agentId `a17a56146cef3bbfe`。
   1. registry 接到 description/name 先过 sanitizer：strip control chars、截断长度（≤ 512）、拒绝含 `<system>/###/SYSTEM:/</?prompt>` 等模式的描述并 `logger.warn`
   2. `tool.name` 加正则白名单 `/^[a-z0-9][a-z0-9_-]*$/`，不合规拒绝注册
   3. prompt tool-guidance 渲染时做 fence 包裹（三反引号），避免描述逃逸模板
+- **Status (2026-04-24, current worktree)**: ✅ 已修前两项。`tool-sanitizer.ts` 已统一做长度裁剪、control-char strip、注入模式拒绝、`tool.name` 白名单；`registry.ts` / `mcp-client.ts` 双层接入。prompt fence 仍可作为 Track D 清理项，但当前注入入口已封住。
 
 ### [CRITICAL] (confidence: 7/10) MCPRegistry 并发 register 可丢状态 + 子进程泄漏
 
@@ -251,6 +269,7 @@ Reviewer: general-purpose subagent，agentId `a17a56146cef3bbfe`。
 - **Evidence**: `register` 流程 `createClient → await client.connect → buildPendingServerState(使用 new Map(this.connections) 快照) → 读当前 existingClient → disconnect → applyServerState(清空后由旧快照重建)`。`applyServerState` 对 `connections/serverToolNames/serverTools` 做 `clear()` 然后从 pendingState 重填。两次并发 `register` 会因快照过期丢状态；并发 `register("A")` + `register("B")` 时，B 的快照可能没包含 A 刚 apply 的 client → clear 后 A 丢失、`disconnect` 永不调用 → 僵尸子进程。
 - **Risk**: 当前 REPL for-of 串行启动不触发；热更新 / Idle Evolution 增量装载 MCP / onChange listener 立即爆。
 - **Recommendation**: `register/unregister/disconnectAll` 共享互斥队列（`this.pendingOp = this.pendingOp.then(...)`）；或改 `applyServerState` 为差量 upsert 而非 clear+rebuild。
+- **Status (2026-04-24, current worktree)**: ✅ 已修。`registry.ts` 现在通过共享 promise queue 串行化 `register/unregister/disconnectAll`，并补了并发 register 回归测试。
 
 ### [CRITICAL] (confidence: 7/10) `MCPClientManager.connect` 重入 transport 泄漏
 
@@ -258,6 +277,7 @@ Reviewer: general-purpose subagent，agentId `a17a56146cef3bbfe`。
 - **Evidence**: `connect` 开头 `await this.disconnect()` 再创建。两次并发 connect → A yield 在 `await withTimeout(client.connect(transport))` 时 B 进入，B 的 disconnect 走过 `pendingCalls` 空 + `transport?.close()` (undefined) → 创建 clientB/transportB。A 恢复后写 `this.client=clientA` → B 覆盖 `this.client=clientB`。**clientA/transportA 从未 close**。
 - **Risk**: 热更新 / server crash 后自动恢复等未来路径触发。
 - **Recommendation**: `if (this.connectInProgress != null) { await this.connectInProgress; } this.connectInProgress = doConnect();` 串行化；或显式 state machine（idle/connecting/connected/disconnecting）。
+- **Status (2026-04-24, current worktree)**: ✅ 已修。`mcp-client.ts` 已加 `connectInProgress` + lifecycle queue，并显式维护 connection state。
 
 ### [HIGH] (confidence: 9/10) REPL builtin 回退 vs explicit config — tool name 分叉
 
@@ -336,45 +356,47 @@ Reviewer: general-purpose subagent，agentId `a17a56146cef3bbfe`。
 
 **先做，其他 track 依赖此完成：**
 
-1. **[CRITICAL] Tool description sanitize**（TS Config #1）
+1. **[CRITICAL] Tool description sanitize**（TS Config #1） — ✅ 当前工作树已修
    - 改 `registry.ts` + `mcp-client.ts`，加 sanitizer + tool.name 白名单正则
    - prompt tool-guidance 加 fence 包裹
    - 加 registry 测试：长 description / control chars / injection 串
-2. **[HIGH] semantic guard 完整化**（Python Memory #4，Batch 1 闭合一半）
+2. **[HIGH] semantic guard 完整化**（Python Memory #4，Batch 1 闭合一半） — ✅ 当前工作树已修
    - `store_validation.py` 加 `layer=semantic` 必需 `source+stability_reason`
    - `update()` 重跑 validator 或拒绝改 semantic
-3. **[HIGH] MCP metadata 白名单**（Python Memory #5）
+3. **[HIGH] MCP metadata 白名单**（Python Memory #5） — ✅ 当前工作树已修
    - `_normalize_metadata` 加字段白名单 + 深度/大小上限
-4. **[HIGH] MCP query 长度限制**（Python Memory #6）
+4. **[HIGH] MCP query 长度限制**（Python Memory #6） — ✅ 当前工作树已修
    - `server.memory_recall_tool` 加 `MAX_RECALL_QUERY_LEN`
 
 ### Track B — 并发与生命周期（CRITICAL + 存储并发）
 
 **可与 Track A 并行：**
 
-1. **[CRITICAL] MCPRegistry 并发互斥**（TS Config #2）
+1. **[CRITICAL] MCPRegistry 并发互斥**（TS Config #2） — ✅ 当前工作树已修
    - `register/unregister/disconnectAll` 加 promise 链串行化
    - 加并发 register 测试
-2. **[CRITICAL] MCPClientManager.connect 重入保护**（TS Config #3）
+2. **[CRITICAL] MCPClientManager.connect 重入保护**（TS Config #3） — ✅ 当前工作树已修
    - 加 `connectInProgress` promise
-3. **[HIGH] KG/Store DB 共享锁竞争**（Python Memory #1）
-   - KG 走独立文件 `OMNIMEM_KG_PATH`，或加 `busy_timeout` + `_ensure_schema` 幂等
-4. **[HIGH] KG 递归 CTE 防环错**（Python Memory #3）
-   - entity 预归一化 + Python 侧再去重
+3. **[HIGH] KG/Store DB 共享锁竞争**（Python Memory #1） — ✅ 当前工作树已修
+   - `kg.py` 改用独立 `OMNIMEM_KG_PATH`，并加 `busy_timeout` + `_ensure_schema` 幂等
+4. **[HIGH] KG 递归 CTE 防环错**（Python Memory #3） — ✅ 当前工作树已修
+   - entity 预归一化 + JSON visited + Python 侧 `(edge_id, entity)` 去重
 
 ### Track C — 正确性与观测性（TS Planning + Python memory 次优先）
 
 **可与 A/B 并行：**
 
-1. **[CRITICAL] Planner LLM 输出 zod 校验**（TS Planning #1）
+1. **[CRITICAL] Planner LLM 输出 zod 校验**（TS Planning #1） — ✅ 当前工作树已修
    - 新增 `planning/types.zod.ts`
    - `planner.deliberate()` `.safeParse`
-2. **[HIGH] recall 更新 access 信号**（Python Memory #2）
-   - `_get_sync/_search_sync` 命中后异步更新；或 ADR-005 明确 "M0 不更新"
-3. **[MEDIUM-B] KG temporal 规范化 UTC**（Batch 2 已规划）
-4. **[MEDIUM-A] fused recall 降级**（Batch 2 已规划）
-5. **[MEDIUM] `productionTargetMet` 改 `<=`** + spec 显式声明（TS Planning）
-6. **[MEDIUM] G-Replan metric 入事件流**（TS Planning）
+2. **[HIGH] recall 更新 access 信号**（Python Memory #2） — ✅ 当前工作树已修
+   - `_get_sync/_search_sync` 命中后回写 `last_accessed/access_count`
+3. **[MEDIUM-B] KG temporal 规范化 UTC** — ✅ 当前工作树已修
+   - `kg.py` 写入与查询统一按 UTC 规范化
+4. **[MEDIUM-A] fused recall 降级** — ✅ 当前工作树已修
+   - `retriever.py` 对 vector/KG/reranker 失败走 best-effort degradation + warn log
+5. **[MEDIUM] `productionTargetMet` 改 `<=`** + spec 显式声明（TS Planning） — ✅ 当前工作树已修
+6. **[MEDIUM] G-Replan metric 入事件流**（TS Planning） — ✅ 当前工作树已修
 
 ### Track D — 可维护性清理（MEDIUM + LOW，低优先级）
 
@@ -397,19 +419,16 @@ Reviewer: general-purpose subagent，agentId `a17a56146cef3bbfe`。
 | 问题 | 状态 | 证据 |
 |---|---|---|
 | HIGH-A `memory_recall` 绕 retriever envelope | ✅ 已闭合 | `server.py:24-39 + retriever.py:167-190 annotate_recall_results` |
-| HIGH-B semantic guard 通过缺失 `metadata.source` 绕过 | ✅ 部分闭合 | `store_validation.py:29-52` — PlanningState shape / forbidden keys 拦截前置到 `layer == "semantic"`；**仍待**强制 `source + stability_reason` 存在性（见 Track A 第 2 条） |
+| HIGH-B semantic guard 通过缺失 `metadata.source` 绕过 | ✅ 已闭合 | `store_validation.py` 对所有 semantic 写入强制 `source + stability_reason`，且 `store.py:update()` 已重跑 validator，后门一并封住 |
 
 ---
 
 ## 6. 是否 block 下一轮切片？
 
-**Block 建议**：
-- Track A 的 CRITICAL-1（tool description sanitize）**必 block**。任何接 plugin/fusion MCP server 的场景都不能没这层防御。
-- Track B 的 CRITICAL-2/3（MCPRegistry/MCPClientManager 并发）**block 热更新 + Idle Evolution 启动**，当前单 MCP 串行场景可暂不 block，但下轮切片若引入并发路径必须前置修。
-- Track C 的 CRITICAL-1（Planner zod）**block Iter A**（真接 Vercel AI SDK v6），本轮 M0 mock 可延后。
-- 其余 HIGH/MEDIUM 可排期到下一轮切片之前，不立即 block。
-
-**建议最小 block set**：Track A 1-4 + Track B 1-4 + Track C 1（共 9 条）必须在 §16.6 重新闭合前完成，才视为"第三轮代码真正稳态"。
+**当前结论**：
+- 先前建议的最小 block set 已全部在当前工作树闭合：Track A 1-4、Track B 1-4、Track C 1 均已完成并通过回归验证。
+- 因此，`§16.6 / §16.7` 的 review gate 现在可以重新闭合；下一轮切片不再被这些契约/并发/正确性问题阻塞。
+- Track D 仅剩可维护性与清理项，建议按独立 backlog 继续推进，不作为本轮 gate。
 
 ---
 

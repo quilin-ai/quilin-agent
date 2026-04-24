@@ -860,26 +860,32 @@ M2.6 / M2.7 ↔ Iter F soul.md 写路径
 
 ### 16.6 Review 补齐本轮新代码（Q2 follow-up）
 
-- **状态**：🔄 reopened。Review 文档：`docs/review/2026-04-24-04-third-slice-review.md`。
-- **当前结论**：初始 third-slice review 的 MEDIUM `1` / LOW `2` 已修复或文档化；`0318392` 后追加 follow-up 又发现 HIGH `2` / MEDIUM `2`。本批已修复 HIGH `2`，MEDIUM `2` 仍待修；`§16.6` 暂不可闭合。
+- **状态**：✅ re-closed。Review 文档：`docs/review/2026-04-24-04-third-slice-review.md`。
+- **当前结论**：初始 third-slice review 的 MEDIUM `1` / LOW `2` 已修复或文档化；`0318392` 后追加 follow-up 又发现 HIGH `2` / MEDIUM `2`。当前工作树已把 HIGH `2` + MEDIUM `2` 全部补齐，`§16.6` 可重新闭合。
 - **原现状**：`docs/review/2026-04-24-{01,02,03}-*.md` 覆盖 C0.1-C1.8 / M0.1-M0.10 / cross-cutting 7 commits，**不含**本轮 §15 新代码（Pascal `4496cb4` / Hooke `77e399a` / Halley `3b60904`）。
 - **DoD**：已新开 `docs/review/2026-04-24-04-third-slice-review.md`，覆盖三路 commits，重点审计：
   - Halley: `memory-writer.ts` 6 禁字段 + sha256 id stability + MCP error fallback；`audit.ts` / `goal-drift.ts` / `replan.ts` 对 ADR-004 L3a 阈值的引用；`state.ts` 新增 3 种 event 的 reducer 纯性。
   - Hooke: `retriever.py` RRF 融合正确性、`kg.py` 递归 CTE SQL 语义、`store.py` semantic guard 覆盖路径、§16.1 拆分前状态。
   - Pascal: `loader.ts` 四级优先级 + `buildCapabilitiesRuntime` REPL wire 的回退语义。
 - **Trigger**：已满足；本 follow-up 收尾前完成 review，未静默进入下一轮切片。
-- **新增 follow-up**：HIGH-1 `memory_recall` envelope 绕过、HIGH-2 semantic guard `metadata.source` 绕过已修；MEDIUM-1 fused recall 优雅降级、MEDIUM-2 KG 时间归一化待修后再重闭合。
+- **新增 follow-up**：HIGH-1 `memory_recall` envelope 绕过、HIGH-2 semantic guard `metadata.source` 绕过、MEDIUM-1 fused recall 优雅降级、MEDIUM-2 KG 时间归一化，当前工作树均已修复并补回归测试。
+- **实证（当前工作树，待 commit）**：`cd packages/agent-core && pnpm test` = `61 passed files / 471 tests`；`cd packages/agent-core && pnpm tsc --noEmit` exit `0`；`cd packages/agent-core && pnpm exec biome check src` exit `0`；`uv run --project providers/memory pytest providers/memory/tests -q` = `134 passed`；`uv run --project providers/memory ruff check providers/memory/src providers/memory/tests` exit `0`。
 
 ### 16.7 Codex code comprehensive review（`docs/review/2026-04-24-05`）
 
-- **状态**：🔄 open。420 行 review doc，35 条 findings（4 CRITICAL + 7 HIGH + 15 MEDIUM + 13 LOW/INFO），HEAD 基线 `0318392`，Batch 1 `0bb9f15` 后续修复中。
+- **状态**：✅ closed（当前工作树，待 Claude 提交 commit hash）。review gate 已闭合；Track A `4/4`、Track B `4/4`、Track C `6/6` 全部完成，Track D 仅保留 backlog。
 - **Review 文档**：`docs/review/2026-04-24-05-codex-code-comprehensive.md`
 - **Reviewer**：Claude + 3 并行 subagent（TS Planning `a38d534a36c01add0` / Python Memory `ad1ff15a01ec93147` / TS Config/Tools `a17a56146cef3bbfe`）
 - **范围**：plan §11/§15 启动以来 Codex 在 `packages/agent-core/` + `providers/memory/` 下的全部新代码（68 文件 / 10797 行增量）
-- **Block gate**：Track A + Track B（9 条必改）完成后才视为第三轮代码稳态；Track A CRITICAL-1（tool description sanitize）**必 block** 任何 plugin/fusion 场景；Track C CRITICAL-1（Planner zod）**block Iter A**。
+- **Block gate**：原定 Track A + Track B（9 条必改）与 Track C CRITICAL-1 已全部完成，因此第三轮代码已恢复稳态；Track D backlog 不阻塞下一轮切片。
 - **并行修复 tracks**：
   - **Track A 契约与安全**（tool description sanitize / semantic guard 完整化 / MCP metadata 白名单 / query 长度限制）
   - **Track B 并发与生命周期**（MCPRegistry/MCPClientManager mutex / KG-Store DB 分离 / KG 防环正确性）
   - **Track C 正确性与观测性**（Planner zod / recall access 信号 / KG temporal UTC / fused recall 降级 / G-Replan metric 入事件流）
   - **Track D 可维护性清理**（REPL 两路合并 / capabilities schema 补齐 / YAML parser / 文件拆分 / LOW 条目）
-- **DoD**：Track A + Track B 全部 land，§16.7 改 closed；Track C + Track D 作为独立 follow-up 或 backlog。
+- **当前工作树进度（待 commit）**：
+  - Track A：A1-A4 已完成。
+  - Track B：B1-B4 已完成。
+  - Track C：C1-C6 已完成。
+- **实证（当前工作树，待 commit）**：`cd packages/agent-core && pnpm test` = `61 passed files / 471 tests`；`cd packages/agent-core && pnpm tsc --noEmit` exit `0`；`cd packages/agent-core && pnpm exec biome check src` exit `0`；`uv run --project providers/memory pytest providers/memory/tests -q` = `134 passed`；`uv run --project providers/memory ruff check providers/memory/src providers/memory/tests` exit `0`。
+- **DoD**：Track A/B/C 已满足并完成；Track D 作为独立 backlog 后续处理。

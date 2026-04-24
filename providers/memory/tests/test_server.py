@@ -10,6 +10,12 @@ from mcp.types import CallToolRequest, CallToolRequestParams
 from omnimem.server import create_server
 from omnimem.store import OmniMemStore
 
+SEMANTIC_METADATA = {
+    "schema_version": 1,
+    "source": "test_fixture",
+    "stability_reason": "fixture stability",
+}
+
 
 def _decode_call_tool_result(result: object) -> dict[str, object]:
     _content, metadata = result  # type: ignore[misc]
@@ -88,7 +94,11 @@ async def test_memory_store_tool_with_tier(server: object) -> None:
     store_result = _decode_call_tool_result(
         await server.call_tool(  # type: ignore[attr-defined]
             "memory_store",
-            {"content": "important", "tier": "semantic"},
+            {
+                "content": "important",
+                "tier": "semantic",
+                "metadata": dict(SEMANTIC_METADATA),
+            },
         )
     )
     recall_result = _decode_call_tool_result(
@@ -102,6 +112,7 @@ async def test_memory_store_tool_with_tier(server: object) -> None:
         layer="semantic",
         memory_id=store_result["id"],  # type: ignore[arg-type]
         recall_source="direct_recall",
+        memory_source="test_fixture",
     )
 
 
@@ -126,7 +137,12 @@ async def test_memory_store_tool_accepts_canonical_layer(server: object) -> None
 async def test_memory_store_tool_prefers_layer_over_tier(server: object) -> None:
     await server.call_tool(  # type: ignore[attr-defined]
         "memory_store",
-        {"content": "stable preference", "tier": "working", "layer": "semantic"},
+        {
+            "content": "stable preference",
+            "tier": "working",
+            "layer": "semantic",
+            "metadata": dict(SEMANTIC_METADATA),
+        },
     )
 
     recall_result = _decode_call_tool_result(
@@ -138,6 +154,7 @@ async def test_memory_store_tool_prefers_layer_over_tier(server: object) -> None
         content="stable preference",
         layer="semantic",
         recall_source="direct_recall",
+        memory_source="test_fixture",
     )
 
 
@@ -312,6 +329,41 @@ async def test_create_server_rejects_invalid_tier_enum() -> None:
         await server.call_tool(
             "memory_store",
             {"content": "bad tier", "tier": "short"},
+        )
+
+
+async def test_memory_store_tool_rejects_unknown_metadata_keys(server: object) -> None:
+    with pytest.raises(Exception, match="metadata keys not allowed"):
+        await server.call_tool(
+            "memory_store",
+            {
+                "content": "bad metadata",
+                "metadata": {"schema_version": 1, "source": "user", "debug": True},
+            },
+        )
+
+
+async def test_memory_store_tool_rejects_excessively_nested_metadata(server: object) -> None:
+    with pytest.raises(Exception, match="nesting"):
+        await server.call_tool(
+            "memory_store",
+            {
+                "content": "too deep",
+                "metadata": {
+                    "schema_version": 1,
+                    "source": "user",
+                    "stability_reason": "deep payload",
+                    "source_layers": [[["a"]]],
+                },
+            },
+        )
+
+
+async def test_memory_recall_tool_rejects_oversized_query(server: object) -> None:
+    with pytest.raises(Exception, match="at most 512 characters"):
+        await server.call_tool(
+            "memory_recall",
+            {"query": "q" * 513},
         )
 
 

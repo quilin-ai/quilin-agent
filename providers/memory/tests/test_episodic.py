@@ -128,7 +128,15 @@ async def test_discard_all_clears_only_episodic_records() -> None:
     await episodic.compress_and_add(
         MemoryItem(content="ep-1", layer="episodic", created_at=_ts(9), last_accessed=_ts(9))
     )
-    await store.store("semantic-1", tier="semantic")
+    await store.store(
+        "semantic-1",
+        tier="semantic",
+        metadata={
+            "schema_version": 1,
+            "source": "test_fixture",
+            "stability_reason": "fixture stability",
+        },
+    )
 
     cleared = await episodic.discard_all()
 

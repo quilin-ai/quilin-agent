@@ -100,6 +100,22 @@ describe.sequential("MCPClientManager", () => {
 		});
 	});
 
+	it("reuses the in-flight connect promise instead of queueing a second lifecycle run", async () => {
+		const manager = new MCPClientManager();
+		const queuedConnect = vi.fn();
+		const inFlightTools = Promise.resolve([]);
+
+		Object.assign(manager as object, {
+			connectInProgress: inFlightTools,
+			queueLifecycleOperation: queuedConnect,
+		});
+
+		await expect(manager.connect(createMemoryServerConfig())).resolves.toEqual(
+			[],
+		);
+		expect(queuedConnect).not.toHaveBeenCalled();
+	});
+
 	it("times out slow MCP tool calls", async () => {
 		vi.useFakeTimers();
 		const manager = new MCPClientManager();
@@ -523,7 +539,8 @@ describe.sequential("MCPClientManager", () => {
 					tier: "episodic",
 					metadata: expect.objectContaining({
 						schema_version: 1,
-						source: "planning_checkpoint",
+						source: "direct_recall",
+						memory_source: "planning_checkpoint",
 						run_id: runId,
 						event_seq: 6,
 						phase: "executing",

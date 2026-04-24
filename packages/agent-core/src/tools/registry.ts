@@ -5,6 +5,10 @@ import type {
 	ToolPromptDescriptor,
 	ToolWithMetadata,
 } from "./tool-metadata.js";
+import {
+	sanitizeMCPToolDescription,
+	sanitizeMCPToolName,
+} from "./tool-sanitizer.js";
 import type { Tool } from "./types.js";
 
 interface MCPClientConnection {
@@ -24,10 +28,19 @@ function toNamespacedTool(
 	namespace: string,
 	riskLevel: RiskLevel,
 ): ToolWithMetadata {
+	const sanitizedNamespace = sanitizeMCPToolName(namespace, {
+		field: "server.namespace",
+	});
+	const sanitizedName = sanitizeMCPToolName(tool.name);
+	const sanitizedDescription = sanitizeMCPToolDescription(tool.description, {
+		toolName: `${sanitizedNamespace}/${sanitizedName}`,
+	});
+
 	return {
 		...tool,
-		name: `${namespace}/${tool.name}`,
-		namespace,
+		name: `${sanitizedNamespace}/${sanitizedName}`,
+		description: sanitizedDescription,
+		namespace: sanitizedNamespace,
 		category: "programmatic",
 		riskLevel,
 	};
@@ -43,6 +56,7 @@ function getShortName(tool: ToolWithMetadata): string {
 }
 
 export class MCPRegistry {
+	private operationQueue: Promise<unknown> = Promise.resolve();
 	private readonly connections = new Map<string, MCPClientConnection>();
 	private readonly serverToolNames = new Map<string, readonly string[]>();
 	private readonly serverTools = new Map<string, ToolWithMetadata>();
@@ -151,54 +165,62 @@ export class MCPRegistry {
 		}
 	}
 
+	private queueOperation<T>(operation: () => Promise<T>): Promise<T> {
+		const run = this.operationQueue.catch(() => undefined).then(operation);
+		this.operationQueue = run.catch(() => undefined);
+		return run;
+	}
+
 	async register(entry: MCPServerEntry): Promise<ToolWithMetadata[]> {
-		const client = this.createClient();
-
-		try {
-			const connectedTools = await client.connect(entry.config);
-			const wrappedTools = connectedTools.map((tool) =>
-				toNamespacedTool(
-					tool,
-					entry.namespace,
-					entry.defaultRiskLevel ?? "read",
-				),
-			);
-
-			const pendingState = this.buildPendingServerState(
-				entry.id,
-				client,
-				wrappedTools,
-			);
-			const existingClient = this.connections.get(entry.id);
-
-			if (existingClient != null) {
-				try {
-					await existingClient.disconnect();
-				} catch (error) {
-					await client.disconnect().catch(() => undefined);
-					logger.warn(
-						{ err: error, serverId: entry.id },
-						"MCP server disconnect failed during register",
-					);
-					throw error;
-				}
-			}
+		return this.queueOperation(async () => {
+			const client = this.createClient();
 
 			try {
-				this.applyServerState(pendingState);
+				const connectedTools = await client.connect(entry.config);
+				const wrappedTools = connectedTools.map((tool) =>
+					toNamespacedTool(
+						tool,
+						entry.namespace,
+						entry.defaultRiskLevel ?? "read",
+					),
+				);
+
+				const pendingState = this.buildPendingServerState(
+					entry.id,
+					client,
+					wrappedTools,
+				);
+				const existingClient = this.connections.get(entry.id);
+
+				if (existingClient != null) {
+					try {
+						await existingClient.disconnect();
+					} catch (error) {
+						await client.disconnect().catch(() => undefined);
+						logger.warn(
+							{ err: error, serverId: entry.id },
+							"MCP server disconnect failed during register",
+						);
+						throw error;
+					}
+				}
+
+				try {
+					this.applyServerState(pendingState);
+				} catch (error) {
+					await client.disconnect().catch(() => undefined);
+					throw error;
+				}
+
+				return wrappedTools;
 			} catch (error) {
 				await client.disconnect().catch(() => undefined);
 				throw error;
 			}
-
-			return wrappedTools;
-		} catch (error) {
-			await client.disconnect().catch(() => undefined);
-			throw error;
-		}
+		});
 	}
 
-	async unregister(serverId: string): Promise<void> {
+	private async unregisterInternal(serverId: string): Promise<void> {
 		const client = this.connections.get(serverId);
 
 		try {
@@ -211,6 +233,10 @@ export class MCPRegistry {
 		} finally {
 			this.clearServerTools(serverId);
 		}
+	}
+
+	async unregister(serverId: string): Promise<void> {
+		return this.queueOperation(async () => this.unregisterInternal(serverId));
 	}
 
 	registerBuiltin(tools: readonly ToolWithMetadata[]): void {
@@ -254,8 +280,10 @@ export class MCPRegistry {
 	}
 
 	async disconnectAll(): Promise<void> {
-		await Promise.all(
-			[...this.connections.keys()].map((serverId) => this.unregister(serverId)),
-		);
+		await this.queueOperation(async () => {
+			for (const serverId of [...this.connections.keys()]) {
+				await this.unregisterInternal(serverId);
+			}
+		});
 	}
 }

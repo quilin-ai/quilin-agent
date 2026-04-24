@@ -12,6 +12,10 @@ import {
 	logger,
 } from "../logger.js";
 import { jsonSchemaToZod } from "./schema-converter.js";
+import {
+	sanitizeMCPToolDescription,
+	sanitizeMCPToolName,
+} from "./tool-sanitizer.js";
 import type { Tool } from "./types.js";
 
 const CONNECT_TIMEOUT_MS = 5_000;
@@ -89,6 +93,8 @@ interface MCPToolCallResult {
 	readonly content: string;
 	readonly isError: boolean;
 }
+
+type MCPConnectionState = "idle" | "connecting" | "connected" | "disconnecting";
 
 export interface MCPServerConfig {
 	readonly command: string;
@@ -272,89 +278,114 @@ export class MCPClientManager {
 	private client?: Client;
 	private transport?: StdioClientTransport;
 	private isConnected = false;
+	private connectionState: MCPConnectionState = "idle";
+	private connectInProgress?: Promise<Tool[]>;
 	private disconnectReason = "MCP client is not connected";
+	private lifecycleQueue: Promise<unknown> = Promise.resolve();
 	private readonly pendingCalls = new Set<Promise<CallToolResult>>();
 
 	async connect(config: MCPServerConfig): Promise<Tool[]> {
-		await this.disconnect();
-		validateMCPServerConfig(config);
+		if (this.connectInProgress != null) {
+			return this.connectInProgress;
+		}
 
-		const transportConfig: StdioServerParameters = {
-			command: config.command,
-			args: [...config.args],
-			cwd: config.cwd ? resolve(config.cwd) : undefined,
-			stderr: "pipe",
-			env: createMCPSpawnEnv(),
-		};
+		const connectPromise = this.queueLifecycleOperation(async () => {
+			this.connectionState = "connecting";
+			await this.disconnectInternal();
+			validateMCPServerConfig(config);
 
-		const client = new Client(CLIENT_INFO);
-		const transport = new StdioClientTransport(transportConfig);
+			const transportConfig: StdioServerParameters = {
+				command: config.command,
+				args: [...config.args],
+				cwd: config.cwd ? resolve(config.cwd) : undefined,
+				stderr: "pipe",
+				env: createMCPSpawnEnv(),
+			};
 
-		transport.onerror = (error) => {
-			writeReplLogSeparatorIfNeeded();
-			logger.error({ err: error }, "MCP transport error");
-		};
-		transport.onclose = () => {
-			this.isConnected = false;
-			this.disconnectReason = "MCP server disconnected";
-			writeReplLogSeparatorIfNeeded();
-			logger.warn("MCP transport closed");
-		};
+			const client = new Client(CLIENT_INFO);
+			const transport = new StdioClientTransport(transportConfig);
 
-		transport.stderr?.on("data", (chunk) => {
-			const message = chunk.toString().trim();
-			if (message !== "") {
+			transport.onerror = (error) => {
 				writeReplLogSeparatorIfNeeded();
-				logger.warn({ stderr: message }, "MCP server stderr");
+				logger.error({ err: error }, "MCP transport error");
+			};
+			transport.onclose = () => {
+				this.isConnected = false;
+				this.connectionState = "idle";
+				this.disconnectReason = "MCP server disconnected";
+				writeReplLogSeparatorIfNeeded();
+				logger.warn("MCP transport closed");
+			};
+
+			transport.stderr?.on("data", (chunk) => {
+				const message = chunk.toString().trim();
+				if (message !== "") {
+					writeReplLogSeparatorIfNeeded();
+					logger.warn({ stderr: message }, "MCP server stderr");
+				}
+			});
+
+			client.onerror = (error) => {
+				writeReplLogSeparatorIfNeeded();
+				logger.error({ err: error }, "MCP client error");
+			};
+
+			try {
+				await withTimeout(
+					client.connect(transport),
+					"MCP connect",
+					CONNECT_TIMEOUT_MS,
+				);
+				const { tools } = await withTimeout(
+					client.listTools(),
+					"MCP listTools",
+					CONNECT_TIMEOUT_MS,
+				);
+
+				this.client = client;
+				this.transport = transport;
+				this.isConnected = true;
+				this.connectionState = "connected";
+				this.disconnectReason = "MCP client is not connected";
+
+				return tools.map((tool) => {
+					const name = sanitizeMCPToolName(tool.name);
+					return {
+						name,
+						description: sanitizeMCPToolDescription(tool.description ?? "", {
+							toolName: name,
+						}),
+						parameters: jsonSchemaToZod(tool.inputSchema),
+						execute: async (args: unknown) => {
+							const result = await this.callToolWithMetadata(
+								name,
+								args as Record<string, unknown>,
+							);
+
+							return {
+								toolCallId: "mcp-call",
+								content: result.content,
+								isError: result.isError,
+							};
+						},
+					};
+				});
+			} catch (error) {
+				await transport.close().catch(() => undefined);
+				this.client = undefined;
+				this.transport = undefined;
+				this.isConnected = false;
+				this.connectionState = "idle";
+				throw error;
 			}
 		});
 
-		client.onerror = (error) => {
-			writeReplLogSeparatorIfNeeded();
-			logger.error({ err: error }, "MCP client error");
-		};
-
-		try {
-			await withTimeout(
-				client.connect(transport),
-				"MCP connect",
-				CONNECT_TIMEOUT_MS,
-			);
-			const { tools } = await withTimeout(
-				client.listTools(),
-				"MCP listTools",
-				CONNECT_TIMEOUT_MS,
-			);
-
-			this.client = client;
-			this.transport = transport;
-			this.isConnected = true;
-			this.disconnectReason = "MCP client is not connected";
-
-			return tools.map((tool) => ({
-				name: tool.name,
-				description: tool.description ?? "",
-				parameters: jsonSchemaToZod(tool.inputSchema),
-				execute: async (args) => {
-					const result = await this.callToolWithMetadata(
-						tool.name,
-						args as Record<string, unknown>,
-					);
-
-					return {
-						toolCallId: "mcp-call",
-						content: result.content,
-						isError: result.isError,
-					};
-				},
-			}));
-		} catch (error) {
-			await transport.close().catch(() => undefined);
-			this.client = undefined;
-			this.transport = undefined;
-			this.isConnected = false;
-			throw error;
-		}
+		this.connectInProgress = connectPromise.finally(() => {
+			if (this.connectInProgress === connectPromise) {
+				this.connectInProgress = undefined;
+			}
+		});
+		return this.connectInProgress;
 	}
 
 	async callTool(name: string, args: Record<string, unknown>): Promise<string> {
@@ -363,6 +394,17 @@ export class MCPClientManager {
 	}
 
 	async disconnect(): Promise<void> {
+		await this.queueLifecycleOperation(async () => this.disconnectInternal());
+	}
+
+	private queueLifecycleOperation<T>(operation: () => Promise<T>): Promise<T> {
+		const run = this.lifecycleQueue.catch(() => undefined).then(operation);
+		this.lifecycleQueue = run.catch(() => undefined);
+		return run;
+	}
+
+	private async disconnectInternal(): Promise<void> {
+		this.connectionState = "disconnecting";
 		this.isConnected = false;
 		this.disconnectReason = "MCP server disconnected";
 
@@ -385,13 +427,17 @@ export class MCPClientManager {
 		await this.transport?.close();
 		this.client = undefined;
 		this.transport = undefined;
+		this.connectionState = "idle";
 	}
 
 	private async callToolWithMetadata(
 		name: string,
 		args: Record<string, unknown>,
 	): Promise<MCPToolCallResult> {
-		if (!this.isConnected || this.client == null) {
+		const isOperational =
+			this.connectionState === "connected" ||
+			(this.connectionState === "idle" && this.isConnected);
+		if (!isOperational || this.client == null) {
 			return createDisconnectedResult(this.disconnectReason);
 		}
 

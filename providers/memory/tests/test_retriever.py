@@ -189,6 +189,42 @@ class StubVectorStore:
         return self._results[:limit]
 
 
+class FailingVectorStore:
+    async def search(
+        self,
+        query: str,
+        limit: int = 10,
+        filters: dict[str, object] | None = None,
+    ) -> list[MemoryItem]:
+        del query, limit, filters
+        raise RuntimeError("vector unavailable")
+
+
+class FailingKnowledgeGraph:
+    async def search(
+        self,
+        query: str,
+        *,
+        max_hops: int = 2,
+        limit: int = 10,
+        as_of: datetime | str | None = None,
+    ) -> list:
+        del query, max_hops, limit, as_of
+        raise RuntimeError("kg unavailable")
+
+
+class FailingReranker:
+    async def rerank(
+        self,
+        query: str,
+        items: list[MemoryItem],
+        *,
+        task_context: dict[str, object] | None = None,
+    ) -> list[MemoryItem]:
+        del query, task_context
+        raise RuntimeError(f"reranker unavailable for {len(items)} items")
+
+
 async def test_hybrid_retrieval_fuses_bm25_vector_and_kg_results() -> None:
     store = OmniMemStore(db_path=":memory:")
     now = datetime(2026, 4, 24, tzinfo=UTC)
@@ -203,6 +239,11 @@ async def test_hybrid_retrieval_fuses_bm25_vector_and_kg_results() -> None:
         id="memory-semantic-1",
         content="semantic preference: summarize migration risk first",
         layer="semantic",
+        metadata={
+            "schema_version": 1,
+            "source": "reflection",
+            "stability_reason": "Stable semantic preference.",
+        },
         created_at=now,
         last_accessed=now,
     )
@@ -252,3 +293,35 @@ async def test_hybrid_retrieval_fuses_bm25_vector_and_kg_results() -> None:
     assert kg_item.content == "migration depends_on approval"
     assert kg_item.metadata["source_layers"] == ["kg"]
     assert kg_item.metadata["graph_distance"] == 1
+
+
+async def test_hybrid_retrieval_degrades_when_vector_kg_and_reranker_fail() -> None:
+    store = OmniMemStore(db_path=":memory:")
+    await store.add(
+        MemoryItem(
+            content="episodic decision quilin_m0_database use Postgres",
+            layer="episodic",
+        )
+    )
+    working = WorkingMemory(k=2)
+    await working.push(
+        MemoryItem(
+            content="working scratch about migration rollout",
+            layer="working",
+        )
+    )
+
+    results = await MemoryRetriever(
+        store,
+        working=working,
+        vector=FailingVectorStore(),
+        kg=FailingKnowledgeGraph(),
+        reranker=FailingReranker(),
+    ).retrieve("quilin_m0_database migration", limit=3)
+
+    assert [item.content for item in results] == [
+        "working scratch about migration rollout",
+        "episodic decision quilin_m0_database use Postgres",
+    ]
+    assert results[0].metadata["source"] == "working_direct"
+    assert results[1].metadata["source"] == "bm25_fts"

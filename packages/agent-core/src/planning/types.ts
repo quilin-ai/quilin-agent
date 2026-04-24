@@ -1,5 +1,5 @@
-import type { ToolCall } from "../tools/types.js";
 import { z } from "zod";
+import type { ToolCall } from "../tools/types.js";
 
 export type Intent =
 	| "SIMPLE_QA"
@@ -97,7 +97,7 @@ export const toolCallSchema = z
 	})
 	.strict();
 
-export const subTaskSchema: z.ZodType<SubTask> = z
+export const subTaskSchema = z
 	.object({
 		id: nonEmptyStringSchema,
 		action: nonEmptyStringSchema,
@@ -115,14 +115,14 @@ export const subTaskSchema: z.ZodType<SubTask> = z
 	})
 	.strict();
 
-export const linearPlanSchema: z.ZodType<LinearPlan> = z
+export const linearPlanSchema = z
 	.object({
 		kind: z.literal("linear"),
 		subtasks: z.array(subTaskSchema).readonly(),
 	})
 	.strict();
 
-export const dagPlanSchema: z.ZodType<DagPlan> = z
+export const dagPlanSchema = z
 	.object({
 		kind: z.literal("dag"),
 		subtasks: z.array(subTaskSchema).readonly(),
@@ -137,14 +137,14 @@ export const planSchema = z.discriminatedUnion("kind", [
 	dagPlanSchema,
 ]);
 
-export const clarificationRequestSchema: z.ZodType<ClarificationRequest> = z
+export const clarificationRequestSchema = z
 	.object({
 		question: nonEmptyStringSchema,
 		missing: z.array(nonEmptyStringSchema).readonly(),
 	})
 	.strict();
 
-export const plannerAuditSchema: z.ZodType<PlannerAudit> = z
+export const plannerAuditSchema = z
 	.object({
 		intentHint: z.enum([
 			"SIMPLE_QA",
@@ -157,7 +157,7 @@ export const plannerAuditSchema: z.ZodType<PlannerAudit> = z
 	})
 	.strict();
 
-export const llmPlannerResponseSchema: z.ZodType<LLMPlannerResponse> = z
+export const llmPlannerResponseSchema = z
 	.object({
 		text: z.string().optional(),
 		toolCalls: z.array(toolCallSchema).readonly().optional(),
@@ -167,7 +167,7 @@ export const llmPlannerResponseSchema: z.ZodType<LLMPlannerResponse> = z
 	})
 	.strict();
 
-function formatIssuePath(path: readonly (string | number)[]): string {
+function formatIssuePath(path: readonly PropertyKey[]): string {
 	if (path.length === 0) {
 		return "<root>";
 	}
@@ -179,7 +179,8 @@ function formatIssuePath(path: readonly (string | number)[]): string {
 			continue;
 		}
 
-		result += result.length === 0 ? segment : `.${segment}`;
+		const key = String(segment);
+		result += result.length === 0 ? key : `.${key}`;
 	}
 
 	return result;
@@ -198,5 +199,5 @@ export function parseLLMPlannerResponse(input: unknown): LLMPlannerResponse {
 			`Invalid planner response from model: ${formatSchemaError(parsed.error)}`,
 		);
 	}
-	return parsed.data;
+	return parsed.data as LLMPlannerResponse;
 }

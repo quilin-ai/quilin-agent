@@ -6,9 +6,18 @@ import time
 import uuid
 from pathlib import Path
 
+import pytest
+
 from omnimem import store as store_module
 from omnimem.store import MemoryStore, OmniMemStore
+from omnimem.store_search import MAX_EXPANDED_QUERY_TERMS, expand_query_terms
 from omnimem.types import MemoryItem
+
+SEMANTIC_METADATA = {
+    "schema_version": 1,
+    "source": "test_fixture",
+    "stability_reason": "fixture stability",
+}
 
 
 async def test_store_returns_record_with_uuid() -> None:
@@ -22,7 +31,11 @@ async def test_store_returns_record_with_uuid() -> None:
 
 async def test_store_with_custom_tier() -> None:
     store = OmniMemStore(db_path=":memory:")
-    record = await store.store("important fact", tier="semantic")
+    record = await store.store(
+        "important fact",
+        tier="semantic",
+        metadata=dict(SEMANTIC_METADATA),
+    )
     assert record.content == "important fact"
     assert record.tier == "semantic"
     uuid.UUID(record.id)
@@ -50,12 +63,17 @@ async def test_add_get_update_delete_and_count_contract() -> None:
 
     memory_id = await store.add(memory)
     fetched = await store.get(memory_id)
-    assert fetched == memory
+    assert fetched is not None
+    assert fetched.id == memory.id
+    assert fetched.content == memory.content
+    assert fetched.access_count == 1
+    assert fetched.last_accessed >= memory.last_accessed
 
     await store.update(memory_id, "remember that")
     updated = await store.get(memory_id)
     assert updated is not None
     assert updated.content == "remember that"
+    assert updated.access_count == 2
     assert updated.embedding is None
     assert await store.count({"layer": "episodic"}) == 1
 
@@ -100,9 +118,17 @@ async def test_search_list_by_layer_and_clear_layer() -> None:
     await store.store(
         "semantic insight",
         tier="semantic",
-        metadata={"schema_version": 1, "source": "reflection"},
+        metadata={
+            "schema_version": 1,
+            "source": "reflection",
+            "stability_reason": "human reflection",
+        },
     )
-    await store.store("semantic backup", tier="semantic")
+    await store.store(
+        "semantic backup",
+        tier="semantic",
+        metadata=dict(SEMANTIC_METADATA),
+    )
 
     semantic_results = await store.search("semantic", filters={"layer": "semantic"})
     assert [item.content for item in semantic_results] == [
@@ -154,10 +180,33 @@ async def test_search_supports_layer_alias_metadata_and_content_type_filters() -
     assert [item.content for item in filtered] == ["checkpoint alpha"]
 
 
+async def test_search_updates_access_signals_for_returned_items() -> None:
+    store = OmniMemStore(db_path=":memory:")
+    record = await store.store("checkpoint alpha", tier="episodic")
+
+    results = await store.search("checkpoint", filters={"layer": "episodic"})
+
+    assert [item.content for item in results] == ["checkpoint alpha"]
+    assert results[0].access_count == 1
+    assert results[0].last_accessed >= record.last_accessed
+
+    persisted = await store.get(record.id)
+    assert persisted is not None
+    assert persisted.access_count == 2
+
+
 async def test_list_by_layer_supports_pagination_in_row_order() -> None:
     store = OmniMemStore(db_path=":memory:")
     for index in range(5):
-        await store.store(f"semantic-{index}", tier="semantic")
+        await store.store(
+            f"semantic-{index}",
+            tier="semantic",
+            metadata={
+                "schema_version": 1,
+                "source": "test_fixture",
+                "stability_reason": f"fixture stability {index}",
+            },
+        )
 
     first_page = await store.list_by_layer("semantic", limit=2, offset=0)
     second_page = await store.list_by_layer("semantic", limit=2, offset=2)
@@ -188,7 +237,12 @@ async def test_count_respects_layer_metadata_and_content_type_filters() -> None:
         metadata={"schema_version": 1, "session_id": "session-2"},
         content_type="json",
     )
-    await store.store("semantic json", tier="semantic", content_type="json")
+    await store.store(
+        "semantic json",
+        tier="semantic",
+        content_type="json",
+        metadata=dict(SEMANTIC_METADATA),
+    )
 
     assert await store.count({"layer": "episodic"}) == 3
     assert (
@@ -299,7 +353,11 @@ async def test_store_persists_records_across_instances(tmp_path: Path) -> None:
     db_path = tmp_path / "omnimem.db"
 
     writer = OmniMemStore(db_path=str(db_path))
-    await writer.store("remember me", tier="semantic")
+    await writer.store(
+        "remember me",
+        tier="semantic",
+        metadata=dict(SEMANTIC_METADATA),
+    )
 
     reader = OmniMemStore(db_path=str(db_path))
     results = await reader.recall("remember")
@@ -344,6 +402,45 @@ async def test_recall_expands_generic_memory_queries_for_fts() -> None:
     results = await store.recall("记得")
 
     assert [record.content for record in results] == ["用户的名字是老孟"]
+
+
+async def test_update_revalidates_semantic_contracts() -> None:
+    store = OmniMemStore(db_path=":memory:")
+    run_id = "run-semantic-update"
+    record = await store.store(
+        """
+        {"run_id":"run-semantic-update","source":"planning_review","schema_version":1,
+        "summary":"Stable strategy","stable_strategy":{"approach":"summarize-first"}}
+        """.replace("\n", ""),
+        tier="semantic",
+        metadata={
+            "schema_version": 1,
+            "source": "planning_review",
+            "run_id": run_id,
+            "stability_reason": "Validated stable review summary.",
+        },
+        content_type="json",
+    )
+
+    with pytest.raises(ValueError, match="PlanningState"):
+        await store.update(
+            record.id,
+            """
+            {"runId":"run-live","phase":"executing","events":[],"checkpoints":[]}
+            """.replace("\n", ""),
+        )
+
+    persisted = await store.get(record.id)
+    assert persisted is not None
+    assert "Stable strategy" in persisted.content
+
+
+async def test_expand_query_terms_caps_the_match_term_count() -> None:
+    query = " ".join(f"term_{index}" for index in range(MAX_EXPANDED_QUERY_TERMS + 20))
+
+    terms = expand_query_terms(query)
+
+    assert len(terms) == MAX_EXPANDED_QUERY_TERMS
 
 
 async def test_recall_falls_back_to_like_when_fts_returns_no_results() -> None:
