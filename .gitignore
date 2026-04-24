@@ -57,6 +57,12 @@ data/
 .agentbridge/
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
+
+# === Local identity files ===
+.quilin/user.md
+.quilin/soul.md
+.quilin/*.local.md
+
 # === Local brief / scratch work ===
 briefs/
 .spike/

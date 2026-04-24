@@ -34,6 +34,7 @@ from .types import (
 FTS_SCHEMA_COMPONENT = _FTS_SCHEMA_COMPONENT
 FTS_SCHEMA_VERSION = _FTS_SCHEMA_VERSION
 
+
 @runtime_checkable
 class MemoryStore(Protocol):
     async def add(self, memory: MemoryItem) -> str: ...
@@ -83,6 +84,14 @@ def _count_metadata_value(value: object) -> object:
 def _metadata_json_path(key: str) -> str:
     escaped_key = key.replace("\\", "\\\\").replace('"', '\\"')
     return f'$."{escaped_key}"'
+
+
+def _candidate_limit(limit: int, filters: dict[str, Any] | None) -> int | None:
+    if not filters:
+        return limit
+
+    non_layer_filters = set(filters) - {"layer", "tier"}
+    return None if non_layer_filters else limit
 
 
 class OmniMemStore:
@@ -179,6 +188,7 @@ class OmniMemStore:
                 self._conn,
                 query=query,
                 layer_filter=layer_filter(filters),
+                limit=_candidate_limit(limit, filters),
             )
             items = [_row_to_record(row, now=_utcnow) for row in rows]
             filtered = [item for item in items if matches_filters(item, filters)]

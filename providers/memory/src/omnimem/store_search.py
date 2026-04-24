@@ -30,15 +30,16 @@ def candidate_rows(
     *,
     query: str,
     layer_filter: MemoryLayer | None,
+    limit: int | None = None,
 ) -> list[sqlite3.Row]:
     if not query:
-        return _all_rows(conn, layer_filter=layer_filter)
+        return _all_rows(conn, layer_filter=layer_filter, limit=limit)
 
-    rows = recall_with_fts(conn, query=query, layer_filter=layer_filter)
+    rows = recall_with_fts(conn, query=query, layer_filter=layer_filter, limit=limit)
     if rows:
         return rows
 
-    return _like_rows(conn, query=query, layer_filter=layer_filter)
+    return _like_rows(conn, query=query, layer_filter=layer_filter, limit=limit)
 
 
 def recall_with_fts(
@@ -46,11 +47,13 @@ def recall_with_fts(
     *,
     query: str,
     layer_filter: MemoryLayer | None,
+    limit: int | None = None,
 ) -> list[sqlite3.Row]:
     match_query = build_match_query(query)
     if match_query is None:
         return []
 
+    limit_clause = _limit_clause(limit)
     if layer_filter is None:
         return conn.execute(
             f"""
@@ -59,6 +62,7 @@ def recall_with_fts(
             JOIN memory_records mr ON mr.id = fts.id
             WHERE memory_records_fts MATCH ? AND mr.deleted = 0
             ORDER BY bm25(memory_records_fts), mr.rowid ASC
+            {limit_clause}
             """,
             (match_query,),
         ).fetchall()
@@ -72,6 +76,7 @@ def recall_with_fts(
           AND mr.deleted = 0
           AND mr.tier = ?
         ORDER BY bm25(memory_records_fts), mr.rowid ASC
+        {limit_clause}
         """,
         (match_query, layer_filter),
     ).fetchall()
@@ -179,7 +184,9 @@ def _all_rows(
     conn: sqlite3.Connection,
     *,
     layer_filter: MemoryLayer | None,
+    limit: int | None = None,
 ) -> list[sqlite3.Row]:
+    limit_clause = _limit_clause(limit)
     if layer_filter is None:
         return conn.execute(
             f"""
@@ -187,6 +194,7 @@ def _all_rows(
             FROM memory_records
             WHERE deleted = 0
             ORDER BY rowid ASC
+            {limit_clause}
             """
         ).fetchall()
 
@@ -196,6 +204,7 @@ def _all_rows(
         FROM memory_records
         WHERE deleted = 0 AND tier = ?
         ORDER BY rowid ASC
+        {limit_clause}
         """,
         (layer_filter,),
     ).fetchall()
@@ -206,8 +215,10 @@ def _like_rows(
     *,
     query: str,
     layer_filter: MemoryLayer | None,
+    limit: int | None = None,
 ) -> list[sqlite3.Row]:
     like_query = f"%{query.lower()}%"
+    limit_clause = _limit_clause(limit)
     if layer_filter is None:
         return conn.execute(
             f"""
@@ -215,6 +226,7 @@ def _like_rows(
             FROM memory_records
             WHERE deleted = 0 AND lower(content) LIKE ?
             ORDER BY rowid ASC
+            {limit_clause}
             """,
             (like_query,),
         ).fetchall()
@@ -225,6 +237,13 @@ def _like_rows(
         FROM memory_records
         WHERE deleted = 0 AND tier = ? AND lower(content) LIKE ?
         ORDER BY rowid ASC
+        {limit_clause}
         """,
         (layer_filter, like_query),
     ).fetchall()
+
+
+def _limit_clause(limit: int | None) -> str:
+    if limit is None:
+        return ""
+    return f"LIMIT {max(int(limit), 0)}"
