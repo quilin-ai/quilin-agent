@@ -13,6 +13,7 @@ DEFAULT_SOURCE_PRIORS = {
     "hybrid_rrf": 0.55,
     "vector_semantic": 0.45,
     "bm25_fts": 0.35,
+    "direct_recall": 0.35,
     "kg_subgraph": 0.25,
 }
 

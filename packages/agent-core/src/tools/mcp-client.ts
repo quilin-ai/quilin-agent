@@ -241,14 +241,6 @@ function containsErrorMarker(
 }
 
 function formatCallToolResult(result: CallToolResult): MCPToolCallResult {
-	if ("toolResult" in result) {
-		const content = JSON.stringify(result.toolResult);
-		return {
-			content,
-			isError: detectErrorPayload(content),
-		};
-	}
-
 	const textContent = result.content
 		.filter(
 			(

@@ -51,6 +51,39 @@ function describeToolDescriptors(ctx: BuildContext): string {
 	return sections.join("\n");
 }
 
+function findResolvedToolName(
+	ctx: BuildContext,
+	shortName: "memory_store" | "memory_recall",
+): string {
+	const descriptorNames =
+		ctx.availableToolDescriptors?.map((tool) => tool.name) ?? [];
+	const descriptorExactName = descriptorNames.find(
+		(name) => name === shortName,
+	);
+	if (descriptorExactName != null) {
+		return descriptorExactName;
+	}
+
+	const descriptorNamespacedName = descriptorNames.find((name) =>
+		name.endsWith(`/${shortName}`),
+	);
+	if (descriptorNamespacedName != null) {
+		return descriptorNamespacedName;
+	}
+
+	const availableExactName = ctx.availableTools.find(
+		(name) => name === shortName,
+	);
+	if (availableExactName != null) {
+		return availableExactName;
+	}
+
+	const availableNamespacedName = ctx.availableTools.find((name) =>
+		name.endsWith(`/${shortName}`),
+	);
+	return availableNamespacedName ?? `omnimem/${shortName}`;
+}
+
 export function createIdentitySection(): PromptSection {
 	return {
 		name: "identity",
@@ -75,15 +108,18 @@ export function createToolGuidanceSection(): PromptSection {
 		name: "tool-guidance",
 		order: 40,
 		updateFrequency: "per_session",
-		compute: (ctx: BuildContext) =>
-			[
+		compute: (ctx: BuildContext) => {
+			const memoryStoreName = findResolvedToolName(ctx, "memory_store");
+			const memoryRecallName = findResolvedToolName(ctx, "memory_recall");
+			return [
 				"Memory guidelines:",
-				"- STORE: When the user shares identity details, preferences, or long-lived facts, call memory_store immediately. Examples: name, role, language preferences, project context.",
-				'- RECALL: At the start of a new conversation or when the user greets you, call memory_recall with a broad query like "用户" or "user" to check if you know this person.',
-				"- RECALL: When the user asks what you remember, or references past context, call memory_recall with relevant keywords before answering.",
+				`- STORE: When the user shares identity details, preferences, or long-lived facts, call ${memoryStoreName} immediately. Examples: name, role, language preferences, project context.`,
+				`- RECALL: At the start of a new conversation or when the user greets you, call ${memoryRecallName} with a broad query like "用户" or "user" to check if you know this person.`,
+				`- RECALL: When the user asks what you remember, or references past context, call ${memoryRecallName} with relevant keywords before answering.`,
 				'- Recall queries can be short Chinese phrases (e.g. "名字", "偏好") — the search supports fuzzy matching.',
 				describeToolDescriptors(ctx),
-			].join("\n"),
+			].join("\n");
+		},
 	};
 }
 

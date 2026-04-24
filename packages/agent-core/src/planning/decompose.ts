@@ -1,3 +1,4 @@
+import { validateDagPlan } from "./dag.js";
 import type {
 	DagPlan,
 	LinearPlan,
@@ -156,7 +157,26 @@ function getPlanSketch(
 }
 
 function toLinearSteps(plan: LinearPlan | DagPlan): readonly SubTask[] {
-	return plan.kind === "linear" ? plan.subtasks : topologicalSort(plan);
+	if (plan.kind === "linear") {
+		return plan.subtasks;
+	}
+
+	const validation = validateDagPlan(plan);
+	if (!validation.ok) {
+		if (validation.duplicateStepIds.length > 0) {
+			throw new Error(
+				`DAG contains duplicate step ids: ${validation.duplicateStepIds.join(", ")}`,
+			);
+		}
+		if (validation.missingStepIds.length > 0) {
+			throw new Error(
+				`DAG edge references missing step ids: ${validation.missingStepIds.join(", ")}`,
+			);
+		}
+		throw new Error(`DAG contains a cycle: ${validation.cycle.join(" -> ")}`);
+	}
+
+	return topologicalSort(plan);
 }
 
 export function createRedecomposedSubtasks(

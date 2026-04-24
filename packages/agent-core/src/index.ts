@@ -11,7 +11,6 @@ import { normalizeTokenUsage } from "./llm/token-usage.js";
 import { configureLogger, logger } from "./logger.js";
 import { startRepl } from "./repl.js";
 import { SQLiteCheckpoint } from "./state/checkpoint.js";
-import { MCPClientManager } from "./tools/mcp-client.js";
 
 export * from "./context/index.js";
 export * from "./llm/client.js";
@@ -192,47 +191,22 @@ export async function main(options: MainOptions = {}): Promise<void> {
 			argv: process.argv.slice(2),
 			env: process.env,
 		});
+		const capabilitiesRuntime = buildCapabilitiesRuntime(loadedCapabilities);
 		const sessionId = await resolveReplSessionId();
 		let shouldExit = false;
 
 		logger.info({ mode: "repl" }, "Starting CLI REPL...");
 
-		if (loadedCapabilities.source.kind === "builtin") {
-			const mcpClient = new MCPClientManager();
-			try {
-				logger.info("Connecting OmniMem MCP server...");
-				const tools = await mcpClient.connect({
-					command: "uv",
-					args: ["run", "python", "-m", "omnimem"],
-					cwd: join(workspaceRoot, "providers", "memory"),
-				});
-				logger.info({ toolCount: tools.length }, "OmniMem MCP connected");
-
-				await startRepl({
-					provider,
-					modelId,
-					...(sessionId == null ? {} : { sessionId }),
-					tools,
-				});
-				shouldExit = true;
-			} finally {
-				await mcpClient.disconnect().catch((err) => {
-					logger.warn({ err }, "OmniMem MCP disconnect failed");
-				});
-			}
-		} else {
-			const capabilitiesRuntime = buildCapabilitiesRuntime(loadedCapabilities);
-			await startRepl({
-				provider,
-				modelId,
-				...(sessionId == null ? {} : { sessionId }),
-				mcpServers: capabilitiesRuntime.mcpServers,
-				...(capabilitiesRuntime.skillsManager == null
-					? {}
-					: { skillsManager: capabilitiesRuntime.skillsManager }),
-			});
-			shouldExit = true;
-		}
+		await startRepl({
+			provider,
+			modelId,
+			...(sessionId == null ? {} : { sessionId }),
+			mcpServers: capabilitiesRuntime.mcpServers,
+			...(capabilitiesRuntime.skillsManager == null
+				? {}
+				: { skillsManager: capabilitiesRuntime.skillsManager }),
+		});
+		shouldExit = true;
 
 		if (shouldExit) {
 			process.exit(0);

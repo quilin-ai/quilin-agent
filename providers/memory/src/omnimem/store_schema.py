@@ -16,9 +16,8 @@ def configure_connection(conn: sqlite3.Connection) -> None:
 def ensure_store_schema(
     conn: sqlite3.Connection,
     *,
-    build_keywords: Callable[[str], str],
     now: Callable[[], datetime],
-    rebuild_fts_index: Callable[[], None] | None = None,
+    rebuild_fts_index: Callable[[], None],
 ) -> None:
     conn.execute(
         """
@@ -58,7 +57,7 @@ def ensure_store_schema(
         )
         """
     )
-    _ensure_fts_schema(conn, build_keywords=build_keywords, rebuild_fts_index=rebuild_fts_index)
+    _ensure_fts_schema(conn, rebuild_fts_index=rebuild_fts_index)
     conn.commit()
 
 
@@ -171,16 +170,12 @@ def _ensure_memory_record_columns(
 def _ensure_fts_schema(
     conn: sqlite3.Connection,
     *,
-    build_keywords: Callable[[str], str],
-    rebuild_fts_index: Callable[[], None] | None,
+    rebuild_fts_index: Callable[[], None],
 ) -> None:
     if _get_schema_version(conn, FTS_SCHEMA_COMPONENT) >= FTS_SCHEMA_VERSION:
         return
 
-    if rebuild_fts_index is None:
-        _rebuild_fts_index(conn, build_keywords=build_keywords)
-    else:
-        rebuild_fts_index()
+    rebuild_fts_index()
     conn.execute(
         """
         INSERT INTO schema_version (component, version)
@@ -189,39 +184,6 @@ def _ensure_fts_schema(
         """,
         (FTS_SCHEMA_COMPONENT, FTS_SCHEMA_VERSION),
     )
-
-
-def _rebuild_fts_index(
-    conn: sqlite3.Connection,
-    *,
-    build_keywords: Callable[[str], str],
-) -> None:
-    conn.execute("DELETE FROM memory_records_fts")
-    conn.execute(
-        """
-        INSERT INTO memory_records_fts (id, content, keywords)
-        SELECT id, content, ''
-        FROM memory_records
-        WHERE deleted = 0
-        """
-    )
-    rows = conn.execute(
-        """
-        SELECT id, content
-        FROM memory_records
-        WHERE deleted = 0
-        ORDER BY rowid ASC
-        """
-    ).fetchall()
-    for row in rows:
-        conn.execute(
-            """
-            UPDATE memory_records_fts
-            SET keywords = ?
-            WHERE id = ?
-            """,
-            (build_keywords(row["content"]), row["id"]),
-        )
 
 
 def _get_schema_version(conn: sqlite3.Connection, component: str) -> int:

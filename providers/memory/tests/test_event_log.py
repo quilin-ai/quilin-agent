@@ -74,11 +74,27 @@ async def test_event_log_marks_citations_and_returns_stats() -> None:
         _retrieved_item("memory-1", source="bm25_fts", layer="episodic", score=0.9),
         _retrieved_item("memory-2", source="vector_semantic", layer="semantic", score=0.7),
     ]
-    await event_log.record_retrieval("run-cite", "database migration", results)
+    event_ids = await event_log.record_retrieval("run-cite", "database migration", results)
 
-    updated = await event_log.mark_cited("run-cite", ["memory-2"])
+    updated = await event_log.mark_cited("run-cite", [event_ids[1]])
     stats = await event_log.citation_stats(["memory-1", "memory-2"])
 
     assert updated == 1
     assert stats["memory-1"].citation_rate == 0.0
     assert stats["memory-2"].citation_rate == 1.0
+
+
+async def test_event_log_marks_citations_by_event_id_not_memory_id() -> None:
+    event_log = RetrievalEventLog(db_path=":memory:")
+    results = [_retrieved_item("memory-1", source="bm25_fts", layer="episodic", score=0.9)]
+    first_event_ids = await event_log.record_retrieval("run-cite", "query one", results)
+    await event_log.record_retrieval("run-cite", "query two", results)
+
+    updated = await event_log.mark_cited("run-cite", [first_event_ids[0]])
+    cited_events = await event_log.list_events(run_id="run-cite", cited_only=True)
+    stats = await event_log.citation_stats(["memory-1"])
+
+    assert updated == 1
+    assert [event.event_id for event in cited_events] == first_event_ids
+    assert stats["memory-1"].impressions == 2
+    assert stats["memory-1"].citations == 1

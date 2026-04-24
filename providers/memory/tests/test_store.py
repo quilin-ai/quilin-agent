@@ -266,6 +266,38 @@ async def test_count_respects_layer_metadata_and_content_type_filters() -> None:
     )
 
 
+async def test_count_uses_sql_filters_without_materializing_search(monkeypatch: object) -> None:
+    store = OmniMemStore(db_path=":memory:")
+    await store.store(
+        "checkpoint alpha",
+        tier="episodic",
+        metadata={"schema_version": 1, "session_id": "session-1"},
+        content_type="json",
+    )
+    await store.store(
+        "checkpoint beta",
+        tier="episodic",
+        metadata={"schema_version": 1, "session_id": "session-2"},
+        content_type="json",
+    )
+
+    def fail_search(*_args: object, **_kwargs: object) -> list[MemoryItem]:
+        raise AssertionError("count must not materialize records through search")
+
+    monkeypatch.setattr(store, "_search_sync", fail_search)  # type: ignore[attr-defined]
+
+    assert (
+        await store.count(
+            {
+                "layer": "episodic",
+                "metadata": {"session_id": "session-1"},
+                "content_type": "json",
+            }
+        )
+        == 1
+    )
+
+
 async def test_recall_empty_query_returns_all() -> None:
     store = OmniMemStore(db_path=":memory:")
     await store.store("alpha")

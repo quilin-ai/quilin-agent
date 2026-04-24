@@ -91,6 +91,27 @@ describe("loadCapabilitiesConfig", () => {
 		expect(Object.keys(loaded.config.mcpServers)).toEqual(["cli-server"]);
 	});
 
+	it("trims --config path values like env config paths", async () => {
+		const workspaceRoot = await createTempWorkspace();
+		const cliPath = await writeCapabilitiesFile(
+			workspaceRoot,
+			"cli.json",
+			buildConfig("cli-server"),
+		);
+
+		const loaded = await loadCapabilitiesConfig({
+			workspaceRoot,
+			cwd: workspaceRoot,
+			argv: ["--config", `  ${relative(workspaceRoot, cliPath)}  `],
+			env: {},
+		});
+
+		expect(loaded.source).toEqual({
+			kind: "cli",
+			path: cliPath,
+		});
+	});
+
 	it("uses QUILIN_CONFIG_PATH when CLI config is absent", async () => {
 		const workspaceRoot = await createTempWorkspace();
 		const envPath = await writeCapabilitiesFile(
@@ -235,5 +256,91 @@ describe("loadCapabilitiesConfig", () => {
 			},
 		]);
 		expect(runtime.skillsManager).toBeDefined();
+	});
+
+	it("parses the accepted YAML boolean subset and rejects floats", async () => {
+		const workspaceRoot = await createTempWorkspace();
+		const yamlPath = await writeCapabilitiesFile(
+			workspaceRoot,
+			"capabilities.yaml",
+			[
+				"schema_version: 1",
+				"mcpServers:",
+				"  stub:",
+				"    command: node",
+				"    args: [stub-server.js]",
+				"    cwd: .",
+				"    enabled: yes",
+				"skills:",
+				"  enabled: on",
+				"  watcherEnabled: no",
+				"  debounceMs: 10",
+			].join("\n"),
+		);
+
+		const loaded = await loadCapabilitiesConfig({
+			workspaceRoot,
+			cwd: workspaceRoot,
+			argv: ["--config", yamlPath],
+			env: {},
+		});
+
+		expect(loaded.config.mcpServers.stub?.enabled).toBe(true);
+		expect(loaded.config.skills.enabled).toBe(true);
+		expect(loaded.config.skills.watcherEnabled).toBe(false);
+
+		await writeCapabilitiesFile(
+			workspaceRoot,
+			"capabilities.yaml",
+			[
+				"schema_version: 1.5",
+				"mcpServers: {}",
+				"skills:",
+				"  enabled: false",
+			].join("\n"),
+		);
+
+		await expect(
+			loadCapabilitiesConfig({
+				workspaceRoot,
+				cwd: workspaceRoot,
+				argv: ["--config", yamlPath],
+				env: {},
+			}),
+		).rejects.toThrow(/floats are not accepted/i);
+	});
+
+	it("rejects MCP server cwd values outside the workspace and config directory", async () => {
+		const workspaceRoot = await createTempWorkspace();
+		const configPath = await writeCapabilitiesFile(
+			workspaceRoot,
+			"capabilities.json",
+			JSON.stringify(
+				{
+					schema_version: 1,
+					mcpServers: {
+						stub: {
+							command: "node",
+							args: ["stub-server.js"],
+							cwd: "../..",
+						},
+					},
+					skills: {
+						enabled: false,
+					},
+				},
+				null,
+				2,
+			),
+		);
+
+		await expect(
+			loadCapabilitiesRuntime({
+				workspaceRoot,
+				cwd: workspaceRoot,
+				argv: ["--config", configPath],
+				env: {},
+			}),
+		).rejects.toThrow(/cwd escapes workspace\/config directory/i);
 	});
 });

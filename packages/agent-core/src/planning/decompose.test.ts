@@ -122,6 +122,22 @@ describe("decomposePlan", () => {
 		expect(result.plan.kind).toBe("linear");
 	});
 
+	it("rejects cyclic DAG sketches before decomposition", () => {
+		const dagSketch: DagPlan = {
+			kind: "dag",
+			subtasks: [
+				makeStep("search", { action: "web_search" }),
+				makeStep("table", { action: "table_write" }),
+			],
+			edges: [
+				["search", "table"],
+				["table", "search"],
+			],
+		};
+
+		expect(() => decomposePlan(dagSketch)).toThrow(/cycle/i);
+	});
+
 	it("rejects missing plan sketches and invalid limits", () => {
 		expect(() => decomposePlan({ text: "no plan" })).toThrow(/planSketch/);
 		expect(() =>

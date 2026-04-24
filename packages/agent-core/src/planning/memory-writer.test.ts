@@ -69,6 +69,28 @@ describe("createPlanReviewMemoryItem", () => {
 			importance_score: 1,
 		});
 	});
+
+	it("creates the same id for equivalent records with different key insertion order", () => {
+		const first = createPlanReviewMemoryItem(makeReview(), {
+			now: () => FIXED_DATE,
+		});
+		const reordered = {
+			stability_reason: "Observed across two successful runs.",
+			stable_strategy: {
+				preferred_tools: ["web_search", "table_write"],
+				ordering: ["search", "table", "recommend"],
+			},
+			summary: "Prefer fetching benchmark snapshots before drafting strategy.",
+			schema_version: PLAN_REVIEW_SCHEMA_VERSION,
+			source: PLAN_REVIEW_SOURCE,
+			run_id: "run-123",
+		};
+		const second = createPlanReviewMemoryItem(reordered, {
+			now: () => FIXED_DATE,
+		});
+
+		expect(second.id).toBe(first.id);
+	});
 });
 
 describe("writePlanReviewRecord", () => {

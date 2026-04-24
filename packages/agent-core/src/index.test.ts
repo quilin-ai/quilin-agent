@@ -41,17 +41,27 @@ vi.mock("./state/checkpoint.js", () => ({
 	},
 }));
 
-const { mockConnect, mockDisconnect } = vi.hoisted(() => ({
-	mockConnect: vi.fn(),
-	mockDisconnect: vi.fn(),
+const { mockValidateMcpServerConfig } = vi.hoisted(() => ({
+	mockValidateMcpServerConfig: vi.fn(),
 }));
 
 vi.mock("./tools/mcp-client.js", () => ({
-	MCPClientManager: class MockMCPClientManager {
-		connect = mockConnect;
-		disconnect = mockDisconnect;
-	},
+	validateMCPServerConfig: mockValidateMcpServerConfig,
 }));
+
+function expectedBuiltinMcpServers() {
+	return [
+		{
+			id: "omnimem",
+			namespace: "omnimem",
+			config: {
+				command: "uv",
+				args: ["run", "python", "-m", "omnimem"],
+				cwd: expect.stringMatching(/providers\/memory$/u),
+			},
+		},
+	];
+}
 
 describe("main", () => {
 	const exitSpy = vi
@@ -60,9 +70,8 @@ describe("main", () => {
 
 	beforeEach(() => {
 		vi.clearAllMocks();
-		mockConnect.mockReset();
-		mockDisconnect.mockReset();
 		mockCheckpointList.mockReset();
+		mockValidateMcpServerConfig.mockReset();
 		process.argv = ["bun", "packages/agent-core/src/index.ts"];
 	});
 
@@ -81,9 +90,6 @@ describe("main", () => {
 				finishReason: "stop",
 			}),
 		);
-		mockConnect.mockResolvedValue([{ name: "memory_recall" }]);
-		mockDisconnect.mockResolvedValue(undefined);
-
 		const { main } = await import("./index.js");
 
 		await main({ runtimeMode: "repl" });
@@ -125,10 +131,8 @@ describe("main", () => {
 		expect(startRepl).toHaveBeenCalledWith({
 			provider,
 			modelId: "deepseek-chat",
-			tools: [{ name: "memory_recall" }],
+			mcpServers: expectedBuiltinMcpServers(),
 		});
-		expect(mockConnect).toHaveBeenCalledTimes(1);
-		expect(mockDisconnect).toHaveBeenCalledTimes(1);
 		expect(exitSpy).toHaveBeenCalledWith(0);
 	});
 
@@ -148,7 +152,6 @@ describe("main", () => {
 				finishReason: "stop",
 			}),
 		);
-		mockConnect.mockResolvedValue([{ name: "memory_recall" }]);
 
 		const { main } = await import("./index.js");
 
@@ -171,7 +174,6 @@ describe("main", () => {
 		);
 		expect(serviceRunner).toHaveBeenCalledOnce();
 		expect(startRepl).not.toHaveBeenCalled();
-		expect(mockConnect).not.toHaveBeenCalled();
 	});
 
 	it("passes the explicit sessionId to the repl when --resume is provided", async () => {
@@ -189,8 +191,6 @@ describe("main", () => {
 				finishReason: "stop",
 			}),
 		);
-		mockConnect.mockResolvedValue([{ name: "memory_recall" }]);
-		mockDisconnect.mockResolvedValue(undefined);
 		process.argv = [
 			"bun",
 			"packages/agent-core/src/index.ts",
@@ -206,7 +206,7 @@ describe("main", () => {
 			provider,
 			modelId: "deepseek-chat",
 			sessionId: "session-123",
-			tools: [{ name: "memory_recall" }],
+			mcpServers: expectedBuiltinMcpServers(),
 		});
 		expect(mockCheckpointList).not.toHaveBeenCalled();
 	});
@@ -226,8 +226,6 @@ describe("main", () => {
 				finishReason: "stop",
 			}),
 		);
-		mockConnect.mockResolvedValue([{ name: "memory_recall" }]);
-		mockDisconnect.mockResolvedValue(undefined);
 		mockCheckpointList.mockResolvedValue(["latest-session", "older-session"]);
 		process.argv = [
 			"bun",
@@ -244,7 +242,7 @@ describe("main", () => {
 			provider,
 			modelId: "deepseek-chat",
 			sessionId: "latest-session",
-			tools: [{ name: "memory_recall" }],
+			mcpServers: expectedBuiltinMcpServers(),
 		});
 	});
 });

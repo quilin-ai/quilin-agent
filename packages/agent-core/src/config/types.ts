@@ -1,6 +1,18 @@
 import type { RiskLevel } from "../tools/tool-metadata.js";
 
 export const CAPABILITIES_SCHEMA_VERSION = 1 as const;
+export type CapabilitiesSchemaVersion = 1 | 2;
+
+export interface McpRetryPolicyConfig {
+	readonly maxAttempts?: number;
+	readonly retryableExitCodes?: readonly number[];
+}
+
+export interface McpBackoffConfig {
+	readonly initialDelayMs?: number;
+	readonly maxDelayMs?: number;
+	readonly multiplier?: number;
+}
 
 export interface McpServerConfig {
 	readonly command: string;
@@ -9,6 +21,11 @@ export interface McpServerConfig {
 	readonly namespace?: string;
 	readonly defaultRiskLevel?: RiskLevel;
 	readonly enabled?: boolean;
+	readonly env?: Readonly<Record<string, string>>;
+	readonly timeoutMs?: number;
+	readonly connectTimeoutMs?: number;
+	readonly retryPolicy?: McpRetryPolicyConfig;
+	readonly backoff?: McpBackoffConfig;
 }
 
 export interface SkillsConfig {
@@ -19,10 +36,16 @@ export interface SkillsConfig {
 	readonly pluginRoots?: readonly string[];
 	readonly watcherEnabled?: boolean;
 	readonly debounceMs?: number;
+	readonly reloadStrategy?: "manual" | "watch";
 }
 
-export interface CapabilitiesConfig {
-	readonly schema_version: typeof CAPABILITIES_SCHEMA_VERSION;
+export type SafetyConfig = Record<string, never>;
+
+export interface CapabilitiesConfigBase {
+	readonly schema_version: CapabilitiesSchemaVersion;
 	readonly mcpServers: Readonly<Record<string, McpServerConfig>>;
 	readonly skills: SkillsConfig;
+	readonly safety?: SafetyConfig;
 }
+
+export type CapabilitiesConfig = CapabilitiesConfigBase;

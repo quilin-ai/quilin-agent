@@ -13,6 +13,20 @@ describe("capabilitiesConfigSchema", () => {
 					cwd: ".",
 					namespace: "stub",
 					defaultRiskLevel: "read",
+					env: {
+						LOG_LEVEL: "debug",
+					},
+					timeoutMs: 30_000,
+					connectTimeoutMs: 5_000,
+					retryPolicy: {
+						maxAttempts: 2,
+						retryableExitCodes: [75],
+					},
+					backoff: {
+						initialDelayMs: 100,
+						maxDelayMs: 1_000,
+						multiplier: 2,
+					},
 				},
 			},
 			skills: {
@@ -21,7 +35,9 @@ describe("capabilitiesConfigSchema", () => {
 				userRoots: ["./skills/user"],
 				watcherEnabled: false,
 				debounceMs: 125,
+				reloadStrategy: "watch",
 			},
+			safety: {},
 		};
 
 		const parsed = capabilitiesConfigSchema.parse(
@@ -29,6 +45,17 @@ describe("capabilitiesConfigSchema", () => {
 		);
 
 		expect(parsed).toEqual(config);
+	});
+
+	it("accepts schema version 2 as a migration placeholder", () => {
+		const parsed = capabilitiesConfigSchema.parse({
+			schema_version: 2,
+			mcpServers: {},
+			skills: {},
+			safety: {},
+		});
+
+		expect(parsed.schema_version).toBe(2);
 	});
 
 	it("rejects unknown top-level fields", () => {

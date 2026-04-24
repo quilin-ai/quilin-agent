@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { DEAD_LOOP_FIXTURE } from "./__fixtures__/dead-loop.js";
 import { DEFAULT_EXECUTOR_MAX_STEPS } from "./executor.js";
 import {
 	applyEvent,
@@ -6,11 +7,7 @@ import {
 	type PlanningEvent,
 	type PlanningState,
 } from "./state.js";
-import {
-	DEAD_LOOP_FIXTURE,
-	detectTermination,
-	replayPlanningEvents,
-} from "./termination.js";
+import { detectTermination, replayPlanningEvents } from "./termination.js";
 import type { LinearPlan, SubTask } from "./types.js";
 
 function makeStep(id: string): SubTask {

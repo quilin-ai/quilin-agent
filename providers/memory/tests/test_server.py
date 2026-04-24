@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
+import time
 from collections.abc import AsyncIterator
 
 import pytest
 from mcp.types import CallToolRequest, CallToolRequestParams
 
+from omnimem import server as server_module
 from omnimem.server import create_server
 from omnimem.store import OmniMemStore
 
@@ -320,6 +323,29 @@ async def test_create_server_uses_injected_store_isolation() -> None:
         recall_source="direct_recall",
     )
     assert right_result["records"] == []
+
+
+async def test_store_lifespan_initializes_store_off_event_loop(monkeypatch: object) -> None:
+    class SlowStore(OmniMemStore):
+        def __init__(self) -> None:
+            time.sleep(0.05)
+            super().__init__(db_path=":memory:")
+
+    monkeypatch.setattr(server_module, "OmniMemStore", SlowStore)
+    lifespan = server_module._build_store_lifespan(None)  # type: ignore[attr-defined]
+    observed: list[str] = []
+
+    async def run_lifespan() -> None:
+        async with lifespan(object()):
+            observed.append("ready")
+
+    async def heartbeat() -> None:
+        await asyncio.sleep(0.01)
+        observed.append("tick")
+
+    await asyncio.gather(run_lifespan(), heartbeat())
+
+    assert observed == ["tick", "ready"]
 
 
 async def test_create_server_rejects_invalid_tier_enum() -> None:

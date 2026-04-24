@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -118,4 +119,30 @@ def test_archive_manifest_store_records_schema_version_and_lists_by_user() -> No
     ).fetchone()
     assert schema_row["version"] == ARCHIVE_SCHEMA_VERSION
 
+    store.close()
+
+
+def test_archive_manifest_store_supports_threaded_access() -> None:
+    store = ArchiveManifestStore(db_path=":memory:")
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    entries = [
+        build_archive_manifest_entry(
+            _memory(f"memory-{index}", age_days=100),
+            user_id="user-1",
+            now=now,
+        )
+        for index in range(3)
+    ]
+
+    threads = [threading.Thread(target=store.record, args=(entry,)) for entry in entries]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert [entry.memory_id for entry in store.list_for_user("user-1")] == [
+        "memory-0",
+        "memory-1",
+        "memory-2",
+    ]
     store.close()

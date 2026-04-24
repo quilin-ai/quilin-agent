@@ -1,5 +1,6 @@
 import type { Intent, Plan } from "./types.js";
 
+// Planning constants trace to docs/engineering/04-planning/README.md.
 export const PLAN_AND_EXECUTE_STEP_THRESHOLD = 20;
 
 export type PlanningStrategy = "CoT" | "ReAct" | "PlanAndExecute";

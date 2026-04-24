@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from omnimem.event_log import RetrievalEventLog
-from omnimem.reranker import LearnableReranker
+from omnimem.reranker import DEFAULT_SOURCE_PRIORS, LearnableReranker
 from omnimem.types import MemoryItem
 
 
@@ -72,12 +72,16 @@ async def test_reranker_uses_citation_history_as_positive_signal() -> None:
         last_accessed=now,
     )
     event_log = RetrievalEventLog(db_path=":memory:")
-    await event_log.record_retrieval("run-1", "query", [common, cited])
-    await event_log.mark_cited("run-1", ["memory-cited"])
+    event_ids = await event_log.record_retrieval("run-1", "query", [common, cited])
+    await event_log.mark_cited("run-1", [event_ids[1]])
 
     reranked = await LearnableReranker(event_log).rerank("query", [common, cited])
 
     assert [item.id for item in reranked] == ["memory-cited", "memory-common"]
+
+
+def test_reranker_has_direct_recall_prior() -> None:
+    assert DEFAULT_SOURCE_PRIORS["direct_recall"] == 0.35
 
 
 async def test_reranker_prefers_shorter_graph_distance_when_scores_match() -> None:

@@ -889,3 +889,42 @@ M2.6 / M2.7 ↔ Iter F soul.md 写路径
   - Track C：C1-C2 / C3-C4 已完成（`616620d`）；C5-C6 已完成（`0c5f02e`）。
 - **实证（HEAD `616620d`）**：`cd packages/agent-core && pnpm test` = `61 passed files / 471 tests`；`cd packages/agent-core && pnpm tsc --noEmit` exit `0`；`cd packages/agent-core && pnpm exec biome check src` exit `0`；`uv run --project providers/memory pytest providers/memory/tests -q` = `134 passed`；`uv run --project providers/memory ruff check providers/memory/src providers/memory/tests` exit `0`。
 - **DoD**：Track A/B/C 已满足并完成；Track D 作为独立 backlog 后续处理。
+
+### 16.8 Track D backlog cleanup — 2026-04-24
+
+- **状态**：✅ 已落地（D1 + D2 + D3 三路并行 + 合并 commit，见 commit hash 段）。
+- **范围**：§16.7 开列的 Track D 全部可维护性条目，按文件独立性拆三路并行修，Codex D2 主线 / D1+D3 worker 同时推进。
+- **D1 Planning 清理**（写范围：`packages/agent-core/src/planning/**`）
+  - `decompose.ts` DAG 入口先 `validateDagPlan`，有环直接抛（replace silent fallback）
+  - `executor.ts` preflight tool 失败路径发 `local_repair` + `terminated({reason:"PreflightFailed"})` 事件
+  - `memory-writer.ts` `createPlanReviewId` 改用 sort keys 规范化 sha256 id 稳定
+  - `termination.ts` 把 `DEAD_LOOP_FIXTURE` 抽到 `__fixtures__/dead-loop.ts`
+  - `replan.ts` 拆 `replan/local.ts + global.ts + metrics.ts`，原文件保留 compatibility re-export
+  - `strategy.ts` / `intent.ts` magic number 加 spec 反链注释
+- **D2 Config / Tools / REPL**（写范围：`config/** + tools/mcp-client.ts + index.ts + context/default-sections.ts` + 对应 tests）
+  - REPL builtin 回退与 explicit config 两路合并：`index.ts` 只保留 explicit，`loader.ts` 生成 builtin fallback config 走同一 MCP registry 流程
+  - `schema.ts` 补 reserved optional 字段（env / timeoutMs / connectTimeoutMs / retryPolicy / backoff / safety / skills.reloadStrategy）+ 版本 union 骨架
+  - `loader.ts` YAML parser 决策方案 A：不换包（依赖变更越界 D2 写范围），改手写 parser 明确文档化 subset + `yes/no/on/off` 支持 + float 显式拒绝
+  - `loader.ts` `cwd` containment 校验（必须位于 `workspaceRoot` 或 `configDir` 下）
+  - `mcp-client.ts` 删 `toolResult` legacy 分支
+  - `context/default-sections.ts` 硬编码 `memory_store/memory_recall` 短名改为从 registry 查 resolved name
+- **D3 Python Memory 清理**（写范围：`providers/memory/**`）
+  - `store.py` `update()` 重跑 `validate_semantic_ingestion_contract`（从 row 读 layer/content_type/metadata）
+  - `store.py` `_count_sync` 改用 SQL `COUNT(*)` + `json_extract`（防 metadata key 含 `.` 的 nested path 歧义）
+  - `event_log.py` `mark_cited` 改按 `event_id` 列表更新，记录 `cite_rank`
+  - `archive.py` `ArchiveManifestStore` 加 `check_same_thread=False` + `threading.Lock()` + WAL
+  - `archive.py` `_compressed_size_stub` 加 Iter M3 zstandard TODO
+  - `server.py` lifespan 改用 `await asyncio.to_thread(OmniMemStore, ...)`，避免同步 DDL/FTS rebuild 阻塞 event loop
+  - `logging.py` 改 `configure_once()` 由 `server.main()` 调用，消除 import 副作用
+  - `reranker.py` `DEFAULT_SOURCE_PRIORS` 补 `"direct_recall": 0.35`
+  - `event_log.py` 拆 `event_log_schema.py`（低风险 schema 抽离）
+  - `store_schema._rebuild_fts_index` 与 `store_search.rebuild_fts_index` 去重
+  - `episodic.py` checkpoint 查询 / `store.py` 裸 `limit=1_000_000` 改命名常量
+- **未做**（定为 backlog）：`kg.py` / `retriever.py` 大文件拆分（Codex 风险判断：大行为面拆分风险不抵收益，defer 到下一轮 sweep）
+- **全量实证（合并工作树，HEAD 为新 commit 前）**：
+  - `cd packages/agent-core && pnpm tsc --noEmit` exit `0`
+  - `cd packages/agent-core && pnpm exec biome check src` = `142 files, no fixes`
+  - `cd packages/agent-core && pnpm test` = `61 passed files / 478 tests`
+  - `cd providers/memory && uv run pytest -q` = `139 passed`
+  - `cd providers/memory && uv run ruff check src tests` = clean
+- **DoD**：Track D backlog 全量可维护性条目已闭合；`kg.py` / `retriever.py` 拆分作为独立 backlog 续项。

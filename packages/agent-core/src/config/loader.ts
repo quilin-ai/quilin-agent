@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { dirname, extname, isAbsolute, join, resolve } from "node:path";
+import { dirname, extname, isAbsolute, join, resolve, sep } from "node:path";
 import { SkillsManager } from "../skills/manager.js";
 import type { MCPServerConfig as RuntimeMCPServerConfig } from "../tools/mcp-client.js";
 import * as mcpClientModule from "../tools/mcp-client.js";
@@ -28,6 +28,7 @@ export interface LoadedCapabilitiesConfig {
 	readonly config: CapabilitiesConfig;
 	readonly source: CapabilitiesConfigSource;
 	readonly configDir: string;
+	readonly workspaceRoot: string;
 }
 
 export interface CapabilitiesRuntime {
@@ -46,6 +47,15 @@ function resolveConfigPath(path: string, cwd: string): string {
 	return isAbsolute(path) ? path : resolve(cwd, path);
 }
 
+function isContainedByOrEqual(path: string, root: string): boolean {
+	const resolvedPath = resolve(path);
+	const resolvedRoot = resolve(root);
+	return (
+		resolvedPath === resolvedRoot ||
+		resolvedPath.startsWith(`${resolvedRoot}${sep}`)
+	);
+}
+
 function parseCliConfigPath(
 	argv: readonly string[],
 	cwd: string,
@@ -58,7 +68,12 @@ function parseCliConfigPath(
 				throw new Error("--config requires a path");
 			}
 
-			return resolveConfigPath(nextArg, cwd);
+			const trimmedPath = nextArg.trim();
+			if (trimmedPath === "") {
+				throw new Error("--config requires a path");
+			}
+
+			return resolveConfigPath(trimmedPath, cwd);
 		}
 
 		if (arg.startsWith("--config=")) {
@@ -126,18 +141,32 @@ function parseArrayItems(rawValue: string): readonly string[] {
 		.map((item) => item.replace(/^['"]|['"]$/g, ""));
 }
 
+// Accepted YAML subset for capabilities config:
+// - indentation-based mappings with scalar leaves
+// - inline arrays of scalar values: [value, "value"]
+// - booleans: true/false/yes/no/on/off
+// - integers only; floats must be quoted if they are intended as strings
+// This parser intentionally rejects broader YAML features until config loading can
+// add a full parser dependency through package metadata review.
 function parseYamlScalar(rawValue: string): unknown {
 	const trimmed = rawValue.trim();
-	if (trimmed === "true") {
+	const lower = trimmed.toLowerCase();
+	if (lower === "true" || lower === "yes" || lower === "on") {
 		return true;
 	}
 
-	if (trimmed === "false") {
+	if (lower === "false" || lower === "no" || lower === "off") {
 		return false;
 	}
 
 	if (/^-?\d+$/u.test(trimmed)) {
 		return Number.parseInt(trimmed, 10);
+	}
+
+	if (/^-?(?:\d+\.\d*|\d*\.\d+)(?:e[+-]?\d+)?$/iu.test(trimmed)) {
+		throw new Error(
+			`Unsupported YAML scalar ${trimmed}: floats are not accepted; quote the value to parse it as a string`,
+		);
 	}
 
 	if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
@@ -312,16 +341,29 @@ function buildSkillsManager(
 function buildMcpServers(
 	config: CapabilitiesConfig,
 	baseDir: string,
+	workspaceRoot: string,
 ): readonly MCPServerEntry[] {
 	return Object.entries(config.mcpServers)
 		.filter(([, serverConfig]) => serverConfig.enabled !== false)
 		.map(([id, serverConfig]) => {
+			const resolvedCwd =
+				serverConfig.cwd == null
+					? undefined
+					: resolveConfigPath(serverConfig.cwd, baseDir);
+			if (
+				resolvedCwd != null &&
+				!isContainedByOrEqual(resolvedCwd, workspaceRoot) &&
+				!isContainedByOrEqual(resolvedCwd, baseDir)
+			) {
+				throw new Error(
+					`MCP server ${id} cwd escapes workspace/config directory: ${serverConfig.cwd}`,
+				);
+			}
+
 			const runtimeConfig: RuntimeMCPServerConfig = {
 				command: serverConfig.command,
 				args: [...serverConfig.args],
-				...(serverConfig.cwd == null
-					? {}
-					: { cwd: resolveConfigPath(serverConfig.cwd, baseDir) }),
+				...(resolvedCwd == null ? {} : { cwd: resolvedCwd }),
 			};
 			mcpClientModule.validateMCPServerConfig?.(runtimeConfig);
 
@@ -357,12 +399,17 @@ export function createDefaultCapabilitiesConfig(
 export async function loadCapabilitiesConfig(
 	options: LoadCapabilitiesConfigOptions,
 ): Promise<LoadedCapabilitiesConfig> {
-	const candidate = resolveCapabilitiesCandidate(options);
+	const workspaceRoot = resolve(options.workspaceRoot);
+	const candidate = resolveCapabilitiesCandidate({
+		...options,
+		workspaceRoot,
+	});
 	if (candidate == null) {
 		return {
-			config: createDefaultCapabilitiesConfig(options.workspaceRoot),
+			config: createDefaultCapabilitiesConfig(workspaceRoot),
 			source: { kind: "builtin" },
-			configDir: options.workspaceRoot,
+			configDir: workspaceRoot,
+			workspaceRoot,
 		};
 	}
 
@@ -378,6 +425,7 @@ export async function loadCapabilitiesConfig(
 			path: candidate.path,
 		},
 		configDir: dirname(candidate.path),
+		workspaceRoot,
 	};
 }
 
@@ -394,7 +442,11 @@ export function buildCapabilitiesRuntime(
 	return {
 		config: loaded.config,
 		source: loaded.source,
-		mcpServers: buildMcpServers(loaded.config, loaded.configDir),
+		mcpServers: buildMcpServers(
+			loaded.config,
+			loaded.configDir,
+			loaded.workspaceRoot,
+		),
 		skillsManager: buildSkillsManager(loaded.config, loaded.configDir),
 	};
 }

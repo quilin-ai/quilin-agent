@@ -199,13 +199,24 @@ export class LinearPlanExecutor {
 			});
 			preflightOutputs.push(result);
 			if (result.isError) {
+				emit({
+					kind: "local_repair",
+					payload: {
+						leafId: `preflight:${toolCall.id}`,
+						note: `preflight_failed:${toolCall.name}`,
+					},
+				});
+				emit({
+					kind: "terminated",
+					payload: { reason: "PreflightFailed" },
+				});
 				return {
 					state,
 					taskHash,
 					outputs,
 					preflightOutputs,
 					haltedOnError: true,
-					terminatedReason: null,
+					terminatedReason: "PreflightFailed",
 				};
 			}
 		}

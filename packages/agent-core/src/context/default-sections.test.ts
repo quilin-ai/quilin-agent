@@ -18,6 +18,18 @@ describe("createToolGuidanceSection", () => {
 			...baseContext,
 			availableToolDescriptors: [
 				{
+					name: "omnimem/memory_recall",
+					description: "Recall memory.",
+					category: "programmatic",
+					riskLevel: "read",
+				},
+				{
+					name: "omnimem/memory_store",
+					description: "Store memory.",
+					category: "programmatic",
+					riskLevel: "write",
+				},
+				{
 					name: "shell_exec",
 					description: "Execute a shell command.",
 					category: "programmatic",
@@ -39,10 +51,14 @@ describe("createToolGuidanceSection", () => {
 		});
 
 		expect(content).toContain("Memory guidelines:");
+		expect(content).toContain("call omnimem/memory_store immediately");
+		expect(content).toContain("call omnimem/memory_recall with a broad query");
 		expect(content).toContain("## Programmatic Tools");
 		expect(content).toContain(
 			"- file_read (read): Read a file with numbered lines.",
 		);
+		expect(content).toContain("- omnimem/memory_recall (read): Recall memory.");
+		expect(content).toContain("- omnimem/memory_store (write): Store memory.");
 		expect(content).toContain("- shell_exec (exec): Execute a shell command.");
 		expect(content).toContain("## Interactive Tools");
 		expect(content).toContain(

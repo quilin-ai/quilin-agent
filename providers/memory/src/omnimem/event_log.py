@@ -12,11 +12,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
+from .event_log_schema import (
+    DEFAULT_TOP_N,
+    EVENT_LOG_COMPONENT,
+    EVENT_LOG_SCHEMA_VERSION,
+    ensure_event_log_schema,
+)
 from .types import MemoryItem
-
-EVENT_LOG_SCHEMA_VERSION = 1
-EVENT_LOG_COMPONENT = "retrieval_event_log"
-DEFAULT_TOP_N = 10
 
 
 def _utcnow() -> datetime:
@@ -110,7 +112,7 @@ class RetrievalEventLog:
         self._persist_raw_query = persist_raw_query
         self._top_n = top_n
         self._conn.execute("PRAGMA journal_mode=WAL")
-        self._ensure_schema()
+        ensure_event_log_schema(self._conn)
 
     async def __aenter__(self) -> RetrievalEventLog:
         return self
@@ -218,11 +220,11 @@ class RetrievalEventLog:
 
         return event_ids
 
-    async def mark_cited(self, run_id: str, memory_ids: Sequence[str]) -> int:
-        return await asyncio.to_thread(self._mark_cited_sync, run_id, list(memory_ids))
+    async def mark_cited(self, run_id: str, event_ids: Sequence[str]) -> int:
+        return await asyncio.to_thread(self._mark_cited_sync, run_id, list(event_ids))
 
-    def _mark_cited_sync(self, run_id: str, memory_ids: list[str]) -> int:
-        deduped_ids = sorted({memory_id for memory_id in memory_ids if memory_id})
+    def _mark_cited_sync(self, run_id: str, event_ids: list[str]) -> int:
+        deduped_ids = sorted({event_id for event_id in event_ids if event_id})
         if not deduped_ids:
             return 0
 
@@ -231,7 +233,7 @@ class RetrievalEventLog:
             UPDATE retrieval_event_log
             SET was_cited = 1
             WHERE run_id = ?
-              AND memory_id IN ({placeholders})
+              AND event_id IN ({placeholders})
         """
 
         with self._lock:
@@ -377,57 +379,6 @@ class RetrievalEventLog:
             return "kg"
 
         return str(item.layer)
-
-    def _ensure_schema(self) -> None:
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS retrieval_event_log (
-                event_id TEXT PRIMARY KEY,
-                run_id TEXT NOT NULL,
-                query_hash TEXT NOT NULL,
-                query_raw TEXT,
-                memory_id TEXT NOT NULL,
-                rank INTEGER NOT NULL,
-                score REAL NOT NULL,
-                source_layer TEXT NOT NULL,
-                source TEXT NOT NULL,
-                metadata_json TEXT NOT NULL DEFAULT '{}',
-                was_cited INTEGER NOT NULL DEFAULT 0 CHECK (was_cited IN (0, 1)),
-                timestamp TEXT NOT NULL,
-                schema_version INTEGER NOT NULL
-            )
-            """
-        )
-        self._conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_retrieval_event_log_run_id
-            ON retrieval_event_log(run_id)
-            """
-        )
-        self._conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_retrieval_event_log_memory_id
-            ON retrieval_event_log(memory_id)
-            """
-        )
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS schema_version (
-                component TEXT PRIMARY KEY,
-                version INTEGER NOT NULL
-            )
-            """
-        )
-        self._conn.execute(
-            """
-            INSERT INTO schema_version (component, version)
-            VALUES (?, ?)
-            ON CONFLICT(component) DO UPDATE SET version = excluded.version
-            """,
-            (EVENT_LOG_COMPONENT, EVENT_LOG_SCHEMA_VERSION),
-        )
-        self._conn.commit()
-
 
 __all__ = [
     "CitationStats",

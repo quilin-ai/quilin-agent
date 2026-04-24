@@ -153,6 +153,54 @@ describe("LinearPlanExecutor", () => {
 		);
 	});
 
+	it("emits repair and termination events when preflight fails", async () => {
+		const executor = new LinearPlanExecutor({
+			tools: {
+				preflight_check: async (toolCall) => ({
+					toolCallId: toolCall.id,
+					content: JSON.stringify({ error: "missing credential" }),
+					isError: true,
+				}),
+				web_search: async (toolCall) => ({
+					toolCallId: toolCall.id,
+					content: "ok",
+					isError: false,
+				}),
+			},
+		});
+
+		const result = await executor.execute({
+			runId: "run-preflight-fail",
+			task: "Check environment before plan",
+			plan: makePlan(1),
+			initialToolCalls: [
+				{
+					id: "preflight-1",
+					name: "preflight_check",
+					arguments: {},
+				},
+			],
+		});
+
+		expect(result.haltedOnError).toBe(true);
+		expect(result.terminatedReason).toBe("PreflightFailed");
+		expect(result.outputs).toHaveLength(0);
+		expect(result.preflightOutputs).toHaveLength(1);
+		expect(result.state.events).toContainEqual(
+			expect.objectContaining({
+				kind: "local_repair",
+				payload: {
+					leafId: "preflight:preflight-1",
+					note: "preflight_failed:preflight_check",
+				},
+			}),
+		);
+		expect(result.state.events.at(-1)).toMatchObject({
+			kind: "terminated",
+			payload: { reason: "PreflightFailed" },
+		});
+	});
+
 	it("emits checkpoint_failed with the frozen payload shape on writer errors", async () => {
 		const executor = new LinearPlanExecutor({
 			tools: {

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
@@ -99,56 +100,62 @@ class ArchiveManifestEntry:
 
 class ArchiveManifestStore:
     def __init__(self, db_path: str | Path = ":memory:") -> None:
-        self._conn = sqlite3.connect(str(db_path))
+        self._conn = sqlite3.connect(str(db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        self._lock = threading.Lock()
+        self._conn.execute("PRAGMA journal_mode=WAL")
         self._ensure_schema()
 
     def close(self) -> None:
-        self._conn.close()
+        with self._lock:
+            self._conn.commit()
+            self._conn.close()
 
     def record(self, entry: ArchiveManifestEntry) -> None:
-        self._conn.execute(
-            """
-            INSERT INTO episodic_archive_manifest (
-                memory_id,
-                user_id,
-                temperature,
-                compression,
-                archive_key,
-                content_digest,
-                original_bytes,
-                compressed_bytes,
-                created_at,
-                archived_at,
-                schema_version,
-                metadata_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(memory_id) DO UPDATE SET
-                user_id = excluded.user_id,
-                temperature = excluded.temperature,
-                compression = excluded.compression,
-                archive_key = excluded.archive_key,
-                content_digest = excluded.content_digest,
-                original_bytes = excluded.original_bytes,
-                compressed_bytes = excluded.compressed_bytes,
-                created_at = excluded.created_at,
-                archived_at = excluded.archived_at,
-                schema_version = excluded.schema_version,
-                metadata_json = excluded.metadata_json
-            """,
-            entry.to_row(),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO episodic_archive_manifest (
+                    memory_id,
+                    user_id,
+                    temperature,
+                    compression,
+                    archive_key,
+                    content_digest,
+                    original_bytes,
+                    compressed_bytes,
+                    created_at,
+                    archived_at,
+                    schema_version,
+                    metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(memory_id) DO UPDATE SET
+                    user_id = excluded.user_id,
+                    temperature = excluded.temperature,
+                    compression = excluded.compression,
+                    archive_key = excluded.archive_key,
+                    content_digest = excluded.content_digest,
+                    original_bytes = excluded.original_bytes,
+                    compressed_bytes = excluded.compressed_bytes,
+                    created_at = excluded.created_at,
+                    archived_at = excluded.archived_at,
+                    schema_version = excluded.schema_version,
+                    metadata_json = excluded.metadata_json
+                """,
+                entry.to_row(),
+            )
+            self._conn.commit()
 
     def get(self, memory_id: str) -> ArchiveManifestEntry | None:
-        row = self._conn.execute(
-            """
-            SELECT *
-            FROM episodic_archive_manifest
-            WHERE memory_id = ?
-            """,
-            (memory_id,),
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT *
+                FROM episodic_archive_manifest
+                WHERE memory_id = ?
+                """,
+                (memory_id,),
+            ).fetchone()
         return None if row is None else ArchiveManifestEntry.from_row(row)
 
     def list_for_user(
@@ -157,71 +164,73 @@ class ArchiveManifestStore:
         *,
         temperature: ArchiveTemperature | None = None,
     ) -> list[ArchiveManifestEntry]:
-        if temperature is None:
-            rows = self._conn.execute(
-                """
-                SELECT *
-                FROM episodic_archive_manifest
-                WHERE user_id = ?
-                ORDER BY created_at ASC, memory_id ASC
-                """,
-                (user_id,),
-            ).fetchall()
-        else:
-            rows = self._conn.execute(
-                """
-                SELECT *
-                FROM episodic_archive_manifest
-                WHERE user_id = ? AND temperature = ?
-                ORDER BY created_at ASC, memory_id ASC
-                """,
-                (user_id, temperature),
-            ).fetchall()
+        with self._lock:
+            if temperature is None:
+                rows = self._conn.execute(
+                    """
+                    SELECT *
+                    FROM episodic_archive_manifest
+                    WHERE user_id = ?
+                    ORDER BY created_at ASC, memory_id ASC
+                    """,
+                    (user_id,),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    """
+                    SELECT *
+                    FROM episodic_archive_manifest
+                    WHERE user_id = ? AND temperature = ?
+                    ORDER BY created_at ASC, memory_id ASC
+                    """,
+                    (user_id, temperature),
+                ).fetchall()
 
         return [ArchiveManifestEntry.from_row(row) for row in rows]
 
     def _ensure_schema(self) -> None:
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS episodic_archive_manifest (
-                memory_id TEXT PRIMARY KEY,
-                user_id TEXT NOT NULL,
-                temperature TEXT NOT NULL CHECK (temperature IN ('hot', 'cold')),
-                compression TEXT NOT NULL CHECK (compression IN ('none', 'zstd-stub')),
-                archive_key TEXT NOT NULL,
-                content_digest TEXT NOT NULL,
-                original_bytes INTEGER NOT NULL,
-                compressed_bytes INTEGER NOT NULL,
-                created_at TEXT NOT NULL,
-                archived_at TEXT NOT NULL,
-                schema_version INTEGER NOT NULL,
-                metadata_json TEXT NOT NULL DEFAULT '{}'
+        with self._lock:
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS episodic_archive_manifest (
+                    memory_id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    temperature TEXT NOT NULL CHECK (temperature IN ('hot', 'cold')),
+                    compression TEXT NOT NULL CHECK (compression IN ('none', 'zstd-stub')),
+                    archive_key TEXT NOT NULL,
+                    content_digest TEXT NOT NULL,
+                    original_bytes INTEGER NOT NULL,
+                    compressed_bytes INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    archived_at TEXT NOT NULL,
+                    schema_version INTEGER NOT NULL,
+                    metadata_json TEXT NOT NULL DEFAULT '{}'
+                )
+                """
             )
-            """
-        )
-        self._conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_episodic_archive_manifest_user_temp
-            ON episodic_archive_manifest(user_id, temperature, created_at)
-            """
-        )
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS schema_version (
-                component TEXT PRIMARY KEY,
-                version INTEGER NOT NULL
+            self._conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_episodic_archive_manifest_user_temp
+                ON episodic_archive_manifest(user_id, temperature, created_at)
+                """
             )
-            """
-        )
-        self._conn.execute(
-            """
-            INSERT INTO schema_version (component, version)
-            VALUES (?, ?)
-            ON CONFLICT(component) DO UPDATE SET version = excluded.version
-            """,
-            (ARCHIVE_SCHEMA_COMPONENT, ARCHIVE_SCHEMA_VERSION),
-        )
-        self._conn.commit()
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS schema_version (
+                    component TEXT PRIMARY KEY,
+                    version INTEGER NOT NULL
+                )
+                """
+            )
+            self._conn.execute(
+                """
+                INSERT INTO schema_version (component, version)
+                VALUES (?, ?)
+                ON CONFLICT(component) DO UPDATE SET version = excluded.version
+                """,
+                (ARCHIVE_SCHEMA_COMPONENT, ARCHIVE_SCHEMA_VERSION),
+            )
+            self._conn.commit()
 
 
 def build_archive_manifest_entry(
@@ -260,6 +269,7 @@ def _compressed_size_stub(content: bytes, compression: ArchiveCompression) -> in
     if compression == "none":
         return len(content)
 
+    # TODO(Iter M3): replace this sizing stub with zstandard.ZstdCompressor.
     return len(content)
 
 

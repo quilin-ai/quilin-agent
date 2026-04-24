@@ -6,6 +6,8 @@ from typing import Any, Protocol, cast
 
 from .types import MemoryItem
 
+CHECKPOINT_SEARCH_LIMIT = 1_000
+
 
 class SupportsMemoryStore(Protocol):
     async def add(self, memory: MemoryItem) -> str: ...
@@ -107,7 +109,7 @@ class EpisodicMemory:
 
         items = await self._store.search(
             "",
-            limit=1_000,
+            limit=CHECKPOINT_SEARCH_LIMIT,
             filters={
                 "layer": "episodic",
                 "content_type": "json",

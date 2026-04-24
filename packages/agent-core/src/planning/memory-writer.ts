@@ -145,8 +145,11 @@ function createPlanReviewId(
 	record: PlanReviewRecord,
 	createdAt: string,
 ): string {
+	const canonicalRecord = JSON.stringify(record, Object.keys(record).sort());
 	const digest = createHash("sha256")
-		.update(JSON.stringify({ createdAt, record }))
+		.update(createdAt)
+		.update("\0")
+		.update(canonicalRecord)
 		.digest("hex")
 		.slice(0, 12);
 

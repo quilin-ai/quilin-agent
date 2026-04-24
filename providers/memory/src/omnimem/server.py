@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from contextlib import asynccontextmanager
 from typing import Any
 
 from mcp.server.fastmcp import Context, FastMCP
 
-from .logging import logger
+from .logging import configure_once, logger
 from .retriever import MemoryRetriever
 from .store import OmniMemStore
 from .types import MemoryLayer, MemoryTier
@@ -201,8 +202,11 @@ def _build_store_lifespan(
             yield {"store": store}
             return
 
-        async with OmniMemStore() as lifespan_store:
+        lifespan_store = await asyncio.to_thread(OmniMemStore)
+        try:
             yield {"store": lifespan_store}
+        finally:
+            await lifespan_store.close()
 
     return lifespan
 
@@ -293,5 +297,6 @@ mcp = create_server()
 
 
 def main() -> None:
+    configure_once()
     logger.info("omnimem server starting", transport="stdio")
     mcp.run(transport="stdio")

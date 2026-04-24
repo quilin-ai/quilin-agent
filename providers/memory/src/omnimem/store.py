@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sqlite3
 import threading
@@ -8,7 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
-from .store_filters import layer_filter, matches_filters
+from .store_filters import coerce_filter_datetime, layer_filter, matches_filters
 from .store_records import insert_memory
 from .store_schema import FTS_SCHEMA_COMPONENT as _FTS_SCHEMA_COMPONENT
 from .store_schema import FTS_SCHEMA_VERSION as _FTS_SCHEMA_VERSION
@@ -32,7 +33,6 @@ from .types import (
 
 FTS_SCHEMA_COMPONENT = _FTS_SCHEMA_COMPONENT
 FTS_SCHEMA_VERSION = _FTS_SCHEMA_VERSION
-
 
 @runtime_checkable
 class MemoryStore(Protocol):
@@ -71,6 +71,20 @@ def _build_keywords(content: str) -> str:
     return _search_build_keywords(content)
 
 
+def _count_metadata_value(value: object) -> object:
+    if isinstance(value, bool):
+        return int(value)
+    if value is None or isinstance(value, int | float | str):
+        return value
+
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+
+
+def _metadata_json_path(key: str) -> str:
+    escaped_key = key.replace("\\", "\\\\").replace('"', '\\"')
+    return f'$."{escaped_key}"'
+
+
 class OmniMemStore:
     def __init__(self, db_path: str | None = None) -> None:
         if db_path is None:
@@ -96,7 +110,6 @@ class OmniMemStore:
         configure_connection(self._conn)
         ensure_store_schema(
             self._conn,
-            build_keywords=_build_keywords,
             now=_utcnow,
             rebuild_fts_index=self._rebuild_fts_index,
         )
@@ -292,32 +305,49 @@ class OmniMemStore:
         return await asyncio.to_thread(self._count_sync, filters)
 
     def _count_sync(self, filters: dict[str, Any] | None = None) -> int:
-        resolved_layer_filter = layer_filter(filters)
-        if filters and any(
-            key in filters
-            for key in ("metadata", "content_type", "created_after", "created_before")
-        ):
-            items = self._search_sync("", limit=1_000_000, filters=filters)
-            return len(items)
+        predicates = ["deleted = 0"]
+        params: list[object] = []
+        if filters:
+            resolved_layer_filter = layer_filter(filters)
+            if resolved_layer_filter is not None:
+                predicates.append("tier = ?")
+                params.append(resolved_layer_filter)
+
+            content_type = filters.get("content_type")
+            if content_type is not None:
+                predicates.append("content_type = ?")
+                params.append(str(content_type))
+
+            metadata_filters = filters.get("metadata")
+            if isinstance(metadata_filters, dict):
+                for key, value in sorted(metadata_filters.items()):
+                    predicates.append("json_extract(metadata_json, ?) = ?")
+                    params.extend(
+                        (
+                            _metadata_json_path(str(key)),
+                            _count_metadata_value(value),
+                        )
+                    )
+
+            created_after = coerce_filter_datetime(filters.get("created_after"))
+            if created_after is not None:
+                predicates.append("created_at >= ?")
+                params.append(created_after.isoformat())
+
+            created_before = coerce_filter_datetime(filters.get("created_before"))
+            if created_before is not None:
+                predicates.append("created_at <= ?")
+                params.append(created_before.isoformat())
 
         with self._lock:
-            if resolved_layer_filter is None:
-                row = self._conn.execute(
-                    """
-                    SELECT COUNT(*)
-                    FROM memory_records
-                    WHERE deleted = 0
-                    """
-                ).fetchone()
-            else:
-                row = self._conn.execute(
-                    """
-                    SELECT COUNT(*)
-                    FROM memory_records
-                    WHERE deleted = 0 AND tier = ?
-                    """,
-                    (resolved_layer_filter,),
-                ).fetchone()
+            row = self._conn.execute(
+                f"""
+                SELECT COUNT(*)
+                FROM memory_records
+                WHERE {" AND ".join(predicates)}
+                """,
+                params,
+            ).fetchone()
 
         return int(row[0]) if row is not None else 0
 

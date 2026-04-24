@@ -5,6 +5,7 @@ import type {
 	LLMPlannerResponse,
 } from "./types.js";
 
+// Intent audit threshold traces to docs/engineering/04-planning/README.md.
 export const DEFAULT_AUDIT_CONFIDENCE_THRESHOLD = 0.85;
 
 export interface IntentDispatchOptions {
