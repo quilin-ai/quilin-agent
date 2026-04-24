@@ -860,12 +860,12 @@ M2.6 / M2.7 ↔ Iter F soul.md 写路径
 
 ### 16.6 Review 补齐本轮新代码（Q2 follow-up）
 
-- **状态**：✅ 已完成。Review 文档：`docs/review/2026-04-24-04-third-slice-review.md`。
-- **结论**：BLOCKING `0` / HIGH `0` / MEDIUM `1` / LOW `2`；MEDIUM/LOW 已修复或文档化；§16.6 gate 可闭合，不阻塞下一轮切片。
+- **状态**：🔄 reopened。Review 文档：`docs/review/2026-04-24-04-third-slice-review.md`。
+- **当前结论**：初始 third-slice review 的 MEDIUM `1` / LOW `2` 已修复或文档化；`0318392` 后追加 follow-up 又发现 HIGH `2` / MEDIUM `2`。本批已修复 HIGH `2`，MEDIUM `2` 仍待修；`§16.6` 暂不可闭合。
 - **原现状**：`docs/review/2026-04-24-{01,02,03}-*.md` 覆盖 C0.1-C1.8 / M0.1-M0.10 / cross-cutting 7 commits，**不含**本轮 §15 新代码（Pascal `4496cb4` / Hooke `77e399a` / Halley `3b60904`）。
 - **DoD**：已新开 `docs/review/2026-04-24-04-third-slice-review.md`，覆盖三路 commits，重点审计：
   - Halley: `memory-writer.ts` 6 禁字段 + sha256 id stability + MCP error fallback；`audit.ts` / `goal-drift.ts` / `replan.ts` 对 ADR-004 L3a 阈值的引用；`state.ts` 新增 3 种 event 的 reducer 纯性。
   - Hooke: `retriever.py` RRF 融合正确性、`kg.py` 递归 CTE SQL 语义、`store.py` semantic guard 覆盖路径、§16.1 拆分前状态。
   - Pascal: `loader.ts` 四级优先级 + `buildCapabilitiesRuntime` REPL wire 的回退语义。
 - **Trigger**：已满足；本 follow-up 收尾前完成 review，未静默进入下一轮切片。
-- **新增 follow-up**：已处理。Halley fallback logger 失败不再破坏 advisory writer；Pascal explicit config registry/namespace 行为已文档化；Hooke KG duplicate seed 已去重。
+- **新增 follow-up**：HIGH-1 `memory_recall` envelope 绕过、HIGH-2 semantic guard `metadata.source` 绕过已修；MEDIUM-1 fused recall 优雅降级、MEDIUM-2 KG 时间归一化待修后再重闭合。

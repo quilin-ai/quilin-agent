@@ -26,9 +26,13 @@ def validate_semantic_ingestion_contract(
     metadata: dict[str, object],
     content: str,
 ) -> None:
+    if metadata.get("source") == PLANNING_STATE_SOURCE and layer == "semantic":
+        raise ValueError("planning_state runtime payloads cannot be stored in semantic memory")
+
+    if layer == "semantic":
+        _reject_semantic_runtime_payload(content_type=content_type, content=content)
+
     if metadata.get("source") == PLANNING_STATE_SOURCE:
-        if layer == "semantic":
-            raise ValueError("planning_state runtime payloads cannot be stored in semantic memory")
         return
 
     if metadata.get("source") != PLANNING_REVIEW_SOURCE:
@@ -46,6 +50,22 @@ def validate_semantic_ingestion_contract(
         raise ValueError("planning_review metadata.run_id must be a non-empty string")
 
     _validate_planning_review_payload(content, run_id=run_id)
+
+
+def _reject_semantic_runtime_payload(*, content_type: str, content: str) -> None:
+    if content_type != "json":
+        return
+
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError:
+        return
+
+    if not isinstance(payload, dict):
+        return
+
+    if _has_planning_state_shape(payload) or _contains_forbidden_runtime_keys(payload):
+        raise ValueError("running PlanningState payloads cannot be stored in semantic memory")
 
 
 def _validate_planning_review_payload(content: str, *, run_id: str) -> None:
@@ -89,3 +109,12 @@ def _contains_forbidden_runtime_keys(payload: object) -> bool:
         return any(_contains_forbidden_runtime_keys(item) for item in payload)
 
     return False
+
+
+def _has_planning_state_shape(payload: dict[str, object]) -> bool:
+    return (
+        isinstance(payload.get("runId"), str)
+        and isinstance(payload.get("events"), list)
+        and isinstance(payload.get("checkpoints"), list)
+        and isinstance(payload.get("phase"), str)
+    )

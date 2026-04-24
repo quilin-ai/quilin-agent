@@ -22,6 +22,8 @@ def _assert_memory_item_record(
     content: str,
     layer: str,
     memory_id: str | None = None,
+    recall_source: str | None = None,
+    memory_source: str | None = None,
 ) -> None:
     if memory_id is not None:
         assert record["id"] == memory_id
@@ -30,7 +32,21 @@ def _assert_memory_item_record(
     assert record["layer"] == layer
     assert record["tier"] == layer
     assert record["content_type"] == "text"
-    assert record["metadata"] == {"schema_version": 1}
+    metadata = record["metadata"]
+    assert metadata["schema_version"] == 1
+    if recall_source is None:
+        assert metadata == {"schema_version": 1}
+    else:
+        assert metadata["source"] == recall_source
+        assert metadata["source_layers"] == [layer]
+        assert metadata["block_version"] == "memory-recall-v1"
+        assert metadata["cache_key"].startswith("memory-recall:")
+        assert metadata["staleness"] == "fresh"
+        assert isinstance(metadata["score"], float)
+        if memory_source is None:
+            assert "memory_source" not in metadata
+        else:
+            assert metadata["memory_source"] == memory_source
     assert record["embedding"] is None
     assert isinstance(record["created_at"], str)
     assert isinstance(record["last_accessed"], str)
@@ -85,6 +101,7 @@ async def test_memory_store_tool_with_tier(server: object) -> None:
         content="important",
         layer="semantic",
         memory_id=store_result["id"],  # type: ignore[arg-type]
+        recall_source="direct_recall",
     )
 
 
@@ -102,6 +119,7 @@ async def test_memory_store_tool_accepts_canonical_layer(server: object) -> None
         recall_result["records"][0],  # type: ignore[index]
         content="checkpoint",
         layer="episodic",
+        recall_source="direct_recall",
     )
 
 
@@ -119,6 +137,7 @@ async def test_memory_store_tool_prefers_layer_over_tier(server: object) -> None
         recall_result["records"][0],  # type: ignore[index]
         content="stable preference",
         layer="semantic",
+        recall_source="direct_recall",
     )
 
 
@@ -138,7 +157,12 @@ async def test_memory_recall_tool_returns_records(server: object) -> None:
         assert "tier" in record
         assert "layer" in record
         assert "metadata" in record
-        assert record["metadata"] == {"schema_version": 1}
+        assert record["metadata"]["schema_version"] == 1
+        assert record["metadata"]["source"] == "direct_recall"
+        assert record["metadata"]["block_version"] == "memory-recall-v1"
+        assert record["metadata"]["cache_key"].startswith("memory-recall:")
+        assert "score" in record["metadata"]
+        assert "source_layers" in record["metadata"]
 
 
 async def test_memory_recall_tool_empty_query(server: object) -> None:
@@ -180,6 +204,32 @@ async def test_roundtrip_store_then_recall(server: object) -> None:
         memory_id=stored_id,  # type: ignore[arg-type]
         content="my memory",
         layer="episodic",
+        recall_source="direct_recall",
+    )
+
+
+async def test_memory_recall_tool_adds_retrieval_envelope_and_preserves_memory_source(
+    server: object,
+) -> None:
+    await server.call_tool(  # type: ignore[attr-defined]
+        "memory_store",
+        {
+            "content": "checkpoint with source metadata",
+            "tier": "episodic",
+            "metadata": {"schema_version": 1, "source": "checkpoint_writer"},
+        },
+    )
+
+    result = _decode_call_tool_result(
+        await server.call_tool("memory_recall", {"query": "checkpoint with source"})  # type: ignore[attr-defined]
+    )
+
+    _assert_memory_item_record(
+        result["records"][0],  # type: ignore[index]
+        content="checkpoint with source metadata",
+        layer="episodic",
+        recall_source="direct_recall",
+        memory_source="checkpoint_writer",
     )
 
 
@@ -250,6 +300,7 @@ async def test_create_server_uses_injected_store_isolation() -> None:
         left_result["records"][0],  # type: ignore[index]
         content="left only",
         layer="working",
+        recall_source="direct_recall",
     )
     assert right_result["records"] == []
 

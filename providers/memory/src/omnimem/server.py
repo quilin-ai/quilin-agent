@@ -7,6 +7,7 @@ from typing import Any
 from mcp.server.fastmcp import Context, FastMCP
 
 from .logging import logger
+from .retriever import MemoryRetriever
 from .store import OmniMemStore
 from .types import MemoryLayer, MemoryTier
 
@@ -26,10 +27,15 @@ async def _memory_recall_with_store(store: OmniMemStore, query: str) -> str:
     Returns all records if query is empty.
     """
     try:
-        results = await store.recall(query)
+        raw_results = await store.recall(query)
     except Exception as exc:
         _raise_memory_operation_error("memory_recall", exc)
 
+    results = MemoryRetriever(store).annotate_recall_results(
+        query,
+        raw_results,
+        limit=len(raw_results),
+    )
     return json.dumps({"records": [r.to_wire_dict() for r in results]})
 
 

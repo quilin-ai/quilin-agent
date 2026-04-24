@@ -1,19 +1,50 @@
 # Third-Slice Review — 2026-04-24
 
 > 范围：§15 第三轮三路新代码：Halley `3b60904`、Hooke `77e399a`、Pascal `4496cb4`，外加 cross-cutting 反链闭合 `0b79520` 的状态核对。
-> Reviewer：Codex（接手 Claude token exhausted 后的独立只读审计）。
-> 方法：只读 git / 文件实证；不修改 `packages/` / `providers/`；本文件用于闭合 §16.6 Q2 follow-up gate。
+> Reviewer：Codex（接手 Claude token exhausted 后的独立审计与后续修复）。
+> 方法：先只读 git / 文件实证，后按新增 finding 回补代码/测试；本文件用于闭合 §16.6 Q2 follow-up gate。
 
 ## 总评
 
-- 风险评分：**0.23（LOW）**。
-- BLOCKING findings：**0**。
-- HIGH findings：**0**。
-- MEDIUM findings：**1（已修）**。
-- LOW findings：**2（已修/已文档化）**。
-- §16.6 gate：**可闭合**。三路功能声明与代码/测试基本一致；review 发现的问题已在后续补丁中处理。
+- 风险评分：**0.51（MEDIUM）**。
+- 初始第三轮 review：**MEDIUM `1` / LOW `2`**，已修复或文档化。
+- `0318392` 后追加 follow-up：新增 **HIGH `2` / MEDIUM `2`**。
+- 当前状态：**HIGH `2` 已修，MEDIUM `2` 待修**。
+- §16.6 gate：**暂不闭合**。必须等 MEDIUM 两条（fused recall 降级 / KG 时间归一化）修完并重跑实证后再恢复为 closed。
 
 ## Findings
+
+### [HIGH] Hooke `memory_recall` MCP 出口绕过 M1.6 retrieval envelope
+
+**状态**：✅ 已修。`providers/memory/src/omnimem/server.py:24-39` 不再直接把 `store.recall()` 原始记录出站，而是经过 `MemoryRetriever.annotate_recall_results()`（`providers/memory/src/omnimem/retriever.py:167-190`）补齐 `cache_key / block_version / source_layers / score / staleness`。
+
+- **What**：修复前，`memory_recall` 直接序列化 `store.recall()` 结果，导致 MCP 公共边界拿不到 M1.6 约定的 retrieval envelope。
+- **Code evidence**：`providers/memory/src/omnimem/server.py:30-39` 先读 raw records，再调用 `MemoryRetriever.annotate_recall_results()`；`providers/memory/src/omnimem/retriever.py:179-188` 统一写入 `cache_key / block_version / staleness`。
+- **Contract evidence**：`docs/adr/adr-005-memory-contracts.md:90` 要求异步增强不得改变 recall/store 基础兼容形状，但 `recall()` 可返回 freshness metadata；`docs/planning/2026-04-23-01-iter-c-m-parallel-breakdown.md:373` 与 `docs/planning/2026-04-23-01-iter-c-m-parallel-breakdown.md:764` 明确 M1.6 结果必须带 `cache_key / block_version / source_layers`。
+- **Verification**：`uv run --project providers/memory pytest providers/memory/tests/test_server.py -q` 覆盖 MCP `memory_recall` envelope 与 `memory_source` 保留路径。
+
+### [HIGH] Hooke semantic guard 可通过缺失或伪造 `metadata.source` 绕过
+
+**状态**：✅ 已修。`providers/memory/src/omnimem/store_validation.py:22-68` 现在先对 `layer == "semantic"` 执行 `_reject_semantic_runtime_payload()`，不再依赖 `metadata.source == "planning_review"` 才检查 live planning payload。
+
+- **What**：修复前，semantic guard 主要靠 `metadata.source` 分支命中；只要把 live runtime payload 写成 `source="checkpoint"` 或省略 `source`，就可能绕开 semantic invariant。
+- **Code evidence**：`providers/memory/src/omnimem/store_validation.py:29-33` 先拦住 semantic JSON payload；`providers/memory/src/omnimem/store_validation.py:55-68` 统一识别 `PlanningState` 形状和递归 forbidden runtime keys。
+- **Contract evidence**：`docs/adr/adr-005-memory-contracts.md:70-73` 明确 semantic 允许的是稳定策略，禁止运行中的 `PlanningState`，且 semantic 写入必须带 `schema_version / source / stability_reason`；`docs/engineering/04-planning/README.md:633-636` 明确 planning 不得把 live plan state 写入 semantic memory。
+- **Verification**：`uv run --project providers/memory pytest providers/memory/tests/test_planning_integration.py -q` 新增“无 planning source / 伪造 checkpoint source”负测。
+
+### [MEDIUM] Hooke optional vector/KG/reranker 失败仍会中断 fused recall
+
+**状态**：⏳ 待修。
+
+- **What**：`providers/memory/src/omnimem/retriever.py:131-152` 仍是顺序 await BM25 / vector / KG / reranker；可选增强路径一旦抛错，会让整次 fused recall 失败，而不是退回 working + BM25。
+- **Contract evidence**：`docs/adr/adr-005-memory-contracts.md:83-90` 明确异步增强失败不得阻塞 L2 verbatim、不得阻塞 Planning；`docs/planning/2026-04-23-01-iter-c-m-parallel-breakdown.md:370` 与 `docs/planning/2026-04-23-01-iter-c-m-parallel-breakdown.md:761` 明确 M1.3 必须“缺向量/缺 KG 都能优雅降级”。
+
+### [MEDIUM] Hooke KG 时序有效性仍按 ISO 字符串比较
+
+**状态**：⏳ 待修。
+
+- **What**：`providers/memory/src/omnimem/kg.py:198-229` 直接存 `isoformat()`，`providers/memory/src/omnimem/kg.py:292-298` 查询时也直接用 ISO 字符串；跨 offset 时，SQLite 文本比较不等价于真实时间顺序。
+- **Contract evidence**：`docs/planning/2026-04-23-01-iter-c-m-parallel-breakdown.md:369` 与 `docs/planning/2026-04-23-01-iter-c-m-parallel-breakdown.md:760` 明确 M1.2 是时序 KG schema，`valid_from / valid_to` 语义必须是时间语义，不是字符串排序巧合。
 
 ### [MEDIUM] Halley `writePlanReviewRecord()` 的 fallback logger 失败会继续向调用方抛出
 
@@ -73,7 +104,7 @@
 
 ## 后续建议
 
-- Halley fallback logger 与 Hooke duplicate seed 已修复；Pascal explicit config 的 namespaced MCP registry 行为已记录。
-- 后续仍可把 Pascal 行为补进 config loader 用户文档；当前 planning/review 文档已足够关闭本轮 finding。
+- HIGH-1 / HIGH-2 已修，可以继续后续修复批次；但在 MEDIUM-1 / MEDIUM-2 收口前，不应把 `§16.6` 重新标为 closed。
+- Pascal explicit config 的 namespaced MCP registry 行为已记录；后续仍可补进 config loader 用户文档。
 
-§16.6 可以关闭；不要把这些 follow-up 作为进入下一轮切片的硬 blocker。
+当前不应关闭 `§16.6`；待 fused recall 降级与 KG 时间归一化修完并补实证后再闭合。

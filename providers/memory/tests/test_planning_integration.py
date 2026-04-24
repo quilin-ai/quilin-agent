@@ -222,6 +222,36 @@ async def test_store_rejects_planning_state_source_for_semantic() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"schema_version": 1},
+        {"schema_version": 1, "source": "checkpoint"},
+    ],
+)
+async def test_store_rejects_runtime_planning_state_even_without_planning_source(
+    metadata: dict[str, object],
+) -> None:
+    store = OmniMemStore(db_path=":memory:")
+
+    with pytest.raises(ValueError, match="PlanningState"):
+        await store.store(
+            json.dumps(
+                {
+                    "runId": "run-live",
+                    "phase": "executing",
+                    "events": [],
+                    "checkpoints": [],
+                }
+            ),
+            tier="semantic",
+            metadata=metadata,
+            content_type="json",
+        )
+
+    assert await store.count({"layer": "semantic"}) == 0
+
+
 async def test_memory_store_tool_accepts_planning_review_schema_fields() -> None:
     store = OmniMemStore(db_path=":memory:")
     server = create_server(store)
@@ -251,5 +281,6 @@ async def test_memory_store_tool_accepts_planning_review_schema_fields() -> None
 
     assert store_result["id"] == recall_result["records"][0]["id"]  # type: ignore[index]
     assert recall_result["records"][0]["content_type"] == "json"  # type: ignore[index]
-    assert recall_result["records"][0]["metadata"]["source"] == "planning_review"  # type: ignore[index]
+    assert recall_result["records"][0]["metadata"]["source"] == "direct_recall"  # type: ignore[index]
+    assert recall_result["records"][0]["metadata"]["memory_source"] == "planning_review"  # type: ignore[index]
     assert recall_result["records"][0]["metadata"]["run_id"] == run_id  # type: ignore[index]

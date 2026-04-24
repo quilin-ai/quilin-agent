@@ -15,6 +15,7 @@ DEFAULT_KG_LIMIT = 20
 DEFAULT_KG_MAX_HOPS = 2
 DEFAULT_RRF_K = 60
 RETRIEVAL_BLOCK_VERSION = "memory-recall-v1"
+DIRECT_RECALL_SOURCE = "direct_recall"
 
 
 class BM25SearchStore(Protocol):
@@ -162,6 +163,31 @@ class MemoryRetriever:
         limit: int | None = None,
     ) -> list[MemoryItem]:
         return await self.retrieve(query, task_context, limit=limit)
+
+    def annotate_recall_results(
+        self,
+        query: str,
+        items: list[MemoryItem],
+        task_context: dict[str, Any] | None = None,
+        *,
+        limit: int | None = None,
+    ) -> list[MemoryItem]:
+        effective_limit = len(items) if limit is None else max(limit, 0)
+        if effective_limit == 0:
+            return []
+
+        cache_key = self._build_cache_key(query, task_context, effective_limit)
+        return [
+            self._with_retrieval_metadata(
+                item,
+                source=DIRECT_RECALL_SOURCE,
+                score=self._rrf_score(rank),
+                cache_key=cache_key,
+                block_version=RETRIEVAL_BLOCK_VERSION,
+                staleness=str(item.metadata.get("staleness", "fresh")),
+            )
+            for rank, item in enumerate(items[:effective_limit], start=1)
+        ]
 
     async def retrieve_bm25(
         self,
