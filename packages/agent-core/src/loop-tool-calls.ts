@@ -4,6 +4,7 @@ import {
 } from "./context/injection-scanner.js";
 import { logger } from "./logger.js";
 import { AgentLoopError, type LoopHooks } from "./loop-types.js";
+import type { AgentTurnTelemetry } from "./observability/loop.js";
 import { saveCheckpointState } from "./state/checkpoint-writer.js";
 import type { AgentState, Checkpoint, Message } from "./state/types.js";
 import type { ToolRouter } from "./tools/router.js";
@@ -17,6 +18,7 @@ export interface ExecuteToolCallsOptions {
 	readonly checkpoint?: Checkpoint;
 	readonly state?: AgentState;
 	readonly hooks?: LoopHooks;
+	readonly telemetry?: AgentTurnTelemetry;
 	readonly consecutiveBlockedToolOutputs: number;
 }
 
@@ -26,7 +28,12 @@ export async function executeToolCalls(
 	let consecutiveBlockedToolOutputs = options.consecutiveBlockedToolOutputs;
 
 	for (const toolCall of options.toolCalls) {
-		const toolResult = await options.router.execute(toolCall);
+		const toolResult =
+			options.telemetry == null
+				? await options.router.execute(toolCall)
+				: await options.telemetry.invokeTool(toolCall, () =>
+						options.router.execute(toolCall),
+					);
 		await options.hooks?.recordSpan?.("loop.tool.execute", {
 			turnCount: options.turnCount,
 			toolName: toolCall.name,

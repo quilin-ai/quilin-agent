@@ -1,6 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runAgentLoop } from "../loop.js";
+import { runWithObservabilityContext } from "../observability/context.js";
 import { createTaskHash, LinearPlanExecutor } from "../planning/executor.js";
 import type { LinearPlan } from "../planning/types.js";
 import {
@@ -144,6 +145,38 @@ describe.sequential("MCPClientManager", () => {
 		expect(error).toBeInstanceOf(Error);
 		expect((error as Error).message).toMatch(/timed out/i);
 		vi.useRealTimers();
+	});
+
+	it("forwards ambient request_id through MCP request metadata", async () => {
+		const manager = new MCPClientManager();
+		const client = {
+			callTool: vi.fn(async () => ({
+				content: [{ type: "text", text: "ok" }],
+				isError: false,
+			})),
+		};
+
+		Object.assign(manager as object, {
+			client,
+			isConnected: true,
+		});
+
+		await runWithObservabilityContext({ requestId: "request-1" }, () =>
+			(
+				manager as unknown as {
+					callToolWithMetadata: (
+						name: string,
+						args: Record<string, unknown>,
+					) => Promise<unknown>;
+				}
+			).callToolWithMetadata("memory_recall", { query: "hello" }),
+		);
+
+		expect(client.callTool).toHaveBeenCalledWith({
+			name: "memory_recall",
+			arguments: { query: "hello" },
+			_meta: { request_id: "request-1" },
+		});
 	});
 
 	it("does not treat plain error messages that mention timeouts as typed MCP timeouts", async () => {

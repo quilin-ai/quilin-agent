@@ -1,6 +1,7 @@
 import type { PromptSessionAssembler } from "./context/prompt-session-assembler.js";
 import type { ContextManager } from "./context/types.js";
 import type { InferenceConfig, LLMClient } from "./llm/types.js";
+import type { AgentLoopObservability } from "./observability/loop.js";
 import type { AgentState, Checkpoint, Message } from "./state/types.js";
 import type { Tool } from "./tools/types.js";
 
@@ -59,5 +60,6 @@ export interface AgentLoopConfig {
 	readonly maxTurns?: number;
 	readonly maxTotalTokens?: number;
 	readonly hooks?: LoopHooks;
+	readonly observability?: AgentLoopObservability;
 	readonly inferenceConfig: InferenceConfig;
 }

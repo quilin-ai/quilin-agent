@@ -11,6 +11,7 @@ import {
 	type LoggerRuntimeMode,
 	logger,
 } from "../logger.js";
+import { createMCPRequestMetadata } from "../observability/context.js";
 import { jsonSchemaToZod } from "./schema-converter.js";
 import {
 	sanitizeMCPToolDescription,
@@ -435,10 +436,12 @@ export class MCPClientManager {
 
 		let pendingCall: Promise<CallToolResult> | undefined;
 		try {
+			const requestMetadata = createMCPRequestMetadata();
 			pendingCall = withTimeout<CallToolResult>(
 				this.client.callTool({
 					name,
 					arguments: args,
+					...(requestMetadata == null ? {} : { _meta: requestMetadata }),
 				}) as Promise<CallToolResult>,
 				`MCP tool ${name}`,
 				DEFAULT_TOOL_TIMEOUT_MS,
