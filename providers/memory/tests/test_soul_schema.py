@@ -44,3 +44,36 @@ def test_soul_schema_rejects_missing_required_fields() -> None:
 def test_soul_schema_rejects_schema_drift() -> None:
     with pytest.raises(ValueError, match="schema_version"):
         SoulDocument.from_markdown(VALID_SOUL_MD.replace("schema_version: 1", "schema_version: 2"))
+
+
+def test_soul_schema_accepts_json_string_core_values() -> None:
+    document = SoulDocument.from_markdown(
+        VALID_SOUL_MD.replace(
+            'core_values: ["clarity", "rigor"]',
+            'core_values: "[\\"clarity\\", \\"rigor\\"]"',
+        )
+    )
+
+    assert document.core_values == ["clarity", "rigor"]
+
+
+def test_soul_schema_rejects_empty_identity_fields() -> None:
+    with pytest.raises(ValueError, match="persona_name"):
+        SoulDocument.from_markdown(
+            VALID_SOUL_MD.replace('persona_name: "Quilin"', 'persona_name: ""')
+        )
+
+    with pytest.raises(ValueError, match="core_values"):
+        SoulDocument.from_markdown(
+            VALID_SOUL_MD.replace('core_values: ["clarity", "rigor"]', "core_values: []")
+        )
+
+
+def test_soul_schema_rejects_non_list_core_values() -> None:
+    with pytest.raises(ValueError, match="core_values"):
+        SoulDocument.from_markdown(
+            VALID_SOUL_MD.replace(
+                'core_values: ["clarity", "rigor"]',
+                'core_values: "\\"clarity\\""',
+            )
+        )

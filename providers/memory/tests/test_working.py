@@ -55,6 +55,23 @@ async def test_working_memory_to_context_uses_recent_content_order() -> None:
     assert await memory.to_context(limit=2) == ["third", "second"]
 
 
+async def test_working_memory_normalizes_non_working_items_to_working_layer() -> None:
+    memory = WorkingMemory(k=2)
+    await memory.push(
+        MemoryItem(
+            content="semantic insight",
+            layer="semantic",
+            metadata={"schema_version": 1, "source": "fixture"},
+        )
+    )
+
+    recent = await memory.get_recent()
+
+    assert recent[0].content == "semantic insight"
+    assert recent[0].layer == "working"
+    assert recent[0].metadata["source"] == "fixture"
+
+
 def test_working_memory_rejects_non_positive_capacity() -> None:
     with pytest.raises(ValueError, match="at least 1"):
         WorkingMemory(k=0)

@@ -36,6 +36,7 @@ select = ["E", "F", "I", "N", "UP", "B", "SIM"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+addopts = "--cov=src/omnimem --cov-fail-under=95 --cov-report=term-missing"
 
 [dependency-groups]
 dev = [

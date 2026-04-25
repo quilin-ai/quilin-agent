@@ -55,6 +55,12 @@ def test_turn_schema_rejects_invalid_input() -> None:
     with pytest.raises(TypeError, match="turn.metadata must be a mapping"):
         normalize_observation_turn({"content": "hello", "metadata": "bad"})
 
+    with pytest.raises(TypeError, match="turn.turn_id"):
+        normalize_observation_turn({"content": "hello", "turn_id": 123})
+
+    with pytest.raises(TypeError, match="turn.role"):
+        normalize_observation_turn({"content": "hello", "role": 123})
+
 
 def test_observation_candidate_schema_is_frozen() -> None:
     candidate = ObservationCandidate(
@@ -74,6 +80,24 @@ def test_observation_candidate_schema_is_frozen() -> None:
 
     with pytest.raises(ValueError, match="candidate.confidence"):
         ObservationCandidate(content="bad", confidence=1.1)
+
+    with pytest.raises(TypeError, match="candidate.content"):
+        ObservationCandidate(content=123, confidence=0.5)  # type: ignore[arg-type]
+
+    with pytest.raises(TypeError, match="candidate.confidence"):
+        ObservationCandidate(content="bad", confidence="high")  # type: ignore[arg-type]
+
+    with pytest.raises(TypeError, match="candidate.kind"):
+        ObservationCandidate(content="bad", confidence=0.5, kind=123)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="Invalid candidate.kind"):
+        ObservationCandidate(content="bad", confidence=0.5, kind="invalid")  # type: ignore[arg-type]
+
+    with pytest.raises(TypeError, match="candidate.source_turn_id"):
+        ObservationCandidate(content="bad", confidence=0.5, source_turn_id=123)  # type: ignore[arg-type]
+
+    with pytest.raises(TypeError, match="turn must"):
+        normalize_observation_turn(object())  # type: ignore[arg-type]
 
 
 async def test_observer_failure_does_not_affect_main_path() -> None:

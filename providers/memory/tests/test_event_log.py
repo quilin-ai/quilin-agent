@@ -1,8 +1,17 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 
-from omnimem.event_log import RetrievalEventLog, TraceContext, hash_query, parse_traceparent
+import pytest
+
+from omnimem.event_log import (
+    CitationStats,
+    RetrievalEventLog,
+    TraceContext,
+    hash_query,
+    parse_traceparent,
+)
 from omnimem.types import MemoryItem
 
 
@@ -156,6 +165,73 @@ async def test_event_log_dual_emit_failure_does_not_block_sqlite_write() -> None
 
     assert len(event_ids) == 1
     assert [event.event_id for event in events] == event_ids
+
+
+async def test_event_log_lifecycle_and_empty_boundaries(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("QUILIN_ENV", "test")
+    async with RetrievalEventLog(top_n=1) as event_log:
+        assert await event_log.record_retrieval("run-empty", "query", [], top_n=0) == []
+        assert await event_log.mark_cited("run-empty", ["", ""]) == 0
+        assert await event_log.citation_stats(["", ""]) == {}
+        await event_log.reset()
+
+    await event_log.close()
+
+    with pytest.raises(ValueError, match="top_n"):
+        RetrievalEventLog(db_path=":memory:", top_n=0)
+
+    db_path = tmp_path / "nested" / "events.db"
+    monkeypatch.delenv("QUILIN_ENV", raising=False)
+    monkeypatch.setenv("OMNIMEM_EVENT_LOG_PATH", str(db_path))
+    file_event_log = RetrievalEventLog()
+    await file_event_log.close()
+
+    assert db_path.exists()
+
+
+async def test_event_log_object_span_sink_and_source_layer_fallbacks() -> None:
+    class RecordingSpan:
+        def __init__(self) -> None:
+            self.events: list[tuple[str, dict[str, object]]] = []
+
+        def add_event(self, name: str, attributes: dict[str, object]) -> None:
+            self.events.append((name, attributes))
+
+    sink = RecordingSpan()
+    event_log = RetrievalEventLog(
+        db_path=":memory:",
+        top_n=2,
+        span_event_sink=sink,
+    )
+    kg_item = MemoryItem(
+        id="kg-memory",
+        content="knowledge graph fact",
+        layer="semantic",
+        metadata={"schema_version": 1, "source": "kg_subgraph", "score": 0.8},
+        created_at=datetime(2026, 4, 24, tzinfo=UTC),
+    )
+    default_item = MemoryItem(
+        id="working-memory",
+        content="plain fact",
+        layer="working",
+        metadata={"schema_version": 1, "score": 0.4},
+        created_at=datetime(2026, 4, 24, tzinfo=UTC),
+    )
+
+    await event_log.record_retrieval("run-source", "query", [kg_item, default_item])
+    events = await event_log.list_events(run_id="run-source")
+    await event_log.close()
+
+    assert [event.source_layer for event in events] == ["kg", "working"]
+    assert [name for name, _attributes in sink.events] == [
+        "memory.retrieval_sample",
+        "memory.retrieval_sample",
+    ]
+
+
+def test_event_log_parse_and_stats_boundary_helpers() -> None:
+    assert parse_traceparent(None) is None
+    assert CitationStats(memory_id="memory-1", impressions=0, citations=0).citation_rate == 0.0
 
 
 def test_parse_traceparent_extracts_w3c_trace_context() -> None:

@@ -222,6 +222,7 @@ class _FakeMeta:
 class _FakeRequestContext:
     def __init__(self, metadata: dict[str, object]) -> None:
         self.meta = _FakeMeta(metadata)
+        self.lifespan_context: object = {}
 
 
 class _FakeContext:
@@ -230,6 +231,21 @@ class _FakeContext:
 
     @property
     def request_context(self) -> _FakeRequestContext:
+        return self._request_context
+
+
+class _RawRequestContext:
+    def __init__(self, meta: object, lifespan_context: object | None = None) -> None:
+        self.meta = meta
+        self.lifespan_context = {} if lifespan_context is None else lifespan_context
+
+
+class _RawContext:
+    def __init__(self, meta: object, lifespan_context: object | None = None) -> None:
+        self._request_context = _RawRequestContext(meta, lifespan_context)
+
+    @property
+    def request_context(self) -> _RawRequestContext:
         return self._request_context
 
 
@@ -361,6 +377,42 @@ async def test_scratchpad_helpers_return_child_traceparent(
     assert result["traceparent"].endswith("-01")
 
 
+async def test_scratchpad_helper_errors_are_sanitized() -> None:
+    class FailingScratchpadStore:
+        async def write(self, **_kwargs: object) -> None:
+            raise sqlite3.OperationalError("cannot write /tmp/private-scratchpad.db")
+
+        async def read(self, **_kwargs: object) -> None:
+            raise sqlite3.OperationalError("cannot read /tmp/private-scratchpad.db")
+
+        async def clear(self, **_kwargs: object) -> None:
+            raise sqlite3.OperationalError("cannot clear /tmp/private-scratchpad.db")
+
+    scratchpad_store = FailingScratchpadStore()
+
+    with pytest.raises(server_module.MemoryOperationError, match="scratchpad_write failed"):
+        await server_module._scratchpad_write_with_store(
+            scratchpad_store,  # type: ignore[arg-type]
+            task_id="task-1",
+            session_id="session-1",
+            key="k",
+            value="v",
+        )
+    with pytest.raises(server_module.MemoryOperationError, match="scratchpad_read failed"):
+        await server_module._scratchpad_read_with_store(
+            scratchpad_store,  # type: ignore[arg-type]
+            task_id="task-1",
+            session_id="session-1",
+            key="k",
+        )
+    with pytest.raises(server_module.MemoryOperationError, match="scratchpad_clear failed"):
+        await server_module._scratchpad_clear_with_store(
+            scratchpad_store,  # type: ignore[arg-type]
+            task_id="task-1",
+            session_id="session-1",
+        )
+
+
 async def test_memory_recall_tool_empty_query(server: object) -> None:
     await server.call_tool("memory_store", {"content": "alpha"})  # type: ignore[attr-defined]
     await server.call_tool("memory_store", {"content": "beta"})  # type: ignore[attr-defined]
@@ -378,6 +430,119 @@ async def test_memory_recall_tool_no_match(server: object) -> None:
         await server.call_tool("memory_recall", {"query": "banana"})  # type: ignore[attr-defined]
     )
     assert result["records"] == []
+
+
+def test_memory_store_metadata_validation_boundaries() -> None:
+    assert server_module._validate_tool_metadata({"source_layers": ["episodic"]}) == {
+        "source_layers": ["episodic"]
+    }
+
+    with pytest.raises(ValueError, match="string values"):
+        server_module._validate_tool_metadata({"source": "x" * 513})
+    with pytest.raises(ValueError, match="lists"):
+        server_module._validate_tool_metadata({"source_layers": ["episodic"] * 33})
+    with pytest.raises(ValueError, match="objects"):
+        server_module._validate_tool_metadata(
+            {"budget_decision": {f"k{index}": index for index in range(33)}}
+        )
+    with pytest.raises(ValueError, match="keys"):
+        server_module._validate_tool_metadata({"budget_decision": {"": "bad"}})
+    with pytest.raises(ValueError, match="JSON-serializable"):
+        server_module._validate_tool_metadata({"budget_decision": object()})
+    with pytest.raises(ValueError, match="4096 bytes"):
+        server_module._validate_tool_metadata({"source_layers": ["x" * 512] * 9})
+
+
+def test_request_metadata_and_context_store_edge_cases(store: OmniMemStore) -> None:
+    assert server_module._request_meta_to_dict(_RawContext(None)) == {}
+    assert server_module._request_meta_to_dict(_RawContext({"traceparent": "tp"})) == {
+        "traceparent": "tp"
+    }
+    assert server_module._request_meta_to_dict(_RawContext(object())) == {}
+    assert server_module._get_store_from_context(_RawContext(None, lifespan_context=[])) is None
+    assert (
+        server_module._get_store_from_context(
+            _RawContext(None, lifespan_context={"store": object()})
+        )
+        is None
+    )
+    assert (
+        server_module._get_store_from_context(_RawContext(None, lifespan_context={"store": store}))
+        is store
+    )
+
+
+async def test_store_lifespan_yields_injected_store(store: OmniMemStore) -> None:
+    lifespan = server_module._build_store_lifespan(store)
+
+    async with lifespan(object()) as context:
+        assert context == {"store": store}
+
+
+async def test_legacy_helpers_use_ephemeral_test_store(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("QUILIN_ENV", "test")
+
+    store_result = json.loads(await server_module.memory_store("legacy helper"))
+    recall_result = json.loads(await server_module.memory_recall("missing"))
+
+    assert isinstance(store_result["id"], str)
+    assert recall_result == {"records": []}
+
+
+async def test_create_server_lazily_creates_scratchpad_store(
+    store: OmniMemStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created: list[str] = []
+
+    class LazyScratchpadStore:
+        def __init__(self) -> None:
+            created.append("scratchpad")
+
+        async def write(self, **_kwargs: object) -> None:
+            return None
+
+    monkeypatch.setattr(server_module, "ScratchpadStore", LazyScratchpadStore)
+    lazy_server = create_server(store)
+
+    result = _decode_call_tool_result(
+        await lazy_server.call_tool(
+            "scratchpad_write",
+            {
+                "task_id": "task-1",
+                "session_id": "session-1",
+                "key": "draft",
+                "value": "hello",
+            },
+        )
+    )
+
+    assert created == ["scratchpad"]
+    assert result == {"ok": True}
+
+
+def test_main_configures_logging_and_runs_stdio(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, object]] = []
+
+    class FakeLogger:
+        def info(self, message: str, **kwargs: object) -> None:
+            calls.append((message, kwargs))
+
+    class FakeMCP:
+        def run(self, *, transport: str) -> None:
+            calls.append(("run", transport))
+
+    monkeypatch.setattr(server_module, "configure_once", lambda: calls.append(("configure", None)))
+    monkeypatch.setattr(server_module, "logger", FakeLogger())
+    monkeypatch.setattr(server_module, "mcp", FakeMCP())
+
+    server_module.main()
+
+    assert calls == [
+        ("configure", None),
+        ("omnimem server starting", {"transport": "stdio"}),
+        ("run", "stdio"),
+    ]
 
 
 async def test_roundtrip_store_then_recall(server: object) -> None:

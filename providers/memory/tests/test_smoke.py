@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import runpy
 from pathlib import Path
 
 from omnimem import __version__
+from omnimem import server as server_module
 from omnimem.types import MemoryItem, MemoryRecord
 
 
@@ -11,6 +13,16 @@ def test_package_imports() -> None:
     assert __version__ == "0.0.1"
     record = MemoryRecord(id="1", content="hello")
     assert record.content == "hello"
+
+
+def test_module_entrypoint_delegates_to_server_main(monkeypatch) -> None:
+    calls: list[str] = []
+
+    monkeypatch.setattr(server_module, "main", lambda: calls.append("main"))
+
+    runpy.run_module("omnimem.__main__", run_name="__main__")
+
+    assert calls == ["main"]
 
 
 def test_memory_record_default_tier() -> None:
