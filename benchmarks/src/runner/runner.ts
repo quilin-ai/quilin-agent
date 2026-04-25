@@ -457,7 +457,7 @@ function assertContainedValue(
 
 function assertCommandContained(command: string, workspaceDir: string): void {
 	for (const token of commandTokens(command)) {
-		if (looksLikeFilesystemPath(token)) {
+		if (hasPathSeparator(token) || shellPathTokenPattern.test(token)) {
 			assertPathContained(token, workspaceDir, "command");
 		}
 	}
@@ -517,8 +517,8 @@ function isPathFieldName(key: string): boolean {
 	);
 }
 
-function looksLikeFilesystemPath(token: string): boolean {
-	return shellPathTokenPattern.test(token);
+function hasPathSeparator(token: string): boolean {
+	return token.includes("/") || token.includes("\\");
 }
 
 function isShellExecTool(tool: BenchmarkTool): boolean {

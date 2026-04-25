@@ -463,6 +463,48 @@ describe("runBenchmarkTask", () => {
 		}
 	});
 
+	it("blocks relative command paths that traverse workspace symlinks", async () => {
+		const outsideDir = await mkdtemp(join(tmpdir(), "quilin-runner-outside-"));
+		const shellExec: BenchmarkTool = {
+			name: "shell_exec",
+			execute: vi.fn(async () => ({ content: "{}", isError: false })),
+		};
+
+		try {
+			await expect(
+				runBenchmarkTask({
+					task,
+					options: {
+						agentLoopConfig: {
+							...makeLoopConfig(),
+							tools: [shellExec],
+						},
+						runAgent: async (config, messages) => {
+							const payload = JSON.parse(messages[1]?.content ?? "{}") as {
+								workspace_dir?: string;
+							};
+							const workspaceDir = payload.workspace_dir ?? "";
+							symlinkSync(outsideDir, join(workspaceDir, "link-out"), "dir");
+							await config.tools?.[0]?.execute({
+								command: "cat link-out/secret.txt",
+							});
+							return "patch";
+						},
+						scorer: async () => ({ passed: true, score: 1, details: {} }),
+					},
+				}),
+			).rejects.toMatchObject({
+				name: "BenchmarkRunError",
+				phase: "agent_loop",
+				message:
+					"agent_loop: Benchmark sandbox blocked path outside workspace: command",
+			});
+			expect(shellExec.execute).not.toHaveBeenCalled();
+		} finally {
+			await rm(outsideDir, { recursive: true, force: true });
+		}
+	});
+
 	it.each([
 		"cat /etc/hosts",
 		'cat "/etc/hosts"',
