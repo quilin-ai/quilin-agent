@@ -1,140 +1,33 @@
 from __future__ import annotations
 
 import asyncio
-import json
-import os
-import re
 import sqlite3
 import threading
-from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
-ASCII_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_]+")
-CJK_RUN_PATTERN = re.compile(r"[\u4e00-\u9fff]+")
-
-KG_SCHEMA_COMPONENT = "temporal_kg"
-KG_SCHEMA_VERSION = 1
-KG_DEFAULT_DB_NAME = "memory-kg.db"
-KG_BUSY_TIMEOUT_MS = 5_000
-
-
-def _utcnow() -> datetime:
-    return datetime.now(UTC)
-
-
-def _resolve_db_path(db_path: str | None) -> str:
-    if db_path is not None:
-        return db_path
-
-    if os.environ.get("QUILIN_ENV") == "test":
-        return ":memory:"
-
-    return os.environ.get(
-        "OMNIMEM_KG_PATH",
-        str(Path.home() / ".quilin" / KG_DEFAULT_DB_NAME),
-    )
-
-
-def _serialize_metadata(metadata: dict[str, object] | None) -> str:
-    return json.dumps(metadata or {}, ensure_ascii=False, sort_keys=True)
-
-
-def _deserialize_metadata(metadata_json: str | None) -> dict[str, object]:
-    if not metadata_json:
-        return {}
-
-    loaded = json.loads(metadata_json)
-    return dict(loaded) if isinstance(loaded, dict) else {}
-
-
-def _format_datetime(value: datetime | None) -> str | None:
-    return None if value is None else _normalize_utc_datetime(value).isoformat()
-
-
-def _parse_datetime(value: str | None) -> datetime | None:
-    if value is None:
-        return None
-
-    return _normalize_utc_datetime(datetime.fromisoformat(value))
-
-
-def _normalize_utc_datetime(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-
-    return value.astimezone(UTC)
-
-
-def _normalize_datetime(value: datetime | str | None) -> datetime | None:
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        return _normalize_utc_datetime(value)
-    if isinstance(value, str):
-        return _normalize_utc_datetime(datetime.fromisoformat(value))
-    raise TypeError("temporal bounds must be datetime or ISO 8601 strings")
-
-
-def _normalize_entity(value: str) -> str:
-    return value.casefold().replace("|", "").strip()
-
-
-def _extract_cjk_terms(text: str) -> set[str]:
-    terms: set[str] = set()
-    for run in CJK_RUN_PATTERN.findall(text):
-        if len(run) <= 3:
-            terms.add(run)
-
-        for size in (2, 3):
-            if len(run) < size:
-                continue
-            for index in range(len(run) - size + 1):
-                terms.add(run[index : index + size])
-
-    return terms
-
-
-def extract_entity_terms(text: str) -> list[str]:
-    lowered = text.casefold()
-    terms = set(ASCII_TOKEN_PATTERN.findall(lowered)) | _extract_cjk_terms(text)
-    return sorted(term for term in terms if term)
-
-
-@dataclass(slots=True, frozen=True)
-class KGEdge:
-    edge_id: str
-    subject: str
-    predicate: str
-    object: str
-    valid_from: datetime
-    valid_to: datetime | None
-    memory_id: str | None
-    weight: float
-    metadata: dict[str, object]
-
-
-@dataclass(slots=True, frozen=True)
-class KGSearchResult:
-    edge_id: str
-    seed_entity: str
-    current_entity: str
-    subject: str
-    predicate: str
-    object: str
-    depth: int
-    path: str
-    valid_from: datetime
-    valid_to: datetime | None
-    memory_id: str | None
-    weight: float
-    metadata: dict[str, object]
+from .kg_query import subgraph_search_sync
+from .kg_validation import (
+    KG_BUSY_TIMEOUT_MS,
+    KG_SCHEMA_COMPONENT,
+    KG_SCHEMA_VERSION,
+    KGEdge,
+    KGSearchResult,
+    ensure_schema,
+    extract_entity_terms,
+    format_datetime,
+    get_schema_version,
+    normalize_datetime,
+    resolve_db_path,
+    serialize_metadata,
+    utcnow,
+)
 
 
 class TemporalKnowledgeGraph:
     def __init__(self, db_path: str | None = None) -> None:
-        resolved_db_path = _resolve_db_path(db_path)
+        resolved_db_path = resolve_db_path(db_path)
         if resolved_db_path != ":memory:":
             Path(resolved_db_path).parent.mkdir(parents=True, exist_ok=True)
 
@@ -212,8 +105,8 @@ class TemporalKnowledgeGraph:
         weight: float,
         metadata: dict[str, object] | None,
     ) -> str:
-        resolved_valid_from = _normalize_datetime(valid_from) or _utcnow()
-        resolved_valid_to = _normalize_datetime(valid_to)
+        resolved_valid_from = normalize_datetime(valid_from) or utcnow()
+        resolved_valid_to = normalize_datetime(valid_to)
         if resolved_valid_to is not None and resolved_valid_to < resolved_valid_from:
             raise ValueError("valid_to must be greater than or equal to valid_from")
 
@@ -243,11 +136,11 @@ class TemporalKnowledgeGraph:
                         predicate,
                         object,
                         resolved_valid_from.isoformat(),
-                        _format_datetime(resolved_valid_to),
+                        format_datetime(resolved_valid_to),
                         memory_id,
                         float(weight),
-                        _serialize_metadata(metadata),
-                        _utcnow().isoformat(),
+                        serialize_metadata(metadata),
+                        utcnow().isoformat(),
                     ),
                 )
 
@@ -295,233 +188,18 @@ class TemporalKnowledgeGraph:
         limit: int,
         as_of: datetime | str | None,
     ) -> list[KGSearchResult]:
-        if max_hops < 1:
-            raise ValueError("max_hops must be at least 1")
-
-        effective_limit = max(limit, 0)
-        if effective_limit == 0:
-            return []
-
-        normalized_entities = (_normalize_entity(entity) for entity in entities)
-        seeds = sorted({entity for entity in normalized_entities if entity})
-        if not seeds:
-            return []
-
-        resolved_as_of = _normalize_datetime(as_of)
-        temporal_condition = "1 = 1"
-        temporal_params: list[object] = []
-        if resolved_as_of is not None:
-            temporal_condition = "e.valid_from <= ? AND (e.valid_to IS NULL OR e.valid_to >= ?)"
-            temporal_value = resolved_as_of.isoformat()
-            temporal_params = [temporal_value, temporal_value]
-
-        placeholders = ", ".join(["(?)"] * len(seeds))
-        subject_key_expr = "LOWER(TRIM(REPLACE(e.subject, '|', '')))"
-        object_key_expr = "LOWER(TRIM(REPLACE(e.object, '|', '')))"
-        initial_current_entity_expr = f"""
-            CASE
-                WHEN {subject_key_expr} = seed.seed_entity THEN e.object
-                ELSE e.subject
-            END
-        """
-        initial_current_entity_key_expr = f"""
-            CASE
-                WHEN {subject_key_expr} = seed.seed_entity THEN {object_key_expr}
-                ELSE {subject_key_expr}
-            END
-        """
-        next_entity_expr = """
-            CASE
-                WHEN LOWER(TRIM(REPLACE(e.subject, '|', ''))) = graph.current_entity_key
-                    THEN e.object
-                ELSE e.subject
-            END
-        """
-        next_entity_key_expr = f"""
-            CASE
-                WHEN {subject_key_expr} = graph.current_entity_key THEN {object_key_expr}
-                ELSE {subject_key_expr}
-            END
-        """
-        query_limit = effective_limit * max(max_hops, 1) * max(len(seeds), 1) * 4
-        sql = f"""
-            WITH RECURSIVE
-            seed(seed_entity) AS (
-                VALUES {placeholders}
-            ),
-            graph AS (
-                SELECT
-                    e.edge_id,
-                    e.subject,
-                    e.predicate,
-                    e.object,
-                    e.valid_from,
-                    e.valid_to,
-                    e.memory_id,
-                    e.weight,
-                    e.metadata_json,
-                    1 AS depth,
-                    seed.seed_entity AS seed_entity,
-                    {initial_current_entity_expr} AS current_entity,
-                    {initial_current_entity_key_expr} AS current_entity_key,
-                    e.subject || ' -> ' || e.predicate || ' -> ' || e.object AS path,
-                    json_array(seed.seed_entity, {initial_current_entity_key_expr}) AS visited
-                FROM kg_edges e
-                JOIN seed
-                  ON {subject_key_expr} = seed.seed_entity
-                  OR {object_key_expr} = seed.seed_entity
-                WHERE {temporal_condition}
-
-                UNION ALL
-
-                SELECT
-                    e.edge_id,
-                    e.subject,
-                    e.predicate,
-                    e.object,
-                    e.valid_from,
-                    e.valid_to,
-                    e.memory_id,
-                    e.weight,
-                    e.metadata_json,
-                    graph.depth + 1 AS depth,
-                    graph.seed_entity AS seed_entity,
-                    {next_entity_expr} AS current_entity,
-                    {next_entity_key_expr} AS current_entity_key,
-                    graph.path
-                        || ' => '
-                        || e.subject
-                        || ' -> '
-                        || e.predicate
-                        || ' -> '
-                        || e.object AS path,
-                    json_insert(graph.visited, '$[#]', {next_entity_key_expr}) AS visited
-                FROM graph
-                JOIN kg_edges e
-                  ON {subject_key_expr} = graph.current_entity_key
-                  OR {object_key_expr} = graph.current_entity_key
-                WHERE graph.depth < ?
-                  AND {temporal_condition}
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM json_each(graph.visited)
-                      WHERE json_each.value = {next_entity_key_expr}
-                  )
-            )
-            SELECT
-                edge_id,
-                seed_entity,
-                current_entity,
-                subject,
-                predicate,
-                object,
-                depth,
-                path,
-                valid_from,
-                valid_to,
-                memory_id,
-                weight,
-                metadata_json
-            FROM graph
-            ORDER BY depth ASC, weight DESC, edge_id ASC
-            LIMIT ?
-        """
-
-        params: list[object] = [*seeds, *temporal_params, max_hops, *temporal_params, query_limit]
-        with self._lock:
-            rows = self._conn.execute(sql, params).fetchall()
-
-        seen: set[tuple[str, str]] = set()
-        results: list[KGSearchResult] = []
-        for row in rows:
-            dedupe_key = (row["edge_id"], row["current_entity"])
-            if dedupe_key in seen:
-                continue
-            seen.add(dedupe_key)
-            results.append(
-                KGSearchResult(
-                    edge_id=row["edge_id"],
-                    seed_entity=row["seed_entity"],
-                    current_entity=row["current_entity"],
-                    subject=row["subject"],
-                    predicate=row["predicate"],
-                    object=row["object"],
-                    depth=int(row["depth"]),
-                    path=row["path"],
-                    valid_from=_parse_datetime(row["valid_from"]) or _utcnow(),
-                    valid_to=_parse_datetime(row["valid_to"]),
-                    memory_id=row["memory_id"],
-                    weight=float(row["weight"]),
-                    metadata=_deserialize_metadata(row["metadata_json"]),
-                )
-            )
-            if len(results) >= effective_limit:
-                break
-
-        return results
+        return subgraph_search_sync(self._conn, self._lock, entities, max_hops, limit, as_of)
 
     def _ensure_schema(self) -> None:
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS kg_edges (
-                edge_id TEXT PRIMARY KEY,
-                subject TEXT NOT NULL,
-                predicate TEXT NOT NULL,
-                object TEXT NOT NULL,
-                valid_from TEXT NOT NULL,
-                valid_to TEXT,
-                memory_id TEXT,
-                weight REAL NOT NULL DEFAULT 1.0,
-                metadata_json TEXT NOT NULL DEFAULT '{}',
-                created_at TEXT NOT NULL
-            )
-            """
-        )
-        self._conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_kg_edges_subject_object
-            ON kg_edges(subject, object)
-            """
-        )
-        self._conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_kg_edges_validity
-            ON kg_edges(valid_from, valid_to)
-            """
-        )
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS schema_version (
-                component TEXT PRIMARY KEY,
-                version INTEGER NOT NULL
-            )
-            """
-        )
-        current_version = self._get_schema_version(KG_SCHEMA_COMPONENT)
-        if current_version < KG_SCHEMA_VERSION:
-            self._conn.execute(
-                """
-                INSERT INTO schema_version (component, version)
-                VALUES (?, ?)
-                ON CONFLICT(component) DO UPDATE SET version = excluded.version
-                """,
-                (KG_SCHEMA_COMPONENT, KG_SCHEMA_VERSION),
-            )
-        self._conn.commit()
+        ensure_schema(self._conn)
 
     def _get_schema_version(self, component: str) -> int:
-        row = self._conn.execute(
-            "SELECT version FROM schema_version WHERE component = ?",
-            (component,),
-        ).fetchone()
-        if row is None:
-            return 0
-
-        return int(row["version"])
+        return get_schema_version(self._conn, component)
 
 
 __all__ = [
     "KGEdge",
+    "KG_BUSY_TIMEOUT_MS",
     "KGSearchResult",
     "KG_SCHEMA_COMPONENT",
     "KG_SCHEMA_VERSION",
