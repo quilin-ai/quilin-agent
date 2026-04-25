@@ -23,6 +23,8 @@ describe("benchmarkTaskSchema", () => {
 		expect(benchmarkDatasetSchema.options).toEqual([
 			"swe-bench-lite",
 			"swe-bench-verified",
+			"gaia",
+			"bfcl-v4",
 		]);
 	});
 

@@ -1,25 +1,33 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 const DATASETS_SERVER_ROWS_URL = "https://datasets-server.huggingface.co/rows";
 const SWE_BENCH_LITE_SOURCE_DATASET = "princeton-nlp/SWE-bench_Lite";
 const SWE_BENCH_VERIFIED_SOURCE_DATASET = "princeton-nlp/SWE-bench_Verified";
+const GAIA_SOURCE_DATASET = "gaia-benchmark/GAIA";
 const DEFAULT_CONFIG = "default";
 const DEFAULT_SPLIT = "test";
+const GAIA_CONFIG = "2023_all";
+const GAIA_SPLIT = "validation";
+const GAIA_ATTACHMENT_BASE_URL =
+	"https://huggingface.co/datasets/gaia-benchmark/GAIA/resolve/main/2023/validation";
 const DEFAULT_PAGE_SIZE = 100;
 const DEFAULT_RETRIES = 3;
 const MAX_PAGE_SIZE = 100;
 const MAX_RETRIES = 5;
 const SOURCE_DATASETS: Record<string, string> = {
+	gaia: GAIA_SOURCE_DATASET,
 	"swe-bench-lite": SWE_BENCH_LITE_SOURCE_DATASET,
 	"swe-bench-verified": SWE_BENCH_VERIFIED_SOURCE_DATASET,
 };
 const EXPECTED_ROWS: Record<string, number> = {
+	gaia: 165,
 	"swe-bench-lite": 300,
 	"swe-bench-verified": 500,
 };
 const ALLOWED_ROWS_BASE_URLS = new Set([DATASETS_SERVER_ROWS_URL]);
+const gaiaAttachmentFilePattern = /^[A-Za-z0-9._-]+$/;
 
 interface FetchBenchmarkOptions {
 	readonly dataset: string;
@@ -30,6 +38,7 @@ interface FetchBenchmarkOptions {
 	readonly retries: number;
 	readonly force: boolean;
 	readonly allowUnsafeRowsBaseUrl: boolean;
+	readonly hfToken?: string;
 }
 
 interface DatasetServerRowsResponse {
@@ -61,6 +70,8 @@ async function fetchBenchmark(
 	options: FetchBenchmarkOptions,
 ): Promise<FetchResult> {
 	const sourceDataset = sourceDatasetFor(options.dataset);
+	const sourceConfig = sourceConfigFor(options.dataset);
+	const sourceSplit = sourceSplitFor(options.dataset);
 	validateFetchOptions(options);
 	const cacheDir = resolveDatasetCacheDir(options.cacheRoot, options.dataset);
 	const outputPath = join(cacheDir, "data.jsonl");
@@ -68,8 +79,8 @@ async function fetchBenchmark(
 	const sourceUrl = buildSourceUrl({
 		baseUrl: options.rowsBaseUrl,
 		dataset: sourceDataset,
-		config: DEFAULT_CONFIG,
-		split: DEFAULT_SPLIT,
+		config: sourceConfig,
+		split: sourceSplit,
 	});
 	if (!options.force) {
 		const cached = await tryReadValidManifest({
@@ -92,7 +103,19 @@ async function fetchBenchmark(
 		}
 	}
 
-	const rows = await fetchAllRows(options, sourceDataset);
+	const rows = await fetchAllRows(
+		options,
+		sourceDataset,
+		sourceConfig,
+		sourceSplit,
+	);
+	await fetchGaiaAttachmentsIfNeeded({
+		cacheDir,
+		dataset: options.dataset,
+		hfToken: options.hfToken,
+		retries: options.retries,
+		rows,
+	});
 	const jsonl = `${rows.map((row) => JSON.stringify(row)).join("\n")}\n`;
 	const sha256 = computeSha256(jsonl);
 	const manifest: DatasetManifest = {
@@ -128,7 +151,14 @@ async function fetchBenchmark(
 async function fetchAllRows(
 	options: FetchBenchmarkOptions,
 	sourceDataset: string,
+	sourceConfig: string,
+	sourceSplit: string,
 ): Promise<Record<string, unknown>[]> {
+	if (options.dataset === "gaia" && !options.hfToken) {
+		throw new Error(
+			"HF_TOKEN is required to fetch the gated GAIA dataset; set HF_TOKEN and retry.",
+		);
+	}
 	const rows: Record<string, unknown>[] = [];
 	let offset = 0;
 	const targetRows = options.maxRows ?? expectedRowsFor(options.dataset);
@@ -141,14 +171,18 @@ async function fetchAllRows(
 		const url = buildRowsUrl({
 			baseUrl: options.rowsBaseUrl,
 			dataset: sourceDataset,
-			config: DEFAULT_CONFIG,
-			split: DEFAULT_SPLIT,
+			config: sourceConfig,
+			split: sourceSplit,
 			offset,
 			length: remaining,
 		});
-		const payload = await fetchJsonWithRetry(url, options.retries);
+		const payload = await fetchJsonWithRetry(
+			url,
+			options.retries,
+			options.hfToken,
+		);
 		const pageRows = (payload.rows ?? []).map((entry, index) =>
-			validateSweBenchRow(entry.row ?? {}, options.dataset, offset + index),
+			validateBenchmarkRow(entry.row ?? {}, options.dataset, offset + index),
 		);
 		if (pageRows.length === 0) {
 			break;
@@ -166,11 +200,17 @@ async function fetchAllRows(
 async function fetchJsonWithRetry(
 	url: string,
 	retries: number,
+	hfToken?: string,
 ): Promise<DatasetServerRowsResponse> {
 	let lastError: unknown;
 	for (let attempt = 1; attempt <= retries; attempt += 1) {
 		try {
-			const response = await fetch(url);
+			const response = await fetch(
+				url,
+				hfToken == null || hfToken.length === 0
+					? undefined
+					: { headers: { Authorization: `Bearer ${hfToken}` } },
+			);
 			if (!response.ok) {
 				throw new Error(
 					`Failed to fetch benchmark rows: ${response.status} ${response.statusText}`,
@@ -187,6 +227,106 @@ async function fetchJsonWithRetry(
 	throw lastError instanceof Error
 		? lastError
 		: new Error("Failed to fetch benchmark rows");
+}
+
+async function fetchGaiaAttachmentsIfNeeded(options: {
+	readonly cacheDir: string;
+	readonly dataset: string;
+	readonly hfToken?: string;
+	readonly retries: number;
+	readonly rows: readonly Record<string, unknown>[];
+}): Promise<void> {
+	if (options.dataset !== "gaia") {
+		return;
+	}
+	const fileNames = Array.from(
+		new Set(
+			options.rows
+				.map((row) => row.file_name)
+				.filter((value): value is string => typeof value === "string"),
+		),
+	);
+	if (fileNames.length === 0) {
+		return;
+	}
+	if (!options.hfToken) {
+		throw new Error(
+			"HF_TOKEN is required to fetch GAIA attachments; set HF_TOKEN and retry.",
+		);
+	}
+
+	const attachmentDir = join(options.cacheDir, "attachments");
+	await mkdir(attachmentDir, { recursive: true });
+	for (const fileName of fileNames) {
+		const attachmentPath = resolveGaiaAttachmentPath(attachmentDir, fileName);
+		const attachment = await fetchBinaryWithRetry(
+			buildGaiaAttachmentUrl(fileName),
+			options.retries,
+			options.hfToken,
+		);
+		await writeFile(attachmentPath, attachment);
+	}
+}
+
+async function gaiaAttachmentsComplete(
+	cacheDir: string,
+	data: string,
+): Promise<boolean> {
+	for (const line of data.split(/\r?\n/)) {
+		if (line.length === 0) {
+			continue;
+		}
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(line);
+		} catch {
+			return false;
+		}
+		if (parsed == null || typeof parsed !== "object") {
+			return false;
+		}
+		const fileName = (parsed as Record<string, unknown>).file_name;
+		if (typeof fileName !== "string" || fileName.length === 0) {
+			continue;
+		}
+		try {
+			await access(
+				resolveGaiaAttachmentPath(join(cacheDir, "attachments"), fileName),
+			);
+		} catch {
+			return false;
+		}
+	}
+	return true;
+}
+
+async function fetchBinaryWithRetry(
+	url: string,
+	retries: number,
+	hfToken: string,
+): Promise<Buffer> {
+	let lastError: unknown;
+	for (let attempt = 1; attempt <= retries; attempt += 1) {
+		try {
+			const response = await fetch(url, {
+				headers: { Authorization: `Bearer ${hfToken}` },
+			});
+			if (!response.ok) {
+				throw new Error(
+					`Failed to fetch GAIA attachment: ${response.status} ${response.statusText}`,
+				);
+			}
+			return Buffer.from(await response.arrayBuffer());
+		} catch (error) {
+			lastError = error;
+			if (attempt < retries) {
+				await delay(100 * attempt);
+			}
+		}
+	}
+	throw lastError instanceof Error
+		? lastError
+		: new Error("Failed to fetch GAIA attachment");
 }
 
 async function tryReadValidManifest(options: {
@@ -218,6 +358,12 @@ async function tryReadValidManifest(options: {
 		if (computeSha256(data) !== manifest.sha256) {
 			return null;
 		}
+		if (
+			options.dataset === "gaia" &&
+			!(await gaiaAttachmentsComplete(dirname(options.outputPath), data))
+		) {
+			return null;
+		}
 		if (typeof manifest.rows !== "number" || manifest.rows < 0) {
 			return null;
 		}
@@ -245,6 +391,17 @@ function cacheSatisfiesRequest(
 	return cachedMaxRows >= currentMaxRows && cachedRows >= currentMaxRows;
 }
 
+function validateBenchmarkRow(
+	record: Record<string, unknown>,
+	dataset: string,
+	index: number,
+): Record<string, unknown> {
+	if (dataset === "gaia") {
+		return validateGaiaRow(record, index);
+	}
+	return validateSweBenchRow(record, dataset, index);
+}
+
 function validateSweBenchRow(
 	record: Record<string, unknown>,
 	dataset: string,
@@ -267,12 +424,117 @@ function validateSweBenchRow(
 	return record;
 }
 
+function validateGaiaRow(
+	record: Record<string, unknown>,
+	index: number,
+): Record<string, unknown> {
+	const normalized = {
+		...record,
+		"Final answer": readGaiaRequiredField(
+			record,
+			["Final answer", "final_answer", "answer"],
+			index,
+		),
+		Level: readGaiaLevel(record, index),
+		Question: readGaiaRequiredField(record, ["Question", "question"], index),
+		file_name: readGaiaOptionalField(record, ["file_name", "file"]),
+		task_id: readGaiaRequiredField(record, ["task_id", "id"], index),
+	};
+	return normalized;
+}
+
+function resolveGaiaAttachmentPath(
+	attachmentDir: string,
+	fileName: string,
+): string {
+	validateGaiaAttachmentFileName(fileName);
+	const attachmentPath = resolve(attachmentDir, fileName);
+	const pathFromAttachmentDir = relative(attachmentDir, attachmentPath);
+	if (
+		pathFromAttachmentDir.startsWith("..") ||
+		isAbsolute(pathFromAttachmentDir)
+	) {
+		throw new Error(`GAIA attachment escapes cache directory: ${fileName}`);
+	}
+	return attachmentPath;
+}
+
+function validateGaiaAttachmentFileName(fileName: string): void {
+	if (
+		!gaiaAttachmentFilePattern.test(fileName) ||
+		fileName.includes("..") ||
+		fileName.includes("/") ||
+		fileName.includes("\\")
+	) {
+		throw new Error(`Unsafe GAIA attachment file_name: ${fileName}`);
+	}
+}
+
+function buildGaiaAttachmentUrl(fileName: string): string {
+	validateGaiaAttachmentFileName(fileName);
+	return `${GAIA_ATTACHMENT_BASE_URL}/${encodeURIComponent(fileName)}`;
+}
+
+function readGaiaRequiredField(
+	record: Record<string, unknown>,
+	keys: readonly string[],
+	index: number,
+): string {
+	for (const key of keys) {
+		const value = record[key];
+		if (typeof value === "string" && value.trim().length > 0) {
+			return value;
+		}
+		if (typeof value === "number" || typeof value === "boolean") {
+			return String(value);
+		}
+	}
+	throw new Error(
+		`Invalid gaia row at index ${index}: missing ${keys.join("/")}`,
+	);
+}
+
+function readGaiaOptionalField(
+	record: Record<string, unknown>,
+	keys: readonly string[],
+): string | null {
+	for (const key of keys) {
+		const value = record[key];
+		if (typeof value === "string" && value.trim().length > 0) {
+			return value;
+		}
+	}
+	return null;
+}
+
+function readGaiaLevel(record: Record<string, unknown>, index: number): number {
+	const value = record.Level ?? record.level;
+	const level =
+		typeof value === "number"
+			? value
+			: typeof value === "string"
+				? Number.parseInt(value, 10)
+				: Number.NaN;
+	if (![1, 2, 3].includes(level)) {
+		throw new Error(`Invalid gaia row at index ${index}: missing Level`);
+	}
+	return level;
+}
+
 function sourceDatasetFor(dataset: string): string {
 	const sourceDataset = SOURCE_DATASETS[dataset];
 	if (sourceDataset == null) {
 		throw new Error(`Unsupported dataset: ${dataset}`);
 	}
 	return sourceDataset;
+}
+
+function sourceConfigFor(dataset: string): string {
+	return dataset === "gaia" ? GAIA_CONFIG : DEFAULT_CONFIG;
+}
+
+function sourceSplitFor(dataset: string): string {
+	return dataset === "gaia" ? GAIA_SPLIT : DEFAULT_SPLIT;
 }
 
 function expectedRowsFor(dataset: string): number {
@@ -372,6 +634,7 @@ function parseArgs(argv: readonly string[]): FetchBenchmarkOptions {
 	let rowsBaseUrl = DATASETS_SERVER_ROWS_URL;
 	let retries = DEFAULT_RETRIES;
 	let force = false;
+	const hfToken = process.env.HF_TOKEN;
 	let allowUnsafeRowsBaseUrl =
 		process.env.QUILIN_ALLOW_UNSAFE_BENCHMARK_ROWS_BASE_URL === "1";
 
@@ -436,6 +699,7 @@ function parseArgs(argv: readonly string[]): FetchBenchmarkOptions {
 		cacheRoot,
 		dataset,
 		force,
+		hfToken,
 		maxRows,
 		pageSize,
 		retries,
@@ -449,6 +713,9 @@ function normalizeDataset(value: string): string {
 	}
 	if (value === "verified") {
 		return "swe-bench-verified";
+	}
+	if (value === "GAIA") {
+		return "gaia";
 	}
 	return value;
 }

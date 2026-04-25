@@ -80,6 +80,191 @@ describe("fetch-benchmark cache intent", () => {
 		expect(unusedFetch).not.toHaveBeenCalled();
 	});
 
+	it("fetches GAIA validation rows with an HF token without writing the token to manifest", async () => {
+		const cacheRoot = await tempCacheRoot();
+		const fetchMock = mockGaiaRowsFetch(2);
+
+		const result = await fetchBenchmark(
+			options({
+				cacheRoot,
+				dataset: "gaia",
+				hfToken: "hf_test_token",
+				maxRows: 2,
+			}),
+		);
+		const manifest = await readFile(
+			join(cacheRoot, "datasets", "gaia", "manifest.json"),
+			"utf8",
+		);
+		const attachment = await readFile(
+			join(cacheRoot, "datasets", "gaia", "attachments", "attachment-1.pdf"),
+			"utf8",
+		);
+
+		expect(result).toMatchObject({ rows: 2, skipped: false });
+		expect(fetchMock).toHaveBeenCalledWith(
+			expect.stringContaining("dataset=gaia-benchmark%2FGAIA"),
+			{ headers: { Authorization: "Bearer hf_test_token" } },
+		);
+		expect(fetchMock).toHaveBeenCalledWith(
+			expect.stringContaining("config=2023_all"),
+			expect.anything(),
+		);
+		expect(fetchMock).toHaveBeenCalledWith(
+			expect.stringContaining("split=validation"),
+			expect.anything(),
+		);
+		expect(manifest).not.toContain("hf_test_token");
+		expect(manifest).toContain('"dataset": "gaia"');
+		expect(manifest).toContain('"requested_max_rows": 2');
+		expect(attachment).toBe("gaia attachment fixture");
+	});
+
+	it("refetches GAIA when manifest is valid but cached attachments are missing", async () => {
+		const cacheRoot = await tempCacheRoot();
+		mockGaiaRowsFetch(2);
+		await fetchBenchmark(
+			options({
+				cacheRoot,
+				dataset: "gaia",
+				hfToken: "hf_test_token",
+				maxRows: 2,
+			}),
+		);
+		await rm(
+			join(cacheRoot, "datasets", "gaia", "attachments", "attachment-1.pdf"),
+			{ force: true },
+		);
+
+		const refetch = mockGaiaRowsFetch(2);
+		await expect(
+			fetchBenchmark(
+				options({
+					cacheRoot,
+					dataset: "gaia",
+					hfToken: "hf_test_token",
+					maxRows: 2,
+				}),
+			),
+		).resolves.toMatchObject({ rows: 2, skipped: false });
+		expect(refetch).toHaveBeenCalledWith(
+			expect.stringContaining("/resolve/main/2023/validation/attachment-1.pdf"),
+			{ headers: { Authorization: "Bearer hf_test_token" } },
+		);
+	});
+
+	it("requires HF_TOKEN only when an uncached GAIA fetch needs network access", async () => {
+		const cacheRoot = await tempCacheRoot();
+		const fetchMock = mockGaiaRowsFetch(1);
+
+		await expect(
+			fetchBenchmark(options({ cacheRoot, dataset: "gaia", maxRows: 1 })),
+		).rejects.toThrow(/HF_TOKEN is required/);
+		expect(fetchMock).not.toHaveBeenCalled();
+
+		const secondRoot = await tempCacheRoot();
+		mockGaiaRowsFetch(1);
+		await fetchBenchmark(
+			options({
+				cacheRoot: secondRoot,
+				dataset: "gaia",
+				hfToken: "hf_test_token",
+				maxRows: 1,
+			}),
+		);
+		const unusedFetch = mockGaiaRowsFetch(1);
+		await expect(
+			fetchBenchmark(
+				options({ cacheRoot: secondRoot, dataset: "gaia", maxRows: 1 }),
+			),
+		).resolves.toMatchObject({ rows: 1, skipped: true });
+		expect(unusedFetch).not.toHaveBeenCalled();
+	});
+
+	it("validates GAIA upstream row aliases before writing cache", async () => {
+		const cacheRoot = await tempCacheRoot();
+		const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+			if (String(input).includes("/resolve/main/")) {
+				return responseWithText("source attachment");
+			}
+			return responseWithRows([
+				{
+					answer: false,
+					file: "source.txt",
+					id: "gaia-alias",
+					level: "2",
+					question: "Alias question?",
+				},
+			]);
+		});
+		vi.stubGlobal("fetch", fetchMock);
+
+		await expect(
+			fetchBenchmark(
+				options({
+					cacheRoot,
+					dataset: "gaia",
+					hfToken: "hf_test_token",
+					maxRows: 1,
+				}),
+			),
+		).resolves.toMatchObject({ rows: 1 });
+
+		const data = await readFile(
+			join(cacheRoot, "datasets", "gaia", "data.jsonl"),
+			"utf8",
+		);
+		expect(data).toContain('"Final answer":"false"');
+		expect(data).toContain('"file_name":"source.txt"');
+		expect(data).toContain('"Level":2');
+		await expect(
+			readFile(
+				join(cacheRoot, "datasets", "gaia", "attachments", "source.txt"),
+				"utf8",
+			),
+		).resolves.toBe("source attachment");
+	});
+
+	it("rejects invalid GAIA upstream rows before cache write", async () => {
+		const cacheRoot = await tempCacheRoot();
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => responseWithRows([{}])),
+		);
+
+		await expect(
+			fetchBenchmark(
+				options({
+					cacheRoot,
+					dataset: "gaia",
+					hfToken: "hf_test_token",
+					maxRows: 1,
+				}),
+			),
+		).rejects.toThrow(/Invalid gaia row/);
+	});
+
+	it("rejects unsafe GAIA attachment names before writing cache", async () => {
+		const cacheRoot = await tempCacheRoot();
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				responseWithRows([{ ...makeGaiaRow(1), file_name: "../secret.txt" }]),
+			),
+		);
+
+		await expect(
+			fetchBenchmark(
+				options({
+					cacheRoot,
+					dataset: "gaia",
+					hfToken: "hf_test_token",
+					maxRows: 1,
+				}),
+			),
+		).rejects.toThrow(/Unsafe GAIA attachment/);
+	});
+
 	it("refetches when the cached manifest schema is stale", async () => {
 		const cacheRoot = await tempCacheRoot();
 		mockRowsFetch(1);
@@ -299,6 +484,24 @@ describe("fetch-benchmark cache intent", () => {
 		});
 	});
 
+	it("parses the GAIA alias without exposing HF_TOKEN in CLI output", () => {
+		const previous = process.env.HF_TOKEN;
+		process.env.HF_TOKEN = "hf_env_token";
+		try {
+			expect(parseArgs(["GAIA", "--max-rows", "1"])).toMatchObject({
+				dataset: "gaia",
+				hfToken: "hf_env_token",
+				maxRows: 1,
+			});
+		} finally {
+			if (previous === undefined) {
+				delete process.env.HF_TOKEN;
+			} else {
+				process.env.HF_TOKEN = previous;
+			}
+		}
+	});
+
 	it("parses all CLI options and rejects malformed arguments", () => {
 		expect(
 			parseArgs([
@@ -377,6 +580,7 @@ function options(
 		cacheRoot: overrides.cacheRoot,
 		dataset: overrides.dataset ?? "swe-bench-lite",
 		force: false,
+		hfToken: overrides.hfToken,
 		maxRows: overrides.maxRows,
 		pageSize: overrides.pageSize ?? 100,
 		retries: overrides.retries ?? 1,
@@ -404,6 +608,23 @@ function mockRowsFetch(totalRows: number): ReturnType<typeof vi.fn> {
 	return fetchMock;
 }
 
+function mockGaiaRowsFetch(totalRows: number): ReturnType<typeof vi.fn> {
+	const rows = Array.from({ length: totalRows }, (_entry, index) =>
+		makeGaiaRow(index),
+	);
+	const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+		if (String(input).includes("/resolve/main/")) {
+			return responseWithText("gaia attachment fixture");
+		}
+		const url = new URL(String(input));
+		const offset = Number(url.searchParams.get("offset") ?? "0");
+		const length = Number(url.searchParams.get("length") ?? "100");
+		return responseWithRows(rows.slice(offset, offset + length));
+	});
+	vi.stubGlobal("fetch", fetchMock);
+	return fetchMock;
+}
+
 function responseWithRows(rows: readonly Record<string, unknown>[]): Response {
 	return responseWithRowsPayload({
 		rows: rows.map((row) => ({ row })),
@@ -412,11 +633,22 @@ function responseWithRows(rows: readonly Record<string, unknown>[]): Response {
 
 function responseWithRowsPayload(payload: DatasetServerRowsPayload): Response {
 	return {
+		arrayBuffer: async () => Buffer.from(JSON.stringify(payload)),
 		json: async () => payload,
 		ok: true,
 		status: 200,
 		statusText: "OK",
-	} as Response;
+	} as unknown as Response;
+}
+
+function responseWithText(text: string): Response {
+	return {
+		arrayBuffer: async () => Buffer.from(text),
+		json: async () => JSON.parse(text),
+		ok: true,
+		status: 200,
+		statusText: "OK",
+	} as unknown as Response;
 }
 
 interface DatasetServerRowsPayload {
@@ -431,5 +663,15 @@ function makeSweBenchRow(index: number): Record<string, string> {
 		problem_statement: `Fix issue ${index}`,
 		repo: "repo/project",
 		test_patch: `diff --git a/test-${index}.py b/test-${index}.py\n+test\n`,
+	};
+}
+
+function makeGaiaRow(index: number): Record<string, string | number | null> {
+	return {
+		"Final answer": index === 0 ? "Paris" : "42",
+		Level: (index % 3) + 1,
+		Question: `GAIA validation question ${index}`,
+		file_name: index === 0 ? null : `attachment-${index}.pdf`,
+		task_id: `gaia-validation-${index}`,
 	};
 }

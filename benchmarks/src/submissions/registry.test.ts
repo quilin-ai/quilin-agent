@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	defaultSubmissionAdapterRegistry,
+	gaiaJsonlAdapter,
 	SubmissionAdapterRegistry,
 	sweBenchVerifiedJsonlAdapter,
 } from "./index.js";
@@ -57,5 +58,9 @@ describe("SubmissionAdapterRegistry", () => {
 		expect(defaultSubmissionAdapterRegistry.get("swe-bench-verified")).toBe(
 			sweBenchVerifiedJsonlAdapter,
 		);
+	});
+
+	it("pre-registers the GAIA adapter in the default registry", () => {
+		expect(defaultSubmissionAdapterRegistry.get("gaia")).toBe(gaiaJsonlAdapter);
 	});
 });

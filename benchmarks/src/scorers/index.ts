@@ -1,4 +1,9 @@
 export {
+	GAIA_EXACT_MATCH_SCORER_TYPE,
+	gaiaExactMatchScorer,
+	normalizeGaiaAnswer,
+} from "./gaia-exact-match.js";
+export {
 	createScorerRegistry,
 	ScorerRegistry,
 	ScorerRegistryError,

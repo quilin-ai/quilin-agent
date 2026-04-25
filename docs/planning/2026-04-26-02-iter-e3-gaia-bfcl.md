@@ -25,8 +25,10 @@
 
 | 轮次 | 任务 | 状态 | commit | 实证 |
 |---|---|---|---|---|
-| Day 0 | 本 plan + ADR-010 §3.1 enum 扩 `gaia` + `bfcl-v4` | ⏳ 本轮待 commit | — | — |
-| Iter E3 第一轮 | GAIA loader + scorer + submission adapter；BFCL v4 loader + scorer + submission adapter | ⏳ 待启动 | — | spike 后启动 |
+| Day 0 | 本 plan + ADR-010 §3.1 enum 扩 `gaia` + `bfcl-v4` | ✅ closed | `d983f8b` / `f3b286a` | plan + ADR enum 文档落地 |
+| Day 0 spike | GAIA + BFCL v4 数据 / scorer / submission / sandbox 兼容性调研 | ✅ closed | `2442dfd` | 决议：拆 E3a GAIA → E3b BFCL single/live AST → E3c multi-turn/agentic 或降 E4 |
+| Iter E3a | GAIA loader + scorer + submission adapter | ⏳ 本轮进行中 | — | `task.ts` zod enum 先同步 `gaia`；HF gated fetch 需 `HF_TOKEN` |
+| Iter E3b/E3c | BFCL v4 loader + scorer + submission adapter | ⏳ 待启动 | — | E3a review 通过后启动 |
 | Iter E3 review | R1 独立 subagent + 主线 reconcile | ⏳ 待启动 | — | 第一轮收口后 |
 | Iter E3 收口 | review chain 闭合 + DockerSandbox 内 GAIA/BFCL smoke 通过 + 95% 覆盖率 + just test-all 三语言绿 | ⏳ 待启动 | — | review 通过后 |
 
@@ -38,8 +40,8 @@
 - **每 leaderboard 独立 scorer + adapter**：scorer registry / submission registry 已稳定，新增不影响既有
 - **dataset 枚举严格对齐 ADR-010 §3.1**：4 值 literal union；新加要修 ADR
 - **Memory 降级延续**：per-task working set + FTS5；不用 4 层 OmniMem（同 E2）
-- **GAIA submission**：HuggingFace `gaia-benchmark/leaderboard` 接受 jsonl `{task_id, model_answer, reasoning_trace}`（spike 时核实最新格式）
-- **BFCL v4 submission**：BFCL 官方 GitHub eval 接受 csv/jsonl `{id, model, model_response}`（spike 时核实）
+- **GAIA submission**：HuggingFace `gaia-benchmark/leaderboard` 接受 JSONL；`task_id` / `model_answer` 必填，`reasoning_trace` 可选；scorer 是 quasi exact-match，不是 LLM-as-judge
+- **BFCL v4 submission**：spike 后改为 E3b/E3c 分拆；优先兼容官方 `result/MODEL_NAME/BFCL_v4_<category>_result.json` + `score/*.csv` 目录，不再假设单一 csv/jsonl 上传包
 
 ---
 

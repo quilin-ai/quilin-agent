@@ -8,6 +8,14 @@ export {
 	loadDatasetCache,
 } from "./cache.js";
 export {
+	GAIA_DATASET,
+	GAIA_EXPECTED_VALIDATION_ROWS,
+	type GaiaTaskFilter,
+	iterateGaiaTasks,
+	type LoadGaiaTasksOptions,
+	loadGaiaTasks,
+} from "./gaia.js";
+export {
 	iterateSweBenchLiteTasks,
 	type LoadSweBenchLiteTasksOptions,
 	loadSweBenchLiteTasks,

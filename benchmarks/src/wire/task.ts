@@ -5,6 +5,8 @@ const unknownRecordSchema = z.record(z.string(), z.unknown());
 export const benchmarkDatasetSchema = z.enum([
 	"swe-bench-lite",
 	"swe-bench-verified",
+	"gaia",
+	"bfcl-v4",
 ]);
 
 export const benchmarkTaskSchema = z
