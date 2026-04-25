@@ -396,10 +396,45 @@ function createTaskMessages(
 				task_id: task.task_id,
 				dataset: task.dataset,
 				workspace_dir: workspaceDir,
-				inputs: task.inputs,
+				inputs: promptInputsForTask(task),
 			}),
 		},
 	];
+}
+
+function promptInputsForTask(task: BenchmarkTask): Record<string, unknown> {
+	if (task.dataset !== "gaia") {
+		return task.inputs;
+	}
+	const sanitized = { ...task.inputs };
+	delete sanitized.file_host_path;
+	if (Array.isArray(sanitized.file_attachments)) {
+		sanitized.file_attachments = sanitized.file_attachments.map((entry) =>
+			sanitizeGaiaAttachmentForPrompt(entry),
+		);
+	}
+	return sanitized;
+}
+
+function sanitizeGaiaAttachmentForPrompt(entry: unknown): unknown {
+	if (!isRecord(entry)) {
+		return entry;
+	}
+	return {
+		...(typeof entry.container_path === "string"
+			? { container_path: entry.container_path }
+			: {}),
+		...(typeof entry.file_name === "string"
+			? { file_name: entry.file_name }
+			: {}),
+		...(typeof entry.file_path === "string"
+			? { file_path: entry.file_path }
+			: {}),
+		...(typeof entry.sha256 === "string" ? { sha256: entry.sha256 } : {}),
+		...(typeof entry.size_bytes === "number"
+			? { size_bytes: entry.size_bytes }
+			: {}),
+	};
 }
 
 function systemPromptForTask(task: BenchmarkTask): string {

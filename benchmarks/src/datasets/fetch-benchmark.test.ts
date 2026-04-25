@@ -1,4 +1,12 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+	mkdir,
+	mkdtemp,
+	readdir,
+	readFile,
+	rm,
+	utimes,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -195,6 +203,93 @@ describe("fetch-benchmark cache intent", () => {
 			expect.stringContaining("/resolve/main/2023/validation/attachment-1.pdf"),
 			{ headers: { Authorization: "Bearer hf_test_token" } },
 		);
+	});
+
+	it("refetches GAIA legacy manifests that do not include attachment hashes", async () => {
+		const cacheRoot = await tempCacheRoot();
+		mockGaiaRowsFetch(2);
+		await fetchBenchmark(
+			options({
+				cacheRoot,
+				dataset: "gaia",
+				hfToken: "hf_test_token",
+				maxRows: 2,
+			}),
+		);
+		const manifestPath = join(cacheRoot, "datasets", "gaia", "manifest.json");
+		const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
+			attachments?: unknown;
+		};
+		delete manifest.attachments;
+		await writeFile(
+			manifestPath,
+			`${JSON.stringify(manifest, null, 2)}\n`,
+			"utf8",
+		);
+
+		const refetch = mockGaiaRowsFetch(2);
+		await expect(
+			fetchBenchmark(
+				options({
+					cacheRoot,
+					dataset: "gaia",
+					hfToken: "hf_test_token",
+					maxRows: 2,
+				}),
+			),
+		).resolves.toMatchObject({ rows: 2, skipped: false });
+		expect(refetch).toHaveBeenCalledWith(
+			expect.stringContaining("/resolve/main/2023/validation/attachment-1.pdf"),
+			{ headers: { Authorization: "Bearer hf_test_token" } },
+		);
+	});
+
+	it("serializes concurrent fetches for the same dataset cache", async () => {
+		const cacheRoot = await tempCacheRoot();
+		const fetchMock = mockGaiaRowsFetch(2);
+
+		const results = await Promise.all([
+			fetchBenchmark(
+				options({
+					cacheRoot,
+					dataset: "gaia",
+					hfToken: "hf_test_token",
+					maxRows: 2,
+				}),
+			),
+			fetchBenchmark(
+				options({
+					cacheRoot,
+					dataset: "gaia",
+					hfToken: "hf_test_token",
+					maxRows: 2,
+				}),
+			),
+		]);
+		const datasetEntries = await readdir(join(cacheRoot, "datasets", "gaia"));
+
+		expect(results.filter((result) => result.skipped)).toHaveLength(1);
+		expect(results.filter((result) => !result.skipped)).toHaveLength(1);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(datasetEntries).not.toContain(".fetch.lock");
+	});
+
+	it("removes stale fetch locks before writing a dataset cache", async () => {
+		const cacheRoot = await tempCacheRoot();
+		const datasetDir = join(cacheRoot, "datasets", "swe-bench-lite");
+		await mkdir(datasetDir, { recursive: true });
+		await writeFile(join(datasetDir, ".fetch.lock"), "stale\n", "utf8");
+		const staleTime = new Date(Date.now() - 11 * 60 * 1000);
+		await utimes(join(datasetDir, ".fetch.lock"), staleTime, staleTime);
+		const fetchMock = mockRowsFetch(1);
+
+		await expect(
+			fetchBenchmark(options({ cacheRoot, maxRows: 1 })),
+		).resolves.toMatchObject({ rows: 1, skipped: false });
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		await expect(
+			readFile(join(datasetDir, ".fetch.lock"), "utf8"),
+		).rejects.toThrow();
 	});
 
 	it("cleans staged GAIA attachments when an attachment fetch fails", async () => {

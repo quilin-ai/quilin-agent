@@ -72,25 +72,10 @@ describe("GAIA dataset loader", () => {
 							file_name: "attachment.xlsx",
 							file_path:
 								"/workspace/cache/datasets/gaia/attachments/attachment.xlsx",
-							host_path: join(
-								cacheRoot,
-								"datasets",
-								GAIA_DATASET,
-								"attachments",
-								"attachment.xlsx",
-							),
-							relative_path: join("attachments", "attachment.xlsx"),
 							sha256: computeSha256("fixture:attachment.xlsx"),
 							size_bytes: Buffer.byteLength("fixture:attachment.xlsx"),
 						},
 					],
-					file_host_path: join(
-						cacheRoot,
-						"datasets",
-						GAIA_DATASET,
-						"attachments",
-						"attachment.xlsx",
-					),
 					file_name: "attachment.xlsx",
 					file_path:
 						"/workspace/cache/datasets/gaia/attachments/attachment.xlsx",
@@ -130,6 +115,12 @@ describe("GAIA dataset loader", () => {
 		});
 		await expect(
 			loadGaiaTasks({ cacheRoot: missingManifestRoot }),
+		).rejects.toThrow(/Missing GAIA attachment manifest entry/);
+		const legacyManifestRoot = await writeGaiaCache(records, {
+			manifestPatch: { attachments: undefined },
+		});
+		await expect(
+			loadGaiaTasks({ cacheRoot: legacyManifestRoot }),
 		).rejects.toThrow(/Missing GAIA attachment manifest entry/);
 
 		const missingFileRoot = await writeGaiaCache(records);

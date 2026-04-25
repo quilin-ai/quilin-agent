@@ -183,13 +183,46 @@ describe("runBenchmarkTask", () => {
 
 	it("collects GAIA model_answer JSON instead of patch output", async () => {
 		let capturedSystemPrompt = "";
+		let capturedUserPrompt = "";
+		const hostPath = join(tmpdir(), "gaia-secret.xlsx");
 		const result = await runBenchmarkTask({
-			task: gaiaTask,
+			task: {
+				...gaiaTask,
+				inputs: {
+					...gaiaTask.inputs,
+					file_attachments: [
+						"raw-attachment-marker",
+						{
+							container_path:
+								"/workspace/cache/datasets/gaia/attachments/secret.xlsx",
+							file_name: "secret.xlsx",
+							file_path:
+								"/workspace/cache/datasets/gaia/attachments/secret.xlsx",
+							host_path: hostPath,
+							relative_path: "attachments/secret.xlsx",
+							sha256: "a".repeat(64),
+							size_bytes: 123,
+						},
+						{
+							container_path: 42,
+							file_name: 42,
+							file_path: 42,
+							host_path: hostPath,
+							relative_path: "attachments/ignored.xlsx",
+							sha256: 42,
+							size_bytes: "123",
+						},
+					],
+					file_host_path: hostPath,
+					file_path: "/workspace/cache/datasets/gaia/attachments/secret.xlsx",
+				},
+			},
 			options: {
 				agentLoopConfig: makeLoopConfig(),
 				createRunId: () => "run-gaia",
 				runAgent: async (_config, messages) => {
 					capturedSystemPrompt = messages[0]?.content ?? "";
+					capturedUserPrompt = messages[1]?.content ?? "";
 					return JSON.stringify({
 						model_answer: "Paris",
 						reasoning_trace: "Looked up the capital.",
@@ -204,6 +237,12 @@ describe("runBenchmarkTask", () => {
 		});
 
 		expect(capturedSystemPrompt).toContain("GAIA benchmark task");
+		expect(capturedUserPrompt).toContain("/workspace/cache/datasets/gaia");
+		expect(capturedUserPrompt).toContain("raw-attachment-marker");
+		expect(capturedUserPrompt).not.toContain(hostPath);
+		expect(capturedUserPrompt).not.toContain("file_host_path");
+		expect(capturedUserPrompt).not.toContain("host_path");
+		expect(capturedUserPrompt).not.toContain("relative_path");
 		expect(result.result.output).toEqual({
 			model_answer: "Paris",
 			reasoning_trace: "Looked up the capital.",

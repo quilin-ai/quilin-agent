@@ -79,6 +79,81 @@ describe("gaiaExactMatchScorer", () => {
 		});
 	});
 
+	it("does not let unparsable numeric answers collide with infinity", async () => {
+		for (const finalAnswer of ["inf", "Infinity", "+infinity"]) {
+			await expect(
+				gaiaExactMatchScorer(
+					{ ...task, expected: { final_answer: finalAnswer } },
+					{ model_answer: "not-a-number" },
+				),
+			).resolves.toMatchObject({
+				passed: false,
+				score: 0,
+			});
+		}
+		await expect(
+			gaiaExactMatchScorer(
+				{ ...task, expected: { final_answer: "ok, inf" } },
+				{ model_answer: "ok, garbage" },
+			),
+		).resolves.toMatchObject({
+			passed: false,
+			score: 0,
+		});
+	});
+
+	it("matches Python float() for Unicode decimal digits and invalid underscores", async () => {
+		await expect(
+			gaiaExactMatchScorer(
+				{ ...task, expected: { final_answer: "１２٣" } },
+				{ model_answer: "123" },
+			),
+		).resolves.toMatchObject({
+			passed: true,
+			score: 1,
+		});
+		await expect(
+			gaiaExactMatchScorer(
+				{ ...task, expected: { final_answer: "١.٥e+١٠" } },
+				{ model_answer: "1.5e+10" },
+			),
+		).resolves.toMatchObject({
+			passed: true,
+			score: 1,
+		});
+		for (const finalAnswer of ["1_", "_1"]) {
+			await expect(
+				gaiaExactMatchScorer(
+					{ ...task, expected: { final_answer: finalAnswer } },
+					{ model_answer: "1" },
+				),
+			).resolves.toMatchObject({
+				passed: true,
+				score: 1,
+			});
+		}
+		await expect(
+			gaiaExactMatchScorer(
+				{ ...task, expected: { final_answer: "1__0" } },
+				{ model_answer: "2" },
+			),
+		).resolves.toMatchObject({
+			passed: false,
+			score: 0,
+		});
+		for (const finalAnswer of ["", "+"]) {
+			await expect(
+				gaiaExactMatchScorer(
+					{ ...task, expected: { final_answer: finalAnswer } },
+					{ model_answer: "1" },
+				),
+			).resolves.toMatchObject({
+				passed: false,
+				score: 0,
+			});
+		}
+	});
+
 	it("does not treat JavaScript-only numeric syntax as official Python floats", async () => {
 		await expect(
 			gaiaExactMatchScorer(

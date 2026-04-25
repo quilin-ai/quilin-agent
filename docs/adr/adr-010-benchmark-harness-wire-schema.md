@@ -53,7 +53,7 @@ Iter E1/E2 接受 `swe-bench-lite` / `swe-bench-verified`；**Iter E3（2026-04-
 
 新增两个 dataset 的字段约束：
 
-- `gaia`：`inputs.{question, level, file_name?, file_attachments?}`；`expected.{final_answer, eval_metadata}`；`scorer_type = "gaia-exact-match"`
+- `gaia`：`inputs.{question, level, file_name?, file_path?, file_attachments?}`；`expected.{final_answer, eval_metadata}`；`scorer_type = "gaia-exact-match"`。`file_path` 必须是 Docker/container 视角路径（当前 `/workspace/cache/datasets/gaia/attachments/<file>`），不得暴露 host 绝对路径。`file_attachments[]` 元素冻结为 `{container_path, file_name, file_path, sha256, size_bytes}`；禁止包含 `host_path` / `file_host_path` / `relative_path` 等 host filesystem 细节。
 - `bfcl-v4`：`inputs.{prompt, candidate_functions, multi_turn?}`；`expected.{ground_truth_calls}`；`scorer_type = "bfcl-tool-call-match"`
 
 每个新 dataset 由独立 scorer + submission adapter 实现；runner 5 阶段生命周期 + DockerSandbox MVP DI 不变。

@@ -1,5 +1,13 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import {
+	mkdir,
+	open,
+	readFile,
+	rename,
+	rm,
+	stat,
+	writeFile,
+} from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 const DATASETS_SERVER_ROWS_URL = "https://datasets-server.huggingface.co/rows";
@@ -28,6 +36,8 @@ const EXPECTED_ROWS: Record<string, number> = {
 };
 const ALLOWED_ROWS_BASE_URLS = new Set([DATASETS_SERVER_ROWS_URL]);
 const MAX_GAIA_ATTACHMENT_FILENAME_BYTES = 255;
+const FETCH_LOCK_RETRY_MS = 25;
+const FETCH_LOCK_STALE_MS = 10 * 60 * 1000;
 const gaiaAttachmentFilePattern = /^[A-Za-z0-9._-]+$/;
 
 interface FetchBenchmarkOptions {
@@ -81,12 +91,32 @@ async function fetchBenchmark(
 	const sourceSplit = sourceSplitFor(options.dataset);
 	validateFetchOptions(options);
 	const cacheDir = resolveDatasetCacheDir(options.cacheRoot, options.dataset);
+	await mkdir(cacheDir, { recursive: true });
+	return withDatasetFetchLock(cacheDir, () =>
+		fetchBenchmarkWithLock({
+			cacheDir,
+			options,
+			sourceConfig,
+			sourceDataset,
+			sourceSplit,
+		}),
+	);
+}
+
+async function fetchBenchmarkWithLock(input: {
+	readonly cacheDir: string;
+	readonly options: FetchBenchmarkOptions;
+	readonly sourceConfig: string;
+	readonly sourceDataset: string;
+	readonly sourceSplit: string;
+}): Promise<FetchResult> {
+	const { cacheDir, options, sourceConfig, sourceDataset, sourceSplit } = input;
 	const outputPath = join(cacheDir, "data.jsonl");
 	const manifestPath = join(cacheDir, "manifest.json");
 	const sourceUrl = buildSourceUrl({
 		baseUrl: options.rowsBaseUrl,
-		dataset: sourceDataset,
 		config: sourceConfig,
+		dataset: sourceDataset,
 		split: sourceSplit,
 	});
 	if (!options.force) {
@@ -137,7 +167,6 @@ async function fetchBenchmark(
 		...(attachments == null ? {} : { attachments }),
 	};
 
-	await mkdir(dirname(outputPath), { recursive: true });
 	await writeFile(outputPath, jsonl, "utf8");
 	await writeFile(
 		manifestPath,
@@ -154,6 +183,57 @@ async function fetchBenchmark(
 		manifestPath,
 		skipped: false,
 	};
+}
+
+async function withDatasetFetchLock<T>(
+	cacheDir: string,
+	operation: () => Promise<T>,
+): Promise<T> {
+	const lockPath = join(cacheDir, ".fetch.lock");
+	while (true) {
+		let handle: Awaited<ReturnType<typeof open>>;
+		try {
+			handle = await open(lockPath, "wx");
+		} catch (error) {
+			if (!isFileExistsError(error)) {
+				throw error;
+			}
+			if (await removeStaleFetchLock(lockPath)) {
+				continue;
+			}
+			await delay(FETCH_LOCK_RETRY_MS);
+			continue;
+		}
+		try {
+			await handle.writeFile(
+				`${JSON.stringify({
+					created_at: new Date().toISOString(),
+					pid: process.pid,
+				})}\n`,
+				"utf8",
+			);
+			return await operation();
+		} finally {
+			await handle.close();
+			await rm(lockPath, { force: true });
+		}
+	}
+}
+
+async function removeStaleFetchLock(lockPath: string): Promise<boolean> {
+	try {
+		const lockStat = await stat(lockPath);
+		if (Date.now() - lockStat.mtimeMs <= FETCH_LOCK_STALE_MS) {
+			return false;
+		}
+		await rm(lockPath, { force: true });
+		return true;
+	} catch (error) {
+		if (isNotFoundError(error)) {
+			return true;
+		}
+		throw error;
+	}
 }
 
 async function fetchAllRows(
@@ -660,6 +740,20 @@ function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function isFileExistsError(error: unknown): boolean {
+	return errorCode(error) === "EEXIST";
+}
+
+function isNotFoundError(error: unknown): boolean {
+	return errorCode(error) === "ENOENT";
+}
+
+function errorCode(error: unknown): unknown {
+	return typeof error === "object" && error !== null
+		? (error as { readonly code?: unknown }).code
+		: undefined;
+}
+
 function parsePositiveInt(flag: string, value: string): number {
 	const parsed = Number.parseInt(value, 10);
 	if (!Number.isFinite(parsed) || parsed <= 0 || String(parsed) !== value) {
@@ -771,6 +865,7 @@ async function main(
 	process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 
+/* v8 ignore next 7 -- direct CLI process exit path; main() is covered directly. */
 if (import.meta.main) {
 	main().catch((error: unknown) => {
 		process.stderr.write(

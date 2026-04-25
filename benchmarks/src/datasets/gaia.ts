@@ -48,6 +48,14 @@ interface GaiaAttachment {
 	readonly size_bytes: number;
 }
 
+interface GaiaPromptAttachment {
+	readonly container_path: string;
+	readonly file_name: string;
+	readonly file_path: string;
+	readonly sha256: string;
+	readonly size_bytes: number;
+}
+
 export async function loadGaiaTasks(
 	options: LoadGaiaTasksOptions = {},
 ): Promise<BenchmarkTask[]> {
@@ -218,8 +226,7 @@ async function toBenchmarkTask(
 			...(attachment == null
 				? {}
 				: {
-						file_attachments: [attachment],
-						file_host_path: attachment.host_path,
+						file_attachments: [toPromptAttachment(attachment)],
 						file_name: attachment.file_name,
 						file_path: attachment.file_path,
 					}),
@@ -232,6 +239,16 @@ async function toBenchmarkTask(
 		},
 		scorer_type: "gaia-exact-match",
 		task_id: record.task_id,
+	};
+}
+
+function toPromptAttachment(attachment: GaiaAttachment): GaiaPromptAttachment {
+	return {
+		container_path: attachment.container_path,
+		file_name: attachment.file_name,
+		file_path: attachment.file_path,
+		sha256: attachment.sha256,
+		size_bytes: attachment.size_bytes,
 	};
 }
 
