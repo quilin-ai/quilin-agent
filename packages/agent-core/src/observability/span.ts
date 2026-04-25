@@ -167,7 +167,9 @@ function validateNumericAttribute(key: string): void {
 		key.endsWith("_usd") ||
 		key.endsWith("_tokens") ||
 		key.endsWith("_count") ||
+		key.endsWith("_ratio") ||
 		key.endsWith(".index") ||
+		key.endsWith(".ratio") ||
 		key.includes(".tokens_")
 	) {
 		return;

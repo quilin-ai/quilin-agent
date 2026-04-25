@@ -329,6 +329,56 @@ describe("startRepl", () => {
 		expect(stderrWriteSpy).toHaveBeenCalledWith("Conversation cleared.\n\n");
 	});
 
+	it("passes observability into runAgentLoop and flushes spans after a turn", async () => {
+		const spanSnapshot = {
+			name: "agent.session",
+			traceId: "a".repeat(32),
+			spanId: "b".repeat(16),
+			startTimeUnixMs: 1,
+			status: "ok",
+			attributes: {
+				"session.id": "session-1",
+				"session.user_id": "user-1",
+				"session.task_summary": "test",
+				"session.turn_count": 1,
+				"session.total_cost_usd": 0,
+				"session.total_tokens": 0,
+			},
+			events: [],
+			children: [],
+		};
+		const spans = {
+			snapshot: vi.fn(() => [spanSnapshot]),
+			clear: vi.fn(),
+		};
+		const spanExporter = {
+			exportSpans: vi.fn(async () => undefined),
+		};
+		mockQuestion.mockResolvedValueOnce("hello").mockResolvedValueOnce("/exit");
+		mockRunAgentLoop.mockResolvedValue("reply");
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: createMockProvider(() => createMockLanguageModel()),
+			modelId: "deepseek-chat",
+			observability: { spans: spans as never, sessionId: "session-1" },
+			spanExporter,
+		});
+
+		expect(mockRunAgentLoop).toHaveBeenCalledWith(
+			expect.objectContaining({
+				observability: expect.objectContaining({
+					spans,
+					sessionId: "session-1",
+				}),
+			}),
+			expect.any(Array),
+		);
+		expect(spanExporter.exportSpans).toHaveBeenCalledWith([spanSnapshot]);
+		expect(spans.clear).toHaveBeenCalledTimes(1);
+	});
+
 	it("resets stream render state on /clear", async () => {
 		mockQuestion
 			.mockResolvedValueOnce("hello")

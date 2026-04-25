@@ -409,6 +409,14 @@ describe.sequential("MCPClientManager", () => {
 				session_id: "session-1",
 				key: "draft",
 			});
+			const tracedRecallResult = await runWithObservabilityContext(
+				{
+					requestId: "request-bridge",
+					traceId: "c".repeat(32),
+					spanId: "d".repeat(16),
+				},
+				() => memoryRecall?.execute({ query: "小明" }),
+			);
 
 			expect(storeResult?.isError).toBe(false);
 			expect(JSON.parse(storeResult?.content ?? "{}")).toEqual({
@@ -435,6 +443,14 @@ describe.sequential("MCPClientManager", () => {
 			expect(JSON.parse(scratchpadClearResult?.content ?? "{}")).toEqual({
 				cleared: 1,
 			});
+			expect(tracedRecallResult?.isError).toBe(false);
+			expect(JSON.parse(tracedRecallResult?.content ?? "{}")).toEqual(
+				expect.objectContaining({
+					traceparent: expect.stringMatching(
+						new RegExp(`^00-${"c".repeat(32)}-[a-f0-9]{16}-01$`),
+					),
+				}),
+			);
 		} finally {
 			await manager.disconnect();
 		}

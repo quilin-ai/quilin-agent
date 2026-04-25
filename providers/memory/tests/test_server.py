@@ -263,6 +263,29 @@ async def test_memory_recall_parses_traceparent_metadata(
     assert result["traceparent"].endswith("-01")
 
 
+async def test_memory_store_returns_child_traceparent(
+    store: OmniMemStore,
+) -> None:
+    parent = server_module.parse_traceparent(
+        f"00-{'e' * 32}-{'f' * 16}-01",
+        request_id="request-store",
+    )
+    child = server_module._child_trace_context(parent)
+    assert child is not None
+
+    result = json.loads(
+        await server_module._memory_store_with_store(
+            store,
+            "traceable content",
+            trace_context=child,
+        )
+    )
+
+    assert isinstance(result["id"], str)
+    assert result["traceparent"].startswith(f"00-{'e' * 32}-")
+    assert result["traceparent"].endswith("-01")
+
+
 async def test_scratchpad_tools_are_task_scoped_and_do_not_pollute_memory(
     server: object,
 ) -> None:

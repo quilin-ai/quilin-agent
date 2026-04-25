@@ -59,8 +59,15 @@
 
 ## Residual Risk
 
-- ADR-009 cascade、forbidden fields、schema strictness、env mapping、`config show/set` 主体覆盖较好；剩余风险集中在已有宽权限文件的 `set` 路径。
-- scratchpad 使用 `scratchpad_entries` 独立表，未扩展 ADR-005 `working | episodic | semantic | skill` 枚举；MCP methods 与 TS client 的 snake_case wire 一致。Executor 集成继续留第三轮是稳的。
+- Codex follow-up 已修复 BLOCKING exporter wiring：`index.ts` 在 REPL runtime 创建 `JsonFileSpanExporter` 并把 runtime `OTelSpanProvider` 传给 `startRepl`，`repl.ts` 每轮 `runAgentLoop()` 后 flush span snapshot 并在成功导出后 clear。新增测试覆盖 REPL 将 observability 传入 loop 并自动 flush exporter。
+- Codex follow-up 已修复 Kelvin `config set` 宽权限路径：写入前先拒绝 existing `>0600` config，写回后无条件 `chmod 0600`；新增测试证明 `0644` 文件不会被先写后拒绝。
+- Codex follow-up 已修复 Python dual-emit attribute 漂移：`memory.rank_index` 改为 `memory.rank.index`，TS validator 增补 ratio 规则并覆盖 `memory.score_ratio` / `memory.rank.index` event attributes。
+- Codex follow-up 已补真实 stdio trace 覆盖：`mcp-client.test.ts` 在 ambient observability context 下调用真实 OmniMem `memory_recall`，断言 Python 返回 child traceparent 且 trace_id 与父 trace 一致；`memory_store_tool` 也已解析 `ctx` trace 并回写 child traceparent。
+- 仍保留一个降级说明：当前 FastMCP response traceparent 仍走 JSON payload，不是 envelope metadata；这是 SDK 形态限制下的可用降级，后续如果 SDK 暴露 response metadata，应迁回 ADR-008 的 metadata 形态。
+- AMB 100k 继续只作为 recall gate，不能证明 event_log dual-emit latency；本轮 follow-up 复跑结果为 p95 `0.294ms`，低于 `300ms` 门槛。建议后续补一个 event_log dual-emit latency smoke，避免把 AMB 归因到 dual-emit 写入路径。
+
+- ADR-009 cascade、forbidden fields、schema strictness、env mapping、`config show/set` 主体覆盖较好；已有宽权限文件的 `set` 路径已由 follow-up 测试覆盖。
+- scratchpad 使用 `scratchpad_entries` 独立表，未扩展 ADR-005 `working | episodic | semantic | skill` 枚举；MCP methods、TS client、Executor optional Plan/Step 字段均保持向后兼容。
 - Rust workspace 符合边界：`Cargo.toml` / `crates/mesh-sdk/Cargo.toml` 无外部 crates，`justfile:34` 的 `test-all` 已包含 `test-rs`，`cargo test --workspace` 通过。
 - 写边界没有发现明显越界：Kelvin/Boyle/Newton/Curie touched files 与 plan 范围基本一致。当前工作区另有 `packages/agent-core/src/planning/{executor.ts,executor.test.ts,types.ts}` 修改，非本 review worker 产生，未触碰、未 revert。
 - Plan §17 残余归属仍稳：`docs/planning/00-implementation-plan.md:548-550` 中 M1.1 / LongMemEval / Arm L gate 仍是资源或数据集 blocked；未发现本轮 commit 解锁信号。`25-02 cleanup sweep` 的启动条件仍要求 Iter D 主轴全部通过，鉴于上面的 BLOCKING trace/export 缺口，不能提前启动。

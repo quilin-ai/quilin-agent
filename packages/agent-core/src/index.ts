@@ -11,6 +11,7 @@ import { bootstrapUserRuntime } from "./config/runtime.js";
 import { createProvider, getDefaultModel } from "./llm/provider.js";
 import { normalizeTokenUsage } from "./llm/token-usage.js";
 import { configureLogger, logger } from "./logger.js";
+import { JsonFileSpanExporter } from "./observability/exporters/json-file.js";
 import { startRepl } from "./repl.js";
 import { SQLiteCheckpoint } from "./state/checkpoint.js";
 
@@ -215,6 +216,11 @@ export async function main(options: MainOptions = {}): Promise<void> {
 			provider,
 			modelId,
 			...(sessionId == null ? {} : { sessionId }),
+			observability: {
+				spans: userRuntime.spanProvider,
+				...(sessionId == null ? {} : { sessionId }),
+			},
+			spanExporter: new JsonFileSpanExporter(),
 			mcpServers: capabilitiesRuntime.mcpServers,
 			...(capabilitiesRuntime.skillsManager == null
 				? {}

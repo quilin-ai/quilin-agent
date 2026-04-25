@@ -117,6 +117,27 @@ describe("config set", () => {
 		expect(reloadedJson.config.llm.temperature).toBe(0.7);
 	});
 
+	it("rejects wide-permission existing files before writing", async () => {
+		const file = path.join(tmpDir, "wide.toml");
+		const original = `[llm]\ndefault_model = "claude-sonnet-4-6"\n`;
+		await fs.writeFile(file, original, { mode: 0o644 });
+		await fs.chmod(file, 0o644);
+
+		const result = await runConfigCommand(
+			["set", "llm.default_model", "claude-opus-4-7", "--config", file],
+			{ env: {} },
+		);
+
+		if (process.platform === "win32") {
+			expect(result.exitCode).toBe(0);
+			return;
+		}
+
+		expect(result.exitCode).toBe(1);
+		expect(result.stderr).toMatch(/permission 644 > 0600/);
+		await expect(fs.readFile(file, "utf8")).resolves.toBe(original);
+	});
+
 	it("coerces booleans and numbers from string args", async () => {
 		const file = path.join(tmpDir, "config.toml");
 		const boolResult = await runConfigCommand(

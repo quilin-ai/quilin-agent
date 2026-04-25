@@ -135,11 +135,17 @@ describe("main", () => {
 			{ mode: "repl" },
 			"Starting CLI REPL...",
 		);
-		expect(startRepl).toHaveBeenCalledWith({
-			provider,
-			modelId: "deepseek-chat",
-			mcpServers: expectedBuiltinMcpServers(),
-		});
+		expect(startRepl).toHaveBeenCalledWith(
+			expect.objectContaining({
+				provider,
+				modelId: "deepseek-chat",
+				observability: expect.objectContaining({
+					spans: expect.any(Object),
+				}),
+				spanExporter: expect.any(Object),
+				mcpServers: expectedBuiltinMcpServers(),
+			}),
+		);
 		expect(exitSpy).toHaveBeenCalledWith(0);
 	});
 
@@ -209,12 +215,19 @@ describe("main", () => {
 
 		await main({ runtimeMode: "repl" });
 
-		expect(startRepl).toHaveBeenCalledWith({
-			provider,
-			modelId: "deepseek-chat",
-			sessionId: "session-123",
-			mcpServers: expectedBuiltinMcpServers(),
-		});
+		expect(startRepl).toHaveBeenCalledWith(
+			expect.objectContaining({
+				provider,
+				modelId: "deepseek-chat",
+				sessionId: "session-123",
+				observability: expect.objectContaining({
+					sessionId: "session-123",
+					spans: expect.any(Object),
+				}),
+				spanExporter: expect.any(Object),
+				mcpServers: expectedBuiltinMcpServers(),
+			}),
+		);
 		expect(mockCheckpointList).not.toHaveBeenCalled();
 	});
 
@@ -245,11 +258,18 @@ describe("main", () => {
 		await main({ runtimeMode: "repl" });
 
 		expect(mockCheckpointList).toHaveBeenCalledTimes(1);
-		expect(startRepl).toHaveBeenCalledWith({
-			provider,
-			modelId: "deepseek-chat",
-			sessionId: "latest-session",
-			mcpServers: expectedBuiltinMcpServers(),
-		});
+		expect(startRepl).toHaveBeenCalledWith(
+			expect.objectContaining({
+				provider,
+				modelId: "deepseek-chat",
+				sessionId: "latest-session",
+				observability: expect.objectContaining({
+					sessionId: "latest-session",
+					spans: expect.any(Object),
+				}),
+				spanExporter: expect.any(Object),
+				mcpServers: expectedBuiltinMcpServers(),
+			}),
+		);
 	});
 });

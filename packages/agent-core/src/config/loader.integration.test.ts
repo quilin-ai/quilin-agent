@@ -169,23 +169,29 @@ describe("config loader integration", () => {
 			watcherEnabled: false,
 			debounceMs: 125,
 		});
-		expect(startRepl).toHaveBeenCalledWith({
-			provider: expect.any(Function),
-			modelId: "deepseek-chat",
-			mcpServers: [
-				{
-					id: "stub-json",
-					namespace: "stub-json",
-					defaultRiskLevel: "read",
-					config: {
-						command: "node",
-						args: ["stub-server.js"],
-						cwd: fixtureDir,
+		expect(startRepl).toHaveBeenCalledWith(
+			expect.objectContaining({
+				provider: expect.any(Function),
+				modelId: "deepseek-chat",
+				mcpServers: [
+					{
+						id: "stub-json",
+						namespace: "stub-json",
+						defaultRiskLevel: "read",
+						config: {
+							command: "node",
+							args: ["stub-server.js"],
+							cwd: fixtureDir,
+						},
 					},
-				},
-			],
-			skillsManager: expect.objectContaining(mockSkillsManagerInstance),
-		});
+				],
+				skillsManager: expect.objectContaining(mockSkillsManagerInstance),
+				observability: expect.objectContaining({
+					spans: expect.any(Object),
+				}),
+				spanExporter: expect.any(Object),
+			}),
+		);
 		expect(mockValidateMcpServerConfig).toHaveBeenCalledWith({
 			command: "node",
 			args: ["stub-server.js"],
@@ -258,23 +264,29 @@ describe("config loader integration", () => {
 			watcherEnabled: false,
 			debounceMs: 250,
 		});
-		expect(startRepl).toHaveBeenCalledWith({
-			provider: expect.any(Function),
-			modelId: "deepseek-chat",
-			mcpServers: [
-				{
-					id: "stub-yaml",
-					namespace: "stub-yaml",
-					defaultRiskLevel: "exec",
-					config: {
-						command: "node",
-						args: ["stub-server.js"],
-						cwd: fixtureDir,
+		expect(startRepl).toHaveBeenCalledWith(
+			expect.objectContaining({
+				provider: expect.any(Function),
+				modelId: "deepseek-chat",
+				mcpServers: [
+					{
+						id: "stub-yaml",
+						namespace: "stub-yaml",
+						defaultRiskLevel: "exec",
+						config: {
+							command: "node",
+							args: ["stub-server.js"],
+							cwd: fixtureDir,
+						},
 					},
-				},
-			],
-			skillsManager: expect.objectContaining(mockSkillsManagerInstance),
-		});
+				],
+				skillsManager: expect.objectContaining(mockSkillsManagerInstance),
+				observability: expect.objectContaining({
+					spans: expect.any(Object),
+				}),
+				spanExporter: expect.any(Object),
+			}),
+		);
 		expect(mockValidateMcpServerConfig).toHaveBeenCalledWith({
 			command: "node",
 			args: ["stub-server.js"],

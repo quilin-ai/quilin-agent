@@ -211,6 +211,7 @@ async def _memory_store_with_store(
     layer: MemoryLayer | None = None,
     metadata: dict[str, object] | None = None,
     content_type: str = "text",
+    trace_context: TraceContext | None = None,
 ) -> str:
     """Store a new memory record.
 
@@ -238,7 +239,7 @@ async def _memory_store_with_store(
     except Exception as exc:
         _raise_memory_operation_error("memory_store", exc)
 
-    return json.dumps({"id": record.id})
+    return json.dumps({"id": record.id, **_trace_payload(trace_context)})
 
 
 def _trace_payload(trace_context: TraceContext | None) -> dict[str, str]:
@@ -430,6 +431,7 @@ def create_server(
             tier: Memory tier (default "working").
             layer: Canonical memory layer. Takes precedence over tier.
         """
+        parent_trace = _trace_context_from_context(ctx)
         return await _memory_store_with_store(
             await resolve_store(ctx),
             content,
@@ -437,6 +439,7 @@ def create_server(
             layer,
             metadata,
             content_type,
+            trace_context=_child_trace_context(parent_trace),
         )
 
     @server.tool(name="scratchpad_write")

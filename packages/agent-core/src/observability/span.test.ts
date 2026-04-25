@@ -123,13 +123,21 @@ describe("OTelSpanProvider", () => {
 		const provider = new OTelSpanProvider();
 		const llm = provider.startSpan("llm.invoke", llmAttributes);
 
-		llm.addEvent("first_token", { "llm.tokens_output": 1 });
+		llm.addEvent("first_token", {
+			"llm.tokens_output": 1,
+			"memory.rank.index": 1,
+			"memory.score_ratio": 0.75,
+		});
 		llm.end("ok");
 
 		expect(provider.readSpan(llm.spanId)?.events).toEqual([
 			expect.objectContaining({
 				name: "first_token",
-				attributes: { "llm.tokens_output": 1 },
+				attributes: {
+					"llm.tokens_output": 1,
+					"memory.rank.index": 1,
+					"memory.score_ratio": 0.75,
+				},
 				timestampUnixMs: expect.any(Number),
 			}),
 		]);

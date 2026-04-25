@@ -449,7 +449,7 @@ class RetrievalEventLog:
                 "memory.run_id": run_id,
                 "memory.query_hash": query_hash,
                 "memory.memory_id": item.id,
-                "memory.rank_index": rank,
+                "memory.rank.index": rank,
                 "memory.score_ratio": score,
                 "memory.source_layer": self._source_layer(item),
                 **self._trace_attributes(trace_context),

@@ -15,6 +15,8 @@ import type { createProvider } from "./llm/provider.js";
 import type { InferenceConfig, LLMStreamEvent } from "./llm/types.js";
 import { logger } from "./logger.js";
 import { runAgentLoop } from "./loop.js";
+import type { SpanExporter } from "./observability/exporters/composite.js";
+import type { AgentLoopObservability } from "./observability/loop.js";
 import { WriteAuthority } from "./safety/write-authority.js";
 import type { SkillsCatalogChange, SkillsManager } from "./skills/manager.js";
 import { SQLiteCheckpoint } from "./state/checkpoint.js";
@@ -34,6 +36,8 @@ interface ReplOptions {
 	provider: ReturnType<typeof createProvider>;
 	modelId: string;
 	sessionId?: string;
+	observability?: AgentLoopObservability;
+	spanExporter?: SpanExporter;
 	tools?: readonly Tool[];
 	mcpServers?: readonly MCPServerEntry[];
 	skillsManager?: SkillsManager;
@@ -108,6 +112,34 @@ function withDefaultMetadata(tools: readonly Tool[]): ToolWithMetadata[] {
 		category: "programmatic",
 		riskLevel: "read",
 	}));
+}
+
+async function flushObservabilitySpans(
+	observability: AgentLoopObservability | undefined,
+	exporter: SpanExporter | undefined,
+): Promise<void> {
+	const spans = observability?.spans;
+	if (spans == null || exporter == null) {
+		return;
+	}
+
+	const snapshots = spans.snapshot();
+	if (snapshots.length === 0) {
+		return;
+	}
+
+	try {
+		if (exporter.exportSpans != null) {
+			await exporter.exportSpans(snapshots);
+		} else if (exporter.exportSpan != null) {
+			await Promise.all(snapshots.map((span) => exporter.exportSpan?.(span)));
+		} else {
+			return;
+		}
+		spans.clear();
+	} catch (err) {
+		logger.error({ err }, "REPL: span export failed");
+	}
 }
 
 type ReasoningDisplayMode = "collapsed" | "verbose";
@@ -482,6 +514,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 						lastMessageTime: previousLastActiveAt,
 						tools: allTools,
 						inferenceConfig,
+						observability: options.observability,
 						hooks: {
 							onAssistantMessage: (message) => {
 								latestAssistantMessage = message;
@@ -513,6 +546,11 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 					isTerminal: false,
 					lastActiveAt: new Date().toISOString(),
 				});
+			} finally {
+				await flushObservabilitySpans(
+					options.observability,
+					options.spanExporter,
+				);
 			}
 		}
 	} finally {

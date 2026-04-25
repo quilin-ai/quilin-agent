@@ -201,14 +201,13 @@ async function runSet(
 	}
 
 	let existing: Record<string, unknown> = {};
-	let fileExists = false;
 	try {
+		await assertSetFileMode(flags.configPath);
 		const raw = await fs.readFile(flags.configPath, "utf8");
 		const { parse: parseToml } = await import("smol-toml");
 		const parsed = parseToml(raw);
 		if (typeof parsed === "object" && parsed !== null) {
 			existing = parsed as Record<string, unknown>;
-			fileExists = true;
 		}
 	} catch (error) {
 		const code = (error as NodeJS.ErrnoException).code;
@@ -244,9 +243,7 @@ async function runSet(
 				mode: 0o600,
 			},
 		);
-		if (!fileExists) {
-			await fs.chmod(flags.configPath, 0o600);
-		}
+		await fs.chmod(flags.configPath, 0o600);
 	} catch (error) {
 		return cliError(error);
 	}
@@ -277,6 +274,20 @@ async function runSet(
 		)}\n`,
 		stderr: "",
 	};
+}
+
+async function assertSetFileMode(filePath: string): Promise<boolean> {
+	const stat = await fs.stat(filePath);
+	if (process.platform !== "win32") {
+		const mode = stat.mode & 0o777;
+		if (mode > 0o600) {
+			throw new UserConfigError(
+				`refusing to write ${filePath}: permission ${mode.toString(8)} > 0600 (chmod 0600 ${filePath})`,
+				"FILE_PERMISSION",
+			);
+		}
+	}
+	return true;
 }
 
 function setDotPath(

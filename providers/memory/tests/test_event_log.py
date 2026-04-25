@@ -134,7 +134,7 @@ async def test_event_log_persists_trace_columns_and_dual_emits_span_events() -> 
         "memory.citation_sample",
     ]
     assert emitted[0][1]["trace.trace_id"] == "a" * 32
-    assert emitted[0][1]["memory.rank_index"] == 1
+    assert emitted[0][1]["memory.rank.index"] == 1
 
 
 async def test_event_log_dual_emit_failure_does_not_block_sqlite_write() -> None:
