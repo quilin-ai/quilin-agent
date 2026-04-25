@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from omnimem.event_log import RetrievalEventLog, hash_query
+from omnimem.event_log import RetrievalEventLog, TraceContext, hash_query, parse_traceparent
 from omnimem.types import MemoryItem
 
 
@@ -98,3 +98,75 @@ async def test_event_log_marks_citations_by_event_id_not_memory_id() -> None:
     assert [event.event_id for event in cited_events] == first_event_ids
     assert stats["memory-1"].impressions == 2
     assert stats["memory-1"].citations == 1
+
+
+async def test_event_log_persists_trace_columns_and_dual_emits_span_events() -> None:
+    emitted: list[tuple[str, dict[str, object]]] = []
+    event_log = RetrievalEventLog(
+        db_path=":memory:",
+        top_n=1,
+        span_event_sink=lambda name, attributes: emitted.append((name, attributes)),
+    )
+    trace_context = TraceContext(
+        trace_id="a" * 32,
+        span_id="b" * 16,
+        request_id="request-1",
+    )
+
+    event_ids = await event_log.record_retrieval(
+        "run-trace",
+        "database migration",
+        [_retrieved_item("memory-1", source="bm25_fts", layer="episodic", score=0.9)],
+        trace_context=trace_context,
+    )
+    await event_log.mark_cited(
+        "run-trace",
+        event_ids,
+        trace_context=trace_context,
+    )
+    events = await event_log.list_events(run_id="run-trace")
+
+    assert events[0].trace_id == "a" * 32
+    assert events[0].span_id == "b" * 16
+    assert events[0].request_id == "request-1"
+    assert [event_name for event_name, _attributes in emitted] == [
+        "memory.retrieval_sample",
+        "memory.citation_sample",
+    ]
+    assert emitted[0][1]["trace.trace_id"] == "a" * 32
+    assert emitted[0][1]["memory.rank_index"] == 1
+
+
+async def test_event_log_dual_emit_failure_does_not_block_sqlite_write() -> None:
+    def failing_sink(_name: str, _attributes: dict[str, object]) -> None:
+        raise RuntimeError("otel unavailable")
+
+    event_log = RetrievalEventLog(
+        db_path=":memory:",
+        top_n=1,
+        span_event_sink=failing_sink,
+    )
+
+    event_ids = await event_log.record_retrieval(
+        "run-fallback",
+        "database migration",
+        [_retrieved_item("memory-1", source="bm25_fts", layer="episodic", score=0.9)],
+    )
+    events = await event_log.list_events(run_id="run-fallback")
+
+    assert len(event_ids) == 1
+    assert [event.event_id for event in events] == event_ids
+
+
+def test_parse_traceparent_extracts_w3c_trace_context() -> None:
+    trace_context = parse_traceparent(
+        f"00-{'a' * 32}-{'b' * 16}-01",
+        request_id="request-1",
+    )
+
+    assert trace_context is not None
+    assert trace_context.trace_id == "a" * 32
+    assert trace_context.span_id == "b" * 16
+    assert trace_context.request_id == "request-1"
+    assert trace_context.traceparent == f"00-{'a' * 32}-{'b' * 16}-01"
+    assert parse_traceparent("bad-traceparent") is None

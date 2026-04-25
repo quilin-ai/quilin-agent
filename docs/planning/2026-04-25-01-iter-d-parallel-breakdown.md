@@ -38,8 +38,13 @@
 | 第一轮 Kelvin（schema/loader/env） | `smol-toml` 1.6.1 + `user-config-schema.ts` (145 LOC) + `user-config.ts` (522 LOC) + `user-config.test.ts` (247 LOC, 21 tests) | ✅ 完成 | `630fce2` | tsc 0；biome 147 clean；`pnpm test` = 63 files / 509 passed；`index.ts` wire 留至 Kelvin tail |
 | 第一轮 Newton（TS-only span provider） | `observability/span.ts` + `log.ts` + `context.ts`（AsyncLocalStorage）+ `loop.ts` 五层埋点 + `mcp-client.ts` `_meta.request_id` placeholder + 测试（5 文件新增，4 文件改动）| ✅ 完成 | `3cf2a9a` | tsc 0；biome 154 clean；`pnpm test` = 66 files / 518 passed（488 基线 + 21 Kelvin + 9 Newton）；`wc -l loop.ts` = 199（CC-01 < 200 守住）；无 `@opentelemetry` 依赖、无 exporter、无旧 `agent.node` 残留；语义修正：一次 `runAgentLoop` 只产生一个 `agent.turn` + `request_id` |
 | 第一轮 Curie（Rust mesh-sdk stub + CI） | `Cargo.toml` workspace root + `Cargo.lock` + `crates/mesh-sdk/{Cargo.toml,src/lib.rs}` + `justfile`（build-rs/test-rs，test-all 含 Rust）+ `.github/workflows/ci.yml`（stable Rust + cargo check --workspace 强制）+ `quilin.md` Rust 措辞 | ✅ 完成 | `fd44e2d` | `just build-rs` 0；`just test-rs` = 1 passed；`just test-all` = TS 518 + Python 155 + Rust 1 全过；无外部 Rust crates 依赖 |
-| 第一轮 Kelvin tail（index.ts wire） | `config/runtime.ts`（新，72 LOC：bootstrap + 单例 accessor）+ `config/runtime.test.ts`（新，6 tests）+ `index.ts` 顶部调 `bootstrapUserRuntime()` 把 user-config / OTelSpanProvider / StructuredLogger 串起来；启动日志附 `user_config` 段 | ⏳ 待 commit | — | tsc 0；biome 156 clean；`pnpm test` = 67 files / 524 passed（基线 488 + 21 Kelvin + 9 Newton + 6 runtime）；`just test-all` 三语言全过 |
-| 第一轮 review gate | 全套验证 + 写边界硬隔离实证 + 跨轨道契约一致性 | ⏳ 待启动 | — | Kelvin tail commit 后启动 |
+| 第一轮 Kelvin tail（index.ts wire） | `config/runtime.ts`（新，72 LOC：bootstrap + 单例 accessor）+ `config/runtime.test.ts`（新，6 tests）+ `index.ts` 顶部调 `bootstrapUserRuntime()` 把 user-config / OTelSpanProvider / StructuredLogger 串起来；启动日志附 `user_config` 段 | ✅ 完成 | `c4775d6` | tsc 0；biome 156 clean；`pnpm test` = 67 files / 524 passed；`just test-all` 三语言全过 |
+| 第二轮 Kelvin CLI（slice-two）| `cli/config-cmd.ts`（新，356 LOC）+ `config-cmd.test.ts`（新，17 tests）+ `index.ts` `dispatchCli()` 拦截 `config` subcommand | ✅ 完成 | `ed8a39c` | tsc 0；biome 158 clean；`pnpm test` = 68 files / 541 passed（基线 524 + 17 CLI）；`quilin config show/--source/set` 实测路径覆盖 |
+| 第二轮 Boyle B1（slice-two scratchpad core + TS client）| `omnimem/scratchpad.py`（新，独立 SQLite table + TTL + per-task LRU + 跨 task 隔离）+ `tests/test_scratchpad.py`（5 tests）+ `memory/scratchpad-client.ts`（新，MCP wrapper + runtime config consumer + Null fallback）+ `scratchpad-client.test.ts`（7 tests）。Executor 集成按共识降级第三轮（Plan/Step 类型未稳）| ✅ 完成 | `000ca33` | `pytest tests/test_scratchpad.py` = 5 passed；ruff clean；`pnpm test scratchpad-client.test.ts` = 7 passed；biome clean；server.py MCP method 集成留 N2 合并 |
+| 第二轮 Newton N2（exporter + Python ingest + traceparent + M1.4 dual-emit）| `observability/exporters/`（json-file + composite + tests，新）+ `observability/context.ts` 加 W3C traceparent 序列化 + `mcp-client.ts` `_meta.traceparent/request_id` 携带 + `omnimem/event_log.py` 加 trace 列 + dual-emit + `omnimem/event_log_schema.py` 扩展 + `omnimem/server.py` 解析 traceparent + child span 回写 + `scratchpad_*` MCP methods 一并合并 | ✅ 完成待 commit | — | tsc 0；biome 164 clean；ruff clean；`pnpm test` = 71 files / 551 passed；`pytest` = 166 passed；`just test-all` = TS 551 + Python 166 + Rust 1；AMB 100k p95 = 16.577ms（≤ 300ms）；`wc -l loop.ts` = 199 |
+| 第二轮 review gate | 全套验证 + 写边界硬隔离实证 + 跨轨道契约一致性 + AMB 100k p95 ≤ 300ms（M1.4 dual-emit 不回归）| ⏳ 待启动 | — | Newton N2 commit 后启动 |
+| 第三轮 Boyle 收尾（Executor 集成）| 扩 Plan/Step 字段 + Executor wire scratchpad 读写 + 端到端 long-running task 测试 | ⏳ 待启动 | — | 第二轮全 land 后启动 |
+| 跨轨道交叉 review | Codex 派独立 subagent 跨 Newton + Kelvin + Curie + Boyle 四轨道 review；Plan §17 残余归属再核 | ⏳ 待启动 | — | 第三轮收口后启动 |
 
 ---
 
@@ -210,7 +215,7 @@ Day 0 是单线串行步骤；契约未冻结前不允许并行轨道开工。
 | TTL / capacity 清理 | 同上 | 后台清理任务（与 `idle_budget` stub 复用调度）；超 capacity 时 LRU 驱逐 |
 | MCP methods | `omnimem/server.py` | `scratchpad_write` / `scratchpad_read` / `scratchpad_clear`；遵循 ADR-008 trace 传递 |
 | `ScratchpadClient` | `packages/agent-core/src/memory/scratchpad-client.ts`（新） | TS 客户端；`NullScratchpadClient` fallback |
-| Executor 集成 | `packages/agent-core/src/planning/executor.ts` | step context 读写 scratchpad；step 结束按策略清理 |
+| Executor 集成 | `packages/agent-core/src/planning/executor.ts` | step context 读写 scratchpad；step 结束按策略清理。**降级为 concern 留第三轮**（Codex 第二轮发现：当前 Plan/Step 类型没有 scratchpad key/value 语义，强 wire 会固定一个不稳的契约；先把 scratchpad 核心 + MCP + TS client 做稳，第三轮再扩 Plan step 字段做 executor 集成） |
 | Config 消费 | `~/.quilin/config.toml` `memory.scratchpad.*` | 默认 `ttl_sec=3600` / `capacity_per_task=1024`（条数） |
 
 ### 6.2 Boyle DoD
@@ -295,7 +300,7 @@ Curie 可与任意轨道并行；Newton 与 Boyle 在 S1 同步点对齐 trace �
 
 - **Newton 收尾（exporter + Python + M1.4）**：`json_file_exporter` + `composite_exporter` + Python `event_log.py` trace ingest + Python `server.py` traceparent 解析 + **M1.4 event_log OTel bridge dual-emit**（末尾接入）+ S1 同步实证（端到端 turn `.logs/traces-*.jsonl` + AMB 100k p95 ≤ 300ms 不回归）
 - **Kelvin 收尾（CLI）**：`quilin config show/set` CLI + `--config` 覆盖支持 + S2 同步实证
-- **Boyle 起步**：`Scratchpad` 模型 + MCP methods + TS client + Executor 集成（依赖 Newton 第一轮 trace 上下文 + Kelvin 第一轮 `memory.scratchpad.*` schema）
+- **Boyle 起步**：`Scratchpad` 模型 + MCP methods + TS client（依赖 Newton 第一轮 trace 上下文 + Kelvin 第一轮 `memory.scratchpad.*` schema）；**Executor 集成降级为 concern**，留第三轮（Codex 判断：当前 Plan/Step 类型没有 scratchpad key/value 语义，第二轮强 wire 会固定不稳契约）
 
 ### 11.4 Review gate
 

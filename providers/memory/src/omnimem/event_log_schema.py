@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 
-EVENT_LOG_SCHEMA_VERSION = 1
+EVENT_LOG_SCHEMA_VERSION = 2
 EVENT_LOG_COMPONENT = "retrieval_event_log"
 DEFAULT_TOP_N = 10
 
@@ -27,6 +27,9 @@ def ensure_event_log_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    _ensure_column(conn, "retrieval_event_log", "trace_id", "TEXT")
+    _ensure_column(conn, "retrieval_event_log", "request_id", "TEXT")
+    _ensure_column(conn, "retrieval_event_log", "span_id", "TEXT")
     conn.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_retrieval_event_log_run
@@ -56,6 +59,19 @@ def ensure_event_log_schema(conn: sqlite3.Connection) -> None:
         (EVENT_LOG_COMPONENT, EVENT_LOG_SCHEMA_VERSION),
     )
     conn.commit()
+
+
+def _ensure_column(
+    conn: sqlite3.Connection,
+    table: str,
+    column: str,
+    definition: str,
+) -> None:
+    existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    if column in existing:
+        return
+
+    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
 __all__ = [

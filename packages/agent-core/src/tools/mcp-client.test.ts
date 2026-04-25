@@ -147,7 +147,7 @@ describe.sequential("MCPClientManager", () => {
 		vi.useRealTimers();
 	});
 
-	it("forwards ambient request_id through MCP request metadata", async () => {
+	it("forwards ambient traceparent and request_id through MCP request metadata", async () => {
 		const manager = new MCPClientManager();
 		const client = {
 			callTool: vi.fn(async () => ({
@@ -161,21 +161,30 @@ describe.sequential("MCPClientManager", () => {
 			isConnected: true,
 		});
 
-		await runWithObservabilityContext({ requestId: "request-1" }, () =>
-			(
-				manager as unknown as {
-					callToolWithMetadata: (
-						name: string,
-						args: Record<string, unknown>,
-					) => Promise<unknown>;
-				}
-			).callToolWithMetadata("memory_recall", { query: "hello" }),
+		await runWithObservabilityContext(
+			{
+				requestId: "request-1",
+				traceId: "a".repeat(32),
+				spanId: "b".repeat(16),
+			},
+			() =>
+				(
+					manager as unknown as {
+						callToolWithMetadata: (
+							name: string,
+							args: Record<string, unknown>,
+						) => Promise<unknown>;
+					}
+				).callToolWithMetadata("memory_recall", { query: "hello" }),
 		);
 
 		expect(client.callTool).toHaveBeenCalledWith({
 			name: "memory_recall",
 			arguments: { query: "hello" },
-			_meta: { request_id: "request-1" },
+			_meta: {
+				request_id: "request-1",
+				traceparent: `00-${"a".repeat(32)}-${"b".repeat(16)}-01`,
+			},
 		});
 	});
 
@@ -338,8 +347,23 @@ describe.sequential("MCPClientManager", () => {
 			const toolNames = tools.map((tool) => tool.name).sort();
 			const memoryRecall = tools.find((tool) => tool.name === "memory_recall");
 			const memoryStore = tools.find((tool) => tool.name === "memory_store");
+			const scratchpadWrite = tools.find(
+				(tool) => tool.name === "scratchpad_write",
+			);
+			const scratchpadRead = tools.find(
+				(tool) => tool.name === "scratchpad_read",
+			);
+			const scratchpadClear = tools.find(
+				(tool) => tool.name === "scratchpad_clear",
+			);
 
-			expect(toolNames).toEqual(["memory_recall", "memory_store"]);
+			expect(toolNames).toEqual([
+				"memory_recall",
+				"memory_store",
+				"scratchpad_clear",
+				"scratchpad_read",
+				"scratchpad_write",
+			]);
 			expect(
 				memoryRecall?.parameters.safeParse({ query: "hello" }).success,
 			).toBe(true);
@@ -355,12 +379,36 @@ describe.sequential("MCPClientManager", () => {
 				memoryStore?.parameters.safeParse({ content: "hello", tier: "short" })
 					.success,
 			).toBe(false);
+			expect(
+				scratchpadWrite?.parameters.safeParse({
+					task_id: "task-1",
+					session_id: "session-1",
+					key: "draft",
+					value: "scratchpad e2e",
+				}).success,
+			).toBe(true);
 
 			const storeResult = await memoryStore?.execute({
 				content: "my name is 小明",
 				tier: "working",
 			});
 			const recallResult = await memoryRecall?.execute({ query: "小明" });
+			const scratchpadWriteResult = await scratchpadWrite?.execute({
+				task_id: "task-1",
+				session_id: "session-1",
+				key: "draft",
+				value: "scratchpad e2e",
+			});
+			const scratchpadReadResult = await scratchpadRead?.execute({
+				task_id: "task-1",
+				session_id: "session-1",
+				key: "draft",
+			});
+			const scratchpadClearResult = await scratchpadClear?.execute({
+				task_id: "task-1",
+				session_id: "session-1",
+				key: "draft",
+			});
 
 			expect(storeResult?.isError).toBe(false);
 			expect(JSON.parse(storeResult?.content ?? "{}")).toEqual({
@@ -374,6 +422,18 @@ describe.sequential("MCPClientManager", () => {
 						tier: "working",
 					}),
 				],
+			});
+			expect(scratchpadWriteResult?.isError).toBe(false);
+			expect(JSON.parse(scratchpadWriteResult?.content ?? "{}")).toEqual({
+				ok: true,
+			});
+			expect(scratchpadReadResult?.isError).toBe(false);
+			expect(JSON.parse(scratchpadReadResult?.content ?? "{}")).toEqual({
+				value: "scratchpad e2e",
+			});
+			expect(scratchpadClearResult?.isError).toBe(false);
+			expect(JSON.parse(scratchpadClearResult?.content ?? "{}")).toEqual({
+				cleared: 1,
 			});
 		} finally {
 			await manager.disconnect();

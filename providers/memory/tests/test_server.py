@@ -10,6 +10,7 @@ import pytest
 from mcp.types import CallToolRequest, CallToolRequestParams
 
 from omnimem import server as server_module
+from omnimem.scratchpad import ScratchpadStore
 from omnimem.server import create_server
 from omnimem.store import OmniMemStore
 
@@ -21,6 +22,15 @@ SEMANTIC_METADATA = {
 
 
 def _decode_call_tool_result(result: object) -> dict[str, object]:
+    if hasattr(result, "root"):
+        content_items = getattr(result.root, "content", [])  # type: ignore[attr-defined]
+        text = "\n".join(
+            item.text
+            for item in content_items
+            if getattr(item, "type", None) == "text"
+        )
+        return json.loads(text)
+
     _content, metadata = result  # type: ignore[misc]
     return json.loads(metadata["result"])
 
@@ -63,12 +73,22 @@ def _assert_memory_item_record(
     assert record["importance_score"] == 0.5
 
 
-async def _call_tool_request(server: object, name: str, arguments: dict[str, object]):
+async def _call_tool_request(
+    server: object,
+    name: str,
+    arguments: dict[str, object],
+    *,
+    metadata: dict[str, object] | None = None,
+):
     handler = server._mcp_server.request_handlers[CallToolRequest]  # type: ignore[attr-defined]
     return await handler(
         CallToolRequest(
             method="tools/call",
-            params=CallToolRequestParams(name=name, arguments=arguments),
+            params=CallToolRequestParams(
+                name=name,
+                arguments=arguments,
+                **({ "_meta": metadata } if metadata is not None else {}),
+            ),
         )
     )
 
@@ -80,8 +100,14 @@ async def store() -> AsyncIterator[OmniMemStore]:
 
 
 @pytest.fixture
-def server(store: OmniMemStore):
-    return create_server(store)
+async def scratchpad_store() -> AsyncIterator[ScratchpadStore]:
+    async with ScratchpadStore(db_path=":memory:") as bound_store:
+        yield bound_store
+
+
+@pytest.fixture
+def server(store: OmniMemStore, scratchpad_store: ScratchpadStore):
+    return create_server(store, scratchpad_store)
 
 
 async def test_memory_store_tool_returns_id(server: object) -> None:
@@ -183,6 +209,133 @@ async def test_memory_recall_tool_returns_records(server: object) -> None:
         assert record["metadata"]["cache_key"].startswith("memory-recall:")
         assert "score" in record["metadata"]
         assert "source_layers" in record["metadata"]
+
+
+class _FakeMeta:
+    def __init__(self, metadata: dict[str, object]) -> None:
+        self._metadata = metadata
+
+    def model_dump(self) -> dict[str, object]:
+        return dict(self._metadata)
+
+
+class _FakeRequestContext:
+    def __init__(self, metadata: dict[str, object]) -> None:
+        self.meta = _FakeMeta(metadata)
+
+
+class _FakeContext:
+    def __init__(self, metadata: dict[str, object]) -> None:
+        self._request_context = _FakeRequestContext(metadata)
+
+    @property
+    def request_context(self) -> _FakeRequestContext:
+        return self._request_context
+
+
+async def test_memory_recall_parses_traceparent_metadata(
+    store: OmniMemStore,
+) -> None:
+    await server_module._memory_store_with_store(store, "trace me")
+    trace_context = server_module._trace_context_from_context(
+        _FakeContext(
+            {
+                "traceparent": f"00-{'a' * 32}-{'b' * 16}-01",
+                "request_id": "request-1",
+            }
+        )
+    )
+    assert trace_context is not None
+
+    child_context = server_module._child_trace_context(trace_context)
+    assert child_context is not None
+
+    result = json.loads(
+        await server_module._memory_recall_with_store(
+            store,
+            "trace",
+            trace_context=child_context,
+        )
+    )
+
+    assert result["records"]
+    assert result["traceparent"].startswith(f"00-{'a' * 32}-")
+    assert result["traceparent"].endswith("-01")
+
+
+async def test_scratchpad_tools_are_task_scoped_and_do_not_pollute_memory(
+    server: object,
+) -> None:
+    write_result = _decode_call_tool_result(
+        await server.call_tool(  # type: ignore[attr-defined]
+            "scratchpad_write",
+            {
+                "task_id": "task-1",
+                "session_id": "session-1",
+                "key": "draft",
+                "value": "scratchpad only",
+                "ttl_sec": 60,
+                "capacity_per_task": 8,
+            },
+        )
+    )
+    read_result = _decode_call_tool_result(
+        await server.call_tool(  # type: ignore[attr-defined]
+            "scratchpad_read",
+            {
+                "task_id": "task-1",
+                "session_id": "session-1",
+                "key": "draft",
+            },
+        )
+    )
+    recall_result = _decode_call_tool_result(
+        await server.call_tool(  # type: ignore[attr-defined]
+            "memory_recall",
+            {"query": "scratchpad only"},
+        )
+    )
+    clear_result = _decode_call_tool_result(
+        await server.call_tool(  # type: ignore[attr-defined]
+            "scratchpad_clear",
+            {
+                "task_id": "task-1",
+                "session_id": "session-1",
+                "key": "draft",
+            },
+        )
+    )
+
+    assert write_result == {"ok": True}
+    assert read_result == {"value": "scratchpad only"}
+    assert recall_result["records"] == []
+    assert clear_result == {"cleared": 1}
+
+
+async def test_scratchpad_helpers_return_child_traceparent(
+    scratchpad_store: ScratchpadStore,
+) -> None:
+    parent = server_module.parse_traceparent(
+        f"00-{'c' * 32}-{'d' * 16}-01",
+        request_id="request-2",
+    )
+    child = server_module._child_trace_context(parent)
+    assert child is not None
+
+    result = json.loads(
+        await server_module._scratchpad_write_with_store(
+            scratchpad_store,
+            task_id="task-trace",
+            session_id="session-1",
+            key="k",
+            value="v",
+            trace_context=child,
+        )
+    )
+
+    assert result["ok"] is True
+    assert result["traceparent"].startswith(f"00-{'c' * 32}-")
+    assert result["traceparent"].endswith("-01")
 
 
 async def test_memory_recall_tool_empty_query(server: object) -> None:

@@ -4,12 +4,14 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import threading
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Protocol
 from uuid import uuid4
 
 from .event_log_schema import (
@@ -55,6 +57,68 @@ def hash_query(query: str) -> str:
     return hashlib.sha256(normalized).hexdigest()
 
 
+TRACEPARENT_RE = re.compile(
+    r"^00-([a-f0-9]{32})-([a-f0-9]{16})-([a-f0-9]{2})$"
+)
+
+
+@dataclass(slots=True, frozen=True)
+class TraceContext:
+    trace_id: str
+    span_id: str
+    request_id: str | None = None
+    trace_flags: str = "01"
+
+    @property
+    def traceparent(self) -> str:
+        return f"00-{self.trace_id}-{self.span_id}-{self.trace_flags}"
+
+
+class SpanEventEmitter(Protocol):
+    def add_event(self, name: str, attributes: dict[str, object]) -> None: ...
+
+
+SpanEventSink = Callable[[str, dict[str, object]], None] | SpanEventEmitter
+
+
+def parse_traceparent(
+    traceparent: str | None,
+    *,
+    request_id: str | None = None,
+) -> TraceContext | None:
+    if traceparent is None:
+        return None
+
+    match = TRACEPARENT_RE.match(traceparent.strip())
+    if match is None:
+        return None
+
+    trace_id, span_id, trace_flags = match.groups()
+    return TraceContext(
+        trace_id=trace_id,
+        span_id=span_id,
+        request_id=request_id,
+        trace_flags=trace_flags,
+    )
+
+
+def _emit_span_event(
+    sink: SpanEventSink | None,
+    name: str,
+    attributes: dict[str, object],
+) -> None:
+    if sink is None:
+        return
+
+    try:
+        if hasattr(sink, "add_event"):
+            sink.add_event(name, attributes)
+        else:
+            sink(name, attributes)
+    except Exception:
+        return
+
+
 @dataclass(slots=True, frozen=True)
 class CitationStats:
     memory_id: str
@@ -84,6 +148,9 @@ class RetrievalEvent:
     was_cited: bool
     timestamp: datetime
     schema_version: int
+    trace_id: str | None = None
+    request_id: str | None = None
+    span_id: str | None = None
 
 
 class RetrievalEventLog:
@@ -93,6 +160,7 @@ class RetrievalEventLog:
         *,
         persist_raw_query: bool = False,
         top_n: int = DEFAULT_TOP_N,
+        span_event_sink: SpanEventSink | None = None,
     ) -> None:
         if top_n < 1:
             raise ValueError("RetrievalEventLog.top_n must be at least 1")
@@ -111,6 +179,7 @@ class RetrievalEventLog:
         self._closed = False
         self._persist_raw_query = persist_raw_query
         self._top_n = top_n
+        self._span_event_sink = span_event_sink
         self._conn.execute("PRAGMA journal_mode=WAL")
         ensure_event_log_schema(self._conn)
 
@@ -149,6 +218,7 @@ class RetrievalEventLog:
         *,
         top_n: int | None = None,
         timestamp: datetime | None = None,
+        trace_context: TraceContext | None = None,
     ) -> list[str]:
         return await asyncio.to_thread(
             self._record_retrieval_sync,
@@ -157,6 +227,7 @@ class RetrievalEventLog:
             list(results),
             top_n,
             timestamp,
+            trace_context,
         )
 
     def _record_retrieval_sync(
@@ -166,6 +237,7 @@ class RetrievalEventLog:
         results: list[MemoryItem],
         top_n: int | None,
         timestamp: datetime | None,
+        trace_context: TraceContext | None,
     ) -> list[str]:
         effective_top_n = self._top_n if top_n is None else max(top_n, 0)
         if effective_top_n == 0:
@@ -198,9 +270,12 @@ class RetrievalEventLog:
                             metadata_json,
                             was_cited,
                             timestamp,
-                            schema_version
+                            schema_version,
+                            trace_id,
+                            request_id,
+                            span_id
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
                         """,
                         (
                             event_id,
@@ -215,15 +290,43 @@ class RetrievalEventLog:
                             _serialize_metadata(metadata),
                             resolved_timestamp,
                             EVENT_LOG_SCHEMA_VERSION,
+                            trace_context.trace_id if trace_context else None,
+                            trace_context.request_id if trace_context else None,
+                            trace_context.span_id if trace_context else None,
                         ),
+                    )
+                    self._emit_retrieval_sample(
+                        event_id=event_id,
+                        run_id=run_id,
+                        query_hash=query_hash,
+                        item=item,
+                        rank=rank,
+                        score=float(item.metadata.get("score", 0.0)),
+                        trace_context=trace_context,
                     )
 
         return event_ids
 
-    async def mark_cited(self, run_id: str, event_ids: Sequence[str]) -> int:
-        return await asyncio.to_thread(self._mark_cited_sync, run_id, list(event_ids))
+    async def mark_cited(
+        self,
+        run_id: str,
+        event_ids: Sequence[str],
+        *,
+        trace_context: TraceContext | None = None,
+    ) -> int:
+        return await asyncio.to_thread(
+            self._mark_cited_sync,
+            run_id,
+            list(event_ids),
+            trace_context,
+        )
 
-    def _mark_cited_sync(self, run_id: str, event_ids: list[str]) -> int:
+    def _mark_cited_sync(
+        self,
+        run_id: str,
+        event_ids: list[str],
+        trace_context: TraceContext | None,
+    ) -> int:
         deduped_ids = sorted({event_id for event_id in event_ids if event_id})
         if not deduped_ids:
             return 0
@@ -240,6 +343,17 @@ class RetrievalEventLog:
             self._conn.execute("BEGIN IMMEDIATE")
             with self._conn:
                 cursor = self._conn.execute(sql, [run_id, *deduped_ids])
+            for event_id in deduped_ids:
+                _emit_span_event(
+                    self._span_event_sink,
+                    "memory.citation_sample",
+                    {
+                        "memory.event_id": event_id,
+                        "memory.run_id": run_id,
+                        "memory.was_cited": True,
+                        **self._trace_attributes(trace_context),
+                    },
+                )
 
         return int(cursor.rowcount or 0)
 
@@ -280,7 +394,10 @@ class RetrievalEventLog:
                 metadata_json,
                 was_cited,
                 timestamp,
-                schema_version
+                schema_version,
+                trace_id,
+                request_id,
+                span_id
             FROM retrieval_event_log
             WHERE {" AND ".join(predicates)}
             ORDER BY timestamp DESC, rank ASC
@@ -306,9 +423,52 @@ class RetrievalEventLog:
                 was_cited=bool(row["was_cited"]),
                 timestamp=datetime.fromisoformat(row["timestamp"]),
                 schema_version=int(row["schema_version"]),
+                trace_id=row["trace_id"],
+                request_id=row["request_id"],
+                span_id=row["span_id"],
             )
             for row in rows
         ]
+
+    def _emit_retrieval_sample(
+        self,
+        *,
+        event_id: str,
+        run_id: str,
+        query_hash: str,
+        item: MemoryItem,
+        rank: int,
+        score: float,
+        trace_context: TraceContext | None,
+    ) -> None:
+        _emit_span_event(
+            self._span_event_sink,
+            "memory.retrieval_sample",
+            {
+                "memory.event_id": event_id,
+                "memory.run_id": run_id,
+                "memory.query_hash": query_hash,
+                "memory.memory_id": item.id,
+                "memory.rank_index": rank,
+                "memory.score_ratio": score,
+                "memory.source_layer": self._source_layer(item),
+                **self._trace_attributes(trace_context),
+            },
+        )
+
+    @staticmethod
+    def _trace_attributes(trace_context: TraceContext | None) -> dict[str, object]:
+        if trace_context is None:
+            return {}
+
+        attributes: dict[str, object] = {
+            "trace.trace_id": trace_context.trace_id,
+            "trace.span_id": trace_context.span_id,
+        }
+        if trace_context.request_id is not None:
+            attributes["trace.request_id"] = trace_context.request_id
+
+        return attributes
 
     async def citation_stats(self, memory_ids: Sequence[str]) -> dict[str, CitationStats]:
         return await asyncio.to_thread(self._citation_stats_sync, list(memory_ids))
@@ -386,5 +546,7 @@ __all__ = [
     "EVENT_LOG_SCHEMA_VERSION",
     "RetrievalEvent",
     "RetrievalEventLog",
+    "TraceContext",
     "hash_query",
+    "parse_traceparent",
 ]
