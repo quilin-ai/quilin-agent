@@ -49,7 +49,14 @@ BenchmarkTask {
 ```
 
 `inputs` / `expected` 字段保持 leaderboard-specific，但顶层 `task_id` / `dataset` / `scorer_type` 必须冻结，scorer 与 runner 通过这些字段路由。
-Iter E1/E2 只接受 `swe-bench-lite` / `swe-bench-verified` 两个 dataset 枚举值；GAIA / BFCL v4 启动时必须先修订本 ADR 并扩展 zod enum，不允许 ad-hoc string。
+Iter E1/E2 接受 `swe-bench-lite` / `swe-bench-verified`；**Iter E3（2026-04-26 修订）扩展为 `swe-bench-lite | swe-bench-verified | gaia | bfcl-v4`**，zod literal union 严格对齐这四个值；新增 leaderboard 仍须修订本 ADR 并扩展 zod enum，不允许 ad-hoc string。
+
+新增两个 dataset 的字段约束：
+
+- `gaia`：`inputs.{question, level, file_name?, file_attachments?}`；`expected.{final_answer, eval_metadata}`；`scorer_type = "gaia-exact-match"`
+- `bfcl-v4`：`inputs.{prompt, candidate_functions, multi_turn?}`；`expected.{ground_truth_calls}`；`scorer_type = "bfcl-tool-call-match"`
+
+每个新 dataset 由独立 scorer + submission adapter 实现；runner 5 阶段生命周期 + DockerSandbox MVP DI 不变。
 
 ### 3.2 Run 生命周期
 
