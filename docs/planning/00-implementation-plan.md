@@ -549,7 +549,7 @@ Benchmark 验证层（Iter E 独立 iter）
 | **LongMemEval vendoring** | 上游数据集不稳定，未 vendored | 上游稳定或本地复刻 1k 样本 | 替代 AMB 四轴作为 M0.10 / M1.3 / M2.5 目标门槛证据（O3 已决） | `docs/planning/2026-04-23-01-iter-c-m-parallel-breakdown.md` §13 / §17.3 |
 | **方向 4 Arm L 1039 样本 gate** | 同 M1.1 | 同 M1.1 | 解锁后重跑产生 pass/fail 决议；决定是否需要 ADR-006（成本部署 qualifier） | 同 M1.1 |
 | **Rust mesh-sdk 实质代码** | 等 Iter D Newton + Boyle 收口（Iter D 只落 stub + CI matrix） | Iter D 主轴稳定 + AgentMesh 设计冻结 | Iter F mesh 接入；ADR-011 Rust substrate / ADR-012 AgentMesh 起草后开工 | `docs/planning/2026-04-25-01-iter-d-parallel-breakdown.md` §13 + Iter F 段 |
-| **DockerSandbox / LocalSandbox / CloudSandbox** | Iter D-lite 仅做 user-level config，sandbox 完整体非本 Iter 范围 | Iter D 主轴收口或 Iter F 启动 | Iter D 后期或 Iter F 落地 09-deployment-runtime 完整体 | `docs/engineering/09-deployment-runtime/README.md` §2.2-2.4 |
+| **DockerSandbox MVP** | E2 已解锁 Linux-only Docker CLI MVP；R2 复核后收口 | `ubuntu-latest` Docker smoke gate + ADR-011 MVP DoD 通过 | Iter E2 Benchmark Ascent hard isolation gate | `docs/planning/2026-04-26-01-iter-e2-swe-bench-verified.md` + `docs/adr/adr-011-docker-sandbox-mvp.md` |
+| **LocalSandbox / CloudSandbox 完整体** | DockerSandbox MVP 之外的 sandbox family 尚未设计冻结 | DockerSandbox MVP 收口 + 09-deployment-runtime v3 sandbox 设计冻结 | Iter F 或后续 09-deployment-runtime 完整体 | `docs/engineering/09-deployment-runtime/README.md` §2.2-2.4 |
 
 > 解锁条件触发时，由 Claude / Codex 任一发现方更新本表；解锁后该项从"待激活"段迁移到对应 Iter 的活动任务。
-

@@ -77,8 +77,16 @@ try {
 			},
 			runAgent: async (config) => {
 				await config.tools?.[0]?.execute({
-					command:
+					command: [
+						"set -eu",
 						"cat /workspace/base/input.txt > /workspace/artifacts/output.txt",
+						"echo task-ok > /workspace/task/task-write.txt",
+						"echo artifact-ok > /workspace/artifacts/artifact-write.txt",
+						"if sh -c 'echo bad > /workspace/base/forbidden' >/workspace/task/base.out 2>/workspace/task/base.err; then echo base-write-allowed >&2; exit 10; fi",
+						"if sh -c 'echo bad > /workspace/cache/forbidden' >/workspace/task/cache.out 2>/workspace/task/cache.err; then echo cache-write-allowed >&2; exit 11; fi",
+						"command -v wget >/dev/null 2>&1",
+						"if wget -qO- --timeout=2 https://example.com >/workspace/task/net.out 2>/workspace/task/net.err; then echo network-allowed >&2; exit 12; fi",
+					].join("; "),
 				});
 				return "diff --git a/smoke b/smoke";
 			},
@@ -100,13 +108,27 @@ try {
 			`Unexpected benchmark phases: ${execution.phases.join(",")}`,
 		);
 	}
+	const timeoutResult = await sandbox.runShellCommand({
+		command: "sleep 60",
+		cwd: join(tmpRoot, "timeout-scratch"),
+		timeoutMs: 100,
+		workspaceDir: join(tmpRoot, "timeout-scratch"),
+	});
+	const timeoutPayload = JSON.parse(timeoutResult.content) as {
+		readonly timedOut?: boolean;
+	};
+	if (timeoutPayload.timedOut !== true) {
+		throw new Error("DockerSandbox timeout smoke did not time out");
+	}
 
 	console.log(
 		JSON.stringify({
 			artifact,
+			egress: "denied",
 			event: "docker_smoke_passed",
 			image: smokeImage,
 			phases: execution.phases,
+			timeout: "enforced",
 		}),
 	);
 } finally {

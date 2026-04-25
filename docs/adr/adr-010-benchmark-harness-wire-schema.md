@@ -102,6 +102,7 @@ BenchmarkCost {
 - 数据文件（jsonl 或原始格式）+ sha256 哈希进 manifest
 - **Load 时强制 verify**：sha256 不匹配 / `schema_version != 1` 直接拒载并报 `CacheError`
 - Fetch 时分页 + retry；幂等：相同 source_url 已有合法 manifest 且 `requested_max_rows` 能覆盖当前请求时跳过。`requested_max_rows: null` 表示 full fetch；partial cache 不能满足 full fetch intent。
+- 兼容性：E2 之前写出的 legacy manifest 若缺少 `requested_max_rows`，loader 归一化为 `null`；fetch CLI 的 cache hit 判断仍按当前 intent 重新校验 rows/sha/source，legacy partial 不能满足 full fetch intent。
 
 ### 3.5 Scorer 协议
 

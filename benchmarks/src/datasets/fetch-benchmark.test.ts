@@ -106,6 +106,49 @@ describe("fetch-benchmark cache intent", () => {
 		expect(refetch).toHaveBeenCalledTimes(1);
 	});
 
+	it("refetches when cached content no longer matches manifest sha256", async () => {
+		const cacheRoot = await tempCacheRoot();
+		mockRowsFetch(1);
+		await fetchBenchmark(options({ cacheRoot, maxRows: 1 }));
+		await writeFile(
+			join(cacheRoot, "datasets", "swe-bench-lite", "data.jsonl"),
+			`${JSON.stringify(makeSweBenchRow(99))}\n`,
+			"utf8",
+		);
+
+		const refetch = mockRowsFetch(1);
+		await expect(
+			fetchBenchmark(options({ cacheRoot, maxRows: 1 })),
+		).resolves.toMatchObject({ rows: 1, skipped: false });
+		expect(refetch).toHaveBeenCalledTimes(1);
+	});
+
+	it("refetches when cached manifest row metadata is invalid", async () => {
+		const cacheRoot = await tempCacheRoot();
+		mockRowsFetch(1);
+		await fetchBenchmark(options({ cacheRoot, maxRows: 1 }));
+		const manifestPath = join(
+			cacheRoot,
+			"datasets",
+			"swe-bench-lite",
+			"manifest.json",
+		);
+		const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
+			readonly rows: number;
+		};
+		await writeFile(
+			manifestPath,
+			`${JSON.stringify({ ...manifest, rows: -1 })}\n`,
+			"utf8",
+		);
+
+		const refetch = mockRowsFetch(1);
+		await expect(
+			fetchBenchmark(options({ cacheRoot, maxRows: 1 })),
+		).resolves.toMatchObject({ rows: 1, skipped: false });
+		expect(refetch).toHaveBeenCalledTimes(1);
+	});
+
 	it("rejects non-HuggingFace rows endpoints unless explicitly allowed", async () => {
 		const cacheRoot = await tempCacheRoot();
 		const fetchMock = mockRowsFetch(1);

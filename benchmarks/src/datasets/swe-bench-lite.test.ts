@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { CacheError, computeSha256 } from "./cache.js";
+import { CacheError, computeSha256, loadDatasetCache } from "./cache.js";
 import {
 	iterateSweBenchLiteTasks,
 	loadSweBenchLiteTasks,
@@ -137,6 +137,19 @@ describe("SWE-bench Lite dataset loader", () => {
 		await expect(loadSweBenchLiteTasks({ cacheRoot })).rejects.toThrow(
 			/Invalid cache manifest schema/,
 		);
+	});
+
+	it("loads legacy cache manifests that predate requested_max_rows", async () => {
+		const cacheRoot = await writeSweBenchLiteCache(records, {
+			manifestPatch: { requested_max_rows: undefined },
+		});
+
+		await expect(loadSweBenchLiteTasks({ cacheRoot })).resolves.toHaveLength(2);
+		await expect(
+			loadDatasetCache({ cacheRoot, dataset: "swe-bench-lite" }),
+		).resolves.toMatchObject({
+			manifest: { requested_max_rows: null },
+		});
 	});
 
 	it("rejects invalid upstream records before conversion", async () => {

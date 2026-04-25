@@ -311,13 +311,6 @@ function validateRowsBaseUrl(
 			`Unsafe --rows-base-url rejected: ${rowsBaseUrl}. Set QUILIN_ALLOW_UNSAFE_BENCHMARK_ROWS_BASE_URL=1 or pass --allow-unsafe-rows-base-url for local tests.`,
 		);
 	}
-	const url = new URL(rowsBaseUrl);
-	if (
-		url.protocol !== "https:" ||
-		url.hostname !== "datasets-server.huggingface.co"
-	) {
-		throw new Error(`Unsafe --rows-base-url rejected: ${rowsBaseUrl}`);
-	}
 }
 
 function resolveDatasetCacheDir(cacheRoot: string, dataset: string): string {

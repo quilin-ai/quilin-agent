@@ -19,14 +19,21 @@ export const datasetManifestSchema = z
 		dataset: z.string().min(1),
 		fetched_at: z.string().min(1),
 		rows: z.number().int().nonnegative(),
-		requested_max_rows: z.number().int().positive().nullable(),
+		requested_max_rows: z.number().int().positive().nullable().optional(),
 		sha256: z.string().regex(/^[a-f0-9]{64}$/),
 		source_url: z.string().min(1),
 		data_file: z.string().min(1),
 	})
 	.strict();
 
-export type DatasetManifest = z.infer<typeof datasetManifestSchema>;
+type ParsedDatasetManifest = z.infer<typeof datasetManifestSchema>;
+
+export type DatasetManifest = Omit<
+	ParsedDatasetManifest,
+	"requested_max_rows"
+> & {
+	readonly requested_max_rows: number | null;
+};
 
 export interface LoadDatasetCacheOptions {
 	readonly cacheRoot?: string;
@@ -147,7 +154,10 @@ async function readManifest(manifestPath: string): Promise<DatasetManifest> {
 			`Invalid cache manifest schema: ${manifestPath} (${result.error.issues.map((issue) => issue.path.join(".")).join(", ")})`,
 		);
 	}
-	return result.data;
+	return {
+		...result.data,
+		requested_max_rows: result.data.requested_max_rows ?? null,
+	};
 }
 
 async function readDataFile(dataPath: string): Promise<string> {
