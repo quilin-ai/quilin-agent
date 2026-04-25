@@ -24,6 +24,12 @@ export type MemoryWriteScope =
 
 export type RiskLevel = "low" | "medium" | "high";
 
+export interface SubTaskScratchpad {
+	readonly readKey?: string;
+	readonly writeKey?: string;
+	readonly clearOnSuccess?: boolean;
+}
+
 export interface SubTask {
 	readonly id: string;
 	readonly action: string;
@@ -38,6 +44,7 @@ export interface SubTask {
 	readonly depth?: number;
 	readonly writeScope?: MemoryWriteScope;
 	readonly risk?: RiskLevel;
+	readonly scratchpad?: SubTaskScratchpad;
 }
 
 export interface LinearPlan {
@@ -89,6 +96,14 @@ export const memoryWriteScopeSchema = z.enum([
 
 export const riskLevelSchema = z.enum(["low", "medium", "high"]);
 
+export const subTaskScratchpadSchema = z
+	.object({
+		readKey: nonEmptyStringSchema.optional(),
+		writeKey: nonEmptyStringSchema.optional(),
+		clearOnSuccess: z.boolean().optional(),
+	})
+	.strict();
+
 export const toolCallSchema = z
 	.object({
 		id: nonEmptyStringSchema,
@@ -112,6 +127,7 @@ export const subTaskSchema = z
 		depth: z.number().int().nonnegative().optional(),
 		writeScope: memoryWriteScopeSchema.optional(),
 		risk: riskLevelSchema.optional(),
+		scratchpad: subTaskScratchpadSchema.readonly().optional(),
 	})
 	.strict();
 

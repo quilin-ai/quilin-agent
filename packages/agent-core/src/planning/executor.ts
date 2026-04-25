@@ -37,6 +37,25 @@ export type ExecutorToolHandler = (
 	step: SubTask | null,
 ) => Promise<ToolResult>;
 
+export interface ExecutorScratchpadClient {
+	read(input: {
+		readonly taskId: string;
+		readonly sessionId: string;
+		readonly key: string;
+	}): Promise<string | null>;
+	write(input: {
+		readonly taskId: string;
+		readonly sessionId: string;
+		readonly key: string;
+		readonly value: string;
+	}): Promise<void>;
+	clear(input: {
+		readonly taskId: string;
+		readonly sessionId: string;
+		readonly key?: string;
+	}): Promise<number>;
+}
+
 export interface ExecutorInput {
 	readonly runId: string;
 	readonly task: string;
@@ -47,6 +66,7 @@ export interface ExecutorInput {
 
 export interface ExecutorOptions {
 	readonly tools: Readonly<Record<string, ExecutorToolHandler>>;
+	readonly scratchpadClient?: ExecutorScratchpadClient;
 	readonly checkpointWriter?: CheckpointWriter;
 	readonly maxSteps?: number;
 	readonly now?: () => number;
@@ -243,7 +263,34 @@ export class LinearPlanExecutor {
 				payload: { leafId: step.id },
 			});
 
-			const toolCall = createToolCall(input.runId, step, stepIndex);
+			let toolCall: ToolCall;
+			try {
+				toolCall = await this.createStepToolCall(
+					input.runId,
+					taskHash,
+					step,
+					stepIndex,
+				);
+			} catch (error) {
+				emit({
+					kind: "local_repair",
+					payload: {
+						leafId: step.id,
+						note: `scratchpad_failed:${toErrorCode(error)}`,
+					},
+				});
+
+				await this.writeCheckpoint(state, taskHash, seq, emit);
+
+				return {
+					state,
+					taskHash,
+					outputs,
+					preflightOutputs,
+					haltedOnError: true,
+					terminatedReason: null,
+				};
+			}
 			emit({
 				kind: "tool_called",
 				payload: {
@@ -268,6 +315,29 @@ export class LinearPlanExecutor {
 					payload: {
 						leafId: step.id,
 						note: `tool_failed:${toolCall.name}`,
+					},
+				});
+
+				await this.writeCheckpoint(state, taskHash, seq, emit);
+
+				return {
+					state,
+					taskHash,
+					outputs,
+					preflightOutputs,
+					haltedOnError: true,
+					terminatedReason: null,
+				};
+			}
+
+			try {
+				await this.commitScratchpad(input.runId, taskHash, step, result);
+			} catch (error) {
+				emit({
+					kind: "local_repair",
+					payload: {
+						leafId: step.id,
+						note: `scratchpad_failed:${toErrorCode(error)}`,
 					},
 				});
 
@@ -320,6 +390,67 @@ export class LinearPlanExecutor {
 			return await handler(toolCall, step);
 		} catch (error) {
 			return createErrorResult(toolCall, toErrorCode(error));
+		}
+	}
+
+	private async createStepToolCall(
+		runId: string,
+		taskHash: string,
+		step: SubTask,
+		stepIndex: number,
+	): Promise<ToolCall> {
+		const toolCall = createToolCall(runId, step, stepIndex);
+		const readKey = step.scratchpad?.readKey;
+		if (this.options.scratchpadClient == null || readKey == null) {
+			return toolCall;
+		}
+
+		const value = await this.options.scratchpadClient.read({
+			taskId: taskHash,
+			sessionId: runId,
+			key: readKey,
+		});
+		if (value == null) {
+			return toolCall;
+		}
+
+		return {
+			...toolCall,
+			arguments: {
+				...toolCall.arguments,
+				scratchpad: { key: readKey, value },
+			},
+		};
+	}
+
+	private async commitScratchpad(
+		runId: string,
+		taskHash: string,
+		step: SubTask,
+		result: ToolResult,
+	): Promise<void> {
+		const client = this.options.scratchpadClient;
+		const scratchpad = step.scratchpad;
+		if (client == null || scratchpad == null) {
+			return;
+		}
+
+		if (scratchpad.writeKey != null) {
+			await client.write({
+				taskId: taskHash,
+				sessionId: runId,
+				key: scratchpad.writeKey,
+				value: result.content,
+			});
+		}
+
+		if (scratchpad.clearOnSuccess === true) {
+			const clearKey = scratchpad.writeKey ?? scratchpad.readKey;
+			await client.clear({
+				taskId: taskHash,
+				sessionId: runId,
+				...(clearKey == null ? {} : { key: clearKey }),
+			});
 		}
 	}
 

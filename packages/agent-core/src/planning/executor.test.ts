@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ToolCall, ToolResult } from "../tools/types.js";
+import type { ExecutorScratchpadClient } from "./executor.js";
 import {
 	createTaskHash,
 	DEFAULT_EXECUTOR_MAX_STEPS,
@@ -11,6 +12,7 @@ import type {
 	PlanningEvent,
 	SubTask,
 } from "./index.js";
+import { parseLLMPlannerResponse } from "./types.js";
 
 function makeStep(id: string, action = "web_search"): SubTask {
 	return {
@@ -37,6 +39,107 @@ function makePlan(count = 3): LinearPlan {
 	};
 }
 
+function makeScratchpadStep(
+	id: string,
+	scratchpad: SubTask["scratchpad"],
+): SubTask {
+	return {
+		...makeStep(id),
+		scratchpad,
+	};
+}
+
+class InMemoryExecutorScratchpad implements ExecutorScratchpadClient {
+	readonly reads: Array<{
+		readonly taskId: string;
+		readonly sessionId: string;
+		readonly key: string;
+	}> = [];
+	readonly writes: Array<{
+		readonly taskId: string;
+		readonly sessionId: string;
+		readonly key: string;
+		readonly value: string;
+	}> = [];
+	readonly clears: Array<{
+		readonly taskId: string;
+		readonly sessionId: string;
+		readonly key?: string;
+	}> = [];
+	private readonly values = new Map<string, string>();
+
+	async read(input: {
+		readonly taskId: string;
+		readonly sessionId: string;
+		readonly key: string;
+	}): Promise<string | null> {
+		this.reads.push(input);
+		return this.values.get(this.storageKey(input)) ?? null;
+	}
+
+	async write(input: {
+		readonly taskId: string;
+		readonly sessionId: string;
+		readonly key: string;
+		readonly value: string;
+	}): Promise<void> {
+		this.writes.push(input);
+		this.values.set(this.storageKey(input), input.value);
+	}
+
+	async clear(input: {
+		readonly taskId: string;
+		readonly sessionId: string;
+		readonly key?: string;
+	}): Promise<number> {
+		this.clears.push(input);
+		if (input.key != null) {
+			const key = this.storageKey({
+				taskId: input.taskId,
+				sessionId: input.sessionId,
+				key: input.key,
+			});
+			const existed = this.values.delete(key);
+			return existed ? 1 : 0;
+		}
+
+		const prefix = `${input.taskId}:${input.sessionId}:`;
+		let cleared = 0;
+		for (const key of [...this.values.keys()]) {
+			if (key.startsWith(prefix)) {
+				this.values.delete(key);
+				cleared += 1;
+			}
+		}
+		return cleared;
+	}
+
+	seed(input: {
+		readonly taskId: string;
+		readonly sessionId: string;
+		readonly key: string;
+		readonly value: string;
+	}): void {
+		this.values.set(this.storageKey(input), input.value);
+	}
+
+	get(input: {
+		readonly taskId: string;
+		readonly sessionId: string;
+		readonly key: string;
+	}): string | null {
+		return this.values.get(this.storageKey(input)) ?? null;
+	}
+
+	private storageKey(input: {
+		readonly taskId: string;
+		readonly sessionId: string;
+		readonly key: string;
+	}): string {
+		return `${input.taskId}:${input.sessionId}:${input.key}`;
+	}
+}
+
 const MULTI_STEP_INTENT: IntentClassification = {
 	intent: "MULTI_STEP",
 	confidence: 1,
@@ -54,6 +157,31 @@ describe("createTaskHash", () => {
 });
 
 describe("LinearPlanExecutor", () => {
+	it("accepts optional scratchpad metadata in parsed plan sketches", () => {
+		const parsed = parseLLMPlannerResponse({
+			planSketch: {
+				kind: "linear",
+				subtasks: [
+					{
+						...makeScratchpadStep("step-schema", {
+							readKey: "handoff",
+							writeKey: "handoff",
+							clearOnSuccess: true,
+						}),
+					},
+					makeStep("step-plain"),
+				],
+			},
+		});
+
+		expect(parsed.planSketch?.subtasks[0]?.scratchpad).toEqual({
+			readKey: "handoff",
+			writeKey: "handoff",
+			clearOnSuccess: true,
+		});
+		expect(parsed.planSketch?.subtasks[1]?.scratchpad).toBeUndefined();
+	});
+
 	it("runs a linear plan end-to-end and emits per-step events", async () => {
 		const emittedEvents: PlanningEvent[] = [];
 		const checkpointWriter = vi.fn(async ({ eventSeq }) => ({
@@ -268,5 +396,187 @@ describe("LinearPlanExecutor", () => {
 			kind: "terminated",
 			payload: { reason: "MaxSteps" },
 		});
+	});
+
+	it("passes scratchpad state through a long-running linear fixture", async () => {
+		const stepCount = 55;
+		const plan: LinearPlan = {
+			kind: "linear",
+			subtasks: Array.from({ length: stepCount }, (_, index) =>
+				makeScratchpadStep(`scratch-${index + 1}`, {
+					...(index === 0 ? {} : { readKey: "rolling-state" }),
+					writeKey: "rolling-state",
+				}),
+			),
+		};
+		const scratchpadClient = new InMemoryExecutorScratchpad();
+		const handler = vi.fn(
+			async (toolCall: ToolCall, step: SubTask | null): Promise<ToolResult> => {
+				const stepNumber = Number(step?.id.replace("scratch-", "") ?? "0");
+				const scratchpad = toolCall.arguments.scratchpad;
+				const previous =
+					typeof scratchpad === "object" &&
+					scratchpad !== null &&
+					"value" in scratchpad &&
+					typeof scratchpad.value === "string"
+						? (JSON.parse(scratchpad.value) as { count: number }).count
+						: 0;
+
+				expect(previous).toBe(stepNumber - 1);
+				return {
+					toolCallId: toolCall.id,
+					content: JSON.stringify({ count: previous + 1 }),
+					isError: false,
+				};
+			},
+		);
+		const executor = new LinearPlanExecutor({
+			tools: { web_search: handler },
+			scratchpadClient,
+			maxSteps: stepCount,
+		});
+
+		const result = await executor.execute({
+			runId: "run-long-scratchpad",
+			task: "Carry scratchpad state across many steps",
+			plan,
+		});
+		const taskHash = createTaskHash(
+			"Carry scratchpad state across many steps",
+			plan,
+		);
+
+		expect(result.haltedOnError).toBe(false);
+		expect(result.terminatedReason).toBe("Success");
+		expect(handler).toHaveBeenCalledTimes(stepCount);
+		expect(scratchpadClient.reads).toHaveLength(stepCount - 1);
+		expect(scratchpadClient.writes).toHaveLength(stepCount);
+		expect(
+			scratchpadClient.get({
+				taskId: taskHash,
+				sessionId: "run-long-scratchpad",
+				key: "rolling-state",
+			}),
+		).toBe(JSON.stringify({ count: stepCount }));
+		expect(
+			scratchpadClient.writes.every((write) => write.taskId === taskHash),
+		).toBe(true);
+		expect(
+			scratchpadClient.writes.every(
+				(write) => write.sessionId === "run-long-scratchpad",
+			),
+		).toBe(true);
+	});
+
+	it("does not inject scratchpad arguments for steps that do not declare readKey", async () => {
+		const plan: LinearPlan = {
+			kind: "linear",
+			subtasks: [
+				makeScratchpadStep("scratch-writer", { writeKey: "handoff" }),
+				makeStep("plain-step"),
+				makeScratchpadStep("scratch-reader", {
+					readKey: "handoff",
+					clearOnSuccess: true,
+				}),
+			],
+		};
+		const scratchpadClient = new InMemoryExecutorScratchpad();
+		const seenArguments: Array<Record<string, unknown>> = [];
+		const executor = new LinearPlanExecutor({
+			tools: {
+				web_search: async (toolCall) => {
+					seenArguments.push(toolCall.arguments);
+					return {
+						toolCallId: toolCall.id,
+						content: JSON.stringify({ ok: toolCall.arguments.query }),
+						isError: false,
+					};
+				},
+			},
+			scratchpadClient,
+		});
+
+		const result = await executor.execute({
+			runId: "run-no-inject",
+			task: "Only inject declared scratchpad reads",
+			plan,
+		});
+
+		expect(result.haltedOnError).toBe(false);
+		expect(seenArguments[0]?.scratchpad).toBeUndefined();
+		expect(seenArguments[1]?.scratchpad).toBeUndefined();
+		expect(seenArguments[2]?.scratchpad).toEqual({
+			key: "handoff",
+			value: JSON.stringify({ ok: "payload:scratch-writer" }),
+		});
+		expect(scratchpadClient.clears).toEqual([
+			{
+				taskId: createTaskHash("Only inject declared scratchpad reads", plan),
+				sessionId: "run-no-inject",
+				key: "handoff",
+			},
+		]);
+	});
+
+	it("does not write scratchpad content when a step fails", async () => {
+		const plan: LinearPlan = {
+			kind: "linear",
+			subtasks: [
+				makeScratchpadStep("failing-step", {
+					readKey: "handoff",
+					writeKey: "handoff",
+				}),
+				makeScratchpadStep("next-step", {
+					readKey: "handoff",
+					writeKey: "handoff",
+				}),
+			],
+		};
+		const task = "Failed scratchpad steps must not pollute state";
+		const runId = "run-failed-scratchpad";
+		const taskHash = createTaskHash(task, plan);
+		const scratchpadClient = new InMemoryExecutorScratchpad();
+		scratchpadClient.seed({
+			taskId: taskHash,
+			sessionId: runId,
+			key: "handoff",
+			value: "clean-state",
+		});
+		const handler = vi.fn(
+			async (toolCall: ToolCall): Promise<ToolResult> => ({
+				toolCallId: toolCall.id,
+				content: "dirty-state",
+				isError: true,
+			}),
+		);
+		const executor = new LinearPlanExecutor({
+			tools: { web_search: handler },
+			scratchpadClient,
+		});
+
+		const result = await executor.execute({
+			runId,
+			task,
+			plan,
+		});
+
+		expect(result.haltedOnError).toBe(true);
+		expect(handler).toHaveBeenCalledTimes(1);
+		expect(scratchpadClient.writes).toHaveLength(0);
+		expect(
+			scratchpadClient.get({
+				taskId: taskHash,
+				sessionId: runId,
+				key: "handoff",
+			}),
+		).toBe("clean-state");
+		expect(handler).toHaveBeenCalledWith(
+			expect.objectContaining({
+				arguments: expect.objectContaining({
+					scratchpad: { key: "handoff", value: "clean-state" },
+				}),
+			}),
+			plan.subtasks[0],
+		);
 	});
 });
