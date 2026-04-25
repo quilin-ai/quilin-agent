@@ -112,6 +112,70 @@ describe("builtin shell_exec tool", () => {
 		expect(runner).not.toHaveBeenCalled();
 	});
 
+	it("returns parser errors for empty, dangling escape, and unterminated quote commands", async () => {
+		const tool = createShellExecTool({
+			runner: vi.fn(),
+			authority: createPermissiveAuthority(),
+		});
+
+		for (const command of ["   ", "echo \\", "echo 'unterminated"]) {
+			const result = await tool.execute({ command });
+			expect(result.isError).toBe(true);
+			expect(JSON.parse(result.content).error).toEqual(expect.any(String));
+		}
+	});
+
+	it("blocks destructive rm and disk wipe patterns before authorization", async () => {
+		const runner = vi.fn();
+		const confirm = vi.fn(async () => true);
+		const tool = createShellExecTool({
+			runner,
+			authority: new WriteAuthority({ mode: "ask", confirm }),
+		});
+
+		const rmResult = await tool.execute({ command: "rm -rf /tmp" });
+		const ddResult = await tool.execute({
+			command: "dd if=/dev/zero of=/dev/sda",
+		});
+
+		expect(rmResult.isError).toBe(true);
+		expect(JSON.parse(rmResult.content).error).toContain(
+			"destructive filesystem wipe",
+		);
+		expect(ddResult.isError).toBe(true);
+		expect(JSON.parse(ddResult.content).error).toContain("disk wipe");
+		expect(confirm).not.toHaveBeenCalled();
+		expect(runner).not.toHaveBeenCalled();
+	});
+
+	it("blocks shell control operators after tokenization", async () => {
+		const runner = vi.fn();
+		const tool = createShellExecTool({
+			runner,
+			authority: createPermissiveAuthority(),
+		});
+
+		const result = await tool.execute({ command: "echo hi && echo bye" });
+
+		expect(result.isError).toBe(true);
+		expect(JSON.parse(result.content).error).toContain("control operators");
+		expect(runner).not.toHaveBeenCalled();
+	});
+
+	it("handles control operators without a preceding argument", async () => {
+		const runner = vi.fn();
+		const tool = createShellExecTool({
+			runner,
+			authority: createPermissiveAuthority(),
+		});
+
+		const result = await tool.execute({ command: ">" });
+
+		expect(result.isError).toBe(true);
+		expect(JSON.parse(result.content).error).toContain("control operators");
+		expect(runner).not.toHaveBeenCalled();
+	});
+
 	it("blocks shell wrapper executables that use -c", async () => {
 		const runner = vi.fn();
 		const tool = createShellExecTool({
@@ -217,6 +281,28 @@ describe("builtin shell_exec tool", () => {
 		});
 	});
 
+	it("uses tiny truncation budgets and fallback error text for failed commands", async () => {
+		const runner = vi.fn(async () => ({
+			stdout: "abcdef",
+			stderr: "",
+			exitCode: 2,
+			timedOut: false,
+		}));
+		const tool = createShellExecTool({
+			runner,
+			maxOutputChars: 2,
+			authority: createPermissiveAuthority(),
+		});
+
+		const result = await tool.execute({ command: "false" });
+
+		expect(result.isError).toBe(true);
+		expect(JSON.parse(result.content)).toEqual({
+			error: "Command failed: false",
+			exitCode: 2,
+		});
+	});
+
 	it("filters inherited secrets and shell metadata while preserving PATH and TERM", async () => {
 		vi.stubEnv("FAKE_SECRET", "hunter2");
 		vi.stubEnv("SHELL", "/bin/zsh");
@@ -237,6 +323,38 @@ describe("builtin shell_exec tool", () => {
 		expect(payload.stdout).not.toContain("SHELL=/bin/zsh");
 		expect(payload.stdout).toContain("PATH=");
 		expect(payload.stdout).toContain("TERM=xterm-256color");
+	});
+
+	it("maps default runner non-zero exits into structured command failures", async () => {
+		const tool = createShellExecTool({
+			authority: createPermissiveAuthority(),
+		});
+
+		const result = await tool.execute({
+			command: "false",
+		});
+
+		expect(result.isError).toBe(true);
+		expect(JSON.parse(result.content)).toEqual({
+			error: expect.any(String),
+			exitCode: 1,
+		});
+	});
+
+	it("reports missing executables from the default runner as command failures", async () => {
+		const tool = createShellExecTool({
+			authority: createPermissiveAuthority(),
+		});
+
+		const result = await tool.execute({
+			command: "__quilin_missing_command_please_do_not_exist__",
+		});
+
+		expect(result.isError).toBe(true);
+		expect(JSON.parse(result.content)).toEqual({
+			error: expect.stringContaining("Executable not found"),
+			exitCode: 127,
+		});
 	});
 
 	it("allows quoted semicolons in arguments without treating them as control operators", async () => {
@@ -330,7 +448,7 @@ describe("builtin shell_exec tool", () => {
 		}));
 		const tool = createShellExecTool({
 			runner,
-			executableAllowlist: ["ls", "git"],
+			executableAllowlist: ["ls", " git ", ""],
 			authority: createPermissiveAuthority(),
 		});
 
@@ -414,6 +532,60 @@ describe("builtin shell_exec tool", () => {
 			stdout: "ok\n",
 			stderr: "",
 			truncated: false,
+		});
+	});
+
+	it("parses escaped whitespace when a runner reports a successful missing exit code", async () => {
+		const runner = vi.fn(async () => ({
+			stdout: "",
+			stderr: "",
+			exitCode: undefined,
+			timedOut: false,
+		}));
+		const tool = createShellExecTool({
+			runner: runner as never,
+			authority: createPermissiveAuthority(),
+		});
+
+		const result = await tool.execute({
+			command: "echo hello\\ world",
+		});
+
+		expect(result.isError).toBe(false);
+		expect(runner).toHaveBeenCalledWith(
+			"echo",
+			["hello world"],
+			expect.any(Object),
+		);
+		expect(JSON.parse(result.content)).toEqual({
+			command: "echo hello\\ world",
+			exitCode: 0,
+			stdout: "",
+			stderr: "",
+			truncated: false,
+		});
+	});
+
+	it("treats missing exit codes with stderr as command failures", async () => {
+		const runner = vi.fn(async () => ({
+			stdout: "",
+			stderr: "runner failed",
+			exitCode: null,
+			timedOut: false,
+		}));
+		const tool = createShellExecTool({
+			runner,
+			authority: createPermissiveAuthority(),
+		});
+
+		const result = await tool.execute({
+			command: "echo maybe",
+		});
+
+		expect(result.isError).toBe(true);
+		expect(JSON.parse(result.content)).toEqual({
+			error: "runner failed",
+			exitCode: 1,
 		});
 	});
 });

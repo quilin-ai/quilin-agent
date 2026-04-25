@@ -297,8 +297,16 @@ async function defaultShellRunner(
 
 			return {
 				stdout: shellError.stdout ?? "",
-				stderr: shellError.stderr || shellError.message,
-				exitCode: typeof shellError.code === "number" ? shellError.code : null,
+				stderr:
+					shellError.code === "ENOENT"
+						? `Executable not found in $PATH: "${executable}"`
+						: shellError.stderr || shellError.message,
+				exitCode:
+					typeof shellError.code === "number"
+						? shellError.code
+						: shellError.code === "ENOENT"
+							? 127
+							: 1,
 				timedOut: shellError.killed === true && shellError.signal === "SIGTERM",
 			};
 		}
@@ -439,10 +447,14 @@ export function createShellExecTool(
 				});
 			}
 
-			if ((result.exitCode ?? 0) !== 0) {
+			if (
+				result.exitCode == null
+					? stderr.value.length > 0
+					: result.exitCode !== 0
+			) {
 				return createErrorResult("builtin-shell-exec", {
 					error: stderr.value || `Command failed: ${command}`,
-					exitCode: result.exitCode,
+					exitCode: result.exitCode ?? 1,
 				});
 			}
 
