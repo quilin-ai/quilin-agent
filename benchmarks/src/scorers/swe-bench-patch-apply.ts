@@ -33,13 +33,18 @@ export type ShellExecTool = {
 };
 
 export type SweBenchPatchApplyScorerOptions = {
-	readonly executor?: GitApplyCheckExecutor;
+	readonly executor: GitApplyCheckExecutor;
 };
 
 export function createSweBenchPatchApplyScorer(
-	options: SweBenchPatchApplyScorerOptions = {},
+	options: SweBenchPatchApplyScorerOptions,
 ): Scorer {
-	const executor = options.executor ?? defaultGitApplyCheckExecutor;
+	const executor = options?.executor;
+	if (typeof executor !== "function") {
+		throw new TypeError(
+			"createSweBenchPatchApplyScorer requires an injected GitApplyCheckExecutor",
+		);
+	}
 
 	return async (task, output) => {
 		const patch = candidatePatch(output);
@@ -88,14 +93,6 @@ export function createSweBenchPatchApplyScorer(
 			});
 		}
 	};
-}
-
-export const sweBenchPatchApplyScorer = createSweBenchPatchApplyScorer();
-
-export async function defaultGitApplyCheckExecutor(): Promise<GitApplyCheckResult> {
-	throw new Error(
-		"SWE-bench patch scorer requires an injected GitApplyCheckExecutor",
-	);
 }
 
 export function createShellExecGitApplyCheckExecutor(

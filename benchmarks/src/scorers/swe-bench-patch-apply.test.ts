@@ -9,6 +9,7 @@ import {
 	type GitApplyCheckExecutor,
 	type ShellExecTool,
 	SWE_BENCH_PATCH_APPLY_SCORER_TYPE,
+	type SweBenchPatchApplyScorerOptions,
 } from "./swe-bench-patch-apply.js";
 
 const fixturePatch = [
@@ -145,20 +146,36 @@ describe("swe-bench-patch-apply scorer", () => {
 		});
 	});
 
-	it("fails explicitly when no git apply executor is injected", async () => {
-		const scorer = createSweBenchPatchApplyScorer();
+	it("stringifies non-Error executor failures", async () => {
+		const executor = vi.fn<GitApplyCheckExecutor>(async () => {
+			throw "offline";
+		});
+		const scorer = createSweBenchPatchApplyScorer({ executor });
 
-		await expect(scorer(task, { patch: fixturePatch })).resolves.toEqual({
+		await expect(scorer(task, { patch: fixturePatch })).resolves.toMatchObject({
 			passed: false,
 			score: 0,
 			details: {
-				scorer_type: SWE_BENCH_PATCH_APPLY_SCORER_TYPE,
-				repo_workdir: "/workspace/repo",
-				error:
-					"SWE-bench patch scorer requires an injected GitApplyCheckExecutor",
+				error: "offline",
 				reason: "executor_error",
 			},
 		});
+	});
+
+	it("requires an injected git apply executor at factory time", () => {
+		expect(() =>
+			createSweBenchPatchApplyScorer(
+				undefined as unknown as SweBenchPatchApplyScorerOptions,
+			),
+		).toThrow(
+			"createSweBenchPatchApplyScorer requires an injected GitApplyCheckExecutor",
+		);
+
+		expect(() =>
+			createSweBenchPatchApplyScorer({} as SweBenchPatchApplyScorerOptions),
+		).toThrow(
+			"createSweBenchPatchApplyScorer requires an injected GitApplyCheckExecutor",
+		);
 	});
 });
 

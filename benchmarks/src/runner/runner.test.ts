@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, symlinkSync } from "node:fs";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -386,6 +386,7 @@ describe("runBenchmarkTask", () => {
 		["home secret", "~/.quilin/secret.txt"],
 		["system file", "/etc/hosts"],
 		["repo root", resolve(process.cwd(), "..", "readme.md")],
+		["windows drive", "C:\\Users\\secret.txt"],
 	])("blocks %s paths outside the task workspace", async (_label, path) => {
 		const shellExec: BenchmarkTool = {
 			name: "shell_exec",
@@ -419,10 +420,56 @@ describe("runBenchmarkTask", () => {
 		expect(shellExec.execute).not.toHaveBeenCalled();
 	});
 
+	it("blocks workspace symlinks that resolve outside the task workspace", async () => {
+		const outsideDir = await mkdtemp(join(tmpdir(), "quilin-runner-outside-"));
+		const shellExec: BenchmarkTool = {
+			name: "shell_exec",
+			execute: vi.fn(async () => ({ content: "{}", isError: false })),
+		};
+
+		try {
+			await expect(
+				runBenchmarkTask({
+					task,
+					options: {
+						agentLoopConfig: {
+							...makeLoopConfig(),
+							tools: [shellExec],
+						},
+						runAgent: async (config, messages) => {
+							const payload = JSON.parse(messages[1]?.content ?? "{}") as {
+								workspace_dir?: string;
+							};
+							const workspaceDir = payload.workspace_dir ?? "";
+							symlinkSync(outsideDir, join(workspaceDir, "link-out"), "dir");
+							await config.tools?.[0]?.execute({
+								command: "pwd",
+								path: "link-out/result.txt",
+							});
+							return "patch";
+						},
+						scorer: async () => ({ passed: true, score: 1, details: {} }),
+					},
+				}),
+			).rejects.toMatchObject({
+				name: "BenchmarkRunError",
+				phase: "agent_loop",
+				message:
+					"agent_loop: Benchmark sandbox blocked path outside workspace: path",
+			});
+			expect(shellExec.execute).not.toHaveBeenCalled();
+		} finally {
+			await rm(outsideDir, { recursive: true, force: true });
+		}
+	});
+
 	it.each([
 		"cat /etc/hosts",
+		'cat "/etc/hosts"',
+		"cat '../secret.txt'",
 		"cat ../secret.txt",
 		"cat ~/.quilin/secret.txt",
+		"type C:\\Windows\\win.ini",
 	])("blocks paths embedded in shell_exec commands: %s", async (command) => {
 		const shellExec: BenchmarkTool = {
 			name: "shell_exec",
@@ -477,6 +524,21 @@ describe("runBenchmarkTask", () => {
 			expect(allowed.result.passed).toBe(true);
 			expect(fetchMock).toHaveBeenCalledTimes(1);
 
+			const allowedByHostname = await runBenchmarkTask({
+				task,
+				options: {
+					agentLoopConfig: makeLoopConfig(),
+					networkWhitelist: ["allowed.example"],
+					runAgent: async () => {
+						await fetch("https://allowed.example:8443/data");
+						return "patch";
+					},
+					scorer: async () => ({ passed: true, score: 1, details: {} }),
+				},
+			});
+			expect(allowedByHostname.result.passed).toBe(true);
+			expect(fetchMock).toHaveBeenCalledTimes(2);
+
 			const allowedByConfig = await runBenchmarkTask({
 				task,
 				options: {
@@ -494,7 +556,7 @@ describe("runBenchmarkTask", () => {
 				},
 			});
 			expect(allowedByConfig.result.passed).toBe(true);
-			expect(fetchMock).toHaveBeenCalledTimes(2);
+			expect(fetchMock).toHaveBeenCalledTimes(3);
 
 			const allowedRequestObject = await runBenchmarkTask({
 				task,
@@ -511,7 +573,7 @@ describe("runBenchmarkTask", () => {
 				},
 			});
 			expect(allowedRequestObject.result.passed).toBe(true);
-			expect(fetchMock).toHaveBeenCalledTimes(3);
+			expect(fetchMock).toHaveBeenCalledTimes(4);
 
 			await expect(
 				runBenchmarkTask({
@@ -532,7 +594,7 @@ describe("runBenchmarkTask", () => {
 				message:
 					"agent_loop: Benchmark network blocked outbound fetch: https://blank.example",
 			});
-			expect(fetchMock).toHaveBeenCalledTimes(3);
+			expect(fetchMock).toHaveBeenCalledTimes(4);
 
 			await expect(
 				runBenchmarkTask({
@@ -553,7 +615,7 @@ describe("runBenchmarkTask", () => {
 				message:
 					"agent_loop: Benchmark network whitelist could not inspect fetch URL",
 			});
-			expect(fetchMock).toHaveBeenCalledTimes(3);
+			expect(fetchMock).toHaveBeenCalledTimes(4);
 
 			await expect(
 				runBenchmarkTask({
@@ -574,7 +636,7 @@ describe("runBenchmarkTask", () => {
 				message:
 					"agent_loop: Benchmark network blocked outbound fetch: https://blocked.example",
 			});
-			expect(fetchMock).toHaveBeenCalledTimes(3);
+			expect(fetchMock).toHaveBeenCalledTimes(4);
 		} finally {
 			globalThis.fetch = originalFetch;
 		}

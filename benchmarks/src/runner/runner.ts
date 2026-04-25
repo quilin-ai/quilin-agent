@@ -1,8 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
+import { lstatSync, realpathSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { Scorer } from "../scorers/index.js";
 import type {
 	BenchmarkCost,
@@ -138,7 +139,9 @@ const pathFieldNames = new Set([
 ]);
 const pathFieldSuffixPattern = /_(?:path|dir|directory)$/;
 const shellExecToolNames = new Set(["shell_exec", "shell-exec", "shellExec"]);
-const shellPathTokenPattern = /^(?:~(?:\/|$)|\/|\.\.(?:\/|$))|\/\.\.(?:\/|$)/;
+const windowsAbsolutePathPattern = /^(?:[a-zA-Z]:[\\/]|\\\\)/;
+const shellPathTokenPattern =
+	/^(?:~(?:\/|$)|\/|\.\.(?:\/|$)|[a-zA-Z]:[\\/]|\\\\)|[\\/]\\.\\.(?:[\\/]|$)/;
 let guardedFetch: typeof globalThis.fetch | undefined;
 let fetchGuardInstalled = false;
 
@@ -480,6 +483,11 @@ function assertPathContained(
 			`Benchmark sandbox blocked path outside workspace: ${fieldName}`,
 		);
 	}
+	if (windowsAbsolutePathPattern.test(trimmed)) {
+		throw new Error(
+			`Benchmark sandbox blocked path outside workspace: ${fieldName}`,
+		);
+	}
 
 	const workspaceRoot = resolve(workspaceDir);
 	const candidate = isAbsolute(trimmed)
@@ -490,6 +498,8 @@ function assertPathContained(
 			`Benchmark sandbox blocked path outside workspace: ${fieldName}`,
 		);
 	}
+
+	assertRealPathContained(workspaceRoot, candidate, fieldName);
 }
 
 function isInsidePath(root: string, candidate: string): boolean {
@@ -513,6 +523,50 @@ function looksLikeFilesystemPath(token: string): boolean {
 
 function isShellExecTool(tool: BenchmarkTool): boolean {
 	return typeof tool.name === "string" && shellExecToolNames.has(tool.name);
+}
+
+function assertRealPathContained(
+	workspaceRoot: string,
+	candidate: string,
+	fieldName: string,
+): void {
+	const realWorkspaceRoot = realpathSync.native(workspaceRoot);
+	const existingPath = nearestExistingPath(candidate, workspaceRoot);
+
+	let realExistingPath: string;
+	try {
+		realExistingPath = realpathSync.native(existingPath);
+	} catch (error) {
+		throw new Error(
+			`Benchmark sandbox blocked unresolved path: ${fieldName} (${errorMessage(error)})`,
+		);
+	}
+
+	if (!isInsidePath(realWorkspaceRoot, realExistingPath)) {
+		throw new Error(
+			`Benchmark sandbox blocked path outside workspace: ${fieldName}`,
+		);
+	}
+}
+
+function nearestExistingPath(candidate: string, workspaceRoot: string): string {
+	let current = candidate;
+	while (true) {
+		try {
+			lstatSync(current);
+			return current;
+		} catch (error) {
+			if (!isNotFoundError(error)) {
+				throw error;
+			}
+		}
+
+		const parent = dirname(current);
+		if (!isInsidePath(workspaceRoot, parent)) {
+			return workspaceRoot;
+		}
+		current = parent;
+	}
 }
 
 async function runWithNetworkWhitelist<T>(
@@ -591,6 +645,15 @@ function resolveNetworkWhitelist(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return value != null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isNotFoundError(error: unknown): boolean {
+	return (
+		error != null &&
+		typeof error === "object" &&
+		"code" in error &&
+		error.code === "ENOENT"
+	);
 }
 
 function resolveScorer(

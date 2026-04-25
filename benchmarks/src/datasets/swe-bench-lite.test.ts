@@ -1,3 +1,4 @@
+import { symlinkSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -208,6 +209,25 @@ describe("SWE-bench Lite dataset loader", () => {
 
 		await expect(loadSweBenchLiteTasks({ cacheRoot })).rejects.toThrow(
 			/Cache data_file must be a canonical filename/,
+		);
+	});
+
+	it("rejects canonical data files that symlink outside the cache directory", async () => {
+		const cacheRoot = await writeSweBenchLiteCache(records);
+		const datasetDir = join(cacheRoot, "datasets", "swe-bench-lite");
+		const outsideRoot = await mkdtemp(
+			join(tmpdir(), "quilin-benchmarks-outside-"),
+		);
+		tempRoots.push(outsideRoot);
+		const outsideDataPath = join(outsideRoot, "data.jsonl");
+		const data = `${records.map((record) => JSON.stringify(record)).join("\n")}\n`;
+		await rm(join(datasetDir, "data.jsonl"));
+		await writeFile(outsideDataPath, data, "utf8");
+		symlinkSync(outsideDataPath, join(datasetDir, "data.jsonl"));
+		await rewriteManifest(cacheRoot, { sha256: computeSha256(data) });
+
+		await expect(loadSweBenchLiteTasks({ cacheRoot })).rejects.toThrow(
+			/Cache data_file symlink escapes cache directory/,
 		);
 	});
 

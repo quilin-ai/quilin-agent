@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { lstatSync, realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { z } from "zod";
@@ -77,7 +78,43 @@ function resolveContainedDataPath(cacheDir: string, dataFile: string): string {
 			`Cache data_file must be a canonical filename: ${dataFile}`,
 		);
 	}
+	assertExistingPathContained(cacheDir, dataPath, dataFile);
 	return dataPath;
+}
+
+function assertExistingPathContained(
+	cacheDir: string,
+	dataPath: string,
+	dataFile: string,
+): void {
+	let dataStat: ReturnType<typeof lstatSync>;
+	try {
+		dataStat = lstatSync(dataPath);
+	} catch (error) {
+		if (isNotFoundError(error)) {
+			return;
+		}
+		throw new CacheError(
+			`Cache data_file stat failed: ${dataFile} (${formatCause(error)})`,
+		);
+	}
+
+	const realCacheDir = realpathSync.native(cacheDir);
+	const realDataPath = realpathSync.native(dataPath);
+	if (!isInsidePath(realCacheDir, realDataPath)) {
+		const symlinkDetail = dataStat.isSymbolicLink() ? " symlink" : "";
+		throw new CacheError(
+			`Cache data_file${symlinkDetail} escapes cache directory: ${dataFile}`,
+		);
+	}
+}
+
+function isInsidePath(root: string, candidate: string): boolean {
+	const pathFromRoot = relative(root, candidate);
+	return (
+		pathFromRoot === "" ||
+		(!pathFromRoot.startsWith("..") && !isAbsolute(pathFromRoot))
+	);
 }
 
 export function computeSha256(text: string): string {
@@ -124,4 +161,13 @@ async function readDataFile(dataPath: string): Promise<string> {
 
 function formatCause(error: unknown): string {
 	return String(error);
+}
+
+function isNotFoundError(error: unknown): boolean {
+	return (
+		error != null &&
+		typeof error === "object" &&
+		"code" in error &&
+		error.code === "ENOENT"
+	);
 }
