@@ -748,9 +748,9 @@ M2.6 / M2.7 ↔ Iter F soul.md 写路径
 | M1.2–M1.6（KG schema + 混合检索 v1 + reranker event log + planning ingestion + cache 元数据） | ✅ In-scope | §11.4 主干，依赖 M0.5/M0.8 已就绪 |
 | Config-track CONFIG.1–CONFIG.4（Capability Config Loader） | ✅ In-scope（本轮新增） | 关闭 §11.3 row 97 剩余风险：第三方 MCP / Skills CLI config loader 未接入 |
 | M1.1（L3a 生产 ingestion） | ⏸ Defer | Arm L 资源 blocked（ANTHROPIC_API_KEY unset / ollama absent，S4 已记录）；解锁再启 |
-| M1.7（UserProfile Store + ProfileUpdater） | ✅ Unblocked | ADR-007 draft 已产出：`docs/adr/adr-007-identity-files.md`；可启动实现 |
-| M1.8（user.md 双向镜像） | ⏸ Defer | 依赖 M1.7 实现完成 |
-| S8 UserProfile schema 同步 | ⏸ Defer | ADR-007 已冻结边界；schema 仍依赖 M1.7/M1.8 实现落地 |
+| M1.7（UserProfile Store + ProfileUpdater） | ✅ 已闭合（第四轮 commit `23837d4`） | ADR-007 draft 已产出；M1.7 实现完成，见 §0.1 第四轮表第 141 行 |
+| M1.8（user.md 双向镜像） | ✅ 已闭合（第四轮 commit `23837d4`，§15.2 旧状态过时） | `profile_store.py` 已加 `export_markdown()` / `sync_from_markdown()`；`tests/test_user_md_mirror.py`；根 `.gitignore` 已加 `.quilin/user.md`；见 §0.1 第四轮表第 141 行 |
+| S8 UserProfile schema 同步 | ✅ 已闭合（schema 随 M1.7 落地冻结） | `UserProfile` dataclass + `schema_version=1` + `ProfileSignal` shape 已在 `23837d4` 实证；如需要"完整文档冻结"（ADR-007 反链 + 字段表）见 §17 cleanup sweep |
 | 方向 4（Arm L 1039 样本 gate） | ⏸ Blocked | 外部资源未就绪 |
 | 方向 5（lint/coverage 独立门禁 sweep） | ⏸ Defer to 收尾 | sweep 改动面大，和 in-flight 三路 track 会 merge 打架；留到本轮全部 commit 后单独一轮 |
 
@@ -821,7 +821,7 @@ M2.6 / M2.7 ↔ Iter F soul.md 写路径
 | 条目 | 解除条件 |
 |---|---|
 | M1.1 | Arm L spike 拿到 recall/FPR/p95 数据；`ANTHROPIC_API_KEY` 或 ollama 任一可用 |
-| M1.7 / M1.8 / S8 | ✅ ADR-007 draft 已产出；下一步实现 M1.7 后闭合 M1.8/S8 |
+| M1.7 / M1.8 / S8 | ✅ 全部已闭合（第四轮 commit `23837d4`：M1.7 + M1.8 + schema 一并落地）；详见 §0.1 第四轮表第 141 行 + §17 全部残余项最终归属 |
 | 方向 4 Arm L gate | 同 M1.1 |
 | 方向 5 lint sweep | ✅ 已完成：`a1276b8`；`just check` + `just lint-py` + TS/Python 全量测试通过 |
 
@@ -952,3 +952,51 @@ M2.6 / M2.7 ↔ Iter F soul.md 写路径
   - `cd providers/memory && uv run pytest -q` = `139 passed`
   - `cd providers/memory && uv run ruff check src tests` = clean
 - **DoD**：Track D backlog 全量可维护性条目已闭合；`kg.py` / `retriever.py` 拆分作为独立 backlog 续项。
+
+---
+
+## 17. 全部残余项最终归属（2026-04-25 收口）
+
+> 本节是本计划的**最终归属表**。所有第四轮 commit `23837d4` / 状态声明实证后的剩余条目都必须在这里出现并指向具体 Iter / 计划。任何在本表之外的"未归属"项视为漏项。
+
+### 17.1 已完成（仅文档状态回写，旧表已修正）
+
+| 项 | 闭合 commit | 实证 |
+|---|---|---|
+| M1.7 UserProfile Store + ProfileUpdater | `23837d4` | `profile_store.py` / `profile_updater.py` + `test_profile_store.py`；audit 字段 who/when/why/diff |
+| M1.8 user.md 双向镜像 | `23837d4` | `UserProfile.export_markdown()` / `sync_from_markdown()`；`tests/test_user_md_mirror.py`；根 `.gitignore` `.quilin/user.md` |
+| S8 UserProfile schema 冻结 | `23837d4` | `UserProfile` dataclass + `schema_version=1` + `ProfileSignal` shape 已落地 |
+| M2.4 / M2.5 / M2.6 | `23837d4` | 见 §0.1 第四轮表 |
+| 方向 5 lint sweep | `a1276b8` | `just check` + `just lint-py` + 全量测试通过 |
+| §16 全部 follow-up | 见各条 | §16.1-16.8 全部 ✅ closed |
+
+### 17.2 已转出到其他 Iter / 计划（不在本计划范围内继续追踪）
+
+| 项 | 归属 | 原文档锚 |
+|---|---|---|
+| C3.6 成本路由探索性门控 | **Iter E**（`00-implementation-plan.md` Iteration E） | §4.4 第 345 行 / §0.1 第 154 行 |
+| M2.7 soul.md 静态加载（read path） | **Iter F prelude / self-evolution read path**（`00-implementation-plan.md` Iter F） | §5.3 第 422 行；与 Iter F 自进化写路径分开 |
+| M2.2 / M2.3 真实 idle loop 实现 | **Iter F** 自进化（O7 已决方案 C） | §13 / 7.1-7.2 |
+| Iter D OTel 时 reranker 训练信号迁移 | **Iter D Newton 后半段**（`docs/planning/2026-04-25-01-iter-d-parallel-breakdown.md` §4.1 `M1.4 event_log OTel bridge`） | §1 第 170 行；M1.4 SQLite 保持训练真相源，Newton dual-emit OTel span event |
+| `kg.py` (530) / `retriever.py` (535) 大文件拆分 | **Iter D 收口后 C+M cleanup sweep**（`docs/planning/2026-04-25-02-c-m-cleanup-sweep.md`） | §16.8 末尾 backlog；`store.py` 已 §16.1 拆完降至 491，不再列入 |
+
+### 17.3 资源 Blocked（解锁前不归 Iter，待激活）
+
+| 项 | blocker | 解锁条件 | 解锁后归属 | 跟踪点 |
+|---|---|---|---|---|
+| M1.1 / M0.9b L3a 生产 observer | `ANTHROPIC_API_KEY` unset / `ollama` absent / `localhost:11434` 拒连接 | API key 或 ollama 任一可用 | 重跑 Arm L spike → ML-first observer 或 d3 opt-in/默认关闭（按 ADR-004 60/3/50） | `00-implementation-plan.md` "Blocked / 待激活项"段 |
+| LongMemEval vendoring | 上游数据集不稳定，未 vendored | 上游稳定或本地复刻 1k 样本 | 替代 AMB 四轴作为 M0.10 / M1.3 / M2.5 目标门槛证据 | 同上 |
+| 方向 4 Arm L 1039 样本 gate | 同 M1.1 | 同 M1.1 | 解锁后重跑产生 pass/fail 决议（ADR-006 是否需要） | 同上 |
+
+### 17.4 漏项检查清单
+
+- [x] §0.1 第一-四轮全部 commit 与本表 17.1 / 17.2 对应
+- [x] §15.2 / §15.7 旧 defer 状态已回写为 closed
+- [x] §16.1-16.8 follow-up 全部 ✅ closed，无遗留
+- [x] M1.4 OTel 迁移已转入 Iter D 计划（不再在本计划追踪）
+- [x] 大文件拆分已转入新 sweep 计划（不在本计划做）
+- [x] M2.7 read path 显式归属 Iter F prelude（不再含糊"Iter F"）
+- [x] 资源 blocked 项有明确解锁条件 + 解锁后归属 + 跟踪点
+
+> 任何后续发现遗漏的项必须在本节追加；不得在 §0-§16 既有段落继续追加新条目（避免与 §17 双源真相）。
+

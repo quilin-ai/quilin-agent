@@ -92,6 +92,7 @@ Day 0 是单线串行步骤；契约未冻结前不允许并行轨道开工。
 - ADR-008 `observability.*` 配置项 ↔ ADR-009 `observability` namespace：log_level、tracing endpoint、metrics port 由 Kelvin 轨道实现 loader，由 Newton 轨道实现 consumer。
 - ADR-008 MCP `metadata.traceparent/request_id` ↔ ADR-005 已有 metadata 字段：traceparent / request_id 与 ADR-005 的 `schema_version / source / score / staleness` 共存于同一 metadata namespace，新字段不冲突。
 - ADR-009 `memory.scratchpad.*` ↔ Boyle 轨道：scratchpad TTL / capacity 配置项由 Kelvin 提供 schema，由 Boyle 消费。
+- ADR-008 trace context ↔ M1.4 event_log：`event_log.py` dual-emit OTel span event；SQLite 保持 reranker 训练真相源，OTel 只是从同一事件生产者并行导出，不替代。详见 §4 Newton 任务 `M1.4 event_log OTel bridge`。
 
 ---
 
@@ -111,6 +112,7 @@ Day 0 是单线串行步骤；契约未冻结前不允许并行轨道开工。
 | `composite_exporter` | `packages/agent-core/src/observability/exporters/composite.ts`（新） | 包装多个 exporter；任一失败不阻塞其他 |
 | Python trace ingest | `providers/memory/src/omnimem/event_log.py` | 增加 `trace_id` / `request_id` / `span_id` 列；MCP request 入口解析 `metadata.traceparent` |
 | Python span 写入 | `providers/memory/src/omnimem/server.py` | MCP request 处理时建本侧 span；response 回写 traceparent |
+| **M1.4 event_log OTel bridge** | `providers/memory/src/omnimem/event_log.py`（dual-emit 模块） | 检索/引用样本 dual-emit 到 OTel span event（attribute key 遵循 ADR-008）；SQLite 仍是 reranker 训练真相源；OTel 失败不阻塞写库；放 Newton **后半段**（依赖 OTelSpanProvider + Python trace ingest 就绪后接入） |
 
 ### 4.2 Newton DoD
 
@@ -197,7 +199,7 @@ Day 0 是单线串行步骤；契约未冻结前不允许并行轨道开工。
 
 | 同步点 | 触达轨道 | 内容 |
 |---|---|---|
-| S1：trace 字段 | Newton ↔ Boyle | MCP `metadata.traceparent / tracestate / request_id` 解析与回写一致；event_log 列名一致 |
+| S1：trace 字段 | Newton ↔ Boyle | MCP `metadata.traceparent / tracestate / request_id` 解析与回写一致；event_log 列名一致；M1.4 dual-emit OTel span event 但**不替代** SQLite（SQLite 仍是 reranker 训练真相源） |
 | S2：config schema | Kelvin ↔ Newton/Boyle | `observability.*` 与 `memory.scratchpad.*` 字段名、默认值、热更新边界对齐 |
 | S3：log schema | Newton ↔ Kelvin | `observability.log_level` 控制 structured log level 阈值 |
 | S4：CI 矩阵 | Curie | TS / Python / Rust 三 job 共存；任一失败阻塞 merge |
@@ -238,7 +240,7 @@ Curie 可与任意轨道并行；Newton 与 Boyle 在 S1 同步点对齐 trace �
 
 ### 11.3 第二轮并行切片
 
-- **Newton 收尾**：`json_file_exporter` + `composite_exporter` + Python trace ingest + S1 同步实证
+- **Newton 收尾**：`json_file_exporter` + `composite_exporter` + Python trace ingest + **M1.4 event_log OTel bridge dual-emit** + S1 同步实证
 - **Kelvin 收尾**：`config show/set` CLI + 权限校验 + S2 同步实证
 - **Boyle 起步**：`Scratchpad` 模型 + MCP methods + TS client + Executor 集成
 
@@ -273,7 +275,7 @@ Curie 可与任意轨道并行；Newton 与 Boyle 在 S1 同步点对齐 trace �
 - **L3a 生产 observer（M1.1 / M0.9b）**：资源 blocked（`ANTHROPIC_API_KEY` unset / `ollama` absent / `:11434` 拒连接）；与 Iter D 无依赖。
 - **DockerSandbox / LocalSandbox / CloudSandbox**：留 Iter D 后期或 Iter F；本计划不覆盖。
 - **mesh-sdk 实质代码**：留 Iter F；ADR-011 / ADR-012 时再写。
-- **Track D 残余大文件拆分**（`kg.py` 477 / `retriever.py` 493 / `store.py` 1036）：等 Iter D 契约稳定后再做更经济（避免 Newton 加列后再次变动）。
+- **Track D 残余大文件拆分**（实证 `kg.py` 530 / `retriever.py` 535；`store.py` 已 §16.1 拆分降至 491，闭合无需再拆）：归 **Iter D 收口后 C+M cleanup sweep**（`docs/planning/2026-04-25-02-c-m-cleanup-sweep.md`），避免 Newton 加 trace 列后再次变动。
 - **Iter E1-c 恢复**：等 Newton + Boyle 收口后从 `iter-e-parked` 分支恢复。
 
 ---

@@ -1,12 +1,15 @@
 # Quilin Agent 实现规划
 
-> **状态（2026-04-22 实证更新）**：
-> - Phase 0 ✅ v0.0.3 | Iter A ✅ v0.1.0-iter-a | **Iter B 基本完成**（B1 ✅ / B2 ✅ / B3a ✅ / B3b ✅ Phase 0-4；tiny-classifier spike 已降级到 Iter D 研究）；Iter C **尚未开工**（下一个主目标）；**Iter E1 已归档到 `iter-e-parked` 分支**（2026-04-22 实证：E1-a/E1-b 代码已完成但 E1-c 依赖的 Iter C Planning + Iter D §03-memory Phase 0 + §08 Observability 尚未落地，benchmark harness 当前无可测 agent，故回退等 C/D 就绪再恢复）
-> - Iter B 当前落点：B1 ✅、B2 ✅、B3a ✅、**B3b ✅ Phase 0/1/2/3/4**（post-compact 恢复 + file watcher：`1f74adb` / `93141c5`）。技能细节以 `docs/planning/2026-04-21-01-skills-b3b-activation.md` 和 `docs/engineering/13-skills/README.md` 为准。
-> - `loop.ts` **191 LOC**（commit `776300e` 把 helpers 抽到 `loop-types.ts`，CC-01 <200 契约已守住；演进链 407 → 212 (`0464377`) → 191 (`776300e`)）
-> - OmniMem L3a observer gate 仍失败（recall 21.4% / 中文 0%）；Iter D Sprint 0 决定 ML-first 或降级 opt-in
+> **状态（2026-04-25 实证更新）**：
+> - Phase 0 ✅ v0.0.3 | Iter A ✅ v0.1.0-iter-a | Iter B 基本完成 ✅
+> - **Iter C ✅ 已完成**：C0-C3 全部落地（commits `c1856c0` Day 0 → `94c5894` 第四轮收口）；Planning DAG / PlanAndExecute / G-Replan / 委派 / 长任务集成已闭合。详见 `docs/planning/2026-04-23-01-iter-c-m-parallel-breakdown.md` §0.1。
+> - **Iter M ✅ 已完成**（与 Iter C 并行抽出）：M0/M1/M2 全部落地；OmniMem L1/L2/FTS/BM25/融合召回/KG/混合检索/reranker event log/UserProfile/100k benchmark/soul.md schema 均已实证。AMB 100k p95 `0.261ms`（硬门槛 `300ms`）。
+> - **Iter D Day 0 ✅ 已冻结**（commit `56b7a46`）：ADR-008 Observability Span Schema + ADR-009 Config Cascade + `docs/planning/2026-04-25-01-iter-d-parallel-breakdown.md` 并行任务拆分。**下一个主目标是 Iter D 第一轮并行切片**（Newton + Kelvin + Curie）。
+> - **Iter E1 已归档到 `iter-e-parked` 分支**：E1-a/E1-b 代码保留，等 Iter D Newton + Boyle 收口后从 branch 恢复继续 E1-c。
+> - **L3a observer**：ADR-004 接管，资源 blocked → blocked/deferred 而非 fail；M1.1 / M0.9b 待 `ANTHROPIC_API_KEY` 或 ollama 解锁后重跑 Arm L spike。
+> - `loop.ts` 191 LOC（CC-01 <200 契约已守住；演进链 407 → 212 (`0464377`) → 191 (`776300e`)）
 >
-> **语言架构**：TS（核心）+ Python（ML Provider）。Rust（mesh / WASM / infra）延后到 Iter D，引入前以 [ADR-001](../adr/adr-001-core-loop-and-language.md) 为准。
+> **语言架构**：TS（核心）+ Python（ML Provider）。Rust（mesh / WASM / infra）Iter D 起 stub，实质代码留 Iter F；引入前以 [ADR-001](../adr/adr-001-core-loop-and-language.md) 为准。
 
 ## Context
 
@@ -17,7 +20,10 @@
 - 核心架构决策已定稿（ADR-001）
 - Phase 0 已完成（v0.0.3）：Agent Loop + OmniMem MCP + REPL + 78 tests
 - Iter A 已完成（v0.1.0-iter-a）：上下文工程 + 提示词工程（PromptBuilder, ContextAssembler, InjectionScanner, TemporalAwareness, MemoryBridge）+ 91 tests
-- Iter B 基本完成：B1 tool substrate ✅；B2 Safety Policy ✅（WriteAuthority + pre/post hooks + Two-Strike + classifier 均已合并；tiny-classifier spike 降级到 Iter D 研究实验）；B3a Skills Core ✅；B3b Activation 已完成 Phase 0/1/2/3/4（条件激活 + CRUD + skills_guard + post-compact 恢复 + file watcher 全部落地）。**下一个主目标是 Iter C（Planning Core）**——Iter E 的 harness 预研已归档到 `iter-e-parked` 分支（E1-a / E1-b 代码 + planning docs 全部保留），等 C + D §03-memory Phase 0 + §08 Observability 就绪后再从 branch 恢复继续做 E1-c。
+- Iter B 基本完成：B1 tool substrate ✅；B2 Safety Policy ✅；B3a/B3b Skills Core + Activation ✅。
+- **Iter C ✅ + Iter M ✅ 完成**（Planning + Memory 并行四轮切片落地）；详见 `docs/planning/2026-04-23-01-iter-c-m-parallel-breakdown.md` §0.1 + §17 全部残余项最终归属。
+- **Iter D Day 0 已冻结**（commit `56b7a46`，ADR-008/009 + 并行计划）；**下一个主目标是 Iter D 第一轮并行切片**（Newton/Kelvin/Curie 起步，Boyle 第二轮，详见 `docs/planning/2026-04-25-01-iter-d-parallel-breakdown.md` §11）。
+- Iter E 的 harness 预研已归档到 `iter-e-parked` 分支（E1-a / E1-b 代码保留），等 Iter D Newton + Boyle 收口后从 branch 恢复继续做 E1-c。
 
 ---
 
@@ -406,12 +412,17 @@ Agent Mesh 接入（11）：
 - User Profile Store + auto-reflect
 - 记忆去重 / 冲突检测 / 遗忘策略
 
-自进化（10，**human-in-loop**）：
+Self-Evolution Read Path（10，**Iter F prelude，先读后写**）：
+- **M2.7 soul.md 静态加载**（read path 显式归属）：`providers/memory/src/omnimem/soul_loader.py` + 02-context ContextAssembler 接入；启动期读 `.quilin/soul.md` 到内存，拼入稳定前缀利于 prompt cache；文件缺失安全回退默认人格；本期只读不写
+- M2.6 soul.md frontmatter schema 已 ✅ commit `23837d4`，read path 是其下一步
+
+自进化写路径（10，**human-in-loop**）：
 - 轨迹分析
 - Scaffold patch proposal（**生成 patch 而非 auto apply**）
 - 技能自创（自动封装重复模式 → Skill Memory，走 SkillManager.extract）
 - User Insight Engine（基于积累数据产生洞察）
 - **Idle Evolution（opt-in）**：显式 `--idle-evolve on` + 日预算上限 + 透明汇报；默认 OFF
+- M2.2 / M2.3 Consolidator 真实 idle loop（M2 期只交付 stub + dry-run，真实 loop 留 Iter F）
 
 对话工程（12，解冻于 Iter F）：
 - 6 层活人感架构
@@ -525,3 +536,20 @@ Benchmark 验证层（Iter E 独立 iter）
 - BFCL v4：SOTA overall ~90%+；目标首次提交 ≥85%
 
 **综合/元 Leaderboard**（Iter F+ 同步追踪）：Epoch AI Capabilities Index, Scale SEAL, HELM, LMSys Arena, Vellum, Artificial Analysis, Onyx AI
+
+---
+
+## Blocked / 待激活项（2026-04-25 收口）
+
+> 本节列出**资源 blocked、当前不归任何 Iter** 的项；解锁后按表格填入解锁 commit + 归属 Iter / 计划。每项必须有 blocker / 解锁条件 / 解锁后归属 / 跟踪点。
+
+| 项 | blocker | 解锁条件 | 解锁后归属 | 跟踪文档 |
+|---|---|---|---|---|
+| **M1.1 / M0.9b L3a 生产 observer** | `ANTHROPIC_API_KEY` unset / `ollama` absent / `localhost:11434` 拒连接（S4 已记录） | API key 或 ollama 任一可用 | 重跑 Arm L spike（按 ADR-004 `recall ≥ 60% / FPR ≤ 3% / p95 ≤ 50ms`）→ pass 走 ML-first observer，fail 走 d3 opt-in/默认关闭，blocked/deferred 维持现状 | `docs/adr/adr-004-l3a-observer-strategy.md` + `docs/planning/2026-04-23-01-iter-c-m-parallel-breakdown.md` §17.3 |
+| **LongMemEval vendoring** | 上游数据集不稳定，未 vendored | 上游稳定或本地复刻 1k 样本 | 替代 AMB 四轴作为 M0.10 / M1.3 / M2.5 目标门槛证据（O3 已决） | `docs/planning/2026-04-23-01-iter-c-m-parallel-breakdown.md` §13 / §17.3 |
+| **方向 4 Arm L 1039 样本 gate** | 同 M1.1 | 同 M1.1 | 解锁后重跑产生 pass/fail 决议；决定是否需要 ADR-006（成本部署 qualifier） | 同 M1.1 |
+| **Rust mesh-sdk 实质代码** | 等 Iter D Newton + Boyle 收口（Iter D 只落 stub + CI matrix） | Iter D 主轴稳定 + AgentMesh 设计冻结 | Iter F mesh 接入；ADR-011 Rust substrate / ADR-012 AgentMesh 起草后开工 | `docs/planning/2026-04-25-01-iter-d-parallel-breakdown.md` §13 + Iter F 段 |
+| **DockerSandbox / LocalSandbox / CloudSandbox** | Iter D-lite 仅做 user-level config，sandbox 完整体非本 Iter 范围 | Iter D 主轴收口或 Iter F 启动 | Iter D 后期或 Iter F 落地 09-deployment-runtime 完整体 | `docs/engineering/09-deployment-runtime/README.md` §2.2-2.4 |
+
+> 解锁条件触发时，由 Claude / Codex 任一发现方更新本表；解锁后该项从"待激活"段迁移到对应 Iter 的活动任务。
+
