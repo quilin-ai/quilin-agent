@@ -25,7 +25,7 @@ E1-a (`2bb25d7`) + E1-b (`1298f3d`) 已被 `1eecb84` / `d538736` revert 掉，ma
 
 1. **跨 leaderboard 漂移**：SWE-bench Verified / GAIA / BFCL v4 任务结构差异大；如果不冻结通用 wire，每个 leaderboard 各写一套 task 类型会让 runner / scorer 无法复用。
 2. **Cost-tracking 重复**：Iter D OTel 已记录 `agent.turn.cost_usd` / `total_latency_ms`，benchmark runner 不应自建第二套 cost-tracking，应抽取 OTel attribute。
-3. **Sandbox/egress 边界**：benchmark 跑大量未知任务，必须有 per-task 文件系统隔离 + 网络白名单；DockerSandbox 留 Iter F，本 Iter 用 per-task scratchpad + tmpdir + cwd containment。
+3. **Workspace guard / egress 边界**：benchmark 跑大量公开 dataset task，E1 用 best-effort workspace guard + 网络白名单降低意外污染风险；恶意 task 的 hard isolation 不由 lexical guard 承诺，DockerSandbox 提前到 E2 作为 gate。
 4. **Cache 完整性**：dataset fetch 一次几百 MB，必须 sha256 manifest verify on load；旧 E1-a 已有此设计，本 ADR 把它升级为通用 cache 协议。
 
 ---
@@ -134,18 +134,20 @@ type SubmissionAdapter<T extends BenchmarkTask = BenchmarkTask> = {
 
 SWE-bench 本地 harness 的 prediction 文件使用 JSONL，每行包含 `{instance_id, model_name_or_path, model_patch}`。`sb-cli submit` 上传路径当前使用 JSON dict/list 形态；E2 接入官方上传时必须按实际 submit 入口选择独立 adapter。本 ADR 的 `swe-bench-verified-jsonl` 只声明本地 harness prediction adapter，不声明最终上传包格式。
 
-### 3.7 Sandbox / Egress 边界
+### 3.7 Best-effort Workspace Guard / Egress 边界
 
-本 Iter E1（包括 E2/E3）：
+本 Iter E1 的 runner 只承诺 **best-effort workspace guard**，不承诺 hard sandbox。原因是 shell command 的真实文件系统影响无法通过 lexical token parser 完整证明：重定向、命令替换、环境变量展开、glob、tool-specific URL/path 语义都会绕过单纯字符串检查。E1 threat model 是防止开发者或 benchmark task **意外污染主仓库 / 用户主目录 / 系统路径**，不是防御恶意 task。
+
+本 Iter E1：
 
 - **文件系统**：per-task scratchpad（Iter D Boyle）+ tmpdir（cwd containment）；禁止 task 写 `~`、`/etc`、`/var`、master 工作树以外的路径
 - **网络**：白名单仅 dataset endpoint（Hugging Face datasets-server / 各 leaderboard 官方）+ LLM provider endpoint；禁止任意 outbound
 - **shell exec**：复用 Iter B 的 shell-exec 工具；CRITICAL 保持 confirm（不因 benchmark 自动放开）
-- **DockerSandbox**：仍 defer Iter F；本 Iter 不实现
+- **DockerSandbox**：提前到 Iter E2 作为 hard isolation gate；E2 Day 0 先冻结 MVP 契约（workspace mount / network policy / timeout / resource limits / artifact export / LLM-API egress 白名单 / CI 可行性）
 
-E1 实施边界：在 DockerSandbox / OS namespace 不存在时，runner 只接受显式注入的 agent runner，并对注入到 runner config 的工具做 workspace containment 包装；`shell_exec` 默认 cwd 强制为 per-task tmpdir，path-like 参数和 shell command 中的路径 token 必须落在 workspace 内。网络侧使用 runner 作用域内的 fetch guard 执行 whitelist。任何绕过注入工具 / fetch guard 的 benchmark runner 都视为不合规，不能注册进正式 leaderboard run。
+E1 实施边界：在 DockerSandbox / OS namespace 不存在时，runner 只接受显式注入的 agent runner，并对注入到 runner config 的工具做 best-effort workspace guard 包装；`shell_exec` 默认 cwd 强制为 per-task tmpdir，明显 path-like 参数、`file://` 本地 URL、常见 redirect-attached path token 必须落在 workspace 内。网络侧使用 runner 作用域内的 fetch guard 执行 whitelist。任何绕过注入工具 / fetch guard 的 benchmark runner 都视为不合规，不能注册进正式 leaderboard run。
 
-破坏沙箱边界视为 BLOCKING，必须停 run 不计分。
+E1 的 best-effort guard 回归（例如已覆盖的绝对路径、`..`、workspace symlink escape、`file://`、常见 redirect path 又被放行）视为 BLOCKING，必须停 run 不计分。未覆盖的 shell 语义不再作为 E1 收口 blocker；它们必须由 E2 DockerSandbox gate 解决。官方 leaderboard / untrusted task 的 hard isolation 不能依赖 E1 lexical guard。
 
 ### 3.8 Iter D 复用契约
 

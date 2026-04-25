@@ -4,6 +4,7 @@ import { lstatSync, realpathSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { Scorer } from "../scorers/index.js";
 import type {
 	BenchmarkCost,
@@ -142,8 +143,10 @@ const shellExecToolNames = new Set(["shell_exec", "shell-exec", "shellExec"]);
 const windowsAbsolutePathPattern = /^(?:[a-zA-Z]:[\\/]|\\\\)/;
 const shellPathTokenPattern =
 	/^(?:~(?:\/|$)|\/|\.\.(?:\/|$)|[a-zA-Z]:[\\/]|\\\\)|[\\/]\\.\\.(?:[\\/]|$)/;
-const urlSchemePattern = /^(?:https?|file|ftp|git|ssh):\/\//i;
+const fileUrlSchemePattern = /^file:\/\//i;
+const remoteUrlSchemePattern = /^(?:https?|ftp|git|ssh):\/\//i;
 const shortOptionPathValuePattern = /^-[A-Za-z](.+)$/;
+const redirectPathValuePattern = /^(?:(?:\d+|&)?>>?|(?:\d+)?<<?)(.+)$/;
 let guardedFetch: typeof globalThis.fetch | undefined;
 let fetchGuardInstalled = false;
 
@@ -474,7 +477,20 @@ function assertCommandTokenContained(
 	workspaceDir: string,
 ): void {
 	const trimmed = token.trim();
-	if (trimmed.length === 0 || isUrlToken(trimmed)) {
+	if (trimmed.length === 0) {
+		return;
+	}
+	if (isFileUrlToken(trimmed)) {
+		assertFileUrlContained(trimmed, workspaceDir);
+		return;
+	}
+	if (isUrlToken(trimmed)) {
+		return;
+	}
+
+	const redirectValue = redirectPathValue(trimmed);
+	if (redirectValue !== undefined) {
+		assertCommandPathValueContained(redirectValue, workspaceDir);
 		return;
 	}
 
@@ -503,6 +519,12 @@ function assignmentTokenValue(token: string): string | undefined {
 	return token.slice(assignmentIndex + 1);
 }
 
+function redirectPathValue(token: string): string | undefined {
+	const match = redirectPathValuePattern.exec(token);
+	const value = match?.[1];
+	return value != null && value.length > 0 ? value : undefined;
+}
+
 function shortOptionPathValue(token: string): string | undefined {
 	if (token.startsWith("--")) {
 		return undefined;
@@ -517,7 +539,14 @@ function assertCommandPathValueContained(
 	workspaceDir: string,
 ): void {
 	const normalized = stripMatchingQuotes(value.trim());
-	if (normalized.length === 0 || isUrlToken(normalized)) {
+	if (normalized.length === 0) {
+		return;
+	}
+	if (isFileUrlToken(normalized)) {
+		assertFileUrlContained(normalized, workspaceDir);
+		return;
+	}
+	if (isUrlToken(normalized)) {
 		return;
 	}
 	if (isPathLikeCommandValue(normalized)) {
@@ -570,6 +599,16 @@ function assertPathContained(
 	assertRealPathContained(workspaceRoot, candidate, fieldName);
 }
 
+function assertFileUrlContained(value: string, workspaceDir: string): void {
+	let filePath: string;
+	try {
+		filePath = fileURLToPath(value);
+	} catch {
+		throw new Error("Benchmark sandbox blocked malformed file URL: command");
+	}
+	assertPathContained(filePath, workspaceDir, "command");
+}
+
 function isInsidePath(root: string, candidate: string): boolean {
 	const pathFromRoot = relative(root, candidate);
 	return (
@@ -597,7 +636,11 @@ function hasPathSeparator(value: string): boolean {
 }
 
 function isUrlToken(value: string): boolean {
-	return urlSchemePattern.test(value);
+	return remoteUrlSchemePattern.test(value);
+}
+
+function isFileUrlToken(value: string): boolean {
+	return fileUrlSchemePattern.test(value);
 }
 
 function isShellExecTool(tool: BenchmarkTool): boolean {

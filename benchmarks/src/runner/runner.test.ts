@@ -516,6 +516,17 @@ describe("runBenchmarkTask", () => {
 		'wget --output-document="/tmp/secret" https://x.com/y',
 		"wget --output-document=../secret.txt https://x.com/y",
 		"curl -O/tmp/secret https://x.com/y",
+		"curl file:///tmp/secret.txt",
+		"tool --remote=file:///tmp/secret.txt",
+		"echo ok >/tmp/secret.txt",
+		"echo ok >>/tmp/secret.txt",
+		"cat </tmp/secret.txt",
+		"cat <<../secret.txt",
+		"echo ok 2>/tmp/secret.txt",
+		"echo ok 2>>/tmp/secret.txt",
+		"echo ok &>/tmp/secret.txt",
+		"echo ok &>>/tmp/secret.txt",
+		"echo ok >../secret.txt",
 	])("blocks paths embedded in shell_exec commands: %s", async (command) => {
 		const shellExec: BenchmarkTool = {
 			name: "shell_exec",
@@ -554,6 +565,9 @@ describe("runBenchmarkTask", () => {
 		"tool --remote=https://x.com/y",
 		"wget --output-document=path/to/file https://x.com/y",
 		"wget --output-document='path/to/file' https://x.com/y",
+		"echo ok >path/to/file",
+		"cat <path/to/file",
+		"cat <<EOF",
 	])("allows URL and workspace-relative command tokens: %s", async (command) => {
 		const calls: unknown[] = [];
 		const shellExec: BenchmarkTool = {

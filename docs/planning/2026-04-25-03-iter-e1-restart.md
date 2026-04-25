@@ -35,8 +35,9 @@
 | Day 0 | ADR-010 + 本 plan + ADR-009 §3.4 加 `benchmarks` namespace | ✅ 完成 | `8254f70` | 3 files / 359 insertions |
 | 选择性 restore | `benchmarks/` workspace（package/tsconfig/vitest）+ `scripts/fetch-benchmark.ts` 339 LOC + `src/wire/{task,run,result,cost,index}.ts` 139 LOC + 4 个 wire test 240 LOC + `pnpm-workspace.yaml` + `index.ts` 加 `runAgentLoop / AgentLoopConfig / LoopHooks` export | ✅ 完成 | `b7e8e2f` | benchmarks vitest = 4 files / 45 tests passed；coverage lines/branches/functions/statements 全 100%；tsc 0；biome 0；root pnpm install OK；agent-core tsc 0；`just test-all` = TS 717 + Python 187 + Rust 1 不回归；Python TOTAL 95.28% 不回归；code-review-graph risk 0 |
 | Iter E1 第一轮（Pasteur runner + Galois dataset + Lavoisier scorer + Mendeleev submission） | 4 路并行：Pasteur 5 阶段 runner + scorer registry routing + lazy `runAgentLoop` + per-task scratchpad；Galois cache 协议 sha256 + SWE-bench-lite loader + iterator + takeFirstN；Lavoisier scorer registry + `swe-bench-patch-apply` scorer 走 Iter B `shell_exec` 不手写 spawn；Mendeleev submission registry + `swe-bench-verified-jsonl` adapter + `model_name_or_path` 字段 + Kelvin-shaped config resolver | ✅ 完成 | `a8f199d` | 23 files / 2443 insertions / runner 812 + datasets 523 + scorers 588 + submissions 477；benchmarks build/lint 0；vitest 11 files / 104 passed；coverage Stmt 98.96% / Branches 95.97% / Func 98.71% / Lines 98.96%（≥ 95% 门槛）；agent-core tsc 0；`just test-all` TS 717 + Python 187 + Rust 1（不回归）；Python 95.28%（不回归）|
-| Iter E1 R1 cross-track review | Codex 派独立 subagent 跨 4 轨道 review；BLOCKING/HIGH ≤ 0；契约一致性 + 边界硬隔离 + 测试质量 + plan §17 残余 | ⏳ 待启动 | — | E1 第一轮 commit 后启动 |
-| Iter E1 收口 | 4 轨道 ✅ + R1 ✅ + 95% coverage gate + just test-all 三语言绿 | ⏳ 待启动 | — | R1 review 通过后 |
+| Iter E1 R1-R5 review chain | R1/R2/R3/R4/R5 独立 review + fix pass；R5 后确认 lexical shell sandbox 不应继续作为 hard isolation 承诺 | ✅ 完成 | `7b633cb` / `5ba2b69` / `6dddbd6` / `52208b6` / `a35f88d` / `d578af9` / `569d6f6` / `10b2be8` / `39efc81` | R5 报告记录 3 BLOCKING：`file://`、redirect-attached path、nested `=`；决议改为 best-effort workspace guard + DockerSandbox E2 gate |
+| R5 fix pass + ADR-010 §3.7 改写 | 过渡 B：`file://` 本地 URL + 常见 redirect-attached path 纳入 workspace guard；nested `=` 文档化为 lexical limitation；ADR-010 §3.7 从 hard sandbox 改为 best-effort workspace guard | ⏳ 本轮待提交 | — | 本轮验证后回填 commit hash + tests |
+| Iter E1 收口 | 收口条件改写为 best-effort guard + documented limitation + DockerSandbox E2 gate；R6 不派，hard isolation 转入 E2 Day 0 | ⏳ 本轮待提交 | — | 本轮验证后回填 commit hash + tests |
 
 ---
 
@@ -47,18 +48,19 @@
 - 不复用 22-10/11/12 旧 planning docs；本 plan 是新单一规范源
 - ADR-010 是跨 leaderboard 通用契约，新增 leaderboard 只加 scorer + adapter
 - Memory 降级：E2 baseline per-task working set + FTS5，不用 4 层（§E2 已决）
-- DockerSandbox defer Iter F；本 Iter 用 per-task scratchpad + tmpdir + cwd containment
+- E1 runner 只承诺 best-effort workspace guard；hard isolation 不再由 lexical parser 承诺
+- DockerSandbox 提前到 E2 Day 0 spike，作为 official / untrusted leaderboard run 的 hard isolation gate
 
 ---
 
 ## 2. 不做事项
 
-- 不在本 Iter 实现 DockerSandbox / CloudSandbox（留 Iter F）
+- 不在 E1 实现 DockerSandbox / CloudSandbox；DockerSandbox MVP 进入 E2 Day 0 spike
 - 不实现 OmniMem 4 层 benchmark 路径（plan §E2 已决）
 - 不在本 Iter 启动 GAIA / BFCL（E1 完成后 E2 再做 SWE-bench Verified；GAIA / BFCL 留 E3）
 - 不实现 Aspirational benchmark（τ-bench / WebArena / OSWorld 等留 E4 选择性）
 - 不重做 cost-tracking（复用 Iter D OTel）
-- 不引入新 ADR（除 ADR-010 + ADR-009 §3.4 修订）
+- 不在 E1 定稿 DockerSandbox ADR；ADR-011 仅以 draft 形式启动，Day 0 spike 后再冻结
 
 ---
 
@@ -122,8 +124,8 @@
 | 选择性 restore（benchmarks workspace + index.ts export）| 1 | Codex 主线 |
 | Iter E1 第一轮（Pasteur + Galois + Lavoisier + Mendeleev）| 2-3 | 4 轨道并行 |
 | Iter E1 review gate（独立 subagent，类似 R1）| 1 | review + fix pass |
-| **Iter E1 总计** | **5-7 轮** | 95% 覆盖率 / OTel 抽取 / sandbox 边界 |
-| Iter E2 SWE-bench Verified 跑通 + 提交 | 5-8 | 500 题 + harness 调优 |
+| **Iter E1 总计** | **5-7 轮 + review 收敛** | 95% 覆盖率 / OTel 抽取 / best-effort guard |
+| Iter E2 SWE-bench Verified 跑通 + 提交 | 6-10 | DockerSandbox Day 0 spike + 500 题 + harness 调优 |
 | Iter E3 GAIA + BFCL v4 | 3-5 | 共享 E1 harness |
 | Iter E4（aspirational，可选）| 视情况 | E2/E3 稳定度决定 |
 
@@ -138,12 +140,13 @@
 - [ ] runner 跑 SWE-bench-lite 1 task 端到端：setup → agent loop → collect → score → cleanup 全部走通
 - [ ] runner 从 OTel 抽出的 cost/latency 与 OTel exporter 输出一致（测试断言）
 - [ ] sha256 manifest verify on load：tamper / schema_version mismatch 必须拒载
-- [ ] sandbox 边界：尝试写 `~/.quilin/secret.txt` / `/etc/hosts` / 主仓库根目录的 task 必须被拒
+- [ ] best-effort workspace guard：已覆盖的绝对路径、`..`、workspace symlink escape、`file://` 本地 URL、常见 redirect-attached path 必须被拒
+- [ ] DockerSandbox hard isolation 不作为 E1 收口条件；E2 Day 0 必须冻结 gate 后才能跑 official / untrusted leaderboard run
 - [ ] Submission jsonl 包格式与 SWE-bench Verified 官方 spec 一致（测试 fixture 比对）
 - [ ] 测试覆盖率 ≥ 95%（vitest config thresholds 95，与 packages/agent-core 一致）
 - [ ] AMB 100k recall 不回归（E1 不碰 memory 实现，理论无影响；保险起见 review gate 跑一次）
 - [ ] `just test-all` 三语言全过
-- [ ] R1 review（独立 subagent）BLOCKING/HIGH 0；MEDIUM ≤ 1
+- [ ] R1-R5 review 链 closed；R5 后 lexical sandbox 未覆盖面文档化并转入 E2 DockerSandbox gate
 
 ### 软验收
 
