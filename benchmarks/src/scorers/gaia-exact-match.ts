@@ -23,7 +23,7 @@ export const gaiaExactMatchScorer: Scorer = async (task, output) => {
 
 	const expectedNormalized = normalizeGaiaAnswer(expected);
 	const candidateNormalized = normalizeGaiaAnswer(candidate);
-	const passed = candidateNormalized === expectedNormalized;
+	const passed = questionScorer(candidate, expected);
 
 	return {
 		passed,
@@ -38,25 +38,98 @@ export const gaiaExactMatchScorer: Scorer = async (task, output) => {
 };
 
 export function normalizeGaiaAnswer(value: string): string {
-	return value
-		.toLowerCase()
-		.trim()
-		.replace(/\s+/g, " ")
-		.replace(/^[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]+/g, "")
-		.replace(/[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]+$/g, "")
-		.trim();
+	return normalizeString(value);
 }
 
 function candidateAnswer(output: Record<string, unknown>): string | undefined {
-	for (const key of ["model_answer", "answer"] as const) {
-		const value = output[key];
+	const value = output.model_answer;
 
-		if (typeof value === "string") {
-			return value;
-		}
+	if (typeof value === "string") {
+		return value;
 	}
 
 	return undefined;
+}
+
+function questionScorer(modelAnswer: string, groundTruth: string): boolean {
+	const groundTruthNumber = parsePythonFloat(groundTruth);
+	if (groundTruthNumber !== undefined) {
+		return normalizeNumberString(modelAnswer) === groundTruthNumber;
+	}
+
+	if (groundTruth.includes(",") || groundTruth.includes(";")) {
+		const groundTruthElements = splitAnswerList(groundTruth);
+		const modelAnswerElements = splitAnswerList(modelAnswer);
+		if (groundTruthElements.length !== modelAnswerElements.length) {
+			return false;
+		}
+		return groundTruthElements.every((groundTruthElement, index) => {
+			const modelAnswerElement = modelAnswerElements[index] as string;
+			const groundTruthElementNumber = parsePythonFloat(groundTruthElement);
+			if (groundTruthElementNumber !== undefined) {
+				return (
+					normalizeNumberString(modelAnswerElement) === groundTruthElementNumber
+				);
+			}
+			return (
+				normalizeString(modelAnswerElement, { removePunctuation: false }) ===
+				normalizeString(groundTruthElement, { removePunctuation: false })
+			);
+		});
+	}
+
+	return normalizeString(modelAnswer) === normalizeString(groundTruth);
+}
+
+function normalizeNumberString(value: string): number {
+	const normalized = value
+		.replaceAll("$", "")
+		.replaceAll("%", "")
+		.replaceAll(",", "");
+	return parsePythonFloat(normalized) ?? Number.POSITIVE_INFINITY;
+}
+
+function splitAnswerList(value: string): string[] {
+	return value.split(/[,;]/);
+}
+
+function normalizeString(
+	value: string,
+	options: { readonly removePunctuation?: boolean } = {},
+): string {
+	const withoutWhitespace = value.replace(/\s/g, "").toLowerCase();
+	if (options.removePunctuation === false) {
+		return withoutWhitespace;
+	}
+	return withoutWhitespace.replace(
+		/[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]/g,
+		"",
+	);
+}
+
+function parsePythonFloat(value: string): number | undefined {
+	const trimmed = value.trim();
+	if (trimmed.length === 0) {
+		return undefined;
+	}
+	const normalized = trimmed.toLowerCase();
+	if (/^[+-]?nan$/.test(normalized)) {
+		return Number.NaN;
+	}
+	if (/^[+-]?(?:inf|infinity)$/.test(normalized)) {
+		return normalized.startsWith("-")
+			? Number.NEGATIVE_INFINITY
+			: Number.POSITIVE_INFINITY;
+	}
+	if (
+		!/^[+-]?(?:(?:\d(?:_?\d)*)(?:\.(?:\d(?:_?\d)*)?)?|\.(?:\d(?:_?\d)*))(?:[eE][+-]?(?:\d(?:_?\d)*))?$/.test(
+			trimmed,
+		)
+	) {
+		return undefined;
+	}
+	const parsed = Number(trimmed.replaceAll("_", ""));
+	return Number.isNaN(parsed) ? undefined : parsed;
 }
 
 function expectedFinalAnswer(expected: GaiaExpected): string | undefined {

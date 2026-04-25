@@ -23,6 +23,17 @@ export const datasetManifestSchema = z
 		sha256: z.string().regex(/^[a-f0-9]{64}$/),
 		source_url: z.string().min(1),
 		data_file: z.string().min(1),
+		attachments: z
+			.record(
+				z.string(),
+				z
+					.object({
+						sha256: z.string().regex(/^[a-f0-9]{64}$/),
+						size_bytes: z.number().int().nonnegative(),
+					})
+					.strict(),
+			)
+			.optional(),
 	})
 	.strict();
 
@@ -125,8 +136,8 @@ function isInsidePath(root: string, candidate: string): boolean {
 	);
 }
 
-export function computeSha256(text: string): string {
-	return createHash("sha256").update(text).digest("hex");
+export function computeSha256(data: string | Uint8Array): string {
+	return createHash("sha256").update(data).digest("hex");
 }
 
 async function readManifest(manifestPath: string): Promise<DatasetManifest> {

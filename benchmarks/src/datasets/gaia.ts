@@ -1,11 +1,19 @@
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { readFile } from "node:fs/promises";
+import { isAbsolute, join, posix, relative, resolve } from "node:path";
 import { z } from "zod";
 import type { BenchmarkTask } from "../wire/task.js";
-import { CacheError, loadDatasetCache } from "./cache.js";
+import {
+	CacheError,
+	computeSha256,
+	type DatasetManifest,
+	loadDatasetCache,
+} from "./cache.js";
 
 export const GAIA_DATASET = "gaia";
 export const GAIA_EXPECTED_VALIDATION_ROWS = 165;
 
+const dockerCacheRoot = "/workspace/cache";
+const maxAttachmentFilenameBytes = 255;
 const gaiaRawRecordSchema = z.record(z.string(), z.unknown());
 const attachmentFilePattern = /^[A-Za-z0-9._-]+$/;
 
@@ -31,9 +39,13 @@ interface GaiaRecord {
 }
 
 interface GaiaAttachment {
+	readonly container_path: string;
 	readonly file_name: string;
 	readonly file_path: string;
+	readonly host_path: string;
 	readonly relative_path: string;
+	readonly sha256: string;
+	readonly size_bytes: number;
 }
 
 export async function loadGaiaTasks(
@@ -62,7 +74,12 @@ export async function* iterateGaiaTasks(
 		}
 		const record = parseJsonlRecord(line, index);
 		if (matchesFilter(record, filter)) {
-			yield toBenchmarkTask(record, index, cache.cacheDir);
+			yield await toBenchmarkTask(
+				record,
+				index,
+				cache.cacheDir,
+				cache.manifest,
+			);
 		}
 		index += 1;
 	}
@@ -179,13 +196,14 @@ function readLevel(record: GaiaRawRecord, index: number): number {
 	return level;
 }
 
-function toBenchmarkTask(
+async function toBenchmarkTask(
 	record: GaiaRecord,
 	index: number,
 	cacheDir: string,
-): BenchmarkTask {
+	manifest: DatasetManifest,
+): Promise<BenchmarkTask> {
 	const attachment = record.file_name
-		? resolveAttachment(cacheDir, record.file_name)
+		? await resolveAttachment(cacheDir, record.file_name, manifest.attachments)
 		: undefined;
 	return {
 		dataset: GAIA_DATASET,
@@ -201,6 +219,7 @@ function toBenchmarkTask(
 				? {}
 				: {
 						file_attachments: [attachment],
+						file_host_path: attachment.host_path,
 						file_name: attachment.file_name,
 						file_path: attachment.file_path,
 					}),
@@ -216,8 +235,15 @@ function toBenchmarkTask(
 	};
 }
 
-function resolveAttachment(cacheDir: string, fileName: string): GaiaAttachment {
+async function resolveAttachment(
+	cacheDir: string,
+	fileName: string,
+	attachments: DatasetManifest["attachments"],
+): Promise<GaiaAttachment> {
 	if (
+		fileName === "." ||
+		fileName === ".." ||
+		Buffer.byteLength(fileName, "utf8") > maxAttachmentFilenameBytes ||
 		!attachmentFilePattern.test(fileName) ||
 		fileName.includes("..") ||
 		fileName.includes("/") ||
@@ -227,18 +253,56 @@ function resolveAttachment(cacheDir: string, fileName: string): GaiaAttachment {
 	}
 
 	const relativePath = join("attachments", fileName);
-	const filePath = resolve(cacheDir, relativePath);
-	const pathFromCacheDir = relative(cacheDir, filePath);
+	const hostPath = resolve(cacheDir, relativePath);
+	const pathFromCacheDir = relative(cacheDir, hostPath);
 	if (pathFromCacheDir.startsWith("..") || isAbsolute(pathFromCacheDir)) {
 		throw new CacheError(
 			`GAIA attachment escapes cache directory: ${fileName}`,
 		);
 	}
+	if (attachments == null) {
+		throw new CacheError(`Missing GAIA attachment manifest entry: ${fileName}`);
+	}
+	const manifestEntry = attachments[fileName];
+	if (manifestEntry == null) {
+		throw new CacheError(`Missing GAIA attachment manifest entry: ${fileName}`);
+	}
+	let attachment: Buffer;
+	try {
+		attachment = await readFile(hostPath);
+	} catch (error) {
+		throw new CacheError(
+			`Missing or unreadable GAIA attachment: ${fileName} (${formatCause(error)})`,
+		);
+	}
+	const actualSha256 = computeSha256(attachment);
+	if (actualSha256 !== manifestEntry.sha256) {
+		throw new CacheError(
+			`GAIA attachment sha256 mismatch for ${fileName}: expected ${manifestEntry.sha256}, got ${actualSha256}`,
+		);
+	}
+	if (attachment.byteLength !== manifestEntry.size_bytes) {
+		throw new CacheError(
+			`GAIA attachment size mismatch for ${fileName}: expected ${manifestEntry.size_bytes}, got ${attachment.byteLength}`,
+		);
+	}
+
+	const cacheRelativePath = posix.join(
+		"datasets",
+		GAIA_DATASET,
+		"attachments",
+		fileName,
+	);
+	const containerPath = posix.join(dockerCacheRoot, cacheRelativePath);
 
 	return {
+		container_path: containerPath,
 		file_name: fileName,
-		file_path: filePath,
+		file_path: containerPath,
+		host_path: hostPath,
 		relative_path: relativePath,
+		sha256: manifestEntry.sha256,
+		size_bytes: manifestEntry.size_bytes,
 	};
 }
 

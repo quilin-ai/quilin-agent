@@ -17,8 +17,8 @@ const task = {
 describe("gaiaExactMatchScorer", () => {
 	it.each([
 		["case", "ALPHA", "alpha"],
-		["whitespace", "  alpha\t beta\n gamma  ", "alpha beta gamma"],
-		["basic edge punctuation", "!!! Alpha, beta.???", "alpha, beta"],
+		["whitespace", "  alpha\t beta\n gamma  ", "alphabetagamma"],
+		["punctuation", "!!! Alpha, beta.???", "alphabeta"],
 	])("normalizes %s", (_caseName, input, expected) => {
 		expect(normalizeGaiaAnswer(input)).toBe(expected);
 	});
@@ -31,15 +31,129 @@ describe("gaiaExactMatchScorer", () => {
 			score: 1,
 			details: {
 				scorer_type: GAIA_EXACT_MATCH_SCORER_TYPE,
-				expected_normalized: "new york city",
-				model_answer_normalized: "new york city",
+				expected_normalized: "newyorkcity",
+				model_answer_normalized: "newyorkcity",
 			},
 		});
 	});
 
-	it("uses output.answer when model_answer is absent", async () => {
+	it("removes internal whitespace and punctuation like the official string scorer", async () => {
 		await expect(
-			gaiaExactMatchScorer(task, { answer: "...New York City..." }),
+			gaiaExactMatchScorer(
+				{ ...task, expected: { final_answer: "seagull" } },
+				{ model_answer: "sea gull!!!" },
+			),
+		).resolves.toMatchObject({
+			passed: true,
+			score: 1,
+		});
+	});
+
+	it("scores numeric answers with the official currency, percent, and comma cleanup", async () => {
+		await expect(
+			gaiaExactMatchScorer(
+				{ ...task, expected: { final_answer: "1000" } },
+				{ model_answer: "$1,000%" },
+			),
+		).resolves.toMatchObject({
+			passed: true,
+			score: 1,
+		});
+		await expect(
+			gaiaExactMatchScorer(
+				{ ...task, expected: { final_answer: "1_000" } },
+				{ model_answer: "$1_000%" },
+			),
+		).resolves.toMatchObject({
+			passed: true,
+			score: 1,
+		});
+		await expect(
+			gaiaExactMatchScorer(
+				{ ...task, expected: { final_answer: "42" } },
+				{ model_answer: "not-a-number" },
+			),
+		).resolves.toMatchObject({
+			passed: false,
+			score: 0,
+		});
+	});
+
+	it("does not treat JavaScript-only numeric syntax as official Python floats", async () => {
+		await expect(
+			gaiaExactMatchScorer(
+				{ ...task, expected: { final_answer: "0x10" } },
+				{ model_answer: "16" },
+			),
+		).resolves.toMatchObject({
+			passed: false,
+			score: 0,
+		});
+		await expect(
+			gaiaExactMatchScorer(
+				{ ...task, expected: { final_answer: "0x10" } },
+				{ model_answer: "0x10" },
+			),
+		).resolves.toMatchObject({
+			passed: true,
+			score: 1,
+		});
+	});
+
+	it("scores comma and semicolon separated lists element by element", async () => {
+		await expect(
+			gaiaExactMatchScorer(
+				{ ...task, expected: { final_answer: "Paris; 42, Dr. King" } },
+				{ model_answer: " paris ; $42, dr. king" },
+			),
+		).resolves.toMatchObject({
+			passed: true,
+			score: 1,
+		});
+		await expect(
+			gaiaExactMatchScorer(
+				{ ...task, expected: { final_answer: "Paris; Rome" } },
+				{ model_answer: "Paris" },
+			),
+		).resolves.toMatchObject({
+			passed: false,
+			score: 0,
+		});
+	});
+
+	it("keeps official edge behavior for empty, nan, and infinity numeric values", async () => {
+		await expect(
+			gaiaExactMatchScorer(
+				{ ...task, expected: { final_answer: "Paris," } },
+				{ model_answer: "Paris," },
+			),
+		).resolves.toMatchObject({
+			passed: true,
+			score: 1,
+		});
+		await expect(
+			gaiaExactMatchScorer(
+				{ ...task, expected: { final_answer: "nan" } },
+				{ model_answer: "nan" },
+			),
+		).resolves.toMatchObject({
+			passed: false,
+			score: 0,
+		});
+		await expect(
+			gaiaExactMatchScorer(
+				{ ...task, expected: { final_answer: "-inf" } },
+				{ model_answer: "-infinity" },
+			),
+		).resolves.toMatchObject({
+			passed: true,
+			score: 1,
+		});
+		await expect(
+			gaiaExactMatchScorer(
+				{ ...task, expected: { final_answer: "inf" } },
+				{ model_answer: "+infinity" },
+			),
 		).resolves.toMatchObject({
 			passed: true,
 			score: 1,
@@ -69,7 +183,7 @@ describe("gaiaExactMatchScorer", () => {
 			score: 0,
 			details: {
 				scorer_type: GAIA_EXACT_MATCH_SCORER_TYPE,
-				expected_normalized: "new york city",
+				expected_normalized: "newyorkcity",
 				model_answer_normalized: "boston",
 				reason: "answer_mismatch",
 			},
@@ -85,6 +199,11 @@ describe("gaiaExactMatchScorer", () => {
 		{
 			caseName: "missing output answer",
 			output: {},
+			reason: "missing_model_answer",
+		},
+		{
+			caseName: "legacy answer alias",
+			output: { answer: "New York City" },
 			reason: "missing_model_answer",
 		},
 		{

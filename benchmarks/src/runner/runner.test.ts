@@ -29,6 +29,17 @@ const task: BenchmarkTask = {
 	scorer_type: "swe-bench-patch-apply",
 };
 
+const gaiaTask: BenchmarkTask = {
+	task_id: "gaia-1",
+	dataset: "gaia",
+	inputs: {
+		level: 1,
+		question: "What is the capital of France?",
+	},
+	expected: { final_answer: "Paris" },
+	scorer_type: "gaia-exact-match",
+};
+
 describe("runBenchmarkTask", () => {
 	it("runs setup, agent_loop, collect, score, and cleanup for one task", async () => {
 		const tmpRoot = await mkdtemp(join(tmpdir(), "quilin-runner-test-"));
@@ -167,6 +178,124 @@ describe("runBenchmarkTask", () => {
 		expect(result.result.score).toBe(0.5);
 		expect(result.result.details).toEqual({
 			routed: "swe-bench-patch-apply",
+		});
+	});
+
+	it("collects GAIA model_answer JSON instead of patch output", async () => {
+		let capturedSystemPrompt = "";
+		const result = await runBenchmarkTask({
+			task: gaiaTask,
+			options: {
+				agentLoopConfig: makeLoopConfig(),
+				createRunId: () => "run-gaia",
+				runAgent: async (_config, messages) => {
+					capturedSystemPrompt = messages[0]?.content ?? "";
+					return JSON.stringify({
+						model_answer: "Paris",
+						reasoning_trace: "Looked up the capital.",
+					});
+				},
+				scorer: async (_task, output) => ({
+					passed: output.model_answer === "Paris",
+					score: 1,
+					details: { output },
+				}),
+			},
+		});
+
+		expect(capturedSystemPrompt).toContain("GAIA benchmark task");
+		expect(result.result.output).toEqual({
+			model_answer: "Paris",
+			reasoning_trace: "Looked up the capital.",
+		});
+		expect(result.result.passed).toBe(true);
+	});
+
+	it("fails loudly when GAIA agent output is not strict answer JSON", async () => {
+		await expect(
+			runBenchmarkTask({
+				task: gaiaTask,
+				options: {
+					agentLoopConfig: makeLoopConfig(),
+					runAgent: async () => "Paris",
+					scorer: async () => ({ passed: true, score: 1, details: {} }),
+				},
+			}),
+		).rejects.toMatchObject({
+			name: "BenchmarkRunError",
+			phase: "collect",
+			message: expect.stringContaining(
+				"GAIA agent output must be a JSON object",
+			),
+		});
+
+		await expect(
+			runBenchmarkTask({
+				task: gaiaTask,
+				options: {
+					agentLoopConfig: makeLoopConfig(),
+					runAgent: async () => "[]",
+					scorer: async () => ({ passed: true, score: 1, details: {} }),
+				},
+			}),
+		).rejects.toMatchObject({
+			name: "BenchmarkRunError",
+			phase: "collect",
+			message: "collect: GAIA agent output must be a JSON object",
+		});
+
+		await expect(
+			runBenchmarkTask({
+				task: gaiaTask,
+				options: {
+					agentLoopConfig: makeLoopConfig(),
+					runAgent: async () => JSON.stringify({ model_answer: " " }),
+					scorer: async () => ({ passed: true, score: 1, details: {} }),
+				},
+			}),
+		).rejects.toMatchObject({
+			name: "BenchmarkRunError",
+			phase: "collect",
+			message: "collect: GAIA agent output requires non-empty model_answer",
+		});
+	});
+
+	it("omits empty GAIA reasoning_trace from collected output", async () => {
+		const result = await runBenchmarkTask({
+			task: gaiaTask,
+			options: {
+				agentLoopConfig: makeLoopConfig(),
+				runAgent: async () =>
+					JSON.stringify({ model_answer: "Paris", reasoning_trace: " " }),
+				scorer: async (_task, output) => ({
+					passed: output.reasoning_trace === undefined,
+					score: 1,
+					details: { output },
+				}),
+			},
+		});
+
+		expect(result.result.output).toEqual({ model_answer: "Paris" });
+	});
+
+	it("fails fast for datasets whose loader/scorer/adapter are not implemented yet", async () => {
+		await expect(
+			runBenchmarkTask({
+				task: {
+					...gaiaTask,
+					dataset: "bfcl-v4",
+					scorer_type: "bfcl-tool-call-match",
+				},
+				options: {
+					agentLoopConfig: makeLoopConfig(),
+					runAgent: async () => "{}",
+					scorer: async () => ({ passed: true, score: 1, details: {} }),
+				},
+			}),
+		).rejects.toMatchObject({
+			name: "BenchmarkRunError",
+			phase: "setup",
+			message: "setup: Benchmark dataset not implemented: bfcl-v4",
 		});
 	});
 

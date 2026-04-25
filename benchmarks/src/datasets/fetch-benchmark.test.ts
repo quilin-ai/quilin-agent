@@ -96,6 +96,12 @@ describe("fetch-benchmark cache intent", () => {
 			join(cacheRoot, "datasets", "gaia", "manifest.json"),
 			"utf8",
 		);
+		const parsedManifest = JSON.parse(manifest) as {
+			readonly attachments: Record<
+				string,
+				{ readonly sha256: string; readonly size_bytes: number }
+			>;
+		};
 		const attachment = await readFile(
 			join(cacheRoot, "datasets", "gaia", "attachments", "attachment-1.pdf"),
 			"utf8",
@@ -117,6 +123,10 @@ describe("fetch-benchmark cache intent", () => {
 		expect(manifest).not.toContain("hf_test_token");
 		expect(manifest).toContain('"dataset": "gaia"');
 		expect(manifest).toContain('"requested_max_rows": 2');
+		expect(parsedManifest.attachments["attachment-1.pdf"]).toEqual({
+			sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+			size_bytes: Buffer.byteLength("gaia attachment fixture"),
+		});
 		expect(attachment).toBe("gaia attachment fixture");
 	});
 
@@ -151,6 +161,75 @@ describe("fetch-benchmark cache intent", () => {
 			expect.stringContaining("/resolve/main/2023/validation/attachment-1.pdf"),
 			{ headers: { Authorization: "Bearer hf_test_token" } },
 		);
+	});
+
+	it("refetches GAIA when cached attachment content no longer matches manifest", async () => {
+		const cacheRoot = await tempCacheRoot();
+		mockGaiaRowsFetch(2);
+		await fetchBenchmark(
+			options({
+				cacheRoot,
+				dataset: "gaia",
+				hfToken: "hf_test_token",
+				maxRows: 2,
+			}),
+		);
+		await writeFile(
+			join(cacheRoot, "datasets", "gaia", "attachments", "attachment-1.pdf"),
+			"tampered",
+			"utf8",
+		);
+
+		const refetch = mockGaiaRowsFetch(2);
+		await expect(
+			fetchBenchmark(
+				options({
+					cacheRoot,
+					dataset: "gaia",
+					hfToken: "hf_test_token",
+					maxRows: 2,
+				}),
+			),
+		).resolves.toMatchObject({ rows: 2, skipped: false });
+		expect(refetch).toHaveBeenCalledWith(
+			expect.stringContaining("/resolve/main/2023/validation/attachment-1.pdf"),
+			{ headers: { Authorization: "Bearer hf_test_token" } },
+		);
+	});
+
+	it("cleans staged GAIA attachments when an attachment fetch fails", async () => {
+		const cacheRoot = await tempCacheRoot();
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input: RequestInfo | URL) => {
+				if (String(input).includes("/resolve/main/")) {
+					return {
+						arrayBuffer: async () => Buffer.from(""),
+						json: async () => ({}),
+						ok: false,
+						status: 503,
+						statusText: "Unavailable",
+					} as unknown as Response;
+				}
+				return responseWithRows([makeGaiaRow(1)]);
+			}),
+		);
+
+		await expect(
+			fetchBenchmark(
+				options({
+					cacheRoot,
+					dataset: "gaia",
+					hfToken: "hf_test_token",
+					maxRows: 1,
+				}),
+			),
+		).rejects.toThrow(/503 Unavailable/);
+		await expect(
+			readFile(
+				join(cacheRoot, "datasets", "gaia", "attachments", "attachment-1.pdf"),
+			),
+		).rejects.toThrow();
 	});
 
 	it("requires HF_TOKEN only when an uncached GAIA fetch needs network access", async () => {
@@ -257,6 +336,25 @@ describe("fetch-benchmark cache intent", () => {
 			fetchBenchmark(
 				options({
 					cacheRoot,
+					dataset: "gaia",
+					hfToken: "hf_test_token",
+					maxRows: 1,
+				}),
+			),
+		).rejects.toThrow(/Unsafe GAIA attachment/);
+
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				responseWithRows([
+					{ ...makeGaiaRow(1), file_name: `${"a".repeat(256)}.pdf` },
+				]),
+			),
+		);
+		await expect(
+			fetchBenchmark(
+				options({
+					cacheRoot: await tempCacheRoot(),
 					dataset: "gaia",
 					hfToken: "hf_test_token",
 					maxRows: 1,

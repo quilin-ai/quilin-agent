@@ -161,6 +161,11 @@ const fileUrlSchemePattern = /^file:\/\//i;
 const remoteUrlSchemePattern = /^(?:https?|ftp|git|ssh):\/\//i;
 const shortOptionPathValuePattern = /^-[A-Za-z](.+)$/;
 const redirectPathValuePattern = /^(?:(?:\d+|&)?>>?|(?:\d+)?<<?)(.+)$/;
+const runnableDatasets = new Set([
+	"swe-bench-lite",
+	"swe-bench-verified",
+	"gaia",
+]);
 let guardedFetch: typeof globalThis.fetch | undefined;
 let fetchGuardInstalled = false;
 
@@ -180,6 +185,7 @@ export async function runBenchmarkTask(
 
 	try {
 		phases.push("setup");
+		assertRunnableDataset(task);
 		workspaceDir = await setupTaskWorkspace({
 			task,
 			options,
@@ -197,7 +203,7 @@ export async function runBenchmarkTask(
 		});
 
 		phases.push("collect");
-		output = collectOutput(loopOutput);
+		output = collectOutput(task, loopOutput);
 		const spans = options.spans?.snapshot() ?? [];
 		cost = extractBenchmarkCost(spans);
 		latencyMs = extractLatencyMs(spans, startedAt, clock());
@@ -321,9 +327,40 @@ async function runAgentLoopForTask(input: {
 	});
 }
 
-function collectOutput(loopOutput: string): Record<string, unknown> {
+function collectOutput(
+	task: BenchmarkTask,
+	loopOutput: string,
+): Record<string, unknown> {
+	if (task.dataset === "gaia") {
+		return collectGaiaOutput(loopOutput);
+	}
 	return {
 		patch: loopOutput,
+	};
+}
+
+function collectGaiaOutput(loopOutput: string): Record<string, unknown> {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(loopOutput);
+	} catch (error) {
+		throw new Error(
+			`GAIA agent output must be a JSON object with model_answer (${errorMessage(error)})`,
+		);
+	}
+	if (!isRecord(parsed)) {
+		throw new Error("GAIA agent output must be a JSON object");
+	}
+	const modelAnswer = parsed.model_answer;
+	if (typeof modelAnswer !== "string" || modelAnswer.trim().length === 0) {
+		throw new Error("GAIA agent output requires non-empty model_answer");
+	}
+	const reasoningTrace = parsed.reasoning_trace;
+	return {
+		model_answer: modelAnswer,
+		...(typeof reasoningTrace === "string" && reasoningTrace.trim().length > 0
+			? { reasoning_trace: reasoningTrace }
+			: {}),
 	};
 }
 
@@ -351,8 +388,7 @@ function createTaskMessages(
 	return [
 		{
 			role: "system",
-			content:
-				"You are running a benchmark task in an isolated workspace. Produce only the final patch diff.",
+			content: systemPromptForTask(task),
 		},
 		{
 			role: "user",
@@ -366,6 +402,13 @@ function createTaskMessages(
 	];
 }
 
+function systemPromptForTask(task: BenchmarkTask): string {
+	if (task.dataset === "gaia") {
+		return "You are running a GAIA benchmark task in an isolated workspace. Return only a JSON object with a non-empty model_answer string and, if useful, a reasoning_trace string.";
+	}
+	return "You are running a benchmark task in an isolated workspace. Produce only the final patch diff.";
+}
+
 function resolveAgentRunner(options: BenchmarkRunnerOptions): AgentLoopRunner {
 	if (typeof options.runAgent === "function") {
 		return async (config, messages) =>
@@ -374,6 +417,12 @@ function resolveAgentRunner(options: BenchmarkRunnerOptions): AgentLoopRunner {
 			);
 	}
 	throw new Error("Benchmark runner requires an injected runAgent");
+}
+
+function assertRunnableDataset(task: BenchmarkTask): void {
+	if (!runnableDatasets.has(task.dataset)) {
+		throw new Error(`Benchmark dataset not implemented: ${task.dataset}`);
+	}
 }
 
 function createSandboxedAgentLoopConfig(

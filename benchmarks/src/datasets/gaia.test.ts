@@ -67,8 +67,12 @@ describe("GAIA dataset loader", () => {
 				inputs: {
 					file_attachments: [
 						{
+							container_path:
+								"/workspace/cache/datasets/gaia/attachments/attachment.xlsx",
 							file_name: "attachment.xlsx",
-							file_path: join(
+							file_path:
+								"/workspace/cache/datasets/gaia/attachments/attachment.xlsx",
+							host_path: join(
 								cacheRoot,
 								"datasets",
 								GAIA_DATASET,
@@ -76,16 +80,20 @@ describe("GAIA dataset loader", () => {
 								"attachment.xlsx",
 							),
 							relative_path: join("attachments", "attachment.xlsx"),
+							sha256: computeSha256("fixture:attachment.xlsx"),
+							size_bytes: Buffer.byteLength("fixture:attachment.xlsx"),
 						},
 					],
-					file_name: "attachment.xlsx",
-					file_path: join(
+					file_host_path: join(
 						cacheRoot,
 						"datasets",
 						GAIA_DATASET,
 						"attachments",
 						"attachment.xlsx",
 					),
+					file_name: "attachment.xlsx",
+					file_path:
+						"/workspace/cache/datasets/gaia/attachments/attachment.xlsx",
 					level: 2,
 					question: "Inspect the attached spreadsheet.",
 				},
@@ -97,6 +105,61 @@ describe("GAIA dataset loader", () => {
 				metadata: { source_row: 1, source_schema: "gaia-2023" },
 			},
 		]);
+	});
+
+	it("rejects missing or tampered GAIA attachments", async () => {
+		const cacheRoot = await writeGaiaCache(records);
+		await writeFile(
+			join(
+				cacheRoot,
+				"datasets",
+				GAIA_DATASET,
+				"attachments",
+				"attachment.xlsx",
+			),
+			"tampered",
+			"utf8",
+		);
+
+		await expect(loadGaiaTasks({ cacheRoot })).rejects.toThrow(
+			/attachment sha256 mismatch/,
+		);
+
+		const missingManifestRoot = await writeGaiaCache(records, {
+			manifestPatch: { attachments: {} },
+		});
+		await expect(
+			loadGaiaTasks({ cacheRoot: missingManifestRoot }),
+		).rejects.toThrow(/Missing GAIA attachment manifest entry/);
+
+		const missingFileRoot = await writeGaiaCache(records);
+		await rm(
+			join(
+				missingFileRoot,
+				"datasets",
+				GAIA_DATASET,
+				"attachments",
+				"attachment.xlsx",
+			),
+			{ force: true },
+		);
+		await expect(loadGaiaTasks({ cacheRoot: missingFileRoot })).rejects.toThrow(
+			/Missing or unreadable GAIA attachment/,
+		);
+
+		const wrongSizeRoot = await writeGaiaCache(records, {
+			manifestPatch: {
+				attachments: {
+					"attachment.xlsx": {
+						sha256: computeSha256("fixture:attachment.xlsx"),
+						size_bytes: 999,
+					},
+				},
+			},
+		});
+		await expect(loadGaiaTasks({ cacheRoot: wrongSizeRoot })).rejects.toThrow(
+			/attachment size mismatch/,
+		);
 	});
 
 	it("iterates, filters, and takes first records", async () => {
@@ -156,6 +219,14 @@ describe("GAIA dataset loader", () => {
 			loadGaiaTasks({
 				cacheRoot: await writeGaiaCache([
 					{ ...records[0], file_name: "../secret.txt" },
+				]),
+			}),
+		).rejects.toThrow(/Unsafe GAIA attachment/);
+
+		await expect(
+			loadGaiaTasks({
+				cacheRoot: await writeGaiaCache([
+					{ ...records[0], file_name: `${"a".repeat(256)}.txt` },
 				]),
 			}),
 		).rejects.toThrow(/Unsafe GAIA attachment/);
@@ -251,6 +322,31 @@ async function writeGaiaCache(
 	}
 	const datasetDir = join(cacheRoot, "datasets", GAIA_DATASET);
 	await mkdir(join(datasetDir, "attachments"), { recursive: true });
+	const attachments: Record<
+		string,
+		{ readonly sha256: string; readonly size_bytes: number }
+	> = {};
+	for (const record of inputRecords) {
+		const fileName = record.file_name ?? record.file;
+		if (typeof fileName !== "string" || fileName.trim().length === 0) {
+			continue;
+		}
+		if (
+			fileName === "." ||
+			fileName === ".." ||
+			Buffer.byteLength(fileName) > 255 ||
+			!/^[A-Za-z0-9._-]+$/.test(fileName) ||
+			fileName.includes("..")
+		) {
+			continue;
+		}
+		const fixture = `fixture:${fileName}`;
+		await writeFile(join(datasetDir, "attachments", fileName), fixture, "utf8");
+		attachments[fileName] = {
+			sha256: computeSha256(fixture),
+			size_bytes: Buffer.byteLength(fixture),
+		};
+	}
 
 	const data = `${inputRecords.map((record) => JSON.stringify(record)).join("\n")}\n`;
 	await writeFile(join(datasetDir, "data.jsonl"), data, "utf8");
@@ -265,6 +361,7 @@ async function writeGaiaCache(
 		source_url:
 			"https://datasets-server.huggingface.co/rows?dataset=gaia-benchmark%2FGAIA&config=2023_all&split=validation",
 		data_file: "data.jsonl",
+		attachments,
 		...options.manifestPatch,
 	};
 	await writeFile(
@@ -292,6 +389,12 @@ async function rewriteManifest(
 		source_url:
 			"https://datasets-server.huggingface.co/rows?dataset=gaia-benchmark%2FGAIA&config=2023_all&split=validation",
 		data_file: "data.jsonl",
+		attachments: {
+			"attachment.xlsx": {
+				sha256: computeSha256("fixture:attachment.xlsx"),
+				size_bytes: Buffer.byteLength("fixture:attachment.xlsx"),
+			},
+		},
 		...patch,
 	};
 	await writeFile(

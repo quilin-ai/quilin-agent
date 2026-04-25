@@ -368,6 +368,7 @@ Memory Sprint 0 Pre-Work（D-21 follow-up，**与 Iter D 主轴并行但不 bloc
 - **GAIA**：466 个多步推理 + 工具使用任务；首次目标 ≥35%（2026-04 第一名 44.8%）
 - **BFCL v4**：工具调用准确率（单/多工具、多轮）；首次目标 overall ≥85%
 - 两个榜单共享大部分 harness infra（E1 交付）
+- 2026-04-26 拆分为 sub-iter：**E3a GAIA**（loader + official scorer parity + JSONL submission + attachment cache integrity）→ **E3b BFCL single/live AST** → **E3c BFCL multi-turn/agentic 或降 E4**；详见 `docs/planning/2026-04-26-02-iter-e3-gaia-bfcl.md`
 
 #### E4 — Aspirational Roadmap
 - 视 E2/E3 稳定度决定启动哪些：

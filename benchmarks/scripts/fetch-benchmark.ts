@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 const DATASETS_SERVER_ROWS_URL = "https://datasets-server.huggingface.co/rows";
@@ -27,6 +27,7 @@ const EXPECTED_ROWS: Record<string, number> = {
 	"swe-bench-verified": 500,
 };
 const ALLOWED_ROWS_BASE_URLS = new Set([DATASETS_SERVER_ROWS_URL]);
+const MAX_GAIA_ATTACHMENT_FILENAME_BYTES = 255;
 const gaiaAttachmentFilePattern = /^[A-Za-z0-9._-]+$/;
 
 interface FetchBenchmarkOptions {
@@ -54,6 +55,12 @@ interface DatasetManifest {
 	readonly sha256: string;
 	readonly source_url: string;
 	readonly data_file: string;
+	readonly attachments?: Readonly<Record<string, AttachmentManifestEntry>>;
+}
+
+interface AttachmentManifestEntry {
+	readonly sha256: string;
+	readonly size_bytes: number;
 }
 
 interface FetchResult {
@@ -109,7 +116,7 @@ async function fetchBenchmark(
 		sourceConfig,
 		sourceSplit,
 	);
-	await fetchGaiaAttachmentsIfNeeded({
+	const attachments = await fetchGaiaAttachmentsIfNeeded({
 		cacheDir,
 		dataset: options.dataset,
 		hfToken: options.hfToken,
@@ -127,6 +134,7 @@ async function fetchBenchmark(
 		sha256,
 		source_url: sourceUrl,
 		data_file: "data.jsonl",
+		...(attachments == null ? {} : { attachments }),
 	};
 
 	await mkdir(dirname(outputPath), { recursive: true });
@@ -235,9 +243,9 @@ async function fetchGaiaAttachmentsIfNeeded(options: {
 	readonly hfToken?: string;
 	readonly retries: number;
 	readonly rows: readonly Record<string, unknown>[];
-}): Promise<void> {
+}): Promise<Record<string, AttachmentManifestEntry> | undefined> {
 	if (options.dataset !== "gaia") {
-		return;
+		return undefined;
 	}
 	const fileNames = Array.from(
 		new Set(
@@ -247,7 +255,7 @@ async function fetchGaiaAttachmentsIfNeeded(options: {
 		),
 	);
 	if (fileNames.length === 0) {
-		return;
+		return {};
 	}
 	if (!options.hfToken) {
 		throw new Error(
@@ -256,21 +264,36 @@ async function fetchGaiaAttachmentsIfNeeded(options: {
 	}
 
 	const attachmentDir = join(options.cacheDir, "attachments");
-	await mkdir(attachmentDir, { recursive: true });
-	for (const fileName of fileNames) {
-		const attachmentPath = resolveGaiaAttachmentPath(attachmentDir, fileName);
-		const attachment = await fetchBinaryWithRetry(
-			buildGaiaAttachmentUrl(fileName),
-			options.retries,
-			options.hfToken,
-		);
-		await writeFile(attachmentPath, attachment);
+	const stagingDir = `${attachmentDir}.tmp-${process.pid}-${Date.now()}`;
+	const attachmentManifest: Record<string, AttachmentManifestEntry> = {};
+	try {
+		await mkdir(stagingDir, { recursive: true });
+		for (const fileName of fileNames) {
+			const attachmentPath = resolveGaiaAttachmentPath(stagingDir, fileName);
+			const attachment = await fetchBinaryWithRetry(
+				buildGaiaAttachmentUrl(fileName),
+				options.retries,
+				options.hfToken,
+			);
+			await writeFile(attachmentPath, attachment);
+			attachmentManifest[fileName] = {
+				sha256: computeSha256(attachment),
+				size_bytes: attachment.byteLength,
+			};
+		}
+		await rm(attachmentDir, { recursive: true, force: true });
+		await rename(stagingDir, attachmentDir);
+		return attachmentManifest;
+	} catch (error) {
+		await rm(stagingDir, { recursive: true, force: true });
+		throw error;
 	}
 }
 
 async function gaiaAttachmentsComplete(
 	cacheDir: string,
 	data: string,
+	attachments: Readonly<Record<string, AttachmentManifestEntry>> | undefined,
 ): Promise<boolean> {
 	for (const line of data.split(/\r?\n/)) {
 		if (line.length === 0) {
@@ -290,9 +313,22 @@ async function gaiaAttachmentsComplete(
 			continue;
 		}
 		try {
-			await access(
+			if (attachments == null) {
+				return false;
+			}
+			const manifestEntry = attachments[fileName];
+			if (manifestEntry == null) {
+				return false;
+			}
+			const attachment = await readFile(
 				resolveGaiaAttachmentPath(join(cacheDir, "attachments"), fileName),
 			);
+			if (
+				computeSha256(attachment) !== manifestEntry.sha256 ||
+				attachment.byteLength !== manifestEntry.size_bytes
+			) {
+				return false;
+			}
 		} catch {
 			return false;
 		}
@@ -360,7 +396,11 @@ async function tryReadValidManifest(options: {
 		}
 		if (
 			options.dataset === "gaia" &&
-			!(await gaiaAttachmentsComplete(dirname(options.outputPath), data))
+			!(await gaiaAttachmentsComplete(
+				dirname(options.outputPath),
+				data,
+				manifest.attachments,
+			))
 		) {
 			return null;
 		}
@@ -461,6 +501,9 @@ function resolveGaiaAttachmentPath(
 
 function validateGaiaAttachmentFileName(fileName: string): void {
 	if (
+		fileName === "." ||
+		fileName === ".." ||
+		Buffer.byteLength(fileName, "utf8") > MAX_GAIA_ATTACHMENT_FILENAME_BYTES ||
 		!gaiaAttachmentFilePattern.test(fileName) ||
 		fileName.includes("..") ||
 		fileName.includes("/") ||
@@ -609,8 +652,8 @@ function buildSourceUrl(options: {
 	return url.toString();
 }
 
-function computeSha256(text: string): string {
-	return createHash("sha256").update(text).digest("hex");
+function computeSha256(data: string | Uint8Array): string {
+	return createHash("sha256").update(data).digest("hex");
 }
 
 function delay(ms: number): Promise<void> {
