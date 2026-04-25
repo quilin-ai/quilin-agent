@@ -72,6 +72,19 @@ export interface BenchmarkScratchpad {
 	}) => Promise<void>;
 }
 
+export interface BenchmarkSandboxCommandInput {
+	readonly command: string;
+	readonly cwd: string;
+	readonly workspaceDir: string;
+	readonly timeoutMs?: number;
+}
+
+export interface BenchmarkSandbox {
+	readonly runShellCommand: (
+		input: BenchmarkSandboxCommandInput,
+	) => Promise<unknown>;
+}
+
 export type BenchmarkScorer = Scorer;
 
 export interface BenchmarkScorerRegistry {
@@ -89,6 +102,7 @@ export interface BenchmarkRunnerOptions {
 	readonly scorerRegistry?: BenchmarkScorerRegistry;
 	readonly scratchpad?: BenchmarkScratchpad;
 	readonly spans?: BenchmarkSpanProvider;
+	readonly sandbox?: BenchmarkSandbox;
 	readonly runAgent: AgentLoopRunner;
 	readonly networkWhitelist?: readonly string[];
 	readonly clock?: () => Date;
@@ -290,6 +304,7 @@ async function runAgentLoopForTask(input: {
 		const agentLoopConfig = createSandboxedAgentLoopConfig(
 			input.options.agentLoopConfig,
 			input.workspaceDir,
+			input.options.sandbox,
 		);
 		return run(
 			{
@@ -364,6 +379,7 @@ function resolveAgentRunner(options: BenchmarkRunnerOptions): AgentLoopRunner {
 function createSandboxedAgentLoopConfig(
 	config: BenchmarkAgentLoopRuntimeConfig,
 	workspaceDir: string,
+	sandbox: BenchmarkSandbox | undefined,
 ): BenchmarkAgentLoopRuntimeConfig {
 	if (config.tools == null) {
 		return config;
@@ -371,18 +387,34 @@ function createSandboxedAgentLoopConfig(
 
 	return {
 		...config,
-		tools: config.tools.map((tool) => createSandboxedTool(tool, workspaceDir)),
+		tools: config.tools.map((tool) =>
+			createSandboxedTool(tool, workspaceDir, sandbox),
+		),
 	};
 }
 
 function createSandboxedTool(
 	tool: BenchmarkTool,
 	workspaceDir: string,
+	sandbox: BenchmarkSandbox | undefined,
 ): BenchmarkTool {
 	return {
 		...tool,
-		execute: async (args) =>
-			tool.execute(sandboxToolArgs(tool, args, workspaceDir)),
+		execute: async (args) => {
+			if (sandbox != null && isShellExecTool(tool) && isRecord(args)) {
+				const command = args.command;
+				if (typeof command === "string") {
+					return sandbox.runShellCommand({
+						command,
+						cwd: stringValue(args.cwd) ?? workspaceDir,
+						workspaceDir,
+						timeoutMs: numberValue(args.timeoutMs),
+					});
+				}
+			}
+			const sandboxedArgs = sandboxToolArgs(tool, args, workspaceDir);
+			return tool.execute(sandboxedArgs);
+		},
 	};
 }
 
@@ -641,6 +673,16 @@ function isUrlToken(value: string): boolean {
 
 function isFileUrlToken(value: string): boolean {
 	return fileUrlSchemePattern.test(value);
+}
+
+function stringValue(value: unknown): string | undefined {
+	return typeof value === "string" ? value : undefined;
+}
+
+function numberValue(value: unknown): number | undefined {
+	return typeof value === "number" && Number.isFinite(value)
+		? value
+		: undefined;
 }
 
 function isShellExecTool(tool: BenchmarkTool): boolean {

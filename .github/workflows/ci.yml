@@ -23,6 +23,18 @@ jobs:
       - run: cd packages/agent-core && bunx tsc --noEmit --pretty false
       - run: cd packages/agent-core && bun run test
 
+  benchmarks-docker-smoke:
+    name: Benchmarks Docker Smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: pnpm/action-setup@v4
+      - run: pnpm install --frozen-lockfile
+      - run: docker version
+      - run: pnpm --filter @quilin/benchmarks build
+      - run: cd benchmarks && bun run scripts/docker-smoke.ts
+
   python:
     name: Python
     runs-on: ubuntu-latest

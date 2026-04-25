@@ -9,6 +9,7 @@ import {
 	type BenchmarkAgentMessage,
 	BenchmarkRunError,
 	type BenchmarkRunnerOptions,
+	type BenchmarkSandbox,
 	type BenchmarkScratchpad,
 	type BenchmarkSpanSnapshot,
 	type BenchmarkTool,
@@ -352,6 +353,155 @@ describe("runBenchmarkTask", () => {
 			},
 		]);
 		expect(existsSync(workspaceDir)).toBe(false);
+	});
+
+	it("routes shell_exec tools through an injected sandbox", async () => {
+		const shellExec: BenchmarkTool = {
+			name: "shell_exec",
+			execute: vi.fn(async () => ({ content: "{}", isError: false })),
+		};
+		const sandbox: BenchmarkSandbox = {
+			runShellCommand: vi.fn(async () => ({
+				content: JSON.stringify({ exitCode: 0, stderr: "", stdout: "ok" }),
+				isError: false,
+			})),
+		};
+
+		const result = await runBenchmarkTask({
+			task,
+			options: {
+				agentLoopConfig: {
+					...makeLoopConfig(),
+					tools: [shellExec],
+				},
+				runAgent: async (config) => {
+					await config.tools?.[0]?.execute({
+						command: "echo ok",
+						timeoutMs: 123,
+					});
+					return "patch";
+				},
+				sandbox,
+				scorer: async () => ({ passed: true, score: 1, details: {} }),
+			},
+		});
+
+		expect(result.result.passed).toBe(true);
+		expect(shellExec.execute).not.toHaveBeenCalled();
+		expect(sandbox.runShellCommand).toHaveBeenCalledWith(
+			expect.objectContaining({
+				command: "echo ok",
+				timeoutMs: 123,
+			}),
+		);
+	});
+
+	it("allows DockerSandbox container paths without host workspace guard rejection", async () => {
+		const shellExec: BenchmarkTool = {
+			name: "shell_exec",
+			execute: vi.fn(async () => ({ content: "{}", isError: false })),
+		};
+		const sandbox: BenchmarkSandbox = {
+			runShellCommand: vi.fn(async () => ({
+				content: JSON.stringify({ exitCode: 0, stderr: "", stdout: "" }),
+				isError: false,
+			})),
+		};
+
+		const command =
+			"cat /workspace/base/input.txt > /workspace/artifacts/output.txt";
+		await runBenchmarkTask({
+			task,
+			options: {
+				agentLoopConfig: {
+					...makeLoopConfig(),
+					tools: [shellExec],
+				},
+				runAgent: async (config) => {
+					await config.tools?.[0]?.execute({ command });
+					return "patch";
+				},
+				sandbox,
+				scorer: async () => ({ passed: true, score: 1, details: {} }),
+			},
+		});
+
+		expect(shellExec.execute).not.toHaveBeenCalled();
+		expect(sandbox.runShellCommand).toHaveBeenCalledWith(
+			expect.objectContaining({ command }),
+		);
+	});
+
+	it("does not route non-shell tools through the sandbox", async () => {
+		const calls: unknown[] = [];
+		const tool: BenchmarkTool = {
+			name: "echo",
+			execute: vi.fn(async (args) => {
+				calls.push(args);
+				return { content: "ok" };
+			}),
+		};
+		const sandbox: BenchmarkSandbox = {
+			runShellCommand: vi.fn(async () => ({
+				content: "{}",
+				isError: false,
+			})),
+		};
+
+		await runBenchmarkTask({
+			task,
+			options: {
+				agentLoopConfig: {
+					...makeLoopConfig(),
+					tools: [tool],
+				},
+				runAgent: async (config) => {
+					await config.tools?.[0]?.execute({ command: "echo ok" });
+					return "patch";
+				},
+				sandbox,
+				scorer: async () => ({ passed: true, score: 1, details: {} }),
+			},
+		});
+
+		expect(calls).toEqual([{ command: "echo ok" }]);
+		expect(sandbox.runShellCommand).not.toHaveBeenCalled();
+	});
+
+	it("falls back to shell_exec when sandboxed args are not commands", async () => {
+		const calls: unknown[] = [];
+		const shellExec: BenchmarkTool = {
+			name: "shell_exec",
+			execute: vi.fn(async (args) => {
+				calls.push(args);
+				return { content: "ok" };
+			}),
+		};
+		const sandbox: BenchmarkSandbox = {
+			runShellCommand: vi.fn(async () => ({
+				content: "{}",
+				isError: false,
+			})),
+		};
+
+		await runBenchmarkTask({
+			task,
+			options: {
+				agentLoopConfig: {
+					...makeLoopConfig(),
+					tools: [shellExec],
+				},
+				runAgent: async (config) => {
+					await config.tools?.[0]?.execute({ command: 42 });
+					return "patch";
+				},
+				sandbox,
+				scorer: async () => ({ passed: true, score: 1, details: {} }),
+			},
+		});
+
+		expect(calls).toEqual([{ command: 42, cwd: expect.any(String) }]);
+		expect(sandbox.runShellCommand).not.toHaveBeenCalled();
 	});
 
 	it("passes non-object tool arguments through unchanged", async () => {

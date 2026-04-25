@@ -7,6 +7,8 @@ export {
 	type BenchmarkRunExecution,
 	type BenchmarkRunnerOptions,
 	type BenchmarkRunPhase,
+	type BenchmarkSandbox,
+	type BenchmarkSandboxCommandInput,
 	type BenchmarkScratchpad,
 	type BenchmarkSpanProvider,
 	type BenchmarkSpanSnapshot,
