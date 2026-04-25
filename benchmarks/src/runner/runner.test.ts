@@ -1,15 +1,17 @@
 import { existsSync } from "node:fs";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { BenchmarkTask } from "../wire/index.js";
 import {
-	type BenchmarkAgentLoopConfig,
+	type BenchmarkAgentLoopRuntimeConfig,
 	type BenchmarkAgentMessage,
 	BenchmarkRunError,
+	type BenchmarkRunnerOptions,
 	type BenchmarkScratchpad,
 	type BenchmarkSpanSnapshot,
+	type BenchmarkTool,
 	extractBenchmarkCost,
 	runBenchmarkTask,
 } from "./runner.js";
@@ -167,32 +169,17 @@ describe("runBenchmarkTask", () => {
 		});
 	});
 
-	it("uses the agent-core runAgentLoop export when no runner is injected", async () => {
-		const result = await runBenchmarkTask({
-			task,
-			options: {
-				agentLoopConfig: {
-					...makeLoopConfig(),
-					llm: {
-						chat: async () => ({
-							content: "diff --git a/src/app.ts b/src/app.ts",
-							finishReason: "stop",
-							usage: { inputTokens: 1, outputTokens: 2 },
-						}),
-					},
-				},
-				scorer: async (_task, output) => ({
-					passed: output.patch === "diff --git a/src/app.ts b/src/app.ts",
-					score: 1,
-					details: { default_runner: true },
-				}),
-			},
-		});
+	it("requires an injected agent runner instead of importing agent-core internals", async () => {
+		const options = {
+			agentLoopConfig: makeLoopConfig(),
+			scorer: async () => ({ passed: true, score: 1, details: {} }),
+		} as unknown as BenchmarkRunnerOptions;
 
-		expect(result.result.output.patch).toBe(
-			"diff --git a/src/app.ts b/src/app.ts",
-		);
-		expect(result.result.details).toEqual({ default_runner: true });
+		await expect(runBenchmarkTask({ task, options })).rejects.toMatchObject({
+			name: "BenchmarkRunError",
+			phase: "agent_loop",
+			message: "agent_loop: Benchmark runner requires an injected runAgent",
+		});
 	});
 
 	it("wraps missing scorer configuration as a score phase error", async () => {
@@ -314,6 +301,309 @@ describe("runBenchmarkTask", () => {
 			await rm(tmpRoot, { recursive: true, force: true });
 		}
 	});
+
+	it("wraps shell_exec tools with workspace cwd containment", async () => {
+		const calls: unknown[] = [];
+		const shellExec: BenchmarkTool = {
+			name: "shell_exec",
+			execute: vi.fn(async (args) => {
+				calls.push(args);
+				return { content: "{}", isError: false };
+			}),
+		};
+		let workspaceDir = "";
+
+		const result = await runBenchmarkTask({
+			task,
+			options: {
+				agentLoopConfig: {
+					...makeLoopConfig(),
+					tools: [shellExec],
+				},
+				runAgent: async (config, messages) => {
+					const payload = JSON.parse(messages[1]?.content ?? "{}") as {
+						workspace_dir?: string;
+					};
+					workspaceDir = payload.workspace_dir ?? "";
+					await config.tools?.[0]?.execute({
+						command: "touch result.txt",
+						outputs: [{ output_dir: "artifacts" }],
+						path: "result.txt",
+						workspace_directory: ".",
+					});
+					return "patch";
+				},
+				scorer: async (_task, output) => ({
+					passed: output.patch === "patch",
+					score: 1,
+					details: {},
+				}),
+			},
+		});
+
+		expect(result.result.passed).toBe(true);
+		expect(calls).toEqual([
+			{
+				command: "touch result.txt",
+				cwd: workspaceDir,
+				outputs: [{ output_dir: "artifacts" }],
+				path: "result.txt",
+				workspace_directory: ".",
+			},
+		]);
+		expect(existsSync(workspaceDir)).toBe(false);
+	});
+
+	it("passes non-object tool arguments through unchanged", async () => {
+		const calls: unknown[] = [];
+		const tool: BenchmarkTool = {
+			name: "echo",
+			execute: vi.fn(async (args) => {
+				calls.push(args);
+				return { content: "ok" };
+			}),
+		};
+
+		await runBenchmarkTask({
+			task,
+			options: {
+				agentLoopConfig: {
+					...makeLoopConfig(),
+					tools: [tool],
+				},
+				runAgent: async (config) => {
+					await config.tools?.[0]?.execute("raw-input");
+					return "patch";
+				},
+				scorer: async () => ({ passed: true, score: 1, details: {} }),
+			},
+		});
+
+		expect(calls).toEqual(["raw-input"]);
+	});
+
+	it.each([
+		["home secret", "~/.quilin/secret.txt"],
+		["system file", "/etc/hosts"],
+		["repo root", resolve(process.cwd(), "..", "readme.md")],
+	])("blocks %s paths outside the task workspace", async (_label, path) => {
+		const shellExec: BenchmarkTool = {
+			name: "shell_exec",
+			execute: vi.fn(async () => ({ content: "{}", isError: false })),
+		};
+
+		await expect(
+			runBenchmarkTask({
+				task,
+				options: {
+					agentLoopConfig: {
+						...makeLoopConfig(),
+						tools: [shellExec],
+					},
+					runAgent: async (config) => {
+						await config.tools?.[0]?.execute({
+							command: "pwd",
+							path,
+						});
+						return "patch";
+					},
+					scorer: async () => ({ passed: true, score: 1, details: {} }),
+				},
+			}),
+		).rejects.toMatchObject({
+			name: "BenchmarkRunError",
+			phase: "agent_loop",
+			message:
+				"agent_loop: Benchmark sandbox blocked path outside workspace: path",
+		});
+		expect(shellExec.execute).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		"cat /etc/hosts",
+		"cat ../secret.txt",
+		"cat ~/.quilin/secret.txt",
+	])("blocks paths embedded in shell_exec commands: %s", async (command) => {
+		const shellExec: BenchmarkTool = {
+			name: "shell_exec",
+			execute: vi.fn(async () => ({ content: "{}", isError: false })),
+		};
+
+		await expect(
+			runBenchmarkTask({
+				task,
+				options: {
+					agentLoopConfig: {
+						...makeLoopConfig(),
+						tools: [shellExec],
+					},
+					runAgent: async (config) => {
+						await config.tools?.[0]?.execute({ command });
+						return "patch";
+					},
+					scorer: async () => ({ passed: true, score: 1, details: {} }),
+				},
+			}),
+		).rejects.toMatchObject({
+			name: "BenchmarkRunError",
+			phase: "agent_loop",
+			message:
+				"agent_loop: Benchmark sandbox blocked path outside workspace: command",
+		});
+		expect(shellExec.execute).not.toHaveBeenCalled();
+	});
+
+	it("enforces the benchmark network whitelist around agent fetch calls", async () => {
+		const originalFetch = globalThis.fetch;
+		const fetchMock = vi.fn(async () => new Response("ok"));
+		globalThis.fetch = fetchMock as typeof globalThis.fetch;
+		try {
+			const allowed = await runBenchmarkTask({
+				task,
+				options: {
+					agentLoopConfig: makeLoopConfig(),
+					networkWhitelist: ["allowed.example"],
+					runAgent: async () => {
+						await fetch("https://allowed.example/data");
+						return "patch";
+					},
+					scorer: async (_task, output) => ({
+						passed: output.patch === "patch",
+						score: 1,
+						details: {},
+					}),
+				},
+			});
+			expect(allowed.result.passed).toBe(true);
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+
+			const allowedByConfig = await runBenchmarkTask({
+				task,
+				options: {
+					agentLoopConfig: {
+						...makeLoopConfig(),
+						benchmarks: {
+							network_whitelist: ["https://origin.example"],
+						},
+					},
+					runAgent: async () => {
+						await fetch(new URL("https://origin.example/data"));
+						return "patch";
+					},
+					scorer: async () => ({ passed: true, score: 1, details: {} }),
+				},
+			});
+			expect(allowedByConfig.result.passed).toBe(true);
+			expect(fetchMock).toHaveBeenCalledTimes(2);
+
+			const allowedRequestObject = await runBenchmarkTask({
+				task,
+				options: {
+					agentLoopConfig: makeLoopConfig(),
+					networkWhitelist: ["object.example"],
+					runAgent: async () => {
+						await fetch({
+							url: "https://object.example/data",
+						} as Parameters<typeof globalThis.fetch>[0]);
+						return "patch";
+					},
+					scorer: async () => ({ passed: true, score: 1, details: {} }),
+				},
+			});
+			expect(allowedRequestObject.result.passed).toBe(true);
+			expect(fetchMock).toHaveBeenCalledTimes(3);
+
+			await expect(
+				runBenchmarkTask({
+					task,
+					options: {
+						agentLoopConfig: makeLoopConfig(),
+						networkWhitelist: [" "],
+						runAgent: async () => {
+							await fetch("https://blank.example/data");
+							return "patch";
+						},
+						scorer: async () => ({ passed: true, score: 1, details: {} }),
+					},
+				}),
+			).rejects.toMatchObject({
+				name: "BenchmarkRunError",
+				phase: "agent_loop",
+				message:
+					"agent_loop: Benchmark network blocked outbound fetch: https://blank.example",
+			});
+			expect(fetchMock).toHaveBeenCalledTimes(3);
+
+			await expect(
+				runBenchmarkTask({
+					task,
+					options: {
+						agentLoopConfig: makeLoopConfig(),
+						networkWhitelist: ["allowed.example"],
+						runAgent: async () => {
+							await fetch({} as Parameters<typeof globalThis.fetch>[0]);
+							return "patch";
+						},
+						scorer: async () => ({ passed: true, score: 1, details: {} }),
+					},
+				}),
+			).rejects.toMatchObject({
+				name: "BenchmarkRunError",
+				phase: "agent_loop",
+				message:
+					"agent_loop: Benchmark network whitelist could not inspect fetch URL",
+			});
+			expect(fetchMock).toHaveBeenCalledTimes(3);
+
+			await expect(
+				runBenchmarkTask({
+					task,
+					options: {
+						agentLoopConfig: makeLoopConfig(),
+						networkWhitelist: ["allowed.example"],
+						runAgent: async () => {
+							await fetch("https://blocked.example/data");
+							return "patch";
+						},
+						scorer: async () => ({ passed: true, score: 1, details: {} }),
+					},
+				}),
+			).rejects.toMatchObject({
+				name: "BenchmarkRunError",
+				phase: "agent_loop",
+				message:
+					"agent_loop: Benchmark network blocked outbound fetch: https://blocked.example",
+			});
+			expect(fetchMock).toHaveBeenCalledTimes(3);
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
+	it("fails closed when a network whitelist is configured without global fetch", async () => {
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = undefined as unknown as typeof globalThis.fetch;
+		try {
+			await expect(
+				runBenchmarkTask({
+					task,
+					options: {
+						agentLoopConfig: makeLoopConfig(),
+						networkWhitelist: ["allowed.example"],
+						runAgent: async () => "patch",
+						scorer: async () => ({ passed: true, score: 1, details: {} }),
+					},
+				}),
+			).rejects.toMatchObject({
+				name: "BenchmarkRunError",
+				phase: "agent_loop",
+				message:
+					"agent_loop: Benchmark network whitelist requires global fetch",
+			});
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
 });
 
 describe("extractBenchmarkCost", () => {
@@ -372,7 +662,7 @@ describe("extractBenchmarkCost", () => {
 	});
 });
 
-function makeLoopConfig(): Omit<BenchmarkAgentLoopConfig, "observability"> {
+function makeLoopConfig(): BenchmarkAgentLoopRuntimeConfig {
 	return {
 		llm: {
 			chat: vi.fn(),

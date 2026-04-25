@@ -1,7 +1,8 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import type { Scorer } from "../scorers/index.js";
 import type {
 	BenchmarkCost,
@@ -32,14 +33,28 @@ export interface BenchmarkAgentMessage {
 	readonly content: string;
 }
 
-export interface BenchmarkAgentLoopConfig {
+export interface BenchmarkTool {
+	readonly name?: string;
+	readonly execute: (args: unknown) => Promise<unknown>;
+	readonly [key: string]: unknown;
+}
+
+export interface BenchmarkAgentLoopRuntimeConfig {
+	readonly tools?: readonly BenchmarkTool[];
+	readonly benchmarks?: {
+		readonly network_whitelist?: readonly string[];
+	};
+	readonly [key: string]: unknown;
+}
+
+export interface BenchmarkAgentLoopConfig
+	extends BenchmarkAgentLoopRuntimeConfig {
 	readonly observability?: {
 		readonly spans?: BenchmarkSpanProvider;
 		readonly sessionId?: string;
 		readonly userId?: string;
 		readonly taskSummary?: string;
 	};
-	readonly [key: string]: unknown;
 }
 
 export interface BenchmarkScratchpad {
@@ -67,12 +82,13 @@ export type AgentLoopRunner = (
 ) => Promise<string>;
 
 export interface BenchmarkRunnerOptions {
-	readonly agentLoopConfig: Omit<BenchmarkAgentLoopConfig, "observability">;
+	readonly agentLoopConfig: BenchmarkAgentLoopRuntimeConfig;
 	readonly scorer?: BenchmarkScorer;
 	readonly scorerRegistry?: BenchmarkScorerRegistry;
 	readonly scratchpad?: BenchmarkScratchpad;
 	readonly spans?: BenchmarkSpanProvider;
-	readonly runAgent?: AgentLoopRunner;
+	readonly runAgent: AgentLoopRunner;
+	readonly networkWhitelist?: readonly string[];
 	readonly clock?: () => Date;
 	readonly createRunId?: () => string;
 	readonly tmpRoot?: string;
@@ -101,6 +117,30 @@ export class BenchmarkRunError extends Error {
 		this.name = "BenchmarkRunError";
 	}
 }
+
+const networkWhitelistStore = new AsyncLocalStorage<readonly string[]>();
+const homePathPattern = /^~(?:\/|$)/;
+const pathFieldNames = new Set([
+	"cache_dir",
+	"cwd",
+	"dir",
+	"directory",
+	"file_path",
+	"filepath",
+	"output_dir",
+	"output_path",
+	"path",
+	"repo_dir",
+	"repo_path",
+	"repo_workdir",
+	"workdir",
+	"working_directory",
+]);
+const pathFieldSuffixPattern = /_(?:path|dir|directory)$/;
+const shellExecToolNames = new Set(["shell_exec", "shell-exec", "shellExec"]);
+const shellPathTokenPattern = /^(?:~(?:\/|$)|\/|\.\.(?:\/|$))|\/\.\.(?:\/|$)/;
+let guardedFetch: typeof globalThis.fetch | undefined;
+let fetchGuardInstalled = false;
 
 export async function runBenchmarkTask(
 	input: RunBenchmarkTaskOptions,
@@ -238,10 +278,14 @@ async function runAgentLoopForTask(input: {
 	readonly workspaceDir: string;
 }): Promise<string> {
 	return wrapPhase("agent_loop", async () => {
-		const run = input.options.runAgent ?? runAgentLoop;
+		const run = resolveAgentRunner(input.options);
+		const agentLoopConfig = createSandboxedAgentLoopConfig(
+			input.options.agentLoopConfig,
+			input.workspaceDir,
+		);
 		return run(
 			{
-				...input.options.agentLoopConfig,
+				...agentLoopConfig,
 				observability: {
 					spans: input.options.spans,
 					sessionId: input.sessionId,
@@ -299,15 +343,254 @@ function createTaskMessages(
 	];
 }
 
-async function runAgentLoop(
-	config: BenchmarkAgentLoopConfig,
-	messages: readonly BenchmarkAgentMessage[],
-): Promise<string> {
-	const agentCoreModule = "@quilin/agent-core/src/loop.js";
-	const agentCore = (await import(agentCoreModule)) as {
-		readonly runAgentLoop: AgentLoopRunner;
+function resolveAgentRunner(options: BenchmarkRunnerOptions): AgentLoopRunner {
+	if (typeof options.runAgent === "function") {
+		return async (config, messages) =>
+			runWithNetworkWhitelist(resolveNetworkWhitelist(options), () =>
+				options.runAgent(config, messages),
+			);
+	}
+	throw new Error("Benchmark runner requires an injected runAgent");
+}
+
+function createSandboxedAgentLoopConfig(
+	config: BenchmarkAgentLoopRuntimeConfig,
+	workspaceDir: string,
+): BenchmarkAgentLoopRuntimeConfig {
+	if (config.tools == null) {
+		return config;
+	}
+
+	return {
+		...config,
+		tools: config.tools.map((tool) => createSandboxedTool(tool, workspaceDir)),
 	};
-	return agentCore.runAgentLoop(config, messages);
+}
+
+function createSandboxedTool(
+	tool: BenchmarkTool,
+	workspaceDir: string,
+): BenchmarkTool {
+	return {
+		...tool,
+		execute: async (args) =>
+			tool.execute(sandboxToolArgs(tool, args, workspaceDir)),
+	};
+}
+
+function sandboxToolArgs(
+	tool: BenchmarkTool,
+	args: unknown,
+	workspaceDir: string,
+): unknown {
+	if (!isRecord(args)) {
+		return args;
+	}
+
+	const next = cloneToolArg(args);
+	if (!isRecord(next)) {
+		return next;
+	}
+
+	if (isShellExecTool(tool) && typeof next.cwd !== "string") {
+		next.cwd = workspaceDir;
+	}
+	assertContainedToolArgs(next, workspaceDir);
+
+	if (isShellExecTool(tool) && typeof next.command === "string") {
+		assertCommandContained(next.command, workspaceDir);
+	}
+
+	return next;
+}
+
+function cloneToolArg(value: unknown): unknown {
+	if (Array.isArray(value)) {
+		return value.map((entry) => cloneToolArg(entry));
+	}
+	if (!isRecord(value)) {
+		return value;
+	}
+
+	const cloned: Record<string, unknown> = {};
+	for (const [key, nested] of Object.entries(value)) {
+		cloned[key] = cloneToolArg(nested);
+	}
+	return cloned;
+}
+
+function assertContainedToolArgs(
+	args: Record<string, unknown>,
+	workspaceDir: string,
+): void {
+	for (const [key, value] of Object.entries(args)) {
+		assertContainedValue(key, value, workspaceDir);
+	}
+}
+
+function assertContainedValue(
+	key: string,
+	value: unknown,
+	workspaceDir: string,
+): void {
+	if (typeof value === "string" && isPathFieldName(key)) {
+		assertPathContained(value, workspaceDir, key);
+		return;
+	}
+
+	if (Array.isArray(value)) {
+		for (const entry of value) {
+			assertContainedValue(key, entry, workspaceDir);
+		}
+		return;
+	}
+
+	if (isRecord(value)) {
+		for (const [nestedKey, nestedValue] of Object.entries(value)) {
+			assertContainedValue(nestedKey, nestedValue, workspaceDir);
+		}
+	}
+}
+
+function assertCommandContained(command: string, workspaceDir: string): void {
+	for (const token of commandTokens(command)) {
+		if (looksLikeFilesystemPath(token)) {
+			assertPathContained(token, workspaceDir, "command");
+		}
+	}
+}
+
+function commandTokens(command: string): string[] {
+	return [...command.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map(
+		(match) => match[1] ?? match[2] ?? match[3] ?? "",
+	);
+}
+
+function assertPathContained(
+	value: string,
+	workspaceDir: string,
+	fieldName: string,
+): void {
+	const trimmed = value.trim();
+	if (trimmed.length === 0) {
+		return;
+	}
+	if (homePathPattern.test(trimmed)) {
+		throw new Error(
+			`Benchmark sandbox blocked path outside workspace: ${fieldName}`,
+		);
+	}
+
+	const workspaceRoot = resolve(workspaceDir);
+	const candidate = isAbsolute(trimmed)
+		? resolve(trimmed)
+		: resolve(workspaceRoot, trimmed);
+	if (!isInsidePath(workspaceRoot, candidate)) {
+		throw new Error(
+			`Benchmark sandbox blocked path outside workspace: ${fieldName}`,
+		);
+	}
+}
+
+function isInsidePath(root: string, candidate: string): boolean {
+	const pathFromRoot = relative(root, candidate);
+	return (
+		pathFromRoot === "" ||
+		(!pathFromRoot.startsWith("..") && !isAbsolute(pathFromRoot))
+	);
+}
+
+function isPathFieldName(key: string): boolean {
+	const normalized = key.toLowerCase();
+	return (
+		pathFieldNames.has(normalized) || pathFieldSuffixPattern.test(normalized)
+	);
+}
+
+function looksLikeFilesystemPath(token: string): boolean {
+	return shellPathTokenPattern.test(token);
+}
+
+function isShellExecTool(tool: BenchmarkTool): boolean {
+	return typeof tool.name === "string" && shellExecToolNames.has(tool.name);
+}
+
+async function runWithNetworkWhitelist<T>(
+	whitelist: readonly string[] | undefined,
+	operation: () => Promise<T>,
+): Promise<T> {
+	if (whitelist === undefined) {
+		return operation();
+	}
+	installFetchGuard();
+	return networkWhitelistStore.run(whitelist, operation);
+}
+
+function installFetchGuard(): void {
+	if (fetchGuardInstalled && globalThis.fetch === guardedFetch) {
+		return;
+	}
+	if (typeof globalThis.fetch !== "function") {
+		throw new Error("Benchmark network whitelist requires global fetch");
+	}
+
+	const fetchImpl = globalThis.fetch.bind(
+		globalThis,
+	) as typeof globalThis.fetch;
+	guardedFetch = (async (...args: Parameters<typeof globalThis.fetch>) => {
+		const whitelist = networkWhitelistStore.getStore();
+		if (whitelist !== undefined) {
+			assertFetchAllowed(args[0], whitelist);
+		}
+		return fetchImpl(...args);
+	}) as typeof globalThis.fetch;
+	globalThis.fetch = guardedFetch;
+	fetchGuardInstalled = true;
+}
+
+function assertFetchAllowed(
+	input: Parameters<typeof globalThis.fetch>[0],
+	whitelist: readonly string[],
+): void {
+	const url = fetchUrl(input);
+	if (!whitelist.some((entry) => matchesAllowedTarget(url, entry))) {
+		throw new Error(`Benchmark network blocked outbound fetch: ${url.origin}`);
+	}
+}
+
+function fetchUrl(input: Parameters<typeof globalThis.fetch>[0]): URL {
+	if (typeof input === "string" || input instanceof URL) {
+		return new URL(input);
+	}
+	const value = input as { readonly url?: unknown };
+	if (typeof value.url === "string") {
+		return new URL(value.url);
+	}
+	throw new Error("Benchmark network whitelist could not inspect fetch URL");
+}
+
+function matchesAllowedTarget(url: URL, entry: string): boolean {
+	const target = entry.trim();
+	if (target.length === 0) {
+		return false;
+	}
+	if (target.includes("://")) {
+		return url.origin === new URL(target).origin;
+	}
+	return url.host === target || url.hostname === target;
+}
+
+function resolveNetworkWhitelist(
+	options: BenchmarkRunnerOptions,
+): readonly string[] | undefined {
+	return (
+		options.networkWhitelist ??
+		options.agentLoopConfig.benchmarks?.network_whitelist
+	);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return value != null && typeof value === "object" && !Array.isArray(value);
 }
 
 function resolveScorer(

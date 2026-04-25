@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { z } from "zod";
+
+const canonicalDataFilePattern = /^(?:data\.jsonl|data\.json)$/;
 
 export class CacheError extends Error {
 	constructor(message: string) {
@@ -40,7 +42,7 @@ export async function loadDatasetCache(
 	options: LoadDatasetCacheOptions,
 ): Promise<DatasetCache> {
 	const cacheRoot = options.cacheRoot ?? ".benchmarks";
-	const cacheDir = join(cacheRoot, "datasets", options.dataset);
+	const cacheDir = resolve(cacheRoot, "datasets", options.dataset);
 	const manifestPath = join(cacheDir, "manifest.json");
 	const manifest = await readManifest(manifestPath);
 
@@ -50,7 +52,7 @@ export async function loadDatasetCache(
 		);
 	}
 
-	const dataPath = join(cacheDir, manifest.data_file);
+	const dataPath = resolveContainedDataPath(cacheDir, manifest.data_file);
 	const data = await readDataFile(dataPath);
 	const actualSha256 = computeSha256(data);
 	if (actualSha256 !== manifest.sha256) {
@@ -60,6 +62,22 @@ export async function loadDatasetCache(
 	}
 
 	return { manifest, cacheDir, dataPath, data };
+}
+
+function resolveContainedDataPath(cacheDir: string, dataFile: string): string {
+	const dataPath = resolve(cacheDir, dataFile);
+	const pathFromCacheDir = relative(cacheDir, dataPath);
+	if (pathFromCacheDir.startsWith("..") || isAbsolute(pathFromCacheDir)) {
+		throw new CacheError(
+			`Cache data_file escapes cache directory: ${dataFile}`,
+		);
+	}
+	if (!canonicalDataFilePattern.test(dataFile)) {
+		throw new CacheError(
+			`Cache data_file must be a canonical filename: ${dataFile}`,
+		);
+	}
+	return dataPath;
 }
 
 export function computeSha256(text: string): string {

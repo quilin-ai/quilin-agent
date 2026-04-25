@@ -65,6 +65,8 @@ export function createSweBenchVerifiedJsonlAdapter(
 		options.modelNameOrPath?.trim() || DEFAULT_MODEL_NAME_OR_PATH;
 	return {
 		dataset: "swe-bench-verified",
+		// Targets SWE-bench local harness prediction files; sb-cli upload
+		// adapters are intentionally separate because their JSON shape differs.
 		format: "jsonl",
 		serialize(results) {
 			if (results.length === 0) {

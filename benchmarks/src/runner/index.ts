@@ -1,4 +1,8 @@
 export {
+	type AgentLoopRunner,
+	type BenchmarkAgentLoopConfig,
+	type BenchmarkAgentLoopRuntimeConfig,
+	type BenchmarkAgentMessage,
 	BenchmarkRunError,
 	type BenchmarkRunExecution,
 	type BenchmarkRunnerOptions,
@@ -6,6 +10,7 @@ export {
 	type BenchmarkScratchpad,
 	type BenchmarkSpanProvider,
 	type BenchmarkSpanSnapshot,
+	type BenchmarkTool,
 	extractBenchmarkCost,
 	type RunBenchmarkTaskOptions,
 	runBenchmarkTask,

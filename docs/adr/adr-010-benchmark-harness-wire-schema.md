@@ -130,6 +130,10 @@ type SubmissionAdapter<T extends BenchmarkTask = BenchmarkTask> = {
 
 每 leaderboard 一个 adapter；submission 包通过 registry 动态生成。
 
+#### Submission format 选择
+
+SWE-bench 本地 harness 的 prediction 文件使用 JSONL，每行包含 `{instance_id, model_name_or_path, model_patch}`。`sb-cli submit` 上传路径当前使用 JSON dict/list 形态；E2 接入官方上传时必须按实际 submit 入口选择独立 adapter。本 ADR 的 `swe-bench-verified-jsonl` 只声明本地 harness prediction adapter，不声明最终上传包格式。
+
 ### 3.7 Sandbox / Egress 边界
 
 本 Iter E1（包括 E2/E3）：
@@ -138,6 +142,8 @@ type SubmissionAdapter<T extends BenchmarkTask = BenchmarkTask> = {
 - **网络**：白名单仅 dataset endpoint（Hugging Face datasets-server / 各 leaderboard 官方）+ LLM provider endpoint；禁止任意 outbound
 - **shell exec**：复用 Iter B 的 shell-exec 工具；CRITICAL 保持 confirm（不因 benchmark 自动放开）
 - **DockerSandbox**：仍 defer Iter F；本 Iter 不实现
+
+E1 实施边界：在 DockerSandbox / OS namespace 不存在时，runner 只接受显式注入的 agent runner，并对注入到 runner config 的工具做 workspace containment 包装；`shell_exec` 默认 cwd 强制为 per-task tmpdir，path-like 参数和 shell command 中的路径 token 必须落在 workspace 内。网络侧使用 runner 作用域内的 fetch guard 执行 whitelist。任何绕过注入工具 / fetch guard 的 benchmark runner 都视为不合规，不能注册进正式 leaderboard run。
 
 破坏沙箱边界视为 BLOCKING，必须停 run 不计分。
 

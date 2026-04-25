@@ -153,13 +153,61 @@ describe("SWE-bench Lite dataset loader", () => {
 	it("rejects missing data files declared by a valid manifest", async () => {
 		const cacheRoot = await writeSweBenchLiteCache(records, {
 			manifestPatch: {
-				data_file: "missing.jsonl",
+				data_file: "data.json",
 				sha256: computeSha256(""),
 			},
 		});
 
 		await expect(loadSweBenchLiteTasks({ cacheRoot })).rejects.toThrow(
-			/missing.jsonl/,
+			/data.json/,
+		);
+	});
+
+	it.each([
+		["path traversal", "../escape.jsonl"],
+		["absolute path", "/tmp/escape.jsonl"],
+	])("rejects manifest data_file %s", async (_label, dataFile) => {
+		const cacheRoot = await writeSweBenchLiteCache(records, {
+			manifestPatch: {
+				data_file: dataFile,
+				sha256: computeSha256(""),
+			},
+		});
+
+		await expect(loadSweBenchLiteTasks({ cacheRoot })).rejects.toThrow(
+			/Cache data_file escapes cache directory/,
+		);
+	});
+
+	it.each([
+		["nested path", "nested/data.jsonl"],
+		["non-canonical file", "evil.jsonl"],
+		["wrong extension", "data.txt"],
+	])("rejects non-canonical manifest data_file %s", async (_label, dataFile) => {
+		const cacheRoot = await writeSweBenchLiteCache(records, {
+			manifestPatch: {
+				data_file: dataFile,
+				sha256: computeSha256(""),
+			},
+		});
+
+		await expect(loadSweBenchLiteTasks({ cacheRoot })).rejects.toThrow(
+			/Cache data_file must be a canonical filename/,
+		);
+	});
+
+	it("rejects data_file replacement attacks even when sha256 matches", async () => {
+		const cacheRoot = await writeSweBenchLiteCache(records);
+		const datasetDir = join(cacheRoot, "datasets", "swe-bench-lite");
+		const replacement = `${records.map((record) => JSON.stringify(record)).join("\n")}\n`;
+		await writeFile(join(datasetDir, "evil.jsonl"), replacement, "utf8");
+		await rewriteManifest(cacheRoot, {
+			data_file: "evil.jsonl",
+			sha256: computeSha256(replacement),
+		});
+
+		await expect(loadSweBenchLiteTasks({ cacheRoot })).rejects.toThrow(
+			/Cache data_file must be a canonical filename/,
 		);
 	});
 

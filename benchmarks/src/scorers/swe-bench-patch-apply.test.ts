@@ -144,6 +144,22 @@ describe("swe-bench-patch-apply scorer", () => {
 			},
 		});
 	});
+
+	it("fails explicitly when no git apply executor is injected", async () => {
+		const scorer = createSweBenchPatchApplyScorer();
+
+		await expect(scorer(task, { patch: fixturePatch })).resolves.toEqual({
+			passed: false,
+			score: 0,
+			details: {
+				scorer_type: SWE_BENCH_PATCH_APPLY_SCORER_TYPE,
+				repo_workdir: "/workspace/repo",
+				error:
+					"SWE-bench patch scorer requires an injected GitApplyCheckExecutor",
+				reason: "executor_error",
+			},
+		});
+	});
 });
 
 describe("createShellExecGitApplyCheckExecutor", () => {
@@ -218,6 +234,26 @@ describe("createShellExecGitApplyCheckExecutor", () => {
 		).resolves.toMatchObject({
 			exitCode: 1,
 			stderr: "not json",
+		});
+	});
+
+	it("defaults successful shell_exec payloads without exitCode to zero", async () => {
+		const tool: ShellExecTool = {
+			execute: async () => ({
+				content: "null",
+				isError: false,
+			}),
+		};
+
+		await expect(
+			createShellExecGitApplyCheckExecutor(tool)({
+				cwd: "/workspace/repo",
+				patch: fixturePatch,
+			}),
+		).resolves.toEqual({
+			exitCode: 0,
+			stdout: "",
+			stderr: "",
 		});
 	});
 });

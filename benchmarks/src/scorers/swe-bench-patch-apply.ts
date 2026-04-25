@@ -92,18 +92,10 @@ export function createSweBenchPatchApplyScorer(
 
 export const sweBenchPatchApplyScorer = createSweBenchPatchApplyScorer();
 
-export async function defaultGitApplyCheckExecutor({
-	cwd,
-	patch,
-}: GitApplyCheckRequest): Promise<GitApplyCheckResult> {
-	const shellExecModule = "@quilin/agent-core/src/tools/builtin/shell-exec.js";
-	const { createShellExecTool } = (await import(shellExecModule)) as {
-		readonly createShellExecTool: () => ShellExecTool;
-	};
-	return createShellExecGitApplyCheckExecutor(createShellExecTool())({
-		cwd,
-		patch,
-	});
+export async function defaultGitApplyCheckExecutor(): Promise<GitApplyCheckResult> {
+	throw new Error(
+		"SWE-bench patch scorer requires an injected GitApplyCheckExecutor",
+	);
 }
 
 export function createShellExecGitApplyCheckExecutor(
