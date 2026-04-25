@@ -79,6 +79,19 @@ describe("validateDagPlan", () => {
 				edges: [],
 			}),
 		).toMatchObject({ ok: false, duplicateStepIds: ["a"] });
+		expect(() =>
+			assertAcyclicDag({
+				kind: "dag",
+				subtasks: [makeStep("a"), makeStep("a")],
+				edges: [],
+			}),
+		).toThrow("DAG contains duplicate step ids: a");
+		expect(() =>
+			assertAcyclicDag({
+				...valid,
+				edges: [["a", "missing"]],
+			}),
+		).toThrow("DAG edge references missing step ids: missing");
 
 		const cyclic: DagPlan = {
 			kind: "dag",
@@ -113,6 +126,29 @@ describe("write-set helpers", () => {
 		).toEqual({
 			scope: "episodic",
 			resources: ["memory:1", "memory:2", "notes.md"],
+			unknown: false,
+		});
+	});
+
+	it("normalizes default and nested resource arguments", () => {
+		expect(getStepWriteSet(makeStep("read-default"))).toEqual({
+			scope: "none",
+			resources: [],
+			unknown: false,
+		});
+		expect(
+			getStepWriteSet(
+				makeStep("write", {
+					writeScope: "working",
+					arguments: {
+						files: [" b.md ", ["a.md", "", ["c.md"]]],
+						resource: 42,
+					},
+				}),
+			),
+		).toEqual({
+			scope: "working",
+			resources: ["a.md", "b.md", "c.md"],
 			unknown: false,
 		});
 	});

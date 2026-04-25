@@ -115,6 +115,12 @@ describe("createSkillsCatalogSection", () => {
 });
 
 describe("createHotSkillsSection", () => {
+	it("returns null when no hot skills are available", () => {
+		const section = createHotSkillsSection({ list: () => [] });
+
+		expect(section.compute(baseCtx)).toBeNull();
+	});
+
 	it("renders project and plugin skills into a per_turn hot-skills block", () => {
 		const section = createHotSkillsSection({
 			list: () => [
@@ -169,6 +175,25 @@ describe("createHotSkillsSection", () => {
 });
 
 describe("createPostCompactSkillsSection", () => {
+	it("returns null when no restore source or restored entries are available", () => {
+		const missingSourceSection = createPostCompactSkillsSection({
+			list: () => [],
+		});
+		const emptyRestoreSection = createPostCompactSkillsSection({
+			list: () => [],
+			postCompactRestore: () => ({ entries: [], totalTokens: 0 }),
+		});
+		const compactedCtx = {
+			...baseCtx,
+			sessionState: {
+				compaction: { justCompacted: true },
+			},
+		};
+
+		expect(missingSourceSection.compute(compactedCtx)).toBeNull();
+		expect(emptyRestoreSection.compute(compactedCtx)).toBeNull();
+	});
+
 	it("returns null when compaction was not just triggered", () => {
 		const section = createPostCompactSkillsSection({
 			list: () => [],

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import type { BuildContext } from "./prompt-types.js";
 import {
 	classifyGap,
@@ -13,6 +13,10 @@ const mockBuildCtx: BuildContext = {
 	availableTools: [],
 	profile: "full",
 };
+
+afterEach(() => {
+	vi.useRealTimers();
+});
 
 describe("classifyGap", () => {
 	test("< 5 分钟为 normal", () => {
@@ -79,6 +83,16 @@ describe("createTemporalBucketSection", () => {
 		const section = createTemporalBucketSection();
 		expect(section.updateFrequency).toBe("per_session");
 	});
+
+	test("没有 temporal session state 时使用当前时间并省略 gap 桶", () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-04-25T02:03:04.000Z"));
+		const section = createTemporalBucketSection();
+
+		const content = section.compute(mockBuildCtx);
+
+		expect(content).toBe("[时间桶]\n日期桶: 2026-04-25");
+	});
 });
 
 describe("decoratePreciseTemporalUserInput", () => {
@@ -95,5 +109,35 @@ describe("decoratePreciseTemporalUserInput", () => {
 		expect(decorated).toContain("时段: afternoon");
 		expect(decorated).toContain("距上条消息: 10 分钟");
 		expect(decorated).toContain("你好");
+	});
+
+	test("covers late night, morning, evening, and duration boundaries", () => {
+		const lateNight = decoratePreciseTemporalUserInput("夜间输入", {
+			currentTime: new Date("2026-04-15T02:00:30.000Z"),
+			lastMessageTime: new Date("2026-04-15T02:00:05.000Z"),
+			sessionStartTime: new Date("2026-04-15T02:00:00.000Z"),
+			lastSessionEndTime: null,
+		});
+		const morning = decoratePreciseTemporalUserInput("早间输入", {
+			currentTime: new Date("2026-04-15T08:00:00.000Z"),
+			lastMessageTime: null,
+			sessionStartTime: new Date("2026-04-15T06:00:00.000Z"),
+			lastSessionEndTime: null,
+		});
+		const evening = decoratePreciseTemporalUserInput("晚间输入", {
+			currentTime: new Date("2026-04-15T20:00:00.000Z"),
+			lastMessageTime: null,
+			sessionStartTime: new Date("2026-04-13T20:00:00.000Z"),
+			lastSessionEndTime: new Date("2026-04-14T20:00:00.000Z"),
+		});
+
+		expect(lateNight).toContain("时段: late_night");
+		expect(lateNight).toContain("距上条消息: 25 秒");
+		expect(lateNight).toContain("本次 session 持续: 30 秒");
+		expect(morning).toContain("时段: morning");
+		expect(morning).toContain("本次 session 持续: 2 小时");
+		expect(evening).toContain("时段: evening");
+		expect(evening).toContain("本次 session 持续: 2 天");
+		expect(evening).toContain("距上次 session: 1 天");
 	});
 });

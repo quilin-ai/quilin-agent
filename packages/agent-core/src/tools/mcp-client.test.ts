@@ -90,6 +90,31 @@ describe.sequential("MCPClientManager", () => {
 		).not.toThrow();
 	});
 
+	it("rejects empty commands and shell-style arguments for allowed commands", () => {
+		expect(() =>
+			validateMCPServerConfig({
+				command: "   ",
+				args: [],
+			}),
+		).toThrow("MCP command must not be empty");
+
+		for (const arg of [
+			"-c",
+			"-lc",
+			"-Command",
+			"-EncodedCommand",
+			"/c",
+			"/k",
+		]) {
+			expect(() =>
+				validateMCPServerConfig({
+					command: "node",
+					args: [arg, "server.js"],
+				}),
+			).toThrow(new RegExp(`MCP arguments not allowed: ${arg}`, "i"));
+		}
+	});
+
 	it("only forwards the explicit MCP spawn env allowlist", () => {
 		vi.stubEnv("LOG_LEVEL", "info");
 		vi.stubEnv("QUILIN_ENV", "test");
@@ -98,6 +123,13 @@ describe.sequential("MCPClientManager", () => {
 		expect(createMCPSpawnEnv()).toEqual({
 			LOG_LEVEL: "info",
 			QUILIN_ENV: "test",
+		});
+	});
+
+	it("uses safe default MCP spawn env values when none are provided", () => {
+		expect(createMCPSpawnEnv({})).toEqual({
+			LOG_LEVEL: "debug",
+			QUILIN_ENV: "dev",
 		});
 	});
 
@@ -337,6 +369,128 @@ describe.sequential("MCPClientManager", () => {
 
 		expect(result.isError).toBe(true);
 		expect(result.content).toBe("opaque failure");
+	});
+
+	it("falls back to structuredContent when MCP responses contain no text content", async () => {
+		const manager = new MCPClientManager();
+		const client = {
+			callTool: vi.fn(async () => ({
+				content: [],
+				structuredContent: {
+					ok: true,
+					value: 1,
+				},
+				isError: false,
+			})),
+		};
+
+		Object.assign(manager as object, {
+			client,
+			isConnected: true,
+		});
+
+		const result = await (
+			manager as unknown as {
+				callToolWithMetadata: (
+					name: string,
+					args: Record<string, unknown>,
+				) => Promise<{ content: string; isError: boolean }>;
+			}
+		).callToolWithMetadata("memory_recall", { query: "hello" });
+
+		expect(result).toEqual({
+			content: JSON.stringify({ ok: true, value: 1 }),
+			isError: false,
+		});
+	});
+
+	it("falls back to raw content and detects nested text error markers", async () => {
+		const manager = new MCPClientManager();
+		const client = {
+			callTool: vi
+				.fn()
+				.mockResolvedValueOnce({
+					content: [
+						{
+							type: "image",
+							data: "opaque",
+							mimeType: "image/png",
+						},
+					],
+					isError: false,
+				})
+				.mockResolvedValueOnce({
+					content: [
+						{
+							type: "text",
+							text: JSON.stringify({
+								outer: [
+									JSON.stringify({
+										type: "text",
+										text: JSON.stringify({ isError: true }),
+									}),
+								],
+							}),
+						},
+					],
+					isError: false,
+				}),
+		};
+
+		Object.assign(manager as object, {
+			client,
+			isConnected: true,
+		});
+
+		const callToolWithMetadata = (
+			manager as unknown as {
+				callToolWithMetadata: (
+					name: string,
+					args: Record<string, unknown>,
+				) => Promise<{ content: string; isError: boolean }>;
+			}
+		).callToolWithMetadata.bind(manager);
+
+		await expect(callToolWithMetadata("image_tool", {})).resolves.toEqual({
+			content: JSON.stringify([
+				{ type: "image", data: "opaque", mimeType: "image/png" },
+			]),
+			isError: false,
+		});
+		await expect(callToolWithMetadata("nested_error", {})).resolves.toEqual({
+			content: JSON.stringify({
+				outer: [JSON.stringify({ type: "text", text: '{"isError":true}' })],
+			}),
+			isError: true,
+		});
+	});
+
+	it("normalizes synchronous non-Error MCP call failures", async () => {
+		const manager = new MCPClientManager();
+		const client = {
+			callTool: vi.fn(() => {
+				throw "sync failure";
+			}),
+		};
+
+		Object.assign(manager as object, {
+			client,
+			isConnected: true,
+		});
+
+		const result = await (
+			manager as unknown as {
+				callToolWithMetadata: (
+					name: string,
+					args: Record<string, unknown>,
+				) => Promise<{ content: string; isError: boolean }>;
+			}
+		).callToolWithMetadata("broken_tool", {});
+
+		expect(result).toEqual({
+			content: JSON.stringify({ error: "MCP tool call failed" }),
+			isError: true,
+		});
 	});
 
 	it("connects to OmniMem and maps MCP tools into local Tool definitions", async () => {

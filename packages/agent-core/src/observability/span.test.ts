@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { OTelSpanProvider, type SpanAttributes } from "./span.js";
+import {
+	OTelSpanProvider,
+	type SpanAttributes,
+	validateAttributeKey,
+	validateSpanAttributes,
+} from "./span.js";
 
 const sessionAttributes = {
 	"session.id": "session-1",
@@ -29,6 +34,14 @@ const llmAttributes = {
 	"llm.cost_usd": 0,
 	"llm.time_to_first_token_ms": 0,
 	"llm.total_latency_ms": 0,
+} satisfies SpanAttributes;
+
+const toolAttributes = {
+	"tool.name": "memory_recall",
+	"tool.params_summary": '{"keys":[]}',
+	"tool.duration_ms": 0,
+	"tool.success": true,
+	"tool.result_size_bytes": 2,
 } satisfies SpanAttributes;
 
 describe("OTelSpanProvider", () => {
@@ -141,5 +154,82 @@ describe("OTelSpanProvider", () => {
 				timestampUnixMs: expect.any(Number),
 			}),
 		]);
+	});
+
+	it("validates attribute keys, value types, and numeric unit suffixes", () => {
+		expect(() => validateAttributeKey("llm.model")).not.toThrow();
+		expect(() => validateAttributeKey("LLM.model")).toThrow(
+			/Invalid observability attribute key/,
+		);
+		expect(() =>
+			validateSpanAttributes({
+				"tool.result_size_bytes": 10,
+				"session.total_cost_usd": 0.01,
+				"session.total_tokens": 20,
+				"turn.replanning_count": 2,
+				"retrieval.hit_ratio": 0.5,
+				"memory.rank.index": 1,
+				"memory.score.ratio": 0.9,
+			}),
+		).not.toThrow();
+		expect(() =>
+			validateSpanAttributes({ "llm.model": null as never }),
+		).toThrow(/Invalid observability attribute value/);
+	});
+
+	it("clones snapshots and supports setters, idempotent end, unknown reads, and clear", () => {
+		const provider = new OTelSpanProvider();
+		const parent = provider.startSpan("agent.session", sessionAttributes);
+		const child = provider.startSpan("tool.invoke", toolAttributes, {
+			parent: parent.snapshot(),
+		});
+
+		child.setAttribute("tool.result_size_bytes", 4);
+		child.setAttributes({ "tool.success": true });
+		child.addEvent("tool_output");
+		child.end("ok");
+		const firstSnapshot = child.snapshot();
+		child.end("error");
+		const secondSnapshot = child.snapshot();
+		(firstSnapshot.children as string[]).push("mutated");
+		if (firstSnapshot.events[0]?.attributes != null) {
+			(firstSnapshot.events[0].attributes as Record<string, unknown>).mutated =
+				true;
+		}
+
+		expect(child.name).toBe("tool.invoke");
+		expect(child.parentSpanId).toBe(parent.spanId);
+		expect(secondSnapshot.status).toBe("ok");
+		expect(secondSnapshot.durationMs).toEqual(expect.any(Number));
+		expect(provider.readSpan("missing")).toBeUndefined();
+		expect(provider.readSpan(child.spanId)?.children).toEqual([]);
+		expect(provider.readSpan(child.spanId)?.events[0]?.attributes).toEqual({});
+
+		provider.clear();
+		expect(provider.snapshot()).toEqual([]);
+	});
+
+	it("rejects unknown span names and permits failed tool spans with error_type", () => {
+		const provider = new OTelSpanProvider();
+
+		expect(() => provider.startSpan("unknown.span" as never, {})).toThrow(
+			/Invalid observability span name/,
+		);
+
+		const failedTool = provider.startSpan("tool.invoke", {
+			...toolAttributes,
+			"tool.success": false,
+			"tool.error_type": "ToolError",
+		});
+		failedTool.end("error");
+
+		expect(failedTool.snapshot()).toEqual(
+			expect.objectContaining({
+				status: "error",
+				attributes: expect.objectContaining({
+					"tool.error_type": "ToolError",
+				}),
+			}),
+		);
 	});
 });

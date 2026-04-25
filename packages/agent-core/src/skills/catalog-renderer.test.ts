@@ -234,6 +234,50 @@ describe("renderSkillsCatalog", () => {
 		expect(stableHash(first)).toBe(stableHash(second));
 	});
 
+	it("uses default activation context and community trust fallback", () => {
+		const xml = renderSkillsCatalog(
+			[
+				makeDescriptor("beta", {
+					source: "user",
+					frontmatter: {
+						trust: undefined,
+					},
+				}),
+				makeDescriptor("alpha", {
+					source: "user",
+					frontmatter: {
+						trust: "trusted",
+					},
+				}),
+			],
+			{
+				availableToolNames: ["web_fetch", "web_search"],
+				minTrustLevel: "community",
+			},
+		);
+
+		expect(xml.indexOf('name="alpha"')).toBeLessThan(
+			xml.indexOf('name="beta"'),
+		);
+		expect(xml).toContain('name="beta"');
+	});
+
+	it("allows omitted minTrustLevel and sorts reverse-ordered stable skills by name", () => {
+		const xml = renderSkillsCatalog(
+			[
+				makeDescriptor("zeta", { source: "user" }),
+				makeDescriptor("alpha", { source: "user" }),
+			],
+			{
+				availableToolNames: ["web_fetch", "web_search"],
+			},
+		);
+
+		expect(xml.indexOf('name="alpha"')).toBeLessThan(
+			xml.indexOf('name="zeta"'),
+		);
+	});
+
 	it("does not allow plugin mandatory to enter stable prefix even if P1-a normalization is bypassed", () => {
 		const xml = renderSkillsCatalog(
 			[
@@ -321,5 +365,82 @@ describe("renderHotSkillsCatalog", () => {
 		expect(xml).toContain("<hot_skills>");
 		expect(xml).toContain('name="forced-plugin"');
 		expect(xml).not.toContain('mandatory="true"');
+	});
+
+	it("orders hot-skill ties by recency, relevance, then name", () => {
+		const xml = renderHotSkillsCatalog(
+			[
+				makeDescriptor("zzz-same-score", {
+					source: "project",
+					description: "same",
+				}),
+				makeDescriptor("aaa-same-score", {
+					source: "project",
+					description: "same",
+				}),
+				makeDescriptor("recent-low-relevance", {
+					source: "project",
+					description: "unrelated",
+				}),
+				makeDescriptor("keyword-match", {
+					source: "project",
+					description: "browser automation keyword",
+				}),
+			],
+			{
+				...baseTurnContext,
+				userInput: "browser automation",
+				recentSkillNames: ["recent-low-relevance"],
+			},
+		);
+
+		expect(xml.indexOf('name="recent-low-relevance"')).toBeLessThan(
+			xml.indexOf('name="keyword-match"'),
+		);
+		expect(xml.indexOf('name="aaa-same-score"')).toBeLessThan(
+			xml.indexOf('name="zzz-same-score"'),
+		);
+	});
+
+	it("returns zero relevance when user input has no searchable keywords", () => {
+		const xml = renderHotSkillsCatalog(
+			[
+				makeDescriptor("plugin-a", { source: "plugin" }),
+				makeDescriptor("plugin-b", { source: "plugin" }),
+			],
+			{
+				...baseTurnContext,
+				userInput: "!!!",
+				recentSkillNames: [],
+			},
+		);
+
+		expect(xml.indexOf('name="plugin-a"')).toBeLessThan(
+			xml.indexOf('name="plugin-b"'),
+		);
+	});
+
+	it("uses recency as the deterministic tie-breaker when weighted hot scores match", () => {
+		const xml = renderHotSkillsCatalog(
+			[
+				makeDescriptor("alpha-beta-gamma", {
+					source: "plugin",
+					description: "alpha beta gamma",
+				}),
+				makeDescriptor("recent-only", {
+					source: "plugin",
+					description: "unrelated",
+				}),
+			],
+			{
+				...baseTurnContext,
+				userInput: "alpha beta gamma delta",
+				recentSkillNames: ["unused", "recent-only"],
+			},
+		);
+
+		expect(xml.indexOf('name="recent-only"')).toBeLessThan(
+			xml.indexOf('name="alpha-beta-gamma"'),
+		);
 	});
 });

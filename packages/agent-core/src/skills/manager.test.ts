@@ -101,6 +101,21 @@ describe("SkillsManager", () => {
 		expect(loaded.tokenEstimate).toBeGreaterThan(0);
 	});
 
+	it("rejects missing and oversized skill loads", async () => {
+		const userRoot = await createTempDir();
+		await writeSkill(userRoot, "heavy-skill", "Large body", "body");
+		const manager = new SkillsManager({ userRoots: [userRoot] });
+
+		await manager.discover();
+
+		await expect(manager.load("missing-skill")).rejects.toThrow(
+			"Skill not found: missing-skill",
+		);
+		await expect(
+			manager.load("heavy-skill", { maxBodyBytes: 1 }),
+		).rejects.toThrow("Skill body exceeds maxBodyBytes limit");
+	});
+
 	it("applies source-based trust defaults while preserving explicit trust", async () => {
 		const bundledRoot = await createTempDir();
 		const userRoot = await createTempDir();
@@ -202,6 +217,24 @@ trust: trusted
 		});
 
 		expect(result.entries.map((entry) => entry.name)).toEqual(["alpha"]);
+	});
+
+	it("postCompactRestore stops at the max skill count", async () => {
+		const userRoot = await createTempDir();
+		await writeSkill(userRoot, "alpha", "Alpha", "# alpha");
+		await writeSkill(userRoot, "beta", "Beta", "# beta");
+		const manager = new SkillsManager({ userRoots: [userRoot] });
+
+		await manager.discover();
+		manager.recordViewedSkill(await manager.load("alpha"));
+		manager.recordViewedSkill(await manager.load("beta"));
+
+		const result = manager.postCompactRestore({
+			recentSkillNames: manager.getRecentSkillNames(),
+			maxSkills: 1,
+		});
+
+		expect(result.entries.map((entry) => entry.name)).toEqual(["beta"]);
 	});
 
 	it("evicts cached loaded skills that fall outside the bounded recent window", async () => {
@@ -329,5 +362,24 @@ trust: trusted
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+
+	it("does not start watchers for disabled or non-runtime roots", async () => {
+		const pluginRoot = await createTempDir();
+		const disabledWatch = vi.fn();
+		const pluginWatch = vi.fn();
+
+		new SkillsManager({
+			userRoots: [pluginRoot],
+			watcherEnabled: false,
+			watchFactory: disabledWatch as never,
+		}).startWatching();
+		new SkillsManager({
+			pluginRoots: [pluginRoot],
+			watchFactory: pluginWatch as never,
+		}).startWatching();
+
+		expect(disabledWatch).not.toHaveBeenCalled();
+		expect(pluginWatch).not.toHaveBeenCalled();
 	});
 });

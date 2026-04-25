@@ -189,6 +189,99 @@ describe("MCPScratchpadClient", () => {
 			}),
 		).rejects.toThrow(ScratchpadClientError);
 	});
+
+	it("rejects invalid ttl and capacity overrides before calling MCP", async () => {
+		const { calls, transport } = createTransport(JSON.stringify({ ok: true }));
+		const client = new MCPScratchpadClient(transport);
+
+		await expect(
+			client.write({
+				taskId: "task-1",
+				sessionId: "session-1",
+				key: "outline",
+				value: "draft answer",
+				ttlSec: 0,
+			}),
+		).rejects.toThrow(/ttlSec/);
+		await expect(
+			client.write({
+				taskId: "task-1",
+				sessionId: "session-1",
+				key: "outline",
+				value: "draft answer",
+				capacityPerTask: 1.5,
+			}),
+		).rejects.toThrow(/capacityPerTask/);
+		expect(calls).toEqual([]);
+	});
+
+	it("raises protocol errors for non-json, non-object, and invalid read values", async () => {
+		const nonJson = new MCPScratchpadClient(
+			createTransport("not-json").transport,
+		);
+		await expect(
+			nonJson.read({
+				taskId: "task-1",
+				sessionId: "session-1",
+				key: "outline",
+			}),
+		).rejects.toThrow(/non-JSON/);
+
+		const nonObject = new MCPScratchpadClient(
+			createTransport(JSON.stringify(["not", "object"])).transport,
+		);
+		await expect(
+			nonObject.read({
+				taskId: "task-1",
+				sessionId: "session-1",
+				key: "outline",
+			}),
+		).rejects.toThrow(/non-object/);
+
+		const badValue = new MCPScratchpadClient(
+			createTransport(JSON.stringify({ value: 123 })).transport,
+		);
+		await expect(
+			badValue.read({
+				taskId: "task-1",
+				sessionId: "session-1",
+				key: "outline",
+			}),
+		).rejects.toThrow(/value must be a string/);
+	});
+
+	it("clears by key, accepts count fallback, and rejects invalid counts", async () => {
+		const { calls, transport } = createTransport(JSON.stringify({ count: 3 }));
+		const client = new MCPScratchpadClient(transport);
+
+		await expect(
+			client.clear({
+				taskId: "task-1",
+				sessionId: "session-1",
+				key: "outline",
+			}),
+		).resolves.toBe(3);
+		expect(calls).toEqual([
+			{
+				name: "scratchpad_clear",
+				args: {
+					task_id: "task-1",
+					session_id: "session-1",
+					key: "outline",
+				},
+			},
+		]);
+
+		const invalid = new MCPScratchpadClient(
+			createTransport(JSON.stringify({ cleared: -1 })).transport,
+		);
+		await expect(
+			invalid.clear({
+				taskId: "task-1",
+				sessionId: "session-1",
+			}),
+		).rejects.toThrow(/non-negative integer/);
+	});
 });
 
 describe("NullScratchpadClient", () => {

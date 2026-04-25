@@ -40,6 +40,25 @@ describe("validatePlanReviewRecord", () => {
 			}),
 		).toThrow(/transient planning fields/i);
 	});
+
+	it("rejects malformed stable review records with specific field errors", () => {
+		expect(() => validatePlanReviewRecord(null)).toThrow(/JSON object/);
+		expect(() =>
+			validatePlanReviewRecord({ ...makeReview(), run_id: "   " }),
+		).toThrow(/run_id/);
+		expect(() =>
+			validatePlanReviewRecord({ ...makeReview(), source: "scratchpad" }),
+		).toThrow(/source/);
+		expect(() =>
+			validatePlanReviewRecord({ ...makeReview(), schema_version: 99 }),
+		).toThrow(/schema_version/);
+		expect(() =>
+			validatePlanReviewRecord({ ...makeReview(), summary: "" }),
+		).toThrow(/summary/);
+		expect(() =>
+			validatePlanReviewRecord({ ...makeReview(), stable_strategy: [] }),
+		).toThrow(/stable_strategy/);
+	});
 });
 
 describe("createPlanReviewMemoryItem", () => {
@@ -161,6 +180,39 @@ describe("writePlanReviewRecord", () => {
 			review: makeReview(),
 		});
 		expect(eventLogger).toHaveBeenCalledWith(result.fallback);
+	});
+
+	it("uses UNKNOWN_ERROR when storage throws a non-Error value", async () => {
+		const result = await writePlanReviewRecord(makeReview(), {
+			client: {
+				recall: vi.fn(async () => []),
+				store: vi.fn(async () => {
+					throw "offline";
+				}),
+			},
+			now: () => FIXED_DATE,
+		});
+
+		expect(result.status).toBe("fallback_logged");
+		expect(result.fallback).toMatchObject({
+			reason: "store_failed",
+			error_code: "UNKNOWN_ERROR",
+		});
+	});
+
+	it("uses the Error name when fallback logging fails with a blank message", async () => {
+		const result = await writePlanReviewRecord(makeReview(), {
+			eventLogger: vi.fn(async () => {
+				throw new Error("   ");
+			}),
+			now: () => FIXED_DATE,
+		});
+
+		expect(result.status).toBe("fallback_logged");
+		expect(result.fallback).toMatchObject({
+			reason: "memory_unavailable",
+			logger_error_code: "ERROR",
+		});
 	});
 
 	it("does not throw when fallback logging fails", async () => {

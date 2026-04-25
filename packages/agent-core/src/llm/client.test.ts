@@ -725,6 +725,203 @@ describe("VercelLLMClient", () => {
 			topP: undefined,
 		});
 	});
+
+	it("maps error finishes and non-object tool call inputs", async () => {
+		vi.mocked(generateText).mockResolvedValue(
+			mockGenerateTextResult({
+				text: "",
+				usage: {
+					promptTokens: 1,
+					completionTokens: 2,
+				},
+				finishReason: "error",
+				toolCalls: [
+					{
+						toolCallId: "call-raw",
+						toolName: "memory_recall",
+						input: "raw-json",
+					},
+					{
+						toolCallId: "call-null",
+						toolName: "memory_store",
+						input: null,
+					},
+				],
+			}),
+		);
+
+		const client = new VercelLLMClient(model);
+
+		const result = await client.chat([{ role: "user", content: "hi" }], [], {
+			temperature: 0.7,
+			maxTokens: 128,
+			thinkingMode: "disabled",
+		});
+
+		expect(result).toEqual({
+			content: "",
+			toolCalls: [
+				{ id: "call-raw", name: "memory_recall", arguments: {} },
+				{ id: "call-null", name: "memory_store", arguments: {} },
+			],
+			usage: {
+				inputTokens: 1,
+				outputTokens: 2,
+			},
+			finishReason: "error",
+		});
+	});
+
+	it("maps OpenAI Responses reasoning and ignores unknown provider reasoning", async () => {
+		const openaiModel = createMockLanguageModel({
+			provider: "openai",
+			modelId: "o4-mini",
+		});
+		vi.mocked(generateText).mockResolvedValueOnce(
+			mockGenerateTextResult({
+				text: "final answer",
+				reasoning: [
+					{
+						type: "reasoning",
+						text: "",
+						providerMetadata: {
+							openai: {
+								itemId: "rs-1",
+								reasoningEncryptedContent: "cipher-1",
+							},
+						},
+					},
+					{
+						type: "reasoning",
+						text: "visible summary",
+						providerMetadata: {
+							openai: {
+								itemId: "rs-2",
+								reasoningEncryptedContent: "cipher-2",
+							},
+						},
+					},
+				],
+				usage: {
+					promptTokens: 7,
+					completionTokens: 5,
+				},
+				finishReason: "stop",
+			}),
+		);
+		vi.mocked(generateText).mockResolvedValueOnce(
+			mockGenerateTextResult({
+				text: "plain answer",
+				reasoning: [
+					{
+						type: "reasoning",
+						text: "provider-specific private trace",
+					},
+				],
+				usage: {
+					promptTokens: 3,
+					completionTokens: 4,
+				},
+				finishReason: "stop",
+			}),
+		);
+
+		const openaiResult = await new VercelLLMClient(openaiModel).chat(
+			[{ role: "user", content: "analyze" }],
+			[],
+			{
+				temperature: 0.1,
+				maxTokens: 256,
+				thinkingMode: "enabled",
+			},
+		);
+		const unknownProviderResult = await new VercelLLMClient(model).chat(
+			[{ role: "user", content: "analyze" }],
+			[],
+			{
+				temperature: 0.1,
+				maxTokens: 256,
+				thinkingMode: "enabled",
+			},
+		);
+
+		expect(openaiResult.thinking).toEqual([
+			{
+				provider: "openai-responses",
+				itemId: "rs-1",
+				encryptedContent: "cipher-1",
+			},
+			{
+				provider: "openai-responses",
+				itemId: "rs-2",
+				encryptedContent: "cipher-2",
+				text: "visible summary",
+			},
+		]);
+		expect(unknownProviderResult.thinking).toBeUndefined();
+	});
+
+	it("handles sparse model metadata and DeepSeek no-op upgrades", async () => {
+		const sparseModel = createMockLanguageModel({
+			provider: 42,
+			modelId: null,
+		});
+		const callableModel = vi.fn() as unknown as LanguageModel;
+		const deepseekChatModel = createMockLanguageModel({
+			provider: "deepseek",
+			modelId: "deepseek-reasoner",
+		});
+		const resolveModel = vi.fn(() => deepseekChatModel);
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+		vi.mocked(generateText).mockResolvedValue(
+			mockGenerateTextResult({
+				text: "ok",
+				usage: {
+					promptTokens: 1,
+					completionTokens: 1,
+				},
+				finishReason: "stop",
+			}),
+		);
+
+		await new VercelLLMClient(sparseModel).chat(
+			[{ role: "user", content: "sparse" }],
+			[],
+			{
+				temperature: 0.1,
+				maxTokens: 64,
+				thinkingMode: "enabled",
+			},
+		);
+		await new VercelLLMClient(callableModel).chat(
+			[{ role: "user", content: "callable" }],
+			[],
+			{
+				temperature: 0.1,
+				maxTokens: 64,
+				thinkingMode: "disabled",
+			},
+		);
+		await new VercelLLMClient({
+			model: deepseekChatModel,
+			resolveModel,
+		}).chat([{ role: "user", content: "same model" }], [], {
+			temperature: 0.1,
+			maxTokens: 64,
+			thinkingMode: "enabled",
+		});
+
+		expect(generateText).toHaveBeenNthCalledWith(
+			1,
+			expect.not.objectContaining({ providerOptions: expect.anything() }),
+		);
+		expect(generateText).toHaveBeenNthCalledWith(
+			2,
+			expect.objectContaining({ model: callableModel }),
+		);
+		expect(resolveModel).toHaveBeenCalledWith("deepseek-reasoner");
+		expect(warnSpy).not.toHaveBeenCalled();
+	});
 });
 
 describe("StreamingLLMClient", () => {
@@ -1087,6 +1284,171 @@ describe("StreamingLLMClient", () => {
 			finishReason: "tool_calls",
 		});
 	});
+
+	it("merges streamed reasoning metadata and accepts text fallback chunks", async () => {
+		const openaiModel = createMockLanguageModel({
+			provider: "openai",
+			modelId: "o4-mini",
+		});
+		const events: unknown[] = [];
+		vi.mocked(streamText).mockReturnValue(
+			mockStreamTextResult({
+				fullStream: (async function* () {
+					yield { type: "reasoning-start", id: "r-1" };
+					yield {
+						type: "reasoning-delta",
+						id: "r-1",
+						text: "hidden ",
+						providerMetadata: {
+							openai: {
+								itemId: "rs-1",
+							},
+						},
+					};
+					yield {
+						type: "reasoning-end",
+						id: "r-1",
+						providerMetadata: {
+							openai: {
+								reasoningEncryptedContent: "cipher",
+							},
+						},
+					};
+					yield { type: "text-delta", id: "t-1", text: "done" };
+				})(),
+				usage: Promise.resolve({
+					promptTokens: 5,
+					completionTokens: 7,
+				}),
+				finishReason: Promise.resolve("stop"),
+			}),
+		);
+
+		const result = await new StreamingLLMClient(openaiModel, (event) => {
+			events.push(event);
+		}).chat([{ role: "user", content: "hi" }], [], {
+			temperature: 0.2,
+			maxTokens: 64,
+			thinkingMode: "enabled",
+		});
+
+		expect(events).toEqual([
+			{ type: "reasoning", delta: "hidden " },
+			{ type: "text", delta: "done" },
+		]);
+		expect(result).toEqual({
+			content: "done",
+			thinking: [
+				{
+					provider: "openai-responses",
+					itemId: "rs-1",
+					encryptedContent: "cipher",
+					text: "hidden ",
+				},
+			],
+			usage: {
+				inputTokens: 5,
+				outputTokens: 7,
+			},
+			finishReason: "stop",
+		});
+	});
+
+	it("emits tool errors, ignores preliminary tool results, and stringifies missing inputs", async () => {
+		const events: unknown[] = [];
+		vi.mocked(streamText).mockReturnValue(
+			mockStreamTextResult({
+				fullStream: (async function* () {
+					yield {
+						type: "tool-call",
+						toolCallId: "call-1",
+						toolName: "search",
+						input: undefined,
+					};
+					yield {
+						type: "tool-result",
+						toolCallId: "call-1",
+						toolName: "search",
+						output: { preliminary: true },
+						preliminary: true,
+					};
+					yield {
+						type: "tool-error",
+						toolCallId: "call-1",
+						toolName: "search",
+						error: "boom",
+					};
+					yield {
+						type: "tool-call",
+						toolCallId: "call-1",
+						toolName: "search",
+						input: undefined,
+					};
+				})(),
+				usage: Promise.resolve({
+					promptTokens: 3,
+					completionTokens: 4,
+				}),
+				finishReason: Promise.resolve("stop"),
+			}),
+		);
+
+		const result = await new StreamingLLMClient(model, (event) => {
+			events.push(event);
+		}).chat([{ role: "user", content: "hi" }], [], {
+			temperature: 0.2,
+			maxTokens: 64,
+			thinkingMode: "disabled",
+		});
+
+		expect(events).toEqual([
+			{ type: "tool-call-start", toolCallId: "call-1", toolName: "search" },
+			{
+				type: "tool-call-end",
+				toolCallId: "call-1",
+				toolName: "search",
+				inputText: "undefined",
+			},
+			{
+				type: "tool-result",
+				toolCallId: "call-1",
+				toolName: "search",
+				output: "boom",
+				isError: true,
+			},
+		]);
+		expect(result.finishReason).toBe("stop");
+	});
+
+	it("wraps non-Error stream error chunks", async () => {
+		vi.mocked(streamText).mockReturnValue(
+			mockStreamTextResult({
+				fullStream: (async function* () {
+					yield {
+						type: "error",
+						error: "stream exploded",
+					};
+				})(),
+				usage: Promise.resolve({
+					promptTokens: 3,
+					completionTokens: 4,
+				}),
+				finishReason: Promise.resolve("stop"),
+			}),
+		);
+
+		await expect(
+			new StreamingLLMClient(model).chat(
+				[{ role: "user", content: "hi" }],
+				[],
+				{
+					temperature: 0.2,
+					maxTokens: 64,
+					thinkingMode: "disabled",
+				},
+			),
+		).rejects.toThrow("stream exploded");
+	});
 });
 
 describe("client test helpers", () => {
@@ -1157,5 +1519,44 @@ describe("client test helpers", () => {
 			},
 			warnings: ["openai-thinking-budget-ignored"],
 		});
+		expect(
+			clientTestHelpers.buildProviderOptions("anthropic", {
+				temperature: 0.1,
+				maxTokens: 128,
+				thinkingMode: "enabled",
+			}),
+		).toEqual({
+			providerOptions: {
+				anthropic: {
+					thinking: {
+						type: "enabled",
+						budgetTokens: 1024,
+					},
+				},
+			},
+			warnings: [],
+		});
+		expect(
+			clientTestHelpers.buildProviderOptions("anthropic", {
+				temperature: 0.1,
+				maxTokens: 128,
+				thinkingMode: "disabled",
+			}),
+		).toEqual({ warnings: [] });
+		expect(
+			clientTestHelpers.buildProviderOptions("openai", {
+				temperature: 0.1,
+				maxTokens: 128,
+				thinkingMode: "disabled",
+				thinkingBudget: 1024,
+			}),
+		).toEqual({ warnings: ["openai-thinking-budget-ignored"] });
+		expect(
+			clientTestHelpers.buildProviderOptions("deepseek", {
+				temperature: 0.1,
+				maxTokens: 128,
+				thinkingMode: "enabled",
+			}),
+		).toEqual({ warnings: [] });
 	});
 });

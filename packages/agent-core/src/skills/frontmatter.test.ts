@@ -115,6 +115,98 @@ describe("parseSkillFrontmatter", () => {
 			}),
 		).toThrow("Skill name must be kebab-case");
 	});
+
+	it("rejects invalid field types and trust values", () => {
+		expect(() =>
+			parseSkillFrontmatter({
+				name: 123,
+				description: "name must be a string",
+			}),
+		).toThrow("name must be a string");
+
+		expect(() =>
+			parseSkillFrontmatter({
+				name: "blank-description",
+				description: "   ",
+			}),
+		).toThrow("requires description");
+
+		expect(() =>
+			parseSkillFrontmatter({
+				name: "bad-tools",
+				description: "allowedTools must be an array",
+				allowedTools: "web_fetch",
+			}),
+		).toThrow("allowedTools must be an array");
+
+		expect(() =>
+			parseSkillFrontmatter({
+				name: "bad-tool-entry",
+				description: "requiresTools entries must be strings",
+				requiresTools: ["web_fetch", 1],
+			}),
+		).toThrow("requiresTools must contain strings");
+
+		expect(() =>
+			parseSkillFrontmatter({
+				name: "bad-bool",
+				description: "mandatory must be boolean",
+				mandatory: "true",
+			}),
+		).toThrow("boolean field has invalid value");
+
+		expect(() =>
+			parseSkillFrontmatter({
+				name: "bad-metadata",
+				description: "metadata must be object",
+				metadata: [],
+			}),
+		).toThrow("metadata must be an object");
+
+		expect(() =>
+			parseSkillFrontmatter({
+				name: "bad-quilin-metadata",
+				description: "metadata.quilin must be object",
+				metadata: { quilin: [] },
+			}),
+		).toThrow("metadata.quilin must be an object");
+
+		expect(() =>
+			parseSkillFrontmatter({
+				name: "bad-trust",
+				description: "trust must be recognized",
+				trust: "local",
+			}),
+		).toThrow("trust must be a valid trust level");
+	});
+
+	it("rejects overlong names and descriptions", () => {
+		expect(() =>
+			parseSkillFrontmatter({
+				name: "a".repeat(65),
+				description: "name too long",
+			}),
+		).toThrow("Skill name exceeds 64 characters");
+
+		expect(() =>
+			parseSkillFrontmatter({
+				name: "description-too-long",
+				description: "a".repeat(1025),
+			}),
+		).toThrow("Skill description exceeds 1024 characters");
+	});
+
+	it("normalizes blank optional strings to undefined", () => {
+		const frontmatter = parseSkillFrontmatter({
+			name: "blank-optionals",
+			description: "Blank optional fields are ignored",
+			whenToUse: "   ",
+			version: "  ",
+		});
+
+		expect(frontmatter.whenToUse).toBeUndefined();
+		expect(frontmatter.version).toBeUndefined();
+	});
 });
 
 describe("parseSkillMarkdown", () => {
@@ -159,6 +251,33 @@ metadata:
 		});
 	});
 
+	it("parses quoted scalars, comments, empty arrays, and explicit booleans", () => {
+		const parsed = parseSkillMarkdown(`---
+# comment lines are ignored
+ignored malformed line
+name: "quoted-skill"
+description: 'Quoted description'
+when-to-use: "Use when quoting matters"
+allowedTools: []
+userInvocable: false
+disableModelInvocation: true
+version: "1.0.0"
+---
+Body
+`);
+
+		expect(parsed.frontmatter).toMatchObject({
+			name: "quoted-skill",
+			description: "Quoted description",
+			whenToUse: "Use when quoting matters",
+			allowedTools: [],
+			userInvocable: false,
+			disableModelInvocation: true,
+			version: "1.0.0",
+		});
+		expect(parsed.body).toBe("Body\n");
+	});
+
 	const upstreamFixturePaths = [
 		fileURLToPath(
 			new URL(
@@ -174,21 +293,54 @@ metadata:
 		),
 	];
 	const upstreamsAvailable = upstreamFixturePaths.every((p) => existsSync(p));
+	const upstreamStyleFixtures = upstreamsAvailable
+		? upstreamFixturePaths.map((fixturePath) =>
+				readFileSync(fixturePath, "utf8"),
+			)
+		: [
+				`---
+name: add-provider-package
+description: Add a provider package to the project dependencies
+when-to-use: Use when wiring a new model provider
+allowedTools:
+  - shell_exec
+userInvocable: false
+disableModelInvocation: false
+---
+# Add Provider Package
+`,
+				`---
+name: adr-skill
+description: Draft an architecture decision record
+whenToUse: Use when a technical decision needs to be recorded
+allowedTools: []
+userInvocable: true
+disableModelInvocation: false
+---
+# ADR Skill
+`,
+			];
 
-	it.skipIf(!upstreamsAvailable)(
-		"parses real upstream skill fixtures without translation",
-		() => {
-			for (const fixturePath of upstreamFixturePaths) {
-				const parsed = parseSkillMarkdown(readFileSync(fixturePath, "utf8"));
-				expect(parsed.frontmatter.name).toMatch(/^[a-z0-9-]+$/);
-				expect(parsed.frontmatter.description.length).toBeGreaterThan(0);
-			}
-		},
-	);
+	it("parses upstream-style skill fixtures without translation", () => {
+		for (const content of upstreamStyleFixtures) {
+			const parsed = parseSkillMarkdown(content);
+			expect(parsed.frontmatter.name).toMatch(/^[a-z0-9-]+$/);
+			expect(parsed.frontmatter.description.length).toBeGreaterThan(0);
+		}
+	});
 
 	it("rejects markdown without frontmatter block", () => {
 		expect(() => parseSkillMarkdown("# no frontmatter")).toThrow(
 			"SKILL.md must start with YAML frontmatter",
 		);
+	});
+
+	it("rejects malformed frontmatter delimiters", () => {
+		expect(() =>
+			parseSkillMarkdown(`---
+name: malformed
+description: Missing closing delimiter
+`),
+		).toThrow("SKILL.md frontmatter block is malformed");
 	});
 });

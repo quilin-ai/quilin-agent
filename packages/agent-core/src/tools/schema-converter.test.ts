@@ -121,6 +121,20 @@ describe("jsonSchemaToZod", () => {
 		).toBe(false);
 	});
 
+	it("rejects arrays without item schemas and accepts empty object schemas", () => {
+		expect(() =>
+			jsonSchemaToZod({
+				type: "array",
+			}),
+		).toThrow("Unsupported MCP schema type for array: missing items");
+
+		expect(
+			jsonSchemaToZod({
+				type: "object",
+			}).safeParse({ arbitrary: true }).success,
+		).toBe(true);
+	});
+
 	it("falls back to z.unknown for anyOf/oneOf branches", () => {
 		expect(
 			jsonSchemaToZod({
@@ -164,6 +178,11 @@ describe("jsonSchemaToZod", () => {
 		);
 		expect(logger.warn).toHaveBeenCalledWith(
 			expect.objectContaining({ schemaType: "mystery" }),
+			"unsupported MCP schema, falling back to unknown",
+		);
+		expect(jsonSchemaToZod({}).safeParse("anything").success).toBe(true);
+		expect(logger.warn).toHaveBeenCalledWith(
+			expect.objectContaining({ schemaType: "unknown" }),
 			"unsupported MCP schema, falling back to unknown",
 		);
 	});

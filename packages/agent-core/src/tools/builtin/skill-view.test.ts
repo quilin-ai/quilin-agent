@@ -274,6 +274,68 @@ describe("builtin skill_view tool", () => {
 		);
 	});
 
+	it("defaults missing trust from descriptor source before guard scanning", async () => {
+		for (const [source, expectedTrust] of [
+			["bundled", "builtin"],
+			["user", "community"],
+			["project", "community"],
+			["plugin", "community"],
+		] as const) {
+			const loadedSkill = {
+				descriptor: {
+					name: `${source}-skill`,
+					description: `${source} skill`,
+					path: `/tmp/${source}-skill/SKILL.md`,
+					source,
+					frontmatter: {
+						name: `${source}-skill`,
+						description: `${source} skill`,
+						userInvocable: true,
+						disableModelInvocation: false,
+					},
+				},
+				body: `${source} body`,
+				tokenEstimate: 3,
+			};
+			const skillsManager = {
+				load: vi.fn(async () => loadedSkill),
+				recordViewedSkill: vi.fn(),
+			} as unknown as SkillsManager;
+			const guard: SkillsGuard = {
+				scan: vi.fn(() => ({ kind: "pass" as const })),
+			};
+			const tool = createSkillViewTool({ skillsManager, guard });
+
+			const result = await tool.execute({ skill_id: `${source}-skill` });
+
+			expect(result.isError).toBe(false);
+			expect(guard.scan).toHaveBeenCalledWith(`${source} body`, {
+				trust: expectedTrust,
+				stage: "read",
+				skillName: `${source}-skill`,
+			});
+			expect(skillsManager.recordViewedSkill).toHaveBeenCalledWith(loadedSkill);
+		}
+	});
+
+	it("returns a generic load error for non-Error failures", async () => {
+		const skillsManager = {
+			load: vi.fn(async () => {
+				throw "boom";
+			}),
+			recordViewedSkill: vi.fn(),
+		} as unknown as SkillsManager;
+		const tool = createSkillViewTool({ skillsManager });
+
+		const result = await tool.execute({ skill_id: "broken-skill" });
+
+		expect(result.isError).toBe(true);
+		expect(JSON.parse(result.content)).toEqual({
+			error: "Failed to load skill",
+		});
+		expect(skillsManager.recordViewedSkill).not.toHaveBeenCalled();
+	});
+
 	it("updates recentSkillNames newest-first on repeated successful views", async () => {
 		const userRoot = await createTempDir();
 		await writeSkill(userRoot, "alpha", "Alpha", "alpha body");

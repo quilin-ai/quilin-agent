@@ -1,6 +1,13 @@
-import { mkdir, mkdtemp, readFile, rm, symlink } from "node:fs/promises";
+import {
+	mkdir,
+	mkdtemp,
+	readFile,
+	rm,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	WriteAuthority,
@@ -9,7 +16,11 @@ import {
 import { parseSkillMarkdown } from "./frontmatter.js";
 import { SkillManager } from "./manage.js";
 import { SkillsManager } from "./manager.js";
-import type { SkillDescriptor, SkillsGuard } from "./types.js";
+import type {
+	SkillDescriptor,
+	SkillFrontmatter,
+	SkillsGuard,
+} from "./types.js";
 
 const createdDirs: string[] = [];
 
@@ -224,6 +235,27 @@ describe("SkillManager", () => {
 		});
 	});
 
+	it("rejects create when a regular skill file already exists", async () => {
+		const userRoot = await createTempDir();
+		const skillDir = join(userRoot, "existing-skill");
+		await mkdir(skillDir, { recursive: true });
+		await writeFile(join(skillDir, "SKILL.md"), "already here", "utf8");
+		const skillsManager = new SkillsManager({ userRoots: [userRoot] });
+		const subject = createSubject({ userRoot, skillsManager });
+
+		const result = await subject.manage({
+			action: "create",
+			descriptor: makeDescriptor("existing-skill"),
+			body: "body",
+		});
+
+		expect(result).toEqual({
+			ok: false,
+			error: "validation_failed",
+			detail: expect.stringContaining("already exists"),
+		});
+	});
+
 	it("rejects project-target create when projectRoot is not configured", async () => {
 		const userRoot = await createTempDir();
 		const skillsManager = new SkillsManager({ userRoots: [userRoot] });
@@ -301,6 +333,74 @@ describe("SkillManager", () => {
 		});
 	});
 
+	it("update rejects move attempts through patch.path or patch.source", async () => {
+		const userRoot = await createTempDir();
+		const skillsManager = new SkillsManager({ userRoots: [userRoot] });
+		const subject = createSubject({ userRoot, skillsManager });
+		await subject.manage({
+			action: "create",
+			descriptor: makeDescriptor("move-test"),
+			body: "body",
+		});
+
+		const byPath = await subject.manage({
+			action: "update",
+			name: "move-test",
+			patch: {
+				path: "/tmp/elsewhere/SKILL.md",
+			},
+		});
+		const bySource = await subject.manage({
+			action: "update",
+			name: "move-test",
+			patch: {
+				source: "project",
+			},
+		});
+
+		expect(byPath).toEqual({
+			ok: false,
+			error: "validation_failed",
+			detail: expect.stringContaining("renaming or moving"),
+		});
+		expect(bySource).toEqual({
+			ok: false,
+			error: "validation_failed",
+			detail: expect.stringContaining("renaming or moving"),
+		});
+	});
+
+	it("update rejects an existing skill path that became a symlink", async () => {
+		const userRoot = await createTempDir();
+		const outsideDir = await createTempDir();
+		const skillsManager = new SkillsManager({ userRoots: [userRoot] });
+		const subject = createSubject({ userRoot, skillsManager });
+		await subject.manage({
+			action: "create",
+			descriptor: makeDescriptor("symlink-update"),
+			body: "body",
+		});
+
+		const skillPath = join(userRoot, "symlink-update", "SKILL.md");
+		const outsidePath = join(outsideDir, "SKILL.md");
+		await writeFile(outsidePath, "external", "utf8");
+		await rm(skillPath, { force: true });
+		await symlink(outsidePath, skillPath);
+
+		const result = await subject.manage({
+			action: "update",
+			name: "symlink-update",
+			patch: {},
+			body: "updated",
+		});
+
+		expect(result).toEqual({
+			ok: false,
+			error: "path_denied",
+			detail: expect.stringContaining("symlink"),
+		});
+	});
+
 	it("update rewrites markdown and roundtrips through parseSkillMarkdown", async () => {
 		const userRoot = await createTempDir();
 		const skillsManager = new SkillsManager({ userRoots: [userRoot] });
@@ -374,6 +474,34 @@ describe("SkillManager", () => {
 		await expect(
 			readFile(join(userRoot, "delete-me", "SKILL.md"), "utf8"),
 		).rejects.toThrow();
+	});
+
+	it("delete ignores non-empty skill directories after removing SKILL.md", async () => {
+		const userRoot = await createTempDir();
+		const skillsManager = new SkillsManager({ userRoots: [userRoot] });
+		const subject = createSubject({ userRoot, skillsManager });
+		await subject.manage({
+			action: "create",
+			descriptor: makeDescriptor("nonempty-delete"),
+			body: "body",
+		});
+		await writeFile(
+			join(userRoot, "nonempty-delete", "notes.txt"),
+			"keep",
+			"utf8",
+		);
+
+		const result = await subject.manage({
+			action: "delete",
+			name: "nonempty-delete",
+			reason: "cleanup",
+		});
+
+		expect(result.ok).toBe(true);
+		expect(skillsManager.findByName("nonempty-delete")).toBeUndefined();
+		await expect(
+			readFile(join(userRoot, "nonempty-delete", "notes.txt"), "utf8"),
+		).resolves.toBe("keep");
 	});
 
 	it("create writes to projectRoot when target=project", async () => {
@@ -644,6 +772,33 @@ describe("SkillManager", () => {
 		});
 	});
 
+	it("returns write_denied when authorization still requires confirmation", async () => {
+		const userRoot = await createTempDir();
+		const skillsManager = new SkillsManager({ userRoots: [userRoot] });
+		const authorize = vi.fn(async () => ({
+			kind: "confirm" as const,
+			prompt: "approve write",
+		}));
+		const subject = createSubject({
+			userRoot,
+			skillsManager,
+			writeAuthority: { authorize } as unknown as WriteAuthority,
+		});
+
+		const result = await subject.manage({
+			action: "create",
+			descriptor: makeDescriptor("needs-confirm"),
+			body: "body",
+		});
+
+		expect(result).toEqual({
+			ok: false,
+			error: "write_denied",
+			detail: expect.stringContaining("interactive confirmation"),
+		});
+		expect(authorize).toHaveBeenCalledTimes(1);
+	});
+
 	it("routes every allowed create/update/delete mutation through authorize exactly once", async () => {
 		const userRoot = await createTempDir();
 		const skillsManager = new SkillsManager({ userRoots: [userRoot] });
@@ -885,5 +1040,327 @@ describe("SkillManager", () => {
 				skillName: "guard-contract",
 			}),
 		);
+	});
+
+	it("falls back to source trust and omits empty array frontmatter fields", async () => {
+		const userRoot = await createTempDir();
+		const skillsManager = new SkillsManager({ userRoots: [userRoot] });
+		const seenTrust: string[] = [];
+		const guard: SkillsGuard = {
+			scan: vi.fn((_body, ctx) => {
+				seenTrust.push(ctx.trust);
+				return { kind: "pass" as const };
+			}),
+		};
+		const subject = createSubject({ userRoot, skillsManager, guard });
+
+		for (const source of ["bundled", "user", "project", "plugin"] as const) {
+			const descriptor = makeDescriptor(`trust-${source}`, source);
+			await subject.manage({
+				action: "create",
+				descriptor: {
+					...descriptor,
+					frontmatter: {
+						...descriptor.frontmatter,
+						allowedTools: [],
+						trust: undefined,
+					},
+				},
+				body: "body",
+			});
+		}
+
+		expect(seenTrust).toEqual([
+			"builtin",
+			"community",
+			"community",
+			"community",
+		]);
+		const markdown = await readFile(
+			join(userRoot, "trust-user", "SKILL.md"),
+			"utf8",
+		);
+		expect(markdown).not.toContain("allowedTools:");
+	});
+
+	it("rejects create when the resolved target directory escapes the root", async () => {
+		const userRoot = await createTempDir();
+		const outsideRoot = await createTempDir();
+		const skillsManager = new SkillsManager({ userRoots: [userRoot] });
+		const subject = createSubject({
+			userRoot,
+			skillsManager,
+			fsOps: {
+				realpath: vi
+					.fn()
+					.mockResolvedValueOnce(outsideRoot)
+					.mockResolvedValue(userRoot) as never,
+			},
+		});
+
+		const result = await subject.manage({
+			action: "create",
+			descriptor: makeDescriptor("escape-root"),
+			body: "body",
+		});
+
+		expect(result).toEqual({
+			ok: false,
+			error: "path_denied",
+			detail: expect.stringContaining("escapes"),
+		});
+	});
+
+	it("returns not_found when discover does not publish created or updated skills", async () => {
+		const userRoot = await createTempDir();
+		const skillPath = join(userRoot, "missing-after-update", "SKILL.md");
+		await mkdir(dirname(skillPath), { recursive: true });
+		await writeFile(
+			skillPath,
+			[
+				"---",
+				"name: missing-after-update",
+				"description: Existing skill",
+				"whenToUse: When testing",
+				"---",
+				"body",
+			].join("\n"),
+			"utf8",
+		);
+		const staleDescriptor = {
+			...makeDescriptor("missing-after-update"),
+			path: skillPath,
+		};
+		const skillsManager = {
+			discover: vi.fn(async () => undefined),
+			findByName: vi
+				.fn()
+				.mockReturnValueOnce(undefined)
+				.mockReturnValueOnce(staleDescriptor)
+				.mockReturnValueOnce(undefined),
+		} as unknown as SkillsManager;
+		const subject = createSubject({ userRoot, skillsManager });
+
+		const createResult = await subject.manage({
+			action: "create",
+			descriptor: makeDescriptor("missing-after-create"),
+			body: "body",
+		});
+		const updateResult = await subject.manage({
+			action: "update",
+			name: "missing-after-update",
+			patch: {},
+			body: "new body",
+		});
+
+		expect(createResult).toEqual({
+			ok: false,
+			error: "not_found",
+			detail: expect.stringContaining("after discover"),
+		});
+		expect(updateResult).toEqual({
+			ok: false,
+			error: "not_found",
+			detail: expect.stringContaining("after discover"),
+		});
+	});
+
+	it("rejects invalid update/delete names, oversized updates, and invalid serialized updates", async () => {
+		const userRoot = await createTempDir();
+		const skillsManager = new SkillsManager({ userRoots: [userRoot] });
+		const subject = createSubject({ userRoot, skillsManager });
+		await subject.manage({
+			action: "create",
+			descriptor: makeDescriptor("update-validation"),
+			body: "body",
+		});
+		const tinySubject = new SkillManager({
+			userRoot,
+			skillsManager,
+			writeAuthority: new WriteAuthority({ mode: "auto-medium" }),
+			maxBodyChars: 2,
+		});
+
+		await expect(
+			subject.manage({
+				action: "update",
+				name: "../bad",
+				patch: {},
+			}),
+		).resolves.toEqual({
+			ok: false,
+			error: "validation_failed",
+			detail: expect.stringContaining("valid slug"),
+		});
+		await expect(
+			subject.manage({
+				action: "delete",
+				name: "../bad",
+				reason: "cleanup",
+			}),
+		).resolves.toEqual({
+			ok: false,
+			error: "validation_failed",
+			detail: expect.stringContaining("valid slug"),
+		});
+		await expect(
+			tinySubject.manage({
+				action: "update",
+				name: "update-validation",
+				patch: {},
+				body: "too long",
+			}),
+		).resolves.toEqual({
+			ok: false,
+			error: "size_exceeded",
+			detail: expect.stringContaining("maxBodyChars"),
+		});
+		await expect(
+			subject.manage({
+				action: "update",
+				name: "update-validation",
+				patch: {
+					frontmatter: {
+						description: undefined,
+					} as unknown as SkillFrontmatter,
+				},
+			}),
+		).resolves.toEqual({
+			ok: false,
+			error: "validation_failed",
+			detail: expect.stringContaining("roundtrip validation failed"),
+		});
+	});
+
+	it("blocks update/delete through guard, path, and authorization failures", async () => {
+		const userRoot = await createTempDir();
+		const projectRoot = await createTempDir();
+		const skillsManager = new SkillsManager({
+			userRoots: [userRoot],
+			projectRoots: [projectRoot],
+		});
+		const subject = createSubject({
+			userRoot,
+			projectRoot,
+			skillsManager,
+		});
+		await subject.manage({
+			action: "create",
+			descriptor: makeDescriptor("guard-update"),
+			body: "body",
+		});
+		await subject.manage({
+			action: "create",
+			descriptor: makeDescriptor("project-owned", "project"),
+			body: "body",
+			target: "project",
+		});
+
+		const guardSubject = createSubject({
+			userRoot,
+			skillsManager,
+			guard: {
+				scan: vi.fn(() => ({
+					kind: "deny" as const,
+					detail: "blocked update",
+					findings: [],
+				})),
+			},
+		});
+		const denySubject = createSubject({
+			userRoot,
+			projectRoot,
+			skillsManager,
+			writeAuthority: new WriteAuthority({ mode: "deny-all" }),
+		});
+		const missingPathManager = {
+			discover: vi.fn(async () => undefined),
+			findByName: vi.fn(() => ({
+				...makeDescriptor("missing-path"),
+				path: join(userRoot, "missing-path", "SKILL.md"),
+			})),
+		} as unknown as SkillsManager;
+		const missingPathSubject = createSubject({
+			userRoot,
+			skillsManager: missingPathManager,
+		});
+
+		await expect(
+			guardSubject.manage({
+				action: "update",
+				name: "guard-update",
+				patch: {},
+				body: "blocked",
+			}),
+		).resolves.toEqual({
+			ok: false,
+			error: "guard_denied",
+			detail: "blocked update",
+		});
+		await expect(
+			denySubject.manage({
+				action: "update",
+				name: "guard-update",
+				patch: {},
+			}),
+		).resolves.toEqual({
+			ok: false,
+			error: "write_denied",
+			detail: expect.stringContaining("disabled"),
+		});
+		await expect(
+			missingPathSubject.manage({
+				action: "delete",
+				name: "missing-path",
+				reason: "cleanup",
+			}),
+		).resolves.toEqual({
+			ok: false,
+			error: "not_found",
+			detail: expect.stringContaining("skill path not found"),
+		});
+		await expect(
+			denySubject.manage({
+				action: "delete",
+				name: "project-owned",
+				reason: "cleanup",
+			}),
+		).resolves.toEqual({
+			ok: false,
+			error: "write_denied",
+			detail: expect.stringContaining("disabled"),
+		});
+	});
+
+	it("rethrows unexpected directory cleanup errors after delete", async () => {
+		const userRoot = await createTempDir();
+		const skillsManager = new SkillsManager({ userRoots: [userRoot] });
+		const subject = createSubject({ userRoot, skillsManager });
+		await subject.manage({
+			action: "create",
+			descriptor: makeDescriptor("delete-eacces"),
+			body: "body",
+		});
+		const failingCleanupSubject = createSubject({
+			userRoot,
+			skillsManager,
+			fsOps: {
+				rmdir: vi.fn(async () => {
+					const error = new Error("permission denied") as Error & {
+						code: string;
+					};
+					error.code = "EACCES";
+					throw error;
+				}),
+			},
+		});
+
+		await expect(
+			failingCleanupSubject.manage({
+				action: "delete",
+				name: "delete-eacces",
+				reason: "cleanup",
+			}),
+		).rejects.toThrow("permission denied");
 	});
 });

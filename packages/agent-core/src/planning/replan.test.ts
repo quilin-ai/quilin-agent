@@ -122,6 +122,43 @@ describe("applyLocalRearrange", () => {
 			name: "Search archive",
 		});
 	});
+
+	it("clears skill hints explicitly and rejects invalid local moves", () => {
+		const plan: LinearPlan = {
+			kind: "linear",
+			subtasks: [
+				makeStep("search", { skillHint: "web-research" }),
+				makeStep("draft"),
+			],
+		};
+
+		const patch = applyLocalRearrange(plan, {
+			kind: "tool_failed",
+			leafId: "search",
+			errorCode: "BAD_HINT",
+			changes: {
+				skillHint: null,
+			},
+		});
+
+		expect(patch.plan.subtasks[0]?.skillHint).toBeUndefined();
+		expect(() =>
+			applyLocalRearrange(plan, {
+				kind: "tool_failed",
+				leafId: "missing",
+				errorCode: "NO_STEP",
+				changes: {},
+			}),
+		).toThrow(/unknown leafId: missing/);
+		expect(() =>
+			applyLocalRearrange(plan, {
+				kind: "precondition_missing",
+				leafId: "search",
+				missing: ["draft_ready"],
+				providerLeafId: "search",
+			}),
+		).toThrow(/cannot move a leaf before itself/);
+	});
 });
 
 describe("applyLocalRedecompose", () => {

@@ -42,7 +42,7 @@
 | 第二轮 Kelvin CLI（slice-two）| `cli/config-cmd.ts`（新，356 LOC）+ `config-cmd.test.ts`（新，17 tests）+ `index.ts` `dispatchCli()` 拦截 `config` subcommand | ✅ 完成 | `ed8a39c` | tsc 0；biome 158 clean；`pnpm test` = 68 files / 541 passed（基线 524 + 17 CLI）；`quilin config show/--source/set` 实测路径覆盖 |
 | 第二轮 Boyle B1（slice-two scratchpad core + TS client）| `omnimem/scratchpad.py`（新，独立 SQLite table + TTL + per-task LRU + 跨 task 隔离）+ `tests/test_scratchpad.py`（5 tests）+ `memory/scratchpad-client.ts`（新，MCP wrapper + runtime config consumer + Null fallback）+ `scratchpad-client.test.ts`（7 tests）。Executor 集成按共识降级第三轮（Plan/Step 类型未稳）| ✅ 完成 | `000ca33` | `pytest tests/test_scratchpad.py` = 5 passed；ruff clean；`pnpm test scratchpad-client.test.ts` = 7 passed；biome clean；server.py MCP method 集成留 N2 合并 |
 | 第二轮 Newton N2（exporter + Python ingest + traceparent + M1.4 dual-emit）| `observability/exporters/`（json-file + composite + tests，新）+ `observability/context.ts` 加 W3C traceparent 序列化 + `mcp-client.ts` `_meta.traceparent/request_id` 携带 + `omnimem/event_log.py` 加 trace 列 + dual-emit + `omnimem/event_log_schema.py` 扩展 + `omnimem/server.py` 解析 traceparent + child span 回写 + `scratchpad_*` MCP methods 一并合并 | ✅ 完成 | `eef2e7a` | tsc 0；biome 164 clean；ruff clean；`pnpm test` = 71 files / 551 passed；`pytest` = 166 passed；`just test-all` = TS 551 + Python 166 + Rust 1；AMB 100k p95 = 16.577ms（≤ 300ms，后续复跑确认该值是 cold-cache 噪声）；`wc -l loop.ts` = 199 |
-| 第二轮 review gate | 全套验证 + 写边界硬隔离实证 + 跨轨道契约一致性 + AMB 100k p95 ≤ 300ms（M1.4 dual-emit 不回归）| ⏳ 待启动 | — | Newton N2 commit 后启动 |
+| 第二轮 review gate | 全套验证 + 写边界硬隔离实证 + 跨轨道契约一致性 + AMB 100k recall gate p95 ≤ 300ms（仅 recall 路径，**不作为** M1.4 dual-emit latency 证据；dual-emit 单独 smoke 是 follow-up）| ⏳ 待启动 | — | Newton N2 commit 后启动 |
 | 第三轮 Boyle B2（Executor scratchpad 集成）| `types.ts` 加 `SubTaskScratchpad` 可选字段 + zod schema；`executor.ts` 加 `ExecutorScratchpadClient` 本地结构化接口 + optional scratchpadClient option + pre-tool-call 注入 readKey 值 + post-tool-call 写 writeKey + clearOnSuccess 清 writeKey??readKey + tool 失败不写 + scratchpad client 异常降级 local_repair；`executor.test.ts` 加 55 步长链 fixture + 边界（未声明不注入 / 失败不写 / schema optional 兼容）| ✅ 完成 | `0ebe7ec` | tsc 0；biome 164 clean；`pnpm test` = 71 files / 555 passed（基线 551 + 4 新增）；ADR-005 layer enum 未碰；observability/config/scratchpad.py/scratchpad-client.ts 未碰；state.ts 未碰；`just test-all` TS 555 + Python 166 + Rust 1；AMB 100k p95 ~0.237ms（与第一轮 0.261ms 持平，N2 commit message 的 16.577ms 是 cold-cache 噪声非回归）|
 | 跨轨道交叉 review（R1）| Codex 派独立 subagent 跨 Newton + Kelvin + Curie + Boyle 四轨道 review，覆盖 7 commits（`630fce2` → `eef2e7a` 第二轮 + `0ebe7ec` 第三轮）；Plan §17 残余归属再核；Codex 主线复核 subagent 结论后完成 follow-up fix pass | ✅ 完成 | 报告 `d18daf5` + fix `eed0a00` | 报告：`docs/review/2026-04-25-01-iter-d-cross-track-review.md`；follow-up 修复 exporter REPL flush + Kelvin `config set` 0600 拒绝路径 + Python dual-emit attribute 命名 + `memory_store` traceparent + 真实 stdio trace 覆盖；残余风险：FastMCP response traceparent 暂走 JSON payload 而非 envelope metadata（SDK 不支持，文档化降级）；验证：tsc 0；biome clean；ruff clean；`pnpm test` = 71 files / 557 passed；`uv run pytest` = 167 passed；`just test-all` = TS 557 + Python 167 + Rust 1；AMB 100k p95 = 0.294ms |
 | 95% 覆盖率门槛新约束（用户 2026-04-25 提出，凌驾 common/testing.md 80% 默认）| 装 `@vitest/coverage-v8` + `pytest-cov`；vitest config 加 thresholds 95；pyproject 加 cov-fail-under=95；按缺口补测试（TS Branches 79.88% → 95% + Python TOTAL 91% → 95%） | ⏳ 进行中 | — | 当前实证（HEAD `eed0a00` 前）：TS Statements 88.59% / Branches 79.88% / Functions 91.47% / Lines 88.83%；Python TOTAL 91% (2401/215)；短板：TS branches 是最大缺口；Python `__main__.py` 0% / `logging.py` 67% / `store_serialization.py` 78% / `store_filters.py` 79% / `server.py` 83% |
@@ -138,7 +138,7 @@ Day 0 是单线串行步骤；契约未冻结前不允许并行轨道开工。
 | `composite_exporter` | `packages/agent-core/src/observability/exporters/composite.ts`（新） | 包装多个 exporter；任一失败不阻塞其他 |
 | Python trace ingest | `providers/memory/src/omnimem/event_log.py` | 增加 `trace_id` / `request_id` / `span_id` 列；MCP request 入口解析 `metadata.traceparent` |
 | Python span 写入 | `providers/memory/src/omnimem/server.py` | MCP request 处理时建本侧 span；response 回写 traceparent |
-| **M1.4 event_log OTel bridge** | `providers/memory/src/omnimem/event_log.py`（dual-emit 模块） | 检索/引用样本 dual-emit 到 OTel span event（attribute key 遵循 ADR-008）；SQLite 仍是 reranker 训练真相源；OTel 失败不阻塞写库；放第二轮**末尾**（依赖 OTelSpanProvider + Python trace ingest 就绪后接入）；AMB 100k benchmark p95 ≤ 300ms 不回归 |
+| **M1.4 event_log OTel bridge** | `providers/memory/src/omnimem/event_log.py`（dual-emit 模块） | 检索/引用样本 dual-emit 到 OTel span event（attribute key 遵循 ADR-008）；SQLite 仍是 reranker 训练真相源；OTel 失败不阻塞写库；放第二轮**末尾**（依赖 OTelSpanProvider + Python trace ingest 就绪后接入）；AMB 100k 仅作为 recall gate p95 ≤ 300ms，不证明 dual-emit latency |
 
 ### 4.2 Newton DoD
 
@@ -156,7 +156,7 @@ Day 0 是单线串行步骤；契约未冻结前不允许并行轨道开工。
 - `uv run pytest` 覆盖 `event_log` 新增列读写 + `metadata.traceparent` 解析
 - 一次端到端 turn 在 `.logs/traces-*.jsonl` 中产出完整五层 span 链
 - TS / Python 两侧产出的 log 行 `trace_id` 相同（实证：单元测试 + 集成测试）
-- AMB 100k benchmark p95 ≤ 300ms（M1.4 dual-emit 不回归）
+- AMB 100k benchmark p95 ≤ 300ms（recall gate；不作为 M1.4 dual-emit latency 证据，dual-emit latency 由 event_log targeted test / 后续 smoke 覆盖）
 
 ---
 
@@ -301,7 +301,7 @@ Curie 可与任意轨道并行；Newton 与 Boyle 在 S1 同步点对齐 trace �
 
 > Newton 第一轮 land 后才能开始第二轮（exporter 依赖 span provider）；Kelvin 第二轮独立于 Newton 推进。
 
-- **Newton 收尾（exporter + Python + M1.4）**：`json_file_exporter` + `composite_exporter` + Python `event_log.py` trace ingest + Python `server.py` traceparent 解析 + **M1.4 event_log OTel bridge dual-emit**（末尾接入）+ S1 同步实证（端到端 turn `.logs/traces-*.jsonl` + AMB 100k p95 ≤ 300ms 不回归）
+- **Newton 收尾（exporter + Python + M1.4）**：`json_file_exporter` + `composite_exporter` + Python `event_log.py` trace ingest + Python `server.py` traceparent 解析 + **M1.4 event_log OTel bridge dual-emit**（末尾接入）+ S1 同步实证（端到端 turn `.logs/traces-*.jsonl` + AMB 100k recall gate p95 ≤ 300ms 不回归；AMB 不作为 dual-emit latency 证据）
 - **Kelvin 收尾（CLI）**：`quilin config show/set` CLI + `--config` 覆盖支持 + S2 同步实证
 - **Boyle 起步**：`Scratchpad` 模型 + MCP methods + TS client（依赖 Newton 第一轮 trace 上下文 + Kelvin 第一轮 `memory.scratchpad.*` schema）；**Executor 集成降级为 concern**，留第三轮（Codex 判断：当前 Plan/Step 类型没有 scratchpad key/value 语义，第二轮强 wire 会固定不稳契约）
 

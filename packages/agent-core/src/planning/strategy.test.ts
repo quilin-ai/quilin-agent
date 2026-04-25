@@ -66,6 +66,10 @@ describe("selectPlanningStrategy", () => {
 			strategy: "ReAct",
 			reason: "single_tool",
 		});
+		expect(selectPlanningStrategy({ intent: "CLARIFICATION" })).toMatchObject({
+			strategy: "CoT",
+			reason: "clarification",
+		});
 	});
 
 	it("honors user override before automatic rules", () => {
@@ -112,6 +116,21 @@ describe("selectPlanningStrategy", () => {
 			reason: "long_plan",
 			planStepCount: null,
 		});
+	});
+
+	it("rejects invalid thresholds and estimated step counts", () => {
+		expect(() =>
+			selectPlanningStrategy(
+				{ intent: "MULTI_STEP" },
+				{ planAndExecuteStepThreshold: 0 },
+			),
+		).toThrow("planAndExecuteStepThreshold must be a positive integer");
+		expect(() =>
+			selectPlanningStrategy({
+				intent: "MULTI_STEP",
+				estimatedSteps: -1,
+			}),
+		).toThrow("estimatedSteps must be a non-negative integer");
 	});
 });
 

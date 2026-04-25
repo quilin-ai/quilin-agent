@@ -63,6 +63,24 @@ function expectedBuiltinMcpServers() {
 	];
 }
 
+function stubIsTTY(
+	stream: NodeJS.ReadStream | NodeJS.WriteStream,
+	value: boolean,
+): () => void {
+	const descriptor = Object.getOwnPropertyDescriptor(stream, "isTTY");
+	Object.defineProperty(stream, "isTTY", {
+		configurable: true,
+		value,
+	});
+	return () => {
+		if (descriptor == null) {
+			delete (stream as { isTTY?: boolean }).isTTY;
+			return;
+		}
+		Object.defineProperty(stream, "isTTY", descriptor);
+	};
+}
+
 describe("main", () => {
 	const exitSpy = vi
 		.spyOn(process, "exit")
@@ -72,6 +90,7 @@ describe("main", () => {
 		vi.clearAllMocks();
 		mockCheckpointList.mockReset();
 		mockValidateMcpServerConfig.mockReset();
+		delete process.env.QUILIN_RUNTIME_MODE;
 		process.argv = ["bun", "packages/agent-core/src/index.ts"];
 	});
 
@@ -189,6 +208,151 @@ describe("main", () => {
 		expect(startRepl).not.toHaveBeenCalled();
 	});
 
+	it("uses QUILIN_RUNTIME_MODE when runtimeMode is not explicitly passed", async () => {
+		const model = createMockLanguageModel();
+		const provider = createMockProvider(() => model);
+		vi.mocked(createProvider).mockReturnValue(provider);
+		vi.mocked(getDefaultModel).mockReturnValue("deepseek-chat");
+		vi.mocked(generateText).mockResolvedValue(
+			mockGenerateTextResult({
+				text: "Quilin Agent online.",
+				usage: {
+					inputTokens: 1,
+					outputTokens: 1,
+				},
+				finishReason: "stop",
+			}),
+		);
+		process.env.QUILIN_RUNTIME_MODE = "repl";
+
+		const { main } = await import("./index.js");
+
+		await main();
+
+		expect(configureLogger).toHaveBeenCalledWith("repl");
+		expect(startRepl).toHaveBeenCalledWith(
+			expect.objectContaining({ modelId: "deepseek-chat" }),
+		);
+	});
+
+	it("uses QUILIN_RUNTIME_MODE=service without entering the repl", async () => {
+		const model = createMockLanguageModel();
+		const provider = createMockProvider(() => model);
+		const serviceRunner = vi.fn().mockResolvedValue(undefined);
+		vi.mocked(createProvider).mockReturnValue(provider);
+		vi.mocked(getDefaultModel).mockReturnValue("deepseek-chat");
+		vi.mocked(generateText).mockResolvedValue(
+			mockGenerateTextResult({
+				text: "Quilin Agent online.",
+				usage: {
+					inputTokens: 1,
+					outputTokens: 1,
+				},
+				finishReason: "stop",
+			}),
+		);
+		process.env.QUILIN_RUNTIME_MODE = "service";
+
+		const { main } = await import("./index.js");
+
+		await main({ serviceRunner });
+
+		expect(configureLogger).toHaveBeenCalledWith("service");
+		expect(serviceRunner).toHaveBeenCalledOnce();
+		expect(startRepl).not.toHaveBeenCalled();
+	});
+
+	it("falls back to terminal detection when QUILIN_RUNTIME_MODE is invalid", async () => {
+		const restoreStdin = stubIsTTY(process.stdin, true);
+		const restoreStderr = stubIsTTY(process.stderr, true);
+		const model = createMockLanguageModel();
+		const provider = createMockProvider(() => model);
+		vi.mocked(createProvider).mockReturnValue(provider);
+		vi.mocked(getDefaultModel).mockReturnValue("deepseek-chat");
+		vi.mocked(generateText).mockResolvedValue(
+			mockGenerateTextResult({
+				text: "Quilin Agent online.",
+				usage: {
+					inputTokens: 1,
+					outputTokens: 1,
+				},
+				finishReason: "stop",
+			}),
+		);
+		process.env.QUILIN_RUNTIME_MODE = "invalid";
+
+		try {
+			const { main } = await import("./index.js");
+
+			await main();
+		} finally {
+			restoreStdin();
+			restoreStderr();
+		}
+
+		expect(configureLogger).toHaveBeenCalledWith("repl");
+		expect(startRepl).toHaveBeenCalledWith(
+			expect.objectContaining({ modelId: "deepseek-chat" }),
+		);
+	});
+
+	it("falls back to service mode when stdio is not fully interactive", async () => {
+		const restoreStdin = stubIsTTY(process.stdin, true);
+		const restoreStderr = stubIsTTY(process.stderr, false);
+		const model = createMockLanguageModel();
+		const provider = createMockProvider(() => model);
+		const serviceRunner = vi.fn().mockResolvedValue(undefined);
+		vi.mocked(createProvider).mockReturnValue(provider);
+		vi.mocked(getDefaultModel).mockReturnValue("deepseek-chat");
+		vi.mocked(generateText).mockResolvedValue(
+			mockGenerateTextResult({
+				text: "Quilin Agent online.",
+				usage: {
+					inputTokens: 1,
+					outputTokens: 1,
+				},
+				finishReason: "stop",
+			}),
+		);
+
+		try {
+			const { main } = await import("./index.js");
+
+			await main({ serviceRunner });
+		} finally {
+			restoreStdin();
+			restoreStderr();
+		}
+
+		expect(configureLogger).toHaveBeenCalledWith("service");
+		expect(serviceRunner).toHaveBeenCalledOnce();
+		expect(startRepl).not.toHaveBeenCalled();
+	});
+
+	it("logs fatal and exits when LLM verification fails", async () => {
+		const model = createMockLanguageModel();
+		const provider = createMockProvider(() => model);
+		const serviceRunner = vi.fn().mockResolvedValue(undefined);
+		vi.mocked(createProvider).mockReturnValue(provider);
+		vi.mocked(getDefaultModel).mockReturnValue("deepseek-chat");
+		vi.mocked(generateText).mockRejectedValue(new Error("unauthorized"));
+		exitSpy.mockImplementationOnce((() => {
+			throw new Error("exit");
+		}) as never);
+
+		const { main } = await import("./index.js");
+
+		await expect(
+			main({ runtimeMode: "service", serviceRunner }),
+		).rejects.toThrow("exit");
+		expect(logger.fatal).toHaveBeenCalledWith(
+			{ err: expect.any(Error) },
+			"LLM connection failed",
+		);
+		expect(exitSpy).toHaveBeenCalledWith(1);
+		expect(serviceRunner).not.toHaveBeenCalled();
+	});
+
 	it("passes the explicit sessionId to the repl when --resume is provided", async () => {
 		const model = createMockLanguageModel();
 		const provider = createMockProvider(() => model);
@@ -231,6 +395,31 @@ describe("main", () => {
 		expect(mockCheckpointList).not.toHaveBeenCalled();
 	});
 
+	it("rejects --resume without a session id after verification", async () => {
+		const model = createMockLanguageModel();
+		const provider = createMockProvider(() => model);
+		vi.mocked(createProvider).mockReturnValue(provider);
+		vi.mocked(getDefaultModel).mockReturnValue("deepseek-chat");
+		vi.mocked(generateText).mockResolvedValue(
+			mockGenerateTextResult({
+				text: "Quilin Agent online.",
+				usage: {
+					promptTokens: 18,
+					completionTokens: 5,
+				},
+				finishReason: "stop",
+			}),
+		);
+		process.argv = ["bun", "packages/agent-core/src/index.ts", "--resume"];
+
+		const { main } = await import("./index.js");
+
+		await expect(main({ runtimeMode: "repl" })).rejects.toThrow(
+			"--resume requires a sessionId",
+		);
+		expect(startRepl).not.toHaveBeenCalled();
+	});
+
 	it("loads the newest session when --resume-latest is provided", async () => {
 		const model = createMockLanguageModel();
 		const provider = createMockProvider(() => model);
@@ -270,6 +459,40 @@ describe("main", () => {
 				spanExporter: expect.any(Object),
 				mcpServers: expectedBuiltinMcpServers(),
 			}),
+		);
+	});
+
+	it("starts a new session when --resume-latest has no saved sessions", async () => {
+		const model = createMockLanguageModel();
+		const provider = createMockProvider(() => model);
+		vi.mocked(createProvider).mockReturnValue(provider);
+		vi.mocked(getDefaultModel).mockReturnValue("deepseek-chat");
+		vi.mocked(generateText).mockResolvedValue(
+			mockGenerateTextResult({
+				text: "Quilin Agent online.",
+				usage: {
+					promptTokens: 18,
+					completionTokens: 5,
+				},
+				finishReason: "stop",
+			}),
+		);
+		mockCheckpointList.mockResolvedValue([]);
+		process.argv = [
+			"bun",
+			"packages/agent-core/src/index.ts",
+			"--resume-latest",
+		];
+
+		const { main } = await import("./index.js");
+
+		await main({ runtimeMode: "repl" });
+
+		expect(logger.warn).toHaveBeenCalledWith(
+			"No saved sessions found — starting a new session",
+		);
+		expect(startRepl).toHaveBeenCalledWith(
+			expect.not.objectContaining({ sessionId: expect.any(String) }),
 		);
 	});
 });

@@ -122,6 +122,18 @@ describe("MCPRegistry", () => {
 		]);
 	});
 
+	it("notifies change listeners for builtin changes and supports unsubscribe", () => {
+		const registry = new MCPRegistry();
+		const listener = vi.fn();
+		const unsubscribe = registry.onChange(listener);
+
+		registry.registerBuiltin([createBuiltinTool("file_read")]);
+		unsubscribe();
+		registry.registerBuiltin([createBuiltinTool("file_write")]);
+
+		expect(listener).toHaveBeenCalledTimes(1);
+	});
+
 	it("returns stable prompt descriptors for all registered tools", async () => {
 		const fakeClient = createFakeClient([
 			createTool("z_tool", "Last tool"),
@@ -312,6 +324,41 @@ describe("MCPRegistry", () => {
 		);
 	});
 
+	it("disconnects the replacement client and preserves state when old disconnect fails during register", async () => {
+		const disconnectError = new Error("old disconnect failed");
+		const existingClient = createFakeClient([createTool("memory_recall")]);
+		existingClient.disconnect.mockRejectedValueOnce(disconnectError);
+		const replacementClient = createFakeClient([createTool("memory_store")]);
+		const clients = [existingClient, replacementClient];
+		const registry = new MCPRegistry(
+			() => clients.shift() ?? createFakeClient([]),
+		);
+
+		await registry.register({
+			id: "memory",
+			config: createServerConfig(),
+			namespace: "memory",
+		});
+
+		await expect(
+			registry.register({
+				id: "memory",
+				config: createServerConfig(),
+				namespace: "memory",
+			}),
+		).rejects.toThrow("old disconnect failed");
+
+		expect(replacementClient.disconnect).toHaveBeenCalledTimes(2);
+		expect(logger.warn).toHaveBeenCalledWith(
+			{ err: disconnectError, serverId: "memory" },
+			"MCP server disconnect failed during register",
+		);
+		expect(registry.findTool("memory/memory_recall")?.name).toBe(
+			"memory/memory_recall",
+		);
+		expect(registry.findTool("memory/memory_store")).toBeUndefined();
+	});
+
 	it("cleans registry state even when disconnect throws during unregister", async () => {
 		const disconnectError = new Error("disconnect failed");
 		const failingClient = {
@@ -443,5 +490,24 @@ describe("MCPRegistry", () => {
 			"memory/memory_recall",
 		);
 		expect(getAllToolsSpy).not.toHaveBeenCalled();
+	});
+
+	it("indexes builtin tools that contain slashes by their suffix", () => {
+		const registry = new MCPRegistry();
+		registry.registerBuiltin([createBuiltinTool("local/search")]);
+
+		expect(registry.findTool("search")?.name).toBe("local/search");
+	});
+
+	it("unregistering an unknown server only rebuilds existing state", async () => {
+		const registry = new MCPRegistry();
+		const listener = vi.fn();
+		registry.registerBuiltin([createBuiltinTool("file_read")]);
+		registry.onChange(listener);
+
+		await registry.unregister("missing");
+
+		expect(registry.findTool("file_read")?.name).toBe("file_read");
+		expect(listener).toHaveBeenCalledTimes(1);
 	});
 });

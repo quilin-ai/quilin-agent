@@ -264,4 +264,42 @@ describe("PromptSessionAssembler", () => {
 		expect(after.prompt.dynamicSuffix).toContain("beta body");
 		expect(after.prompt.staticPrefix).not.toContain("<post_compact_skills>");
 	});
+
+	test("uses default clock, strips existing system prompts, and leaves assistant resumes undecorated", () => {
+		const builder = new PromptBuilder();
+		const seenUserInputs: string[] = [];
+		builder.register({
+			name: "identity",
+			order: 10,
+			updateFrequency: "per_turn",
+			compute: (ctx) => {
+				seenUserInputs.push(ctx.userInput);
+				return "Runtime prompt.";
+			},
+		});
+		const assembler = new PromptSessionAssembler({
+			promptBuilder: builder,
+			modelId: "deepseek-chat",
+			sessionStartedAt: "2026-04-21T09:00:00.000Z",
+		});
+
+		const outbound = assembler.buildOutboundRequest({
+			transcript: [
+				{ role: "system", content: "old prompt" },
+				{ role: "user", content: "previous user" },
+				{ role: "assistant", content: "resume from tool" },
+			],
+			turnKind: "tool-resume",
+		});
+
+		expect(seenUserInputs).toEqual([""]);
+		expect(outbound.messages[0]).toMatchObject({
+			role: "system",
+			content: expect.stringContaining("Runtime prompt."),
+		});
+		expect(outbound.messages.slice(1)).toEqual([
+			{ role: "user", content: "previous user" },
+			{ role: "assistant", content: "resume from tool" },
+		]);
+	});
 });

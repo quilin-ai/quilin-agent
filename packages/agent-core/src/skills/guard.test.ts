@@ -199,4 +199,60 @@ describe("scanner behavior", () => {
 		expect(decision.kind).toBe("ask");
 		expect(elapsedMs).toBeLessThan(500);
 	});
+
+	it("truncates long matches, normalizes whitespace-only offsets, and can pass low findings", () => {
+		const customGuard = createSkillsGuard({
+			patterns: [
+				{
+					id: "TEST-LONG",
+					category: "obfuscation",
+					severity: "medium",
+					regex: /A{130}/gu,
+					rationale: "test long match",
+					references: ["test"],
+				},
+				{
+					id: "TEST-WHITESPACE",
+					category: "prompt_injection",
+					severity: "low",
+					regex: /\s+/gu,
+					rationale: "test whitespace match",
+					references: ["test"],
+				},
+				{
+					id: "TEST-LOW",
+					category: "prompt_injection",
+					severity: "low",
+					regex: /low-risk-token/gu,
+					rationale: "test low finding",
+					references: ["test"],
+				},
+			],
+		});
+
+		const longDecision = customGuard.scan("A".repeat(130), {
+			trust: "community",
+			stage: "write",
+			skillName: "long-match",
+		});
+		expect(longDecision.kind).toBe("ask");
+		if (longDecision.kind === "ask") {
+			expect(longDecision.findings[0]?.match).toHaveLength(120);
+			expect(longDecision.findings[0]?.match.endsWith("…")).toBe(true);
+		}
+
+		const whitespaceDecision = customGuard.scan("\n\t", {
+			trust: "community",
+			stage: "read",
+			skillName: "whitespace",
+		});
+		expect(whitespaceDecision.kind).toBe("pass");
+
+		const lowDecision = customGuard.scan("low-risk-token", {
+			trust: "community",
+			stage: "read",
+			skillName: "low-finding",
+		});
+		expect(lowDecision).toEqual({ kind: "pass" });
+	});
 });

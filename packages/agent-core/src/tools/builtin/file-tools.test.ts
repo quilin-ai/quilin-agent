@@ -333,12 +333,19 @@ describe("builtin file tools", () => {
 		const fakeHome = join(tempDir, "home");
 		const awsDir = join(fakeHome, ".aws");
 		const credentialsPath = join(awsDir, "credentials");
+		const gcloudDir = join(fakeHome, ".gcloud");
 
 		vi.stubEnv("HOME", fakeHome);
 		await mkdir(awsDir, { recursive: true });
+		await mkdir(gcloudDir, { recursive: true });
 		await writeFile(
 			credentialsPath,
 			"[default]\naws_access_key_id=test\n",
+			"utf8",
+		);
+		await writeFile(
+			join(gcloudDir, "application_default_credentials.json"),
+			"{}",
 			"utf8",
 		);
 
@@ -348,6 +355,13 @@ describe("builtin file tools", () => {
 		expect(result.isError).toBe(true);
 		expect(JSON.parse(result.content)).toEqual({
 			error: expect.stringContaining("credentials"),
+		});
+
+		const listTool = createFileListTool({ allowedRoots: [fakeHome] });
+		const listResult = await listTool.execute({ path: gcloudDir });
+		expect(listResult.isError).toBe(true);
+		expect(JSON.parse(listResult.content)).toEqual({
+			error: expect.stringContaining(".gcloud"),
 		});
 	});
 
@@ -410,6 +424,29 @@ describe("builtin file tools", () => {
 		});
 	});
 
+	it("file_write reports interactive confirmation prompts", async () => {
+		const filePath = join(tempDir, "needs-confirm.txt");
+		const tool = createFileWriteTool({
+			allowedRoots: [tempDir],
+			authority: {
+				authorize: vi.fn(async () => ({
+					kind: "confirm" as const,
+					prompt: "approve write",
+				})),
+			} as unknown as WriteAuthority,
+		});
+
+		const result = await tool.execute({
+			path: filePath,
+			content: "blocked",
+		});
+
+		expect(result.isError).toBe(true);
+		expect(JSON.parse(result.content)).toEqual({
+			error: "approve write",
+		});
+	});
+
 	it("file_write proceeds after WriteAuthority confirmation succeeds", async () => {
 		const filePath = join(tempDir, "confirmed.txt");
 		const tool = createFileWriteTool({
@@ -427,5 +464,36 @@ describe("builtin file tools", () => {
 
 		expect(result.isError).toBe(false);
 		expect(await readFile(filePath, "utf8")).toBe("confirmed");
+	});
+
+	it("blocks root-prefixed system paths and ssh private key names", async () => {
+		const systemTool = createFileReadTool({ allowedRoots: ["/"] });
+		const systemResult = await systemTool.execute({ path: "/root/.npmrc" });
+		expect(systemResult.isError).toBe(true);
+		expect(JSON.parse(systemResult.content)).toEqual({
+			error: "Path not accessible",
+		});
+
+		const fakeHome = join(tempDir, "home");
+		const sshDir = join(fakeHome, ".ssh");
+		const keyPath = join(sshDir, "id_ed25519");
+		const publicKeyPath = join(sshDir, "deploy_key.pub");
+		vi.stubEnv("HOME", fakeHome);
+		await mkdir(sshDir, { recursive: true });
+		await writeFile(keyPath, "PRIVATE KEY", "utf8");
+		await writeFile(publicKeyPath, "ssh-ed25519 AAAATEST user@example", "utf8");
+
+		const keyTool = createFileReadTool({ allowedRoots: [fakeHome] });
+		const keyResult = await keyTool.execute({ path: keyPath });
+		const publicKeyResult = await keyTool.execute({ path: publicKeyPath });
+
+		expect(keyResult.isError).toBe(true);
+		expect(JSON.parse(keyResult.content)).toEqual({
+			error: expect.stringContaining("id_ed25519"),
+		});
+		expect(publicKeyResult.isError).toBe(true);
+		expect(JSON.parse(publicKeyResult.content)).toEqual({
+			error: expect.stringContaining("deploy_key.pub"),
+		});
 	});
 });

@@ -1,3 +1,6 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { logger } from "../logger.js";
 import { MigrationError, SQLiteCheckpoint } from "./checkpoint.js";
@@ -182,6 +185,26 @@ describe("SQLiteCheckpoint", () => {
 		await checkpoint.save(state);
 
 		await expect(checkpoint.load("session-roundtrip")).resolves.toEqual(state);
+	});
+
+	it("shares an in-flight database open and creates parent directories for file paths", async () => {
+		const tempDir = await mkdtemp(join(tmpdir(), "quilin-checkpoint-db-"));
+		const dbPath = join(tempDir, "nested", "sessions.db");
+		try {
+			const checkpoint = new SQLiteCheckpoint({
+				sessionId: "concurrent-session",
+				dbPath,
+			});
+			const state = makeState();
+
+			await Promise.all([checkpoint.save(state), checkpoint.list()]);
+
+			await expect(checkpoint.load("concurrent-session")).resolves.toEqual(
+				state,
+			);
+		} finally {
+			await rm(tempDir, { recursive: true, force: true });
+		}
 	});
 
 	it("returns null for a missing sessionId", async () => {
@@ -504,6 +527,61 @@ describe("SQLiteCheckpoint", () => {
 
 		await expect(checkpoint.load("future-session")).rejects.toThrow(
 			MigrationError,
+		);
+	});
+
+	it("loads legacy raw state payloads and strips persisted reasoning", async () => {
+		const dbPath = makeMemoryDbPath("checkpoint-legacy-raw-state");
+		seedSession(
+			dbPath,
+			"raw-session",
+			JSON.stringify(
+				makeState({
+					messages: [
+						{ role: "system", content: "system prompt" },
+						{
+							role: "assistant",
+							content: "legacy answer",
+							reasoning: [
+								{ provider: "deepseek", text: "stored private data" },
+							],
+						},
+					],
+				}),
+			),
+		);
+		const checkpoint = new SQLiteCheckpoint({ dbPath });
+
+		await expect(checkpoint.load("raw-session")).resolves.toEqual(
+			makeState({
+				messages: [
+					{ role: "system", content: "system prompt" },
+					{ role: "assistant", content: "legacy answer" },
+				],
+			}),
+		);
+	});
+
+	it("throws MigrationError for non-object checkpoints and invalid envelopes", async () => {
+		const dbPath = makeMemoryDbPath("checkpoint-invalid-envelope");
+		seedSession(dbPath, "primitive-session", "null");
+		seedSession(
+			dbPath,
+			"bad-payload-session",
+			JSON.stringify({
+				schemaVersion: 2,
+				createdAt: "2026-04-15T00:00:00.000Z",
+				updatedAt: "2026-04-15T00:00:00.000Z",
+				payload: null,
+			}),
+		);
+		const checkpoint = new SQLiteCheckpoint({ dbPath });
+
+		await expect(checkpoint.load("primitive-session")).rejects.toThrow(
+			/Checkpoint payload is not an object/,
+		);
+		await expect(checkpoint.load("bad-payload-session")).rejects.toThrow(
+			/Checkpoint v2 payload is invalid/,
 		);
 	});
 });

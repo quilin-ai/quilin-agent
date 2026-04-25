@@ -126,4 +126,46 @@ describe("detectGoalDrift", () => {
 			reason: "warning_limit_reached",
 		});
 	});
+
+	it("rejects invalid probabilities and cadence options", () => {
+		expect(() => detectGoalDrift(makeState(5), Number.NaN)).toThrow(
+			"similarity must be a number between 0 and 1",
+		);
+		expect(() => detectGoalDrift(makeState(5), 0.5, { threshold: 2 })).toThrow(
+			"threshold must be a number between 0 and 1",
+		);
+		expect(() =>
+			detectGoalDrift(makeState(5), 0.5, { checkInterval: 0 }),
+		).toThrow("checkInterval must be a positive integer");
+		expect(() =>
+			detectGoalDrift(makeState(5), 0.5, { warningLimit: 1.5 }),
+		).toThrow("warningLimit must be a positive integer");
+	});
+});
+
+describe("createGoalDriftEvent", () => {
+	it("rejects unchecked or non-drift decisions and falls back to a generic reason", () => {
+		const state = makeState(5);
+		const unchecked = detectGoalDrift(makeState(4), 0.2);
+		const stable = detectGoalDrift(state, 0.9);
+
+		expect(() => createGoalDriftEvent(state, unchecked)).toThrow(
+			"goal drift event requires a checked drift decision",
+		);
+		expect(() => createGoalDriftEvent(state, stable)).toThrow(
+			"goal drift event requires a checked drift decision",
+		);
+		const event = createGoalDriftEvent(
+			state,
+			{
+				...detectGoalDrift(state, 0.2),
+				reason: null,
+			},
+			() => 12_345,
+		);
+		expect(event.kind).toBe("goal_drift_detected");
+		if (event.kind === "goal_drift_detected") {
+			expect(event.payload.reason).toBe("goal_drift_detected");
+		}
+	});
 });

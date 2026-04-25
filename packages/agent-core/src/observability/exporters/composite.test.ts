@@ -36,4 +36,26 @@ describe("CompositeSpanExporter", () => {
 		expect(exporter.lastFailures).toHaveLength(1);
 		expect(exporter.lastFailures[0]?.exporterIndex).toBe(0);
 	});
+
+	it("falls back to per-span exportSpan and records failures by exporter index", async () => {
+		const first = { exportSpan: vi.fn(async () => undefined) };
+		const failing = {
+			exportSpan: vi.fn(async () => {
+				throw new Error("network down");
+			}),
+		};
+		const noMethods = {};
+		const exporter = new CompositeSpanExporter([first, noMethods, failing]);
+
+		await exporter.exportSpan(span);
+
+		expect(first.exportSpan).toHaveBeenCalledWith(span);
+		expect(failing.exportSpan).toHaveBeenCalledWith(span);
+		expect(exporter.lastFailures).toEqual([
+			{
+				exporterIndex: 2,
+				error: expect.any(Error),
+			},
+		]);
+	});
 });

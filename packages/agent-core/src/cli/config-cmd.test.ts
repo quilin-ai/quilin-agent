@@ -66,6 +66,13 @@ describe("config show", () => {
 		const result = await runConfigCommand(["show", "--config"], { env: {} });
 		expect(result.exitCode).toBe(1);
 		expect(result.stderr).toMatch(/--config requires a path/);
+
+		const startsWithFlag = await runConfigCommand(
+			["show", "--config", "--source"],
+			{ env: {} },
+		);
+		expect(startsWithFlag.exitCode).toBe(1);
+		expect(startsWithFlag.stderr).toMatch(/--config requires a path/);
 	});
 });
 
@@ -188,6 +195,28 @@ describe("config set", () => {
 		expect(result.exitCode).toBe(1);
 		expect(result.stderr).toMatch(/exactly <dot.path> <value>/);
 	});
+
+	it("rejects unknown set flags, missing config values, and invalid dot paths", async () => {
+		const file = path.join(tmpDir, "config.toml");
+		const unknownFlag = await runConfigCommand(["set", "--garbage"], {
+			env: {},
+		});
+		const missingConfig = await runConfigCommand(
+			["set", "llm.default_model", "claude", "--config", "--source"],
+			{ env: {} },
+		);
+		const invalidPath = await runConfigCommand(
+			["set", "llm..default_model", "claude", "--config", file],
+			{ env: {} },
+		);
+
+		expect(unknownFlag.exitCode).toBe(1);
+		expect(unknownFlag.stderr).toMatch(/unknown flag/);
+		expect(missingConfig.exitCode).toBe(1);
+		expect(missingConfig.stderr).toMatch(/--config requires a path/);
+		expect(invalidPath.exitCode).toBe(1);
+		expect(invalidPath.stderr).toMatch(/invalid dot.path/);
+	});
 });
 
 describe("config help", () => {
@@ -198,7 +227,7 @@ describe("config help", () => {
 	});
 
 	it("prints help on `help` with exit 0", async () => {
-		const result = await runConfigCommand(["help"], { env: {} });
+		const result = await runConfigCommand(["help"]);
 		expect(result.exitCode).toBe(0);
 		expect(result.stderr).toMatch(/quilin config set/);
 	});
@@ -221,9 +250,16 @@ describe("coerceLiteral helper", () => {
 
 	it("parses JSON arrays", () => {
 		expect(__testing.coerceLiteral('["a","b"]')).toEqual(["a", "b"]);
+		expect(__testing.coerceLiteral("[not-json]")).toBe("[not-json]");
 	});
 
 	it("falls through to string", () => {
 		expect(__testing.coerceLiteral("hello")).toBe("hello");
+		expect(__testing.coerceLiteral("9".repeat(400))).toBe("9".repeat(400));
+		expect(__testing.coerceLiteral(`${"9".repeat(400)}.1`)).toBe(
+			`${"9".repeat(400)}.1`,
+		);
+		expect(__testing.pickDotPath({}, ["missing", "leaf"])).toBeUndefined();
+		expect(__testing.pickDotPath({ a: null }, ["a", "leaf"])).toBeUndefined();
 	});
 });

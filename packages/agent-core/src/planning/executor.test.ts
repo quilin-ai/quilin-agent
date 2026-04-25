@@ -398,6 +398,52 @@ describe("LinearPlanExecutor", () => {
 		});
 	});
 
+	it("rejects invalid maxSteps at construction time", () => {
+		expect(
+			() =>
+				new LinearPlanExecutor({
+					tools: {},
+					maxSteps: 0,
+				}),
+		).toThrow(/maxSteps/);
+	});
+
+	it("halts with TOOL_NOT_FOUND when a step has no registered handler", async () => {
+		const executor = new LinearPlanExecutor({
+			tools: {},
+		});
+
+		const result = await executor.execute({
+			runId: "run-missing-tool",
+			task: "Call missing tool",
+			plan: {
+				kind: "linear",
+				subtasks: [makeStep("unknown", "missing_tool")],
+			},
+		});
+
+		expect(result.haltedOnError).toBe(true);
+		expect(result.state.events).toContainEqual(
+			expect.objectContaining({
+				kind: "tool_returned",
+				payload: expect.objectContaining({
+					toolCallId: "run-missing-tool:unknown:1",
+					isError: true,
+					leafId: "unknown",
+				}),
+			}),
+		);
+		expect(result.state.events).toContainEqual(
+			expect.objectContaining({
+				kind: "local_repair",
+				payload: {
+					leafId: "unknown",
+					note: "tool_failed:missing_tool",
+				},
+			}),
+		);
+	});
+
 	it("passes scratchpad state through a long-running linear fixture", async () => {
 		const stepCount = 55;
 		const plan: LinearPlan = {
@@ -578,5 +624,125 @@ describe("LinearPlanExecutor", () => {
 			}),
 			plan.subtasks[0],
 		);
+	});
+
+	it("halts before tool execution when scratchpad reads fail", async () => {
+		const handler = vi.fn(
+			async (toolCall: ToolCall): Promise<ToolResult> => ({
+				toolCallId: toolCall.id,
+				content: "ok",
+				isError: false,
+			}),
+		);
+		const scratchpadClient: ExecutorScratchpadClient = {
+			read: vi.fn(async () => {
+				throw new Error("read offline");
+			}),
+			write: vi.fn(async () => undefined),
+			clear: vi.fn(async () => 0),
+		};
+		const executor = new LinearPlanExecutor({
+			tools: { web_search: handler },
+			scratchpadClient,
+		});
+
+		const result = await executor.execute({
+			runId: "run-read-fails",
+			task: "Read scratchpad",
+			plan: {
+				kind: "linear",
+				subtasks: [makeScratchpadStep("reader", { readKey: "handoff" })],
+			},
+		});
+
+		expect(result.haltedOnError).toBe(true);
+		expect(handler).not.toHaveBeenCalled();
+		expect(result.state.events).toContainEqual(
+			expect.objectContaining({
+				kind: "local_repair",
+				payload: {
+					leafId: "reader",
+					note: "scratchpad_failed:READ_OFFLINE",
+				},
+			}),
+		);
+	});
+
+	it("halts after tool success when scratchpad commits fail", async () => {
+		const scratchpadClient: ExecutorScratchpadClient = {
+			read: vi.fn(async () => null),
+			write: vi.fn(async () => {
+				throw "write rejected";
+			}),
+			clear: vi.fn(async () => 0),
+		};
+		const executor = new LinearPlanExecutor({
+			tools: {
+				web_search: async (toolCall) => ({
+					toolCallId: toolCall.id,
+					content: "ok",
+					isError: false,
+				}),
+			},
+			scratchpadClient,
+		});
+
+		const result = await executor.execute({
+			runId: "run-commit-fails",
+			task: "Write scratchpad",
+			plan: {
+				kind: "linear",
+				subtasks: [makeScratchpadStep("writer", { writeKey: "handoff" })],
+			},
+		});
+
+		expect(result.haltedOnError).toBe(true);
+		expect(result.outputs).toEqual([]);
+		expect(result.state.events).toContainEqual(
+			expect.objectContaining({
+				kind: "local_repair",
+				payload: {
+					leafId: "writer",
+					note: "scratchpad_failed:UNKNOWN_ERROR",
+				},
+			}),
+		);
+	});
+
+	it("clears all scratchpad keys when clearOnSuccess has no read or write key", async () => {
+		const scratchpadClient: ExecutorScratchpadClient = {
+			read: vi.fn(async () => null),
+			write: vi.fn(async () => undefined),
+			clear: vi.fn(async () => 2),
+		};
+		const plan: LinearPlan = {
+			kind: "linear",
+			subtasks: [makeScratchpadStep("cleanup", { clearOnSuccess: true })],
+		};
+		const executor = new LinearPlanExecutor({
+			tools: {
+				web_search: async (toolCall) => ({
+					toolCallId: toolCall.id,
+					content: "ok",
+					isError: false,
+				}),
+			},
+			scratchpadClient,
+		});
+
+		await expect(
+			executor.execute({
+				runId: "run-clear-all",
+				task: "Clear scratchpad",
+				plan,
+			}),
+		).resolves.toMatchObject({
+			haltedOnError: false,
+			terminatedReason: "Success",
+		});
+		expect(scratchpadClient.clear).toHaveBeenCalledWith({
+			taskId: createTaskHash("Clear scratchpad", plan),
+			sessionId: "run-clear-all",
+		});
 	});
 });

@@ -26,7 +26,7 @@ const mockRegistryRegister = vi.fn();
 const mockRegistryGetAllTools = vi.fn();
 const mockRegistryGetToolDescriptors = vi.fn();
 const mockRegistryDisconnectAll = vi.fn();
-const mockRegistryOnChange = vi.fn(() => () => undefined);
+const mockRegistryOnChange = vi.fn((_listener: () => void) => () => undefined);
 const mockRegistryConstructor = vi.fn();
 let capturedStreamCallback:
 	| ((event: Record<string, unknown>) => void)
@@ -34,6 +34,7 @@ let capturedStreamCallback:
 
 const registryBuiltinTools: ToolWithMetadata[] = [];
 const registryServerTools: ToolWithMetadata[] = [];
+const registryChangeListeners: Array<() => void> = [];
 
 function createToolWithMetadata(
 	name: string,
@@ -127,6 +128,7 @@ describe("startRepl", () => {
 		capturedMessages.length = 0;
 		registryBuiltinTools.length = 0;
 		registryServerTools.length = 0;
+		registryChangeListeners.length = 0;
 		randomUUIDSpy.mockReturnValue("00000000-0000-0000-0000-000000000000");
 		mockCheckpointLoad.mockResolvedValue(null);
 		mockCheckpointSave.mockResolvedValue(undefined);
@@ -161,6 +163,10 @@ describe("startRepl", () => {
 				}))
 				.sort((left, right) => left.name.localeCompare(right.name)),
 		);
+		mockRegistryOnChange.mockImplementation((listener: () => void) => {
+			registryChangeListeners.push(listener);
+			return () => undefined;
+		});
 		mockRegistryDisconnectAll.mockResolvedValue(undefined);
 	});
 
@@ -665,6 +671,29 @@ describe("startRepl", () => {
 		);
 	});
 
+	it("keeps the base model as effective for non-DeepSeek providers", async () => {
+		mockQuestion
+			.mockResolvedValueOnce("/think on")
+			.mockResolvedValueOnce("/status")
+			.mockResolvedValueOnce("/exit");
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: createMockProvider((requestedModelId: string) =>
+				createMockLanguageModel({
+					provider: "mock-openai",
+					modelId: requestedModelId,
+				}),
+			),
+			modelId: "gpt-test",
+		});
+
+		expect(stderrWriteSpy).toHaveBeenCalledWith(
+			"Status: model=gpt-test | effective=gpt-test | thinking=enabled | reasoning=collapsed\n",
+		);
+	});
+
 	it("queues slash commands entered during WriteAuthority confirmation", async () => {
 		mockQuestion
 			.mockResolvedValueOnce("trigger write")
@@ -722,6 +751,80 @@ describe("startRepl", () => {
 		);
 	});
 
+	it("handles early write confirmation failures and persistent allow answers", async () => {
+		mockCreateBuiltinTools.mockImplementationOnce((options) => {
+			void (
+				options as {
+					writeAuthority: {
+						authorize: (request: {
+							tool: string;
+							riskLevel: "high";
+							summary: string;
+							origin: "agent";
+						}) => Promise<unknown>;
+					};
+				}
+			).writeAuthority.authorize({
+				tool: "shell_exec",
+				riskLevel: "high",
+				summary: "before repl",
+				origin: "agent",
+			});
+			return [];
+		});
+		mockQuestion.mockResolvedValueOnce("/exit");
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: createMockProvider(() => createMockLanguageModel()),
+			modelId: "deepseek-chat",
+		});
+
+		mockCreateBuiltinTools.mockReset();
+		mockCreateBuiltinTools.mockReturnValue([
+			createToolWithMetadata("file_read", "Read a file with numbered lines."),
+		]);
+		mockQuestion
+			.mockResolvedValueOnce("trigger write")
+			.mockResolvedValueOnce("always-low")
+			.mockResolvedValueOnce("trigger write again")
+			.mockResolvedValueOnce("always-medium")
+			.mockResolvedValueOnce("trigger yes")
+			.mockResolvedValueOnce("yes")
+			.mockResolvedValueOnce("/exit");
+		mockRunAgentLoop.mockImplementation(async () => {
+			const writeAuthority = (
+				mockCreateBuiltinTools.mock.calls.at(-1)?.[0] as
+					| {
+							writeAuthority: {
+								authorize: (request: {
+									tool: string;
+									riskLevel: "high";
+									summary: string;
+									origin: "agent";
+								}) => Promise<unknown>;
+							};
+					  }
+					| undefined
+			)?.writeAuthority;
+			await writeAuthority?.authorize({
+				tool: "shell_exec",
+				riskLevel: "high",
+				summary: "write file",
+				origin: "agent",
+			});
+			return "ok";
+		});
+
+		await startRepl({
+			provider: createMockProvider(() => createMockLanguageModel()),
+			modelId: "plain-model",
+		});
+
+		expect(mockRunAgentLoop).toHaveBeenCalledTimes(3);
+	});
+
 	it("toggles reasoning display between verbose and collapsed", async () => {
 		mockQuestion
 			.mockResolvedValueOnce("/verbose")
@@ -736,6 +839,7 @@ describe("startRepl", () => {
 			})
 			.mockImplementationOnce(async () => {
 				capturedStreamCallback?.({ type: "reasoning", delta: "step 2" });
+				capturedStreamCallback?.({ type: "reasoning", delta: "step 3" });
 				return "done";
 			});
 
@@ -754,6 +858,11 @@ describe("startRepl", () => {
 		);
 		expect(stderrWriteSpy).toHaveBeenCalledWith("step 1");
 		expect(stderrWriteSpy).toHaveBeenCalledWith("💭 [thinking...]\n");
+		expect(
+			stderrWriteSpy.mock.calls.filter(
+				(call) => call[0] === "💭 [thinking...]\n",
+			),
+		).toHaveLength(1);
 	});
 
 	it("renders tool progress lines from streaming events", async () => {
@@ -799,5 +908,290 @@ describe("startRepl", () => {
 			'\n🔧 calling search({"q":"cache"})\n',
 		);
 		expect(stderrWriteSpy).toHaveBeenCalledWith("\n✅ search → ok\n");
+	});
+
+	it("renders text, fallback tool inputs, error results, and scalar output summaries", async () => {
+		mockQuestion
+			.mockResolvedValueOnce("stream variants")
+			.mockResolvedValueOnce("/exit");
+		mockRunAgentLoop.mockImplementation(async () => {
+			capturedStreamCallback?.({ type: "text", delta: "hello" });
+			capturedStreamCallback?.({
+				type: "tool-call-end",
+				toolCallId: "call-json",
+				toolName: "lookup",
+				inputText: "",
+				input: { q: "cache" },
+			});
+			capturedStreamCallback?.({
+				type: "tool-result",
+				toolCallId: "call-error",
+				toolName: "lookup",
+				output: { content: "first line\nsecond line" },
+				isError: true,
+			});
+			capturedStreamCallback?.({
+				type: "tool-result",
+				toolCallId: "call-raw",
+				toolName: "echo",
+				output: "raw\nignored",
+			});
+			capturedStreamCallback?.({
+				type: "tool-call-args-delta",
+				toolCallId: "call-orphan",
+				toolName: "lookup",
+				delta: '{"q":"orphan"}',
+			});
+			capturedStreamCallback?.({
+				type: "tool-call-end",
+				toolCallId: "call-orphan",
+				toolName: "lookup",
+				inputText: "",
+			});
+			capturedStreamCallback?.({
+				type: "tool-result",
+				toolCallId: "call-content-object",
+				toolName: "lookup",
+				output: { content: { nested: true } },
+			});
+			capturedStreamCallback?.({
+				type: "tool-result",
+				toolCallId: "call-long",
+				toolName: "lookup",
+				output: { result: "x".repeat(140) },
+			});
+			capturedStreamCallback?.({
+				type: "tool-result",
+				toolCallId: "call-nullish",
+				toolName: "empty",
+				output: undefined,
+			});
+			return "done";
+		});
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: createMockProvider(() => createMockLanguageModel()),
+			modelId: "deepseek-chat",
+		});
+
+		expect(stderrWriteSpy).toHaveBeenCalledWith("hello");
+		expect(stderrWriteSpy).toHaveBeenCalledWith(
+			'\n🔧 calling lookup({"q":"cache"})\n',
+		);
+		expect(stderrWriteSpy).toHaveBeenCalledWith("\n⚠️ lookup → first line\n");
+		expect(stderrWriteSpy).toHaveBeenCalledWith("\n✅ echo → raw\n");
+		expect(stderrWriteSpy).toHaveBeenCalledWith(
+			'\n🔧 calling lookup({"q":"orphan"})\n',
+		);
+		expect(stderrWriteSpy).toHaveBeenCalledWith(
+			'\n✅ lookup → {"content":{"nested":true}}\n',
+		);
+		expect(stderrWriteSpy).toHaveBeenCalledWith(
+			`\n✅ lookup → ${"x".repeat(117)}...\n`,
+		);
+		expect(stderrWriteSpy).toHaveBeenCalledWith('\n✅ empty → "undefined"\n');
+	});
+
+	it("flushes spans through per-span exporters and logs export failures without clearing", async () => {
+		const spanSnapshot = {
+			name: "agent.session",
+			traceId: "a".repeat(32),
+			spanId: "b".repeat(16),
+			startTimeUnixMs: 1,
+			status: "ok",
+			attributes: {
+				"session.id": "session-1",
+				"session.user_id": "user-1",
+				"session.task_summary": "test",
+				"session.turn_count": 1,
+				"session.total_cost_usd": 0,
+				"session.total_tokens": 0,
+			},
+			events: [],
+			children: [],
+		};
+		const spans = {
+			snapshot: vi.fn(() => [spanSnapshot]),
+			clear: vi.fn(),
+		};
+		const exportSpan = vi.fn(async () => undefined);
+		mockQuestion.mockResolvedValueOnce("hello").mockResolvedValueOnce("/exit");
+		mockRunAgentLoop.mockResolvedValue("reply");
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: createMockProvider(() => createMockLanguageModel()),
+			modelId: "deepseek-chat",
+			observability: { spans: spans as never, sessionId: "session-1" },
+			spanExporter: { exportSpan },
+		});
+
+		expect(exportSpan).toHaveBeenCalledWith(spanSnapshot);
+		expect(spans.clear).toHaveBeenCalledTimes(1);
+
+		spans.clear.mockClear();
+		exportSpan.mockRejectedValueOnce(new Error("disk full"));
+		mockQuestion
+			.mockResolvedValueOnce("hello again")
+			.mockResolvedValueOnce("/exit");
+
+		await startRepl({
+			provider: createMockProvider(() => createMockLanguageModel()),
+			modelId: "deepseek-chat",
+			observability: { spans: spans as never, sessionId: "session-1" },
+			spanExporter: { exportSpan },
+		});
+
+		expect(mockLoggerError).toHaveBeenCalledWith(
+			{ err: expect.any(Error) },
+			"REPL: span export failed",
+		);
+		expect(spans.clear).not.toHaveBeenCalled();
+	});
+
+	it("skips span flushing when snapshots are empty or exporter has no methods", async () => {
+		const spans = {
+			snapshot: vi.fn(() => []),
+			clear: vi.fn(),
+		};
+		mockQuestion.mockResolvedValueOnce("hello").mockResolvedValueOnce("/exit");
+		mockRunAgentLoop.mockResolvedValue("reply");
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: createMockProvider(() => createMockLanguageModel()),
+			modelId: "deepseek-chat",
+			observability: { spans: spans as never, sessionId: "session-1" },
+			spanExporter: {},
+		});
+
+		expect(spans.snapshot).toHaveBeenCalled();
+		expect(spans.clear).not.toHaveBeenCalled();
+	});
+
+	it("handles blank prompts, /quit, and invalid /think usage", async () => {
+		mockQuestion
+			.mockResolvedValueOnce("   ")
+			.mockResolvedValueOnce("/think sideways")
+			.mockResolvedValueOnce("/quit");
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: createMockProvider(() => createMockLanguageModel()),
+			modelId: "deepseek-chat",
+		});
+
+		expect(stderrWriteSpy).toHaveBeenCalledWith("Usage: /think on|off|auto\n");
+		expect(mockRunAgentLoop).not.toHaveBeenCalled();
+		expect(mockCheckpointSave).toHaveBeenCalledWith(
+			expect.objectContaining({ isTerminal: true }),
+		);
+	});
+
+	it("prints removed and generic skills catalog hints while ignoring empty changes", async () => {
+		const catalogListeners: Array<
+			(change: {
+				added: readonly string[];
+				removed: readonly string[];
+				changed: readonly string[];
+			}) => void
+		> = [];
+		const skillsManager = {
+			discover: vi.fn(async () => []),
+			startWatching: vi.fn(),
+			stopWatching: vi.fn(),
+			list: vi.fn(() => []),
+			postCompactRestore: vi.fn(() => ({ entries: [], totalTokens: 0 })),
+			getRecentSkillNames: vi.fn(() => ["recent"]),
+			onCatalogChange: vi.fn((listener) => {
+				catalogListeners.push(listener);
+				return () => undefined;
+			}),
+		};
+		mockQuestion.mockImplementationOnce(async () => {
+			for (const listener of catalogListeners) {
+				listener({ added: [], removed: ["old-skill"], changed: [] });
+				listener({ added: [], removed: [], changed: [] });
+				listener({ added: ["a"], removed: [], changed: ["b"] });
+			}
+			return "/exit";
+		});
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: createMockProvider(() => createMockLanguageModel()),
+			modelId: "deepseek-chat",
+			skillsManager: skillsManager as never,
+		});
+
+		expect(stderrWriteSpy).toHaveBeenCalledWith("🗑 Skill removed: old-skill\n");
+		expect(stderrWriteSpy).toHaveBeenCalledWith("🎯 Skills catalog updated\n");
+	});
+
+	it("builds prompt context from registry tools and invalidates on registry change", async () => {
+		mockQuestion
+			.mockResolvedValueOnce("inspect context")
+			.mockResolvedValueOnce("/exit");
+		mockRegistryGetAllTools.mockImplementation(() => [
+			createToolWithMetadata("z_tool", "Z tool"),
+			{ ...createToolWithMetadata("nameless", "No name"), name: undefined },
+			createToolWithMetadata("a_tool", "A tool"),
+		]);
+		mockRegistryGetToolDescriptors.mockImplementation(() => [
+			{
+				name: "a_tool",
+				description: "A tool",
+				category: "programmatic",
+				riskLevel: "read",
+			},
+			{
+				name: "z_tool",
+				description: "Z tool",
+				category: "programmatic",
+				riskLevel: "read",
+			},
+		]);
+		mockRunAgentLoop.mockImplementation(async (config) => {
+			const assembler = config.sessionAssembler as {
+				buildOutboundPrompt: (input: {
+					transcript: Array<{ role: "user"; content: string }>;
+					turnKind: "user-turn";
+				}) => { prompt: { dynamicSuffix: string; staticPrefix: string } };
+			};
+			const before = assembler.buildOutboundPrompt({
+				transcript: [{ role: "user", content: "inspect context" }],
+				turnKind: "user-turn",
+			});
+			for (const listener of registryChangeListeners) {
+				listener();
+			}
+			const after = assembler.buildOutboundPrompt({
+				transcript: [{ role: "user", content: "inspect context" }],
+				turnKind: "user-turn",
+			});
+			capturedMessages.push(
+				before.prompt.staticPrefix,
+				after.prompt.staticPrefix,
+			);
+			return "done";
+		});
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: createMockProvider(() => createMockLanguageModel()),
+			modelId: "deepseek-chat",
+		});
+
+		expect(capturedMessages[0]).toContain("a_tool");
+		expect(capturedMessages[0]).toContain("z_tool");
+		expect(capturedMessages[0]).not.toContain("nameless");
+		expect(capturedMessages[1]).toEqual(expect.any(String));
 	});
 });

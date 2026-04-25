@@ -112,6 +112,48 @@ describe("loadCapabilitiesConfig", () => {
 		});
 	});
 
+	it("supports inline --config= paths and rejects missing config values", async () => {
+		const workspaceRoot = await createTempWorkspace();
+		const cliPath = await writeCapabilitiesFile(
+			workspaceRoot,
+			"cli.json",
+			buildConfig("inline-server"),
+		);
+
+		const loaded = await loadCapabilitiesConfig({
+			workspaceRoot,
+			cwd: workspaceRoot,
+			argv: [`--config=${relative(workspaceRoot, cliPath)}`],
+			env: {},
+		});
+
+		expect(loaded.source).toEqual({ kind: "cli", path: cliPath });
+		await expect(
+			loadCapabilitiesConfig({
+				workspaceRoot,
+				cwd: workspaceRoot,
+				argv: ["--config"],
+				env: {},
+			}),
+		).rejects.toThrow(/--config requires a path/);
+		await expect(
+			loadCapabilitiesConfig({
+				workspaceRoot,
+				cwd: workspaceRoot,
+				argv: ["--config="],
+				env: {},
+			}),
+		).rejects.toThrow(/--config requires a path/);
+		await expect(
+			loadCapabilitiesConfig({
+				workspaceRoot,
+				cwd: workspaceRoot,
+				argv: ["--config", "   "],
+				env: {},
+			}),
+		).rejects.toThrow(/--config requires a path/);
+	});
+
 	it("uses QUILIN_CONFIG_PATH when CLI config is absent", async () => {
 		const workspaceRoot = await createTempWorkspace();
 		const envPath = await writeCapabilitiesFile(
@@ -134,6 +176,25 @@ describe("loadCapabilitiesConfig", () => {
 			path: envPath,
 		});
 		expect(Object.keys(loaded.config.mcpServers)).toEqual(["env-server"]);
+	});
+
+	it("ignores blank env config path and falls back to project config", async () => {
+		const workspaceRoot = await createTempWorkspace();
+		const projectPath = await writeCapabilitiesFile(
+			workspaceRoot,
+			"capabilities.json",
+			buildConfig("project-server"),
+		);
+
+		const loaded = await loadCapabilitiesConfig({
+			workspaceRoot,
+			cwd: workspaceRoot,
+			argv: [],
+			env: { QUILIN_CONFIG_PATH: "   " },
+		});
+
+		expect(loaded.source).toEqual({ kind: "project", path: projectPath });
+		expect(Object.keys(loaded.config.mcpServers)).toEqual(["project-server"]);
 	});
 
 	it("uses project JSON when no explicit config is provided", async () => {
@@ -186,9 +247,6 @@ describe("loadCapabilitiesConfig", () => {
 
 		const loaded = await loadCapabilitiesConfig({
 			workspaceRoot,
-			cwd: workspaceRoot,
-			argv: [],
-			env: {},
 		});
 
 		expect(loaded.source).toEqual({ kind: "builtin" });
@@ -308,6 +366,215 @@ describe("loadCapabilitiesConfig", () => {
 				env: {},
 			}),
 		).rejects.toThrow(/floats are not accepted/i);
+	});
+
+	it("parses YAML quoted arrays, empty arrays, comments, and disabled MCP servers", async () => {
+		const workspaceRoot = await createTempWorkspace();
+		const yamlPath = await writeCapabilitiesFile(
+			workspaceRoot,
+			"capabilities.yaml",
+			[
+				"# accepted subset",
+				"schema_version: 1",
+				"mcpServers:",
+				"  active:",
+				"    command: node",
+				"    args: ['server.js', \"--flag\"]",
+				"    cwd: .",
+				"    namespace: custom",
+				"    defaultRiskLevel: exec",
+				"  disabled:",
+				"    command: node",
+				"    args: []",
+				"    enabled: false",
+				"skills:",
+				"  enabled: true",
+				"  bundledRoots: []",
+				"  userRoots: [./skills/user]",
+				"  projectRoots: [./skills/project]",
+				"  pluginRoots: [./skills/plugin]",
+			].join("\n"),
+		);
+
+		const runtime = await loadCapabilitiesRuntime({
+			workspaceRoot,
+			cwd: workspaceRoot,
+			argv: ["--config", yamlPath],
+			env: {},
+		});
+
+		expect(runtime.mcpServers).toEqual([
+			{
+				id: "active",
+				namespace: "custom",
+				defaultRiskLevel: "exec",
+				config: {
+					command: "node",
+					args: ["server.js", "--flag"],
+					cwd: join(workspaceRoot, ".quilin"),
+				},
+			},
+		]);
+		expect(runtime.skillsManager).toBeDefined();
+	});
+
+	it("reports unsupported, invalid JSON, malformed YAML, and schema errors", async () => {
+		const workspaceRoot = await createTempWorkspace();
+		const noExtensionPath = await writeCapabilitiesFile(
+			workspaceRoot,
+			"capabilities",
+			"schema_version: 1",
+		);
+		await expect(
+			loadCapabilitiesConfig({
+				workspaceRoot,
+				cwd: workspaceRoot,
+				argv: ["--config", noExtensionPath],
+				env: {},
+			}),
+		).rejects.toThrow(/<none>/);
+
+		const txtPath = await writeCapabilitiesFile(
+			workspaceRoot,
+			"capabilities.txt",
+			"schema_version: 1",
+		);
+		await expect(
+			loadCapabilitiesConfig({
+				workspaceRoot,
+				cwd: workspaceRoot,
+				argv: ["--config", txtPath],
+				env: {},
+			}),
+		).rejects.toThrow(/Unsupported capabilities config format/);
+
+		const jsonPath = await writeCapabilitiesFile(
+			workspaceRoot,
+			"capabilities.json",
+			"{not-json",
+		);
+		await expect(
+			loadCapabilitiesConfig({
+				workspaceRoot,
+				cwd: workspaceRoot,
+				argv: ["--config", jsonPath],
+				env: {},
+			}),
+		).rejects.toThrow(/Capabilities config JSON is invalid/);
+
+		const yamlPath = await writeCapabilitiesFile(
+			workspaceRoot,
+			"capabilities.yaml",
+			"schema_version: 1\nbad line",
+		);
+		await expect(
+			loadCapabilitiesConfig({
+				workspaceRoot,
+				cwd: workspaceRoot,
+				argv: ["--config", yamlPath],
+				env: {},
+			}),
+		).rejects.toThrow(/Capabilities config YAML is invalid/);
+
+		await writeCapabilitiesFile(
+			workspaceRoot,
+			"capabilities.json",
+			JSON.stringify({
+				schema_version: 1,
+				mcpServers: { broken: { args: [] } },
+				skills: {},
+			}),
+		);
+		await expect(
+			loadCapabilitiesConfig({
+				workspaceRoot,
+				cwd: workspaceRoot,
+				argv: ["--config", jsonPath],
+				env: {},
+			}),
+		).rejects.toThrow(/Capabilities config schema invalid/);
+
+		await writeCapabilitiesFile(workspaceRoot, "capabilities.json", "null");
+		await expect(
+			loadCapabilitiesConfig({
+				workspaceRoot,
+				cwd: workspaceRoot,
+				argv: ["--config", jsonPath],
+				env: {},
+			}),
+		).rejects.toThrow(/root:/);
+	});
+
+	it("builds optional runtime fields only when configured", async () => {
+		const workspaceRoot = await createTempWorkspace();
+		const configPath = await writeCapabilitiesFile(
+			workspaceRoot,
+			"capabilities.json",
+			JSON.stringify(
+				{
+					schema_version: 1,
+					mcpServers: {
+						"no-cwd": {
+							command: "node",
+							args: ["server.js"],
+						},
+					},
+					skills: {
+						enabled: true,
+					},
+				},
+				null,
+				2,
+			),
+		);
+
+		const runtime = await loadCapabilitiesRuntime({
+			workspaceRoot,
+			cwd: workspaceRoot,
+			argv: ["--config", configPath],
+			env: {},
+		});
+
+		expect(runtime.mcpServers).toEqual([
+			{
+				id: "no-cwd",
+				namespace: "no-cwd",
+				config: {
+					command: "node",
+					args: ["server.js"],
+				},
+			},
+		]);
+		expect(runtime.skillsManager).toBeDefined();
+	});
+
+	it("instantiates skills manager from roots even when skills.enabled is omitted", async () => {
+		const workspaceRoot = await createTempWorkspace();
+		const configPath = await writeCapabilitiesFile(
+			workspaceRoot,
+			"capabilities.json",
+			JSON.stringify(
+				{
+					schema_version: 1,
+					mcpServers: {},
+					skills: {
+						pluginRoots: ["./skills/plugin"],
+					},
+				},
+				null,
+				2,
+			),
+		);
+
+		const runtime = await loadCapabilitiesRuntime({
+			workspaceRoot,
+			cwd: workspaceRoot,
+			argv: ["--config", configPath],
+			env: {},
+		});
+
+		expect(runtime.mcpServers).toEqual([]);
+		expect(runtime.skillsManager).toBeDefined();
 	});
 
 	it("rejects MCP server cwd values outside the workspace and config directory", async () => {

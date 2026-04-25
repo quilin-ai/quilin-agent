@@ -122,6 +122,32 @@ describe("decomposePlan", () => {
 		expect(result.plan.kind).toBe("linear");
 	});
 
+	it("keeps stable order while linearizing DAGs with fan-in dependencies", () => {
+		const dagSketch: DagPlan = {
+			kind: "dag",
+			subtasks: [
+				makeStep("search"),
+				makeStep("profile"),
+				makeStep("summarize"),
+				makeStep("publish"),
+			],
+			edges: [
+				["search", "summarize"],
+				["profile", "summarize"],
+				["summarize", "publish"],
+			],
+		};
+
+		const result = decomposePlan(dagSketch, { maxSteps: 4 });
+
+		expect(result.plan.subtasks.map((step) => step.id)).toEqual([
+			"search",
+			"profile",
+			"summarize",
+			"publish",
+		]);
+	});
+
 	it("rejects cyclic DAG sketches before decomposition", () => {
 		const dagSketch: DagPlan = {
 			kind: "dag",
@@ -136,6 +162,24 @@ describe("decomposePlan", () => {
 		};
 
 		expect(() => decomposePlan(dagSketch)).toThrow(/cycle/i);
+	});
+
+	it("rejects DAG sketches with duplicate or missing edge step ids", () => {
+		expect(() =>
+			decomposePlan({
+				kind: "dag",
+				subtasks: [makeStep("search"), makeStep("search")],
+				edges: [],
+			}),
+		).toThrow(/duplicate step ids: search/);
+
+		expect(() =>
+			decomposePlan({
+				kind: "dag",
+				subtasks: [makeStep("search")],
+				edges: [["search", "missing"]],
+			}),
+		).toThrow(/missing step ids: missing/);
 	});
 
 	it("rejects missing plan sketches and invalid limits", () => {
@@ -192,6 +236,24 @@ describe("createRedecomposedSubtasks", () => {
 			}),
 		]);
 	});
+
+	it("requires replacements and normalizes blank, prefixed, and nested child ids", () => {
+		const target = makeStep("table", {
+			preconditions: ["competitors_found"],
+			effects: ["comparison_table_ready"],
+		});
+
+		expect(() => createRedecomposedSubtasks(target, [])).toThrow(
+			/replacement subtasks/,
+		);
+		expect(
+			createRedecomposedSubtasks(target, [
+				makeStep("  "),
+				makeStep("/collect"),
+				makeStep("table.write"),
+			]).map((step) => step.id),
+		).toEqual(["table.1", "table.collect", "table.write"]);
+	});
 });
 
 describe("replacePlanSubtree", () => {
@@ -230,5 +292,33 @@ describe("replacePlanSubtree", () => {
 			"table.finalize",
 			"recommend",
 		]);
+	});
+
+	it("rejects unknown and non-contiguous subtree replacements", () => {
+		expect(() =>
+			replacePlanSubtree(
+				{
+					kind: "linear",
+					subtasks: [makeStep("search"), makeStep("table")],
+				},
+				"missing",
+				[makeStep("retry")],
+			),
+		).toThrow(/unknown leafId/);
+
+		expect(() =>
+			replacePlanSubtree(
+				{
+					kind: "linear",
+					subtasks: [
+						makeStep("table"),
+						makeStep("recommend"),
+						makeStep("table.write"),
+					],
+				},
+				"table",
+				[makeStep("retry")],
+			),
+		).toThrow(/must remain contiguous/);
 	});
 });
