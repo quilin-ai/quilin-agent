@@ -97,7 +97,14 @@ describe("main", () => {
 		expect(configureLogger).toHaveBeenCalledWith("repl");
 		expect(logger.info).toHaveBeenNthCalledWith(
 			1,
-			{ version: "0.0.1" },
+			expect.objectContaining({
+				version: "0.0.1",
+				user_config: expect.objectContaining({
+					default_model: expect.any(String),
+					log_level: expect.any(String),
+					safety_trust: expect.any(String),
+				}),
+			}),
 			"Quilin Agent starting",
 		);
 		expect(logger.info).toHaveBeenNthCalledWith(

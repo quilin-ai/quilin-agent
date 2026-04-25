@@ -6,6 +6,7 @@ import {
 	buildCapabilitiesRuntime,
 	loadCapabilitiesConfig,
 } from "./config/loader.js";
+import { bootstrapUserRuntime } from "./config/runtime.js";
 import { createProvider, getDefaultModel } from "./llm/provider.js";
 import { normalizeTokenUsage } from "./llm/token-usage.js";
 import { configureLogger, logger } from "./logger.js";
@@ -149,7 +150,19 @@ export async function main(options: MainOptions = {}): Promise<void> {
 	const runtimeMode = resolveRuntimeMode(options.runtimeMode);
 	configureLogger(runtimeMode);
 
-	logger.info({ version: "0.0.1" }, "Quilin Agent starting");
+	const userRuntime = await bootstrapUserRuntime();
+	logger.info(
+		{
+			version: "0.0.1",
+			user_config: {
+				file_path: userRuntime.result.filePath,
+				log_level: userRuntime.result.config.observability.log_level,
+				default_model: userRuntime.result.config.llm.default_model,
+				safety_trust: userRuntime.result.config.safety.trust_mode,
+			},
+		},
+		"Quilin Agent starting",
+	);
 
 	const provider = createProvider();
 	const modelId = getDefaultModel();

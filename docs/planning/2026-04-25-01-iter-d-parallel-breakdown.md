@@ -35,9 +35,11 @@
 | Day 0 | ADR-008 / ADR-009 / 本计划 | ✅ 完成 | `56b7a46` | 3 files / 619 insertions / TS 488 + Python 155 + AMB p95 0.261ms 不回归 |
 | Day 0 | 25-01 §17 全部残余项归属 + 25-02 sweep plan + §15 状态回写 + 00-impl-plan 顶部更新 + Blocked 段 | ✅ 完成 | `5aeeaa2` | 4 files / +187/-15 / TS 488 + Python 155 不回归 |
 | Day 0 | 25-01 §4-§5/§7/§8/§11 第一轮范围细化（Codex review 反馈：loop.ts 文件名修正 / S-wire 同步点 / Newton 第一轮钉死 TS-only / Kelvin 第一轮 owns index.ts / Curie 加 Cargo.lock + test-all 纳入 test-rs） | ✅ 完成 | `29c093d` | 1 file / +76/-30 |
-| 第一轮 Kelvin | schema/loader/env：`smol-toml` 1.6.1 + `user-config-schema.ts` (145 LOC) + `user-config.ts` (522 LOC) + `user-config.test.ts` (247 LOC, 21 tests passed) | ⏳ 待 commit | — | tsc exit 0；biome 147 files clean；`pnpm test` = 63 files / 509 passed（基线 488 + 21 新增）；不动 capability YAML loader（§16.4 闭合保持）；index.ts wire 留至 Newton OTelSpanProvider land 后 |
-| 第一轮 Newton | TS-only span provider + 五层埋点 + structured log（Codex worker 推进中） | ⏳ in-flight | — | Codex 派 worker 处理，未交付 |
-| 第一轮 Curie | Rust mesh-sdk stub + Cargo workspace + justfile/CI matrix + quilin.md（Codex 主线推进中） | ⏳ in-flight | — | Codex 报 cargo check/test/fmt/clippy 通过；`just test-all` 等并行轨道稳定后跑 |
+| 第一轮 Kelvin（schema/loader/env） | `smol-toml` 1.6.1 + `user-config-schema.ts` (145 LOC) + `user-config.ts` (522 LOC) + `user-config.test.ts` (247 LOC, 21 tests) | ✅ 完成 | `630fce2` | tsc 0；biome 147 clean；`pnpm test` = 63 files / 509 passed；`index.ts` wire 留至 Kelvin tail |
+| 第一轮 Newton（TS-only span provider） | `observability/span.ts` + `log.ts` + `context.ts`（AsyncLocalStorage）+ `loop.ts` 五层埋点 + `mcp-client.ts` `_meta.request_id` placeholder + 测试（5 文件新增，4 文件改动）| ✅ 完成 | `3cf2a9a` | tsc 0；biome 154 clean；`pnpm test` = 66 files / 518 passed（488 基线 + 21 Kelvin + 9 Newton）；`wc -l loop.ts` = 199（CC-01 < 200 守住）；无 `@opentelemetry` 依赖、无 exporter、无旧 `agent.node` 残留；语义修正：一次 `runAgentLoop` 只产生一个 `agent.turn` + `request_id` |
+| 第一轮 Curie（Rust mesh-sdk stub + CI） | `Cargo.toml` workspace root + `Cargo.lock` + `crates/mesh-sdk/{Cargo.toml,src/lib.rs}` + `justfile`（build-rs/test-rs，test-all 含 Rust）+ `.github/workflows/ci.yml`（stable Rust + cargo check --workspace 强制）+ `quilin.md` Rust 措辞 | ✅ 完成 | `fd44e2d` | `just build-rs` 0；`just test-rs` = 1 passed；`just test-all` = TS 518 + Python 155 + Rust 1 全过；无外部 Rust crates 依赖 |
+| 第一轮 Kelvin tail（index.ts wire） | `config/runtime.ts`（新，72 LOC：bootstrap + 单例 accessor）+ `config/runtime.test.ts`（新，6 tests）+ `index.ts` 顶部调 `bootstrapUserRuntime()` 把 user-config / OTelSpanProvider / StructuredLogger 串起来；启动日志附 `user_config` 段 | ⏳ 待 commit | — | tsc 0；biome 156 clean；`pnpm test` = 67 files / 524 passed（基线 488 + 21 Kelvin + 9 Newton + 6 runtime）；`just test-all` 三语言全过 |
+| 第一轮 review gate | 全套验证 + 写边界硬隔离实证 + 跨轨道契约一致性 | ⏳ 待启动 | — | Kelvin tail commit 后启动 |
 
 ---
 
