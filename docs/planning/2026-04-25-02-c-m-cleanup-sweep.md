@@ -1,6 +1,6 @@
 # Iter D 收口后 C+M Cleanup Sweep
 
-> **状态**: Pending（trigger：Iter D Newton + Boyle + Kelvin + Curie 全部收口）
+> **状态**: ✅ 已闭合（commit `1023ab5`，2026-04-25）
 > **日期**: 2026-04-25
 > **owner**: Quilin Agent 团队
 > **前置**: Iter D 全部主轴 ✅（`2026-04-25-01-iter-d-parallel-breakdown.md` §12 全部硬验收通过）
@@ -70,12 +70,14 @@
 
 ## 4. 验收
 
-- [ ] `kg.py` 主文件 ≤ 250 行；新子模块 LOC 实证写入 commit message
-- [ ] `retriever.py` 主文件 ≤ 250 行；新子模块 LOC 实证写入 commit message
-- [ ] `cd providers/memory && uv run pytest -q` 全部通过（无新 skipped）
-- [ ] `cd providers/memory && uv run ruff check src tests` clean
-- [ ] AMB 100k benchmark p95 ≤ `300ms`（不回归）
-- [ ] public API 签名不变（`grep` 实证 `MemoryClient.recall` / `MemoryStore.search` 等入口签名 diff 为空）
+- [x] `kg.py` 主文件 ≤ 250 行（实证 208）；新子模块：`kg_query.py` 179 / `kg_validation.py` 208
+- [x] `retriever.py` 主文件 ≤ 250 行（实证 208）；新子模块：`retriever_bm25.py` 240 / `retriever_vector.py` 50 / `retriever_kg.py` 76
+- [x] `cd providers/memory && uv run pytest -q` 全部通过（187 passed，coverage TOTAL 95.28% ≥ 95% 门槛）
+- [x] `cd providers/memory && uv run ruff check src tests` clean
+- [x] AMB 100k benchmark p95 ≤ `300ms`（实证 0.286ms，max 0.305ms）
+- [x] public API 签名不变（`grep` 实证 `MemoryRetriever.recall` / `MemoryStore.search` diff 空，imports 通过 re-export 维持兼容）
+- [x] `just test-all` 三语言全过：TS 717 + Python 187 + Rust 1
+- [x] commit `1023ab5 refactor(memory): split kg and retriever modules (25-02 cleanup sweep)`
 
 ---
 
