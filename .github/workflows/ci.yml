@@ -35,6 +35,14 @@ jobs:
       - run: cd providers/memory && uv run ruff check src/
       - run: cd providers/memory && uv run pytest
 
-  # Rust job removed 2026-04-22 — repo has no Cargo.toml / crates/ yet.
-  # Re-add when Iter D lands the mesh/WASM sandbox crates. Until then the
-  # job only burned CI minutes on a missing workspace.
+  rust:
+    name: Rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace
+      - run: cargo test --workspace

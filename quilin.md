@@ -12,7 +12,7 @@ Quilin Agent（麒麟）is a self-evolving Agent framework that tracks **curated
 > See [ADR-002](docs/adr/adr-002-project-skeleton.md) for project skeleton blueprint (Phase 0).
 
 - **Core Loop**: Custom minimal Agent Loop (< 200 lines TS), no LangGraph or external framework
-- **Two-Language Runtime (Iter A..C)**: TS (Agent core) + Python (ML providers as MCP servers). Rust (mesh/WASM sandbox) deferred to **Iter D** — not built yet.
+- **Runtime Languages**: TS (Agent core) + Python (ML providers as MCP servers) are active; Rust has an Iter D `crates/mesh-sdk` stub, with mesh/WASM runtime behavior deferred to Iter F.
 - **E-T-C-S-L-V**: Six capabilities exposed as LLM-callable tools, not fixed state graph nodes
 - **Layered Memory**: OmniMem 4-tier (working/episodic/semantic/skill) with auto-reflect + User Profile Store + Departure Context
 - **Communication**: MCP stdio (TS↔Python). Agent Mesh (gRPC) and HTTP SSE streaming land in Iter D+.
@@ -64,13 +64,14 @@ just init          # 一键安装全部依赖（pnpm + uv + cargo）
 just start         # 一键启动全部服务（agent-core + omnimem）
 just stop          # 一键停止
 just restart       # 一键重启
-just test-all      # 一键测试（TS + Python）
+just test-all      # 一键测试（TS + Python + Rust）
 just check         # 一键 lint + format
 just clean         # 一键清理构建产物
 just dev           # TS 开发模式（前台 + watch）
 just dev-memory    # Python OmniMem 开发模式
 just build         # TS 构建
-# just build-rs / test-rs — 留空到 Iter D（crates/ 目录引入后启用）
+just build-rs      # Rust workspace check（Iter D mesh-sdk stub）
+just test-rs       # Rust workspace tests（Iter D mesh-sdk stub）
 ```
 
 ## Directory Structure
@@ -81,7 +82,7 @@ quilin-agent/
 │   └── agent-core/                 #   Agent Loop + LLM + Context + Tools
 ├── providers/                      # Python — uv workspace (Iter A+)
 │   └── memory/                     #   OmniMem MCP Server
-# crates/                          # Rust — cargo workspace — 延后到 Iter D (mesh/WASM)
+├── crates/                         # Rust — cargo workspace (Iter D mesh-sdk stub; runtime deferred to Iter F)
 ├── upstreams/                      # ~100 git submodules (tracked, --depth 1)
 ├── docs/
 │   ├── adr/                        # 架构决策记录
@@ -134,7 +135,7 @@ quilin-agent/
 
 - **TypeScript**: ESNext target, strict mode, Biome for lint/format, immutable interfaces (`readonly`), `.js` extensions in imports
 - **Python**: 4-space indent, type annotations, `pathlib.Path`, Ruff for lint/format, structlog for logging
-- **Rust**: (Iter D) edition 2024, clippy + rustfmt, workspace dependencies — rules 保留备用，代码暂不存在
+- **Rust**: edition 2024, clippy + rustfmt, workspace dependencies; Iter D only includes the `mesh-sdk` stub and defers runtime mesh behavior to Iter F
 - **Markdown**: 保留现有编号目录形式（`01-llm-integration`），ADR 统一 `adr-###-slug.md`；`docs/planning/` 用 `NN-` 或 `YYYY-MM-DD-NN-slug.md`（同日多篇按 `01`/`02` 递增），`docs/iterations/` 用 `NN-iter-x-*/`
 - **Shell**: 小写 kebab-case, `set -euo pipefail`
 - **Logging**: 三种语言统一 JSON schema 输出到 stdout（详见 ADR-002 §7）
@@ -144,8 +145,8 @@ quilin-agent/
 
 - **TS**: Vitest, 80% coverage threshold, `just test`
 - **Python**: pytest + pytest-asyncio, `just test-py`
-- **Rust**: (Iter D) cargo test + insta — 当前未启用
-- **All at once**: `just test-all`（TS + Python）
+- **Rust**: `cargo test --workspace` via `just test-rs`; no external crates in the Iter D `mesh-sdk` stub
+- **All at once**: `just test-all`（TS + Python + Rust）
 - **Before Phase 0 skeleton lands**: 修改脚本时用 `--help` / `--dry-run` 最小验证；修改文档时检查链接和交叉引用
 
 ## Commit & PR Conventions
@@ -187,7 +188,7 @@ quilin-agent/
 - Do not modify local language environment versions (Go, Python, Node, etc.)
 - Never execute SQL scripts directly
 - Submodules use `--depth 1` (shallow clone) to save disk space
-- Target languages (current): **TypeScript (core)** + **Python (ML providers)**. Rust (mesh/WASM) joins at Iter D — do not add Rust code before then.
+- Target languages (current): **TypeScript (core)** + **Python (ML providers)** + **Rust stub (mesh-sdk)**. Do not add Rust mesh/WASM runtime code before Iter F.
 - **No auto-scaffold-write**: 任何对 `packages/` / `providers/` / spec 的修改都必须走 human-reviewed PR；Idle Evolution / Self-Evolution 只能 propose patch，不能直接 apply。
 
 <!-- code-review-graph MCP tools -->

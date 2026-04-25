@@ -31,7 +31,7 @@ stop:
 restart: stop start
 
 # 一键测试全部
-test-all: test test-py
+test-all: test test-py test-rs
 
 # 一键质量检查
 check: lint fmt
@@ -85,15 +85,15 @@ fmt-py:
 # ============ Rust (crates/) ============
 
 build-rs:
-    @echo '{"ts":"'"$(date -Iseconds)"'","level":"info","service":"quilin","msg":"Rust workspace is deferred until Iter D; build-rs is currently a no-op."}'
+    cargo check --workspace
 
 test-rs:
-    @echo '{"ts":"'"$(date -Iseconds)"'","level":"info","service":"quilin","msg":"Rust workspace is deferred until Iter D; test-rs is currently a no-op."}'
+    cargo test --workspace
 
 lint-rs:
-    @echo '{"ts":"'"$(date -Iseconds)"'","level":"info","service":"quilin","msg":"Rust workspace is deferred until Iter D; lint-rs is currently a no-op."}'
+    cargo clippy --workspace --all-targets -- -D warnings
 fmt-rs:
-    @echo '{"ts":"'"$(date -Iseconds)"'","level":"info","service":"quilin","msg":"Rust workspace is deferred until Iter D; fmt-rs is currently a no-op."}'
+    cargo fmt --all
 
 # ============ 生产 ============
 

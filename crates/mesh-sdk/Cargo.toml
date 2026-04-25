@@ -1,0 +1,8 @@
+[package]
+name = "quilin-mesh-sdk"
+version = "0.0.0"
+edition.workspace = true
+publish = false
+
+[lib]
+path = "src/lib.rs"
