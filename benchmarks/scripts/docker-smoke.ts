@@ -3,6 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type BenchmarkTool, runBenchmarkTask } from "../src/runner/index.js";
 import { createDockerSandbox, hasDocker } from "../src/sandbox/index.js";
+import {
+	assertDockerSmokeCommandSucceeded,
+	assertDockerSmokeCommandTimedOut,
+} from "../src/sandbox/smoke-result.js";
 import type { BenchmarkTask } from "../src/wire/index.js";
 
 const smokeImage = process.env.QUILIN_DOCKER_SMOKE_IMAGE ?? "alpine:3.20";
@@ -76,18 +80,31 @@ try {
 				tools: [shellExec],
 			},
 			runAgent: async (config) => {
-				await config.tools?.[0]?.execute({
+				const shellExecTool = config.tools?.[0];
+				if (shellExecTool == null) {
+					throw new Error("Docker smoke requires a sandboxed shell_exec tool");
+				}
+				const shellResult = await shellExecTool.execute({
 					command: [
 						"set -eu",
+						"test -d /workspace/base",
+						"test -d /workspace/cache",
+						"test -d /workspace/task",
+						"test -d /workspace/artifacts",
 						"cat /workspace/base/input.txt > /workspace/artifacts/output.txt",
 						"echo task-ok > /workspace/task/task-write.txt",
 						"echo artifact-ok > /workspace/artifacts/artifact-write.txt",
 						"if sh -c 'echo bad > /workspace/base/forbidden' >/workspace/task/base.out 2>/workspace/task/base.err; then echo base-write-allowed >&2; exit 10; fi",
 						"if sh -c 'echo bad > /workspace/cache/forbidden' >/workspace/task/cache.out 2>/workspace/task/cache.err; then echo cache-write-allowed >&2; exit 11; fi",
-						"command -v wget >/dev/null 2>&1",
+						"if ! command -v wget >/dev/null 2>&1; then echo wget-missing >&2; exit 13; fi",
 						"if wget -qO- --timeout=2 https://example.com >/workspace/task/net.out 2>/workspace/task/net.err; then echo network-allowed >&2; exit 12; fi",
+						"echo network-denied > /workspace/task/network-denied.txt",
 					].join("; "),
 				});
+				assertDockerSmokeCommandSucceeded(
+					shellResult,
+					"DockerSandbox isolation smoke",
+				);
 				return "diff --git a/smoke b/smoke";
 			},
 			sandbox,
@@ -114,12 +131,10 @@ try {
 		timeoutMs: 100,
 		workspaceDir: join(tmpRoot, "timeout-scratch"),
 	});
-	const timeoutPayload = JSON.parse(timeoutResult.content) as {
-		readonly timedOut?: boolean;
-	};
-	if (timeoutPayload.timedOut !== true) {
-		throw new Error("DockerSandbox timeout smoke did not time out");
-	}
+	assertDockerSmokeCommandTimedOut(
+		timeoutResult,
+		"DockerSandbox timeout smoke",
+	);
 
 	console.log(
 		JSON.stringify({
