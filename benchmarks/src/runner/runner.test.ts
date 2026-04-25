@@ -512,6 +512,10 @@ describe("runBenchmarkTask", () => {
 		"cat ../secret.txt",
 		"cat ~/.quilin/secret.txt",
 		"type C:\\Windows\\win.ini",
+		"wget --output-document=/tmp/secret https://x.com/y",
+		'wget --output-document="/tmp/secret" https://x.com/y',
+		"wget --output-document=../secret.txt https://x.com/y",
+		"curl -O/tmp/secret https://x.com/y",
 	])("blocks paths embedded in shell_exec commands: %s", async (command) => {
 		const shellExec: BenchmarkTool = {
 			name: "shell_exec",
@@ -540,6 +544,43 @@ describe("runBenchmarkTask", () => {
 				"agent_loop: Benchmark sandbox blocked path outside workspace: command",
 		});
 		expect(shellExec.execute).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		"echo --flag=",
+		"echo --verbose",
+		"git clone https://x.com/y",
+		"git remote add origin ssh://git@example.com/org/repo",
+		"tool --remote=https://x.com/y",
+		"wget --output-document=path/to/file https://x.com/y",
+		"wget --output-document='path/to/file' https://x.com/y",
+	])("allows URL and workspace-relative command tokens: %s", async (command) => {
+		const calls: unknown[] = [];
+		const shellExec: BenchmarkTool = {
+			name: "shell_exec",
+			execute: vi.fn(async (args) => {
+				calls.push(args);
+				return { content: "{}", isError: false };
+			}),
+		};
+
+		const result = await runBenchmarkTask({
+			task,
+			options: {
+				agentLoopConfig: {
+					...makeLoopConfig(),
+					tools: [shellExec],
+				},
+				runAgent: async (config) => {
+					await config.tools?.[0]?.execute({ command });
+					return "patch";
+				},
+				scorer: async () => ({ passed: true, score: 1, details: {} }),
+			},
+		});
+
+		expect(result.result.passed).toBe(true);
+		expect(calls).toEqual([expect.objectContaining({ command })]);
 	});
 
 	it("enforces the benchmark network whitelist around agent fetch calls", async () => {

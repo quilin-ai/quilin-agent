@@ -142,6 +142,8 @@ const shellExecToolNames = new Set(["shell_exec", "shell-exec", "shellExec"]);
 const windowsAbsolutePathPattern = /^(?:[a-zA-Z]:[\\/]|\\\\)/;
 const shellPathTokenPattern =
 	/^(?:~(?:\/|$)|\/|\.\.(?:\/|$)|[a-zA-Z]:[\\/]|\\\\)|[\\/]\\.\\.(?:[\\/]|$)/;
+const urlSchemePattern = /^(?:https?|file|ftp|git|ssh):\/\//i;
+const shortOptionPathValuePattern = /^-[A-Za-z](.+)$/;
 let guardedFetch: typeof globalThis.fetch | undefined;
 let fetchGuardInstalled = false;
 
@@ -457,9 +459,7 @@ function assertContainedValue(
 
 function assertCommandContained(command: string, workspaceDir: string): void {
 	for (const token of commandTokens(command)) {
-		if (hasPathSeparator(token) || shellPathTokenPattern.test(token)) {
-			assertPathContained(token, workspaceDir, "command");
-		}
+		assertCommandTokenContained(token, workspaceDir);
 	}
 }
 
@@ -467,6 +467,74 @@ function commandTokens(command: string): string[] {
 	return [...command.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map(
 		(match) => match[1] ?? match[2] ?? match[3] ?? "",
 	);
+}
+
+function assertCommandTokenContained(
+	token: string,
+	workspaceDir: string,
+): void {
+	const trimmed = token.trim();
+	if (trimmed.length === 0 || isUrlToken(trimmed)) {
+		return;
+	}
+
+	const assignmentValue = assignmentTokenValue(trimmed);
+	if (assignmentValue !== undefined) {
+		assertCommandPathValueContained(assignmentValue, workspaceDir);
+		return;
+	}
+
+	const shortOptionValue = shortOptionPathValue(trimmed);
+	if (shortOptionValue !== undefined) {
+		assertCommandPathValueContained(shortOptionValue, workspaceDir);
+		return;
+	}
+
+	if (isPathLikeCommandValue(trimmed)) {
+		assertPathContained(trimmed, workspaceDir, "command");
+	}
+}
+
+function assignmentTokenValue(token: string): string | undefined {
+	const assignmentIndex = token.indexOf("=");
+	if (assignmentIndex <= 0) {
+		return undefined;
+	}
+	return token.slice(assignmentIndex + 1);
+}
+
+function shortOptionPathValue(token: string): string | undefined {
+	if (token.startsWith("--")) {
+		return undefined;
+	}
+	const match = shortOptionPathValuePattern.exec(token);
+	const value = match?.[1];
+	return value != null && isPathLikeCommandValue(value) ? value : undefined;
+}
+
+function assertCommandPathValueContained(
+	value: string,
+	workspaceDir: string,
+): void {
+	const normalized = stripMatchingQuotes(value.trim());
+	if (normalized.length === 0 || isUrlToken(normalized)) {
+		return;
+	}
+	if (isPathLikeCommandValue(normalized)) {
+		assertPathContained(normalized, workspaceDir, "command");
+	}
+}
+
+function stripMatchingQuotes(value: string): string {
+	const first = value.at(0);
+	const last = value.at(-1);
+	if (
+		value.length >= 2 &&
+		((first === '"' && last === '"') || (first === "'" && last === "'"))
+	) {
+		return value.slice(1, -1);
+	}
+	return value;
 }
 
 function assertPathContained(
@@ -517,8 +585,19 @@ function isPathFieldName(key: string): boolean {
 	);
 }
 
-function hasPathSeparator(token: string): boolean {
-	return token.includes("/") || token.includes("\\");
+function isPathLikeCommandValue(value: string): boolean {
+	return (
+		!isUrlToken(value) &&
+		(hasPathSeparator(value) || shellPathTokenPattern.test(value))
+	);
+}
+
+function hasPathSeparator(value: string): boolean {
+	return value.includes("/") || value.includes("\\");
+}
+
+function isUrlToken(value: string): boolean {
+	return urlSchemePattern.test(value);
 }
 
 function isShellExecTool(tool: BenchmarkTool): boolean {
