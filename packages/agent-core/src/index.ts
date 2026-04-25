@@ -19,6 +19,8 @@ export * from "./context/index.js";
 export * from "./llm/client.js";
 export * from "./llm/provider.js";
 export * from "./memory/index.js";
+export { runAgentLoop } from "./loop.js";
+export type { AgentLoopConfig, LoopHooks } from "./loop-types.js";
 export {
 	applyEvent,
 	type BudgetLedger,

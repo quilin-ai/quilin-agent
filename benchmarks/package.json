@@ -1,0 +1,23 @@
+{
+  "name": "@quilin/benchmarks",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --configLoader runner",
+    "test:watch": "vitest --configLoader runner",
+    "lint": "biome check src scripts vitest.config.ts",
+    "format": "biome format --write src scripts vitest.config.ts"
+  },
+  "dependencies": {
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.12",
+    "@types/node": "^25.6.0",
+    "@vitest/coverage-v8": "4.1.4",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.4"
+  }
+}
