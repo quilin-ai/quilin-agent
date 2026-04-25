@@ -93,6 +93,7 @@ API key 永远不写入 `config.toml`，运行时只从 env 读取；写入文�
 | `tools` | enabled/disabled 工具白/黑名单 |
 | `idle_evolution` | 自进化开关、daily token budget、allowed_hours；默认 `enabled=false` |
 | `safety` | WriteAuthority 模式、AUTO trust 选项；默认最严 |
+| `benchmarks` | benchmark harness 配置（output_dir / submissions_dir / cache_dir / max_concurrent_tasks / network_whitelist）；ADR-010 修订时新增 |
 
 新增顶层 namespace 必须修订本 ADR。
 
