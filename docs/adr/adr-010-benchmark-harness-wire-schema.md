@@ -39,7 +39,7 @@ E1-a (`2bb25d7`) + E1-b (`1298f3d`) 已被 `1eecb84` / `d538736` revert 掉，ma
 ```
 BenchmarkTask {
   task_id: string                 // 跨 leaderboard 唯一
-  dataset: string                 // "swe-bench-verified" / "gaia" / "bfcl-v4"
+  dataset: string                 // "swe-bench-lite" / "swe-bench-verified" / "gaia" / "bfcl-v4"
   inputs: Record<string, unknown> // leaderboard-specific 输入
   expected: Record<string, unknown> // leaderboard-specific 预期（scorer 用）
   scorer_type: string             // "patch-apply" / "exact-match" / "tool-call" / ...

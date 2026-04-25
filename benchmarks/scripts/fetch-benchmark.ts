@@ -4,10 +4,15 @@ import { dirname, join } from "node:path";
 
 const DATASETS_SERVER_ROWS_URL = "https://datasets-server.huggingface.co/rows";
 const SWE_BENCH_LITE_SOURCE_DATASET = "princeton-nlp/SWE-bench_Lite";
+const SWE_BENCH_VERIFIED_SOURCE_DATASET = "princeton-nlp/SWE-bench_Verified";
 const DEFAULT_CONFIG = "default";
 const DEFAULT_SPLIT = "test";
 const DEFAULT_PAGE_SIZE = 100;
 const DEFAULT_RETRIES = 3;
+const SOURCE_DATASETS: Record<string, string> = {
+	"swe-bench-lite": SWE_BENCH_LITE_SOURCE_DATASET,
+	"swe-bench-verified": SWE_BENCH_VERIFIED_SOURCE_DATASET,
+};
 
 interface FetchBenchmarkOptions {
 	readonly dataset: string;
@@ -59,16 +64,13 @@ fetchBenchmark(options)
 async function fetchBenchmark(
 	options: FetchBenchmarkOptions,
 ): Promise<FetchResult> {
-	if (options.dataset !== "swe-bench-lite") {
-		throw new Error(`Unsupported dataset: ${options.dataset}`);
-	}
-
+	const sourceDataset = sourceDatasetFor(options.dataset);
 	const cacheDir = resolveDatasetCacheDir(options.cacheRoot, options.dataset);
 	const outputPath = join(cacheDir, "data.jsonl");
 	const manifestPath = join(cacheDir, "manifest.json");
 	const sourceUrl = buildRowsUrl({
 		baseUrl: options.rowsBaseUrl,
-		dataset: SWE_BENCH_LITE_SOURCE_DATASET,
+		dataset: sourceDataset,
 		config: DEFAULT_CONFIG,
 		split: DEFAULT_SPLIT,
 		offset: 0,
@@ -97,7 +99,7 @@ async function fetchBenchmark(
 		}
 	}
 
-	const rows = await fetchAllRows(options);
+	const rows = await fetchAllRows(options, sourceDataset);
 	const jsonl = `${rows.map((row) => JSON.stringify(row)).join("\n")}\n`;
 	const sha256 = computeSha256(jsonl);
 	const manifest: DatasetManifest = {
@@ -131,6 +133,7 @@ async function fetchBenchmark(
 
 async function fetchAllRows(
 	options: FetchBenchmarkOptions,
+	sourceDataset: string,
 ): Promise<Record<string, unknown>[]> {
 	const rows: Record<string, unknown>[] = [];
 	let offset = 0;
@@ -145,7 +148,7 @@ async function fetchAllRows(
 
 		const url = buildRowsUrl({
 			baseUrl: options.rowsBaseUrl,
-			dataset: SWE_BENCH_LITE_SOURCE_DATASET,
+			dataset: sourceDataset,
 			config: DEFAULT_CONFIG,
 			split: DEFAULT_SPLIT,
 			offset,
@@ -153,7 +156,7 @@ async function fetchAllRows(
 		});
 		const payload = await fetchJsonWithRetry(url, options.retries);
 		const pageRows = (payload.rows ?? []).map((entry, index) =>
-			validateSweBenchLiteRow(entry.row ?? {}, offset + index),
+			validateSweBenchRow(entry.row ?? {}, options.dataset, offset + index),
 		);
 		if (pageRows.length === 0) {
 			break;
@@ -225,8 +228,9 @@ async function tryReadValidManifest(options: {
 	}
 }
 
-function validateSweBenchLiteRow(
+function validateSweBenchRow(
 	record: Record<string, unknown>,
+	dataset: string,
 	index: number,
 ): Record<string, unknown> {
 	for (const field of [
@@ -239,11 +243,19 @@ function validateSweBenchLiteRow(
 	]) {
 		if (typeof record[field] !== "string" || record[field].length === 0) {
 			throw new Error(
-				`Invalid SWE-bench Lite row at index ${index}: missing ${field}`,
+				`Invalid ${dataset} row at index ${index}: missing ${field}`,
 			);
 		}
 	}
 	return record;
+}
+
+function sourceDatasetFor(dataset: string): string {
+	const sourceDataset = SOURCE_DATASETS[dataset];
+	if (sourceDataset == null) {
+		throw new Error(`Unsupported dataset: ${dataset}`);
+	}
+	return sourceDataset;
 }
 
 function resolveDatasetCacheDir(cacheRoot: string, dataset: string): string {
@@ -285,6 +297,7 @@ function parsePositiveInt(flag: string, value: string): number {
 
 function parseArgs(argv: readonly string[]): FetchBenchmarkOptions {
 	let dataset = "swe-bench-lite";
+	let datasetProvided = false;
 	let cacheRoot = ".benchmarks";
 	let pageSize = DEFAULT_PAGE_SIZE;
 	let maxRows: number | undefined;
@@ -295,6 +308,14 @@ function parseArgs(argv: readonly string[]): FetchBenchmarkOptions {
 	for (let index = 0; index < argv.length; index += 1) {
 		const arg = argv[index];
 		const value = argv[index + 1];
+		if (!arg.startsWith("--")) {
+			if (datasetProvided) {
+				throw new Error(`Unexpected positional argument: ${arg}`);
+			}
+			dataset = normalizeDataset(arg);
+			datasetProvided = true;
+			continue;
+		}
 		if (arg === "--force") {
 			force = true;
 			continue;
@@ -303,7 +324,8 @@ function parseArgs(argv: readonly string[]): FetchBenchmarkOptions {
 			throw new Error(`Missing value for ${arg}`);
 		}
 		if (arg === "--dataset") {
-			dataset = value;
+			dataset = normalizeDataset(value);
+			datasetProvided = true;
 			index += 1;
 			continue;
 		}
@@ -336,4 +358,14 @@ function parseArgs(argv: readonly string[]): FetchBenchmarkOptions {
 	}
 
 	return { dataset, cacheRoot, pageSize, maxRows, rowsBaseUrl, retries, force };
+}
+
+function normalizeDataset(value: string): string {
+	if (value === "lite") {
+		return "swe-bench-lite";
+	}
+	if (value === "verified") {
+		return "swe-bench-verified";
+	}
+	return value;
 }
