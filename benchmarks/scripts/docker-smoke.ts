@@ -26,8 +26,12 @@ if (process.platform !== "linux") {
 	console.log(
 		JSON.stringify({
 			event: "docker_smoke_skipped",
-			reason: "DockerSandbox CI gate is Linux-only",
+			reason:
+				process.platform === "darwin"
+					? "macos-no-docker"
+					: "non-linux-no-docker",
 			platform: process.platform,
+			status: "skipped",
 		}),
 	);
 	process.exit(0);

@@ -15,6 +15,7 @@ export interface DockerSandboxOptions {
 	readonly memory?: string;
 	readonly pidsLimit?: number;
 	readonly timeoutMs?: number;
+	readonly maxOutputBytes?: number;
 	readonly dockerBinary?: string;
 	readonly containerNamePrefix?: string;
 	readonly runner?: DockerCliRunner;
@@ -23,12 +24,14 @@ export interface DockerSandboxOptions {
 export interface DockerCliRunOptions {
 	readonly signal?: AbortSignal;
 	readonly dockerBinary?: string;
+	readonly maxOutputBytes?: number;
 }
 
 export interface DockerCliResult {
 	readonly stdout: string;
 	readonly stderr: string;
 	readonly exitCode: number | null;
+	readonly outputTruncated?: boolean;
 }
 
 export type DockerCliRunner = (
@@ -51,6 +54,8 @@ const defaultCpus = 1;
 const defaultMemory = "2g";
 const defaultPidsLimit = 512;
 const defaultTimeoutMs = 60_000;
+const defaultMaxOutputBytes = 16 * 1024 * 1024;
+const cleanupTimeoutMs = 1_000;
 const workspaceTaskPath = "/workspace/task";
 const workspaceBasePath = "/workspace/base";
 const workspaceArtifactsPath = "/workspace/artifacts";
@@ -71,6 +76,7 @@ export function createDockerSandbox(
 	const memory = options.memory ?? defaultMemory;
 	const pidsLimit = options.pidsLimit ?? defaultPidsLimit;
 	const timeoutMs = options.timeoutMs ?? defaultTimeoutMs;
+	const maxOutputBytes = options.maxOutputBytes ?? defaultMaxOutputBytes;
 	const containerNamePrefix = options.containerNamePrefix ?? "quilin-benchmark";
 
 	return {
@@ -82,17 +88,15 @@ export function createDockerSandbox(
 			const containerName = `${containerNamePrefix}-${basename(scratchDir)}-${Date.now()}`;
 			const controller = new AbortController();
 			let timedOut = false;
-			let killPromise: Promise<DockerCliResult> | undefined;
+			let cleanupPromise: Promise<DockerCliResult> | undefined;
 			const effectiveTimeoutMs = input.timeoutMs ?? timeoutMs;
 			const timer = setTimeout(() => {
 				timedOut = true;
 				controller.abort();
-				killPromise = runner(["kill", containerName], { dockerBinary }).catch(
-					(error) => ({
-						stdout: "",
-						stderr: error instanceof Error ? error.message : String(error),
-						exitCode: 1,
-					}),
+				cleanupPromise = forceRemoveContainer(
+					runner,
+					containerName,
+					dockerBinary,
 				);
 			}, effectiveTimeoutMs);
 
@@ -110,9 +114,17 @@ export function createDockerSandbox(
 						memory,
 						pidsLimit,
 						scratchDir,
+						stopTimeoutSeconds: stopTimeoutSeconds(effectiveTimeoutMs),
 					}),
-					{ dockerBinary, signal: controller.signal },
+					{ dockerBinary, maxOutputBytes, signal: controller.signal },
 				);
+				if (result.outputTruncated === true) {
+					cleanupPromise = forceRemoveContainer(
+						runner,
+						containerName,
+						dockerBinary,
+					);
+				}
 				return shellExecResult(result, false, containerName, artifactsDir);
 			} catch (error) {
 				if (!timedOut) {
@@ -130,10 +142,29 @@ export function createDockerSandbox(
 				);
 			} finally {
 				clearTimeout(timer);
-				await killPromise;
+				await cleanupPromise;
 			}
 		},
 	};
+}
+
+async function forceRemoveContainer(
+	runner: DockerCliRunner,
+	containerName: string,
+	dockerBinary: string | undefined,
+): Promise<DockerCliResult> {
+	return Promise.race([
+		runner(["rm", "-f", containerName], { dockerBinary }).catch((error) => ({
+			stdout: "",
+			stderr: error instanceof Error ? error.message : String(error),
+			exitCode: 1,
+		})),
+		delay(cleanupTimeoutMs).then(() => ({
+			stdout: "",
+			stderr: "docker rm -f cleanup timed out",
+			exitCode: 124,
+		})),
+	]);
 }
 
 export async function hasDocker(
@@ -176,15 +207,39 @@ export async function runDockerCli(
 		});
 		let stdout = "";
 		let stderr = "";
+		let outputBytes = 0;
+		let outputTruncated = false;
 		let settled = false;
 
 		child.stdout?.setEncoding("utf8");
 		child.stderr?.setEncoding("utf8");
 		child.stdout?.on("data", (chunk) => {
-			stdout += chunk;
+			const appended = appendLimitedOutput(
+				stdout,
+				chunk,
+				outputBytes,
+				options.maxOutputBytes,
+			);
+			stdout = appended.output;
+			outputBytes = appended.bytes;
+			if (appended.truncated) {
+				outputTruncated = true;
+				child.kill("SIGKILL");
+			}
 		});
 		child.stderr?.on("data", (chunk) => {
-			stderr += chunk;
+			const appended = appendLimitedOutput(
+				stderr,
+				chunk,
+				outputBytes,
+				options.maxOutputBytes,
+			);
+			stderr = appended.output;
+			outputBytes = appended.bytes;
+			if (appended.truncated) {
+				outputTruncated = true;
+				child.kill("SIGKILL");
+			}
 		});
 		child.on("error", (error) => {
 			if (!settled) {
@@ -195,10 +250,43 @@ export async function runDockerCli(
 		child.on("close", (code) => {
 			if (!settled) {
 				settled = true;
-				resolvePromise({ exitCode: code, stderr, stdout });
+				resolvePromise({ exitCode: code, outputTruncated, stderr, stdout });
 			}
 		});
 	});
+}
+
+function appendLimitedOutput(
+	currentOutput: string,
+	chunk: unknown,
+	currentBytes: number,
+	maxOutputBytes: number | undefined,
+): {
+	readonly bytes: number;
+	readonly output: string;
+	readonly truncated: boolean;
+} {
+	const limit = maxOutputBytes ?? Number.POSITIVE_INFINITY;
+	if (currentBytes >= limit) {
+		return { bytes: currentBytes, output: currentOutput, truncated: true };
+	}
+
+	const buffer = Buffer.from(String(chunk));
+	const remaining = limit - currentBytes;
+	if (buffer.byteLength <= remaining) {
+		return {
+			bytes: currentBytes + buffer.byteLength,
+			output: `${currentOutput}${String(chunk)}`,
+			truncated: false,
+		};
+	}
+
+	const sliceLength = Math.max(0, Math.floor(remaining));
+	return {
+		bytes: limit,
+		output: `${currentOutput}${buffer.subarray(0, sliceLength).toString("utf8")}`,
+		truncated: true,
+	};
 }
 
 function dockerRunArgs(input: {
@@ -213,7 +301,9 @@ function dockerRunArgs(input: {
 	readonly memory: string;
 	readonly pidsLimit: number;
 	readonly scratchDir: string;
+	readonly stopTimeoutSeconds: number;
 }): string[] {
+	const commandTimeoutSeconds = input.stopTimeoutSeconds;
 	return [
 		"run",
 		"--rm",
@@ -225,8 +315,12 @@ function dockerRunArgs(input: {
 		String(input.cpus),
 		"--memory",
 		input.memory,
+		"--memory-swap",
+		input.memory,
 		"--pids-limit",
 		String(input.pidsLimit),
+		"--stop-timeout",
+		String(input.stopTimeoutSeconds),
 		"--read-only",
 		"--mount",
 		bindMount(input.baseDir, workspaceBasePath, true),
@@ -241,8 +335,28 @@ function dockerRunArgs(input: {
 		input.image,
 		"/bin/sh",
 		"-lc",
-		input.command,
+		wrapShellCommandWithTimeout(input.command, commandTimeoutSeconds),
 	];
+}
+
+function stopTimeoutSeconds(timeoutMs: number): number {
+	return Math.max(1, Math.ceil(timeoutMs / 1000));
+}
+
+function delay(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function wrapShellCommandWithTimeout(
+	command: string,
+	timeoutSeconds: number,
+): string {
+	const quotedCommand = shellQuote(command);
+	return `if command -v timeout >/dev/null 2>&1; then timeout -s KILL ${timeoutSeconds}s /bin/sh -lc ${quotedCommand}; else /bin/sh -lc ${quotedCommand}; fi`;
+}
+
+function shellQuote(value: string): string {
+	return `'${value.replaceAll("'", "'\"'\"'")}'`;
 }
 
 function bindMount(source: string, target: string, readonly: boolean): string {
@@ -269,16 +383,18 @@ function shellExecResult(
 	artifactsDir: string,
 ): DockerSandboxCommandResult {
 	const exitCode = timedOut ? null : result.exitCode;
+	const outputTruncated = result.outputTruncated === true;
 	return {
 		content: JSON.stringify({
 			artifactsDir,
 			containerName,
 			exitCode,
+			output_truncated: outputTruncated,
 			stderr: result.stderr,
 			stdout: result.stdout,
 			timedOut,
 		}),
-		isError: timedOut || exitCode !== 0,
+		isError: timedOut || outputTruncated || exitCode !== 0,
 	};
 }
 

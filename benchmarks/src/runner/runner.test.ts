@@ -805,6 +805,31 @@ describe("runBenchmarkTask", () => {
 			expect(allowedByConfig.result.passed).toBe(true);
 			expect(fetchMock).toHaveBeenCalledTimes(3);
 
+			await expect(
+				runBenchmarkTask({
+					task,
+					options: {
+						agentLoopConfig: {
+							...makeLoopConfig(),
+							benchmarks: {
+								network_whitelist: ["https://origin.example"],
+							},
+						},
+						runAgent: async () => {
+							await fetch("https://not-origin.example/data");
+							return "patch";
+						},
+						scorer: async () => ({ passed: true, score: 1, details: {} }),
+					},
+				}),
+			).rejects.toMatchObject({
+				name: "BenchmarkRunError",
+				phase: "agent_loop",
+				message:
+					"agent_loop: Benchmark network blocked outbound fetch: https://not-origin.example",
+			});
+			expect(fetchMock).toHaveBeenCalledTimes(3);
+
 			const allowedRequestObject = await runBenchmarkTask({
 				task,
 				options: {

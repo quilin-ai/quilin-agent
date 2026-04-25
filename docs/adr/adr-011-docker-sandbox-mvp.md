@@ -62,7 +62,11 @@ Day 0 spike 要验证 Docker 网络限制实现方式：优先自定义 network 
 - stdout / stderr max bytes
 - cleanup on timeout / failure
 
-MVP 默认值由 E2 plan 冻结；user config 可覆盖，但不能关闭 hard timeout。
+MVP 默认值由 E2 plan 冻结；user config 可覆盖，但不能关闭 hard timeout。Docker CLI runner 必须同时做：
+
+- `docker run --stop-timeout` / `docker rm -f` cleanup 兜底
+- 容器内 `timeout` command best-effort wall-clock（镜像具备时启用；host timeout 仍是最终兜底）
+- stdout / stderr combined cap，超限截断并在 result metadata 标 `output_truncated: true`
 
 ### 3.5 Artifact export
 
@@ -92,6 +96,10 @@ Sources:
 ### 3.7 Control plane
 
 MVP 优先通过 Docker CLI 调 `docker run` / `docker inspect` / `docker rm -f`，不引入新 npm dependency。`dockerode` 可作为后续增强（streaming logs / stats / attach），但不是 E2 Day 0 前置。
+
+### 3.8 Best-effort guard deprecation
+
+E1 best-effort workspace guard 只作为 DockerSandbox 过渡层保留。E2 SWE-bench Verified 与 E3 GAIA / BFCL v4 均通过 DockerSandbox gate 后，v3 runner 应移除 raw host shell fallback；未注入 DockerSandbox 的 benchmark run 只能跑 unit / smoke，不得 claim hard isolation 或 official leaderboard readiness。
 
 ---
 

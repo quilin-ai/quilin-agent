@@ -7,24 +7,24 @@ import {
 import type { SubmissionAdapter } from "./types.js";
 import { SubmissionAdapterRegistryError } from "./types.js";
 
-const gaiaAdapter = {
-	dataset: "gaia",
+const liteAdapter = {
+	dataset: "swe-bench-lite",
 	format: "json",
 	serialize: () => "{}",
-	filename: (runId: string) => `gaia-${runId}.json`,
+	filename: (runId: string) => `lite-${runId}.json`,
 } satisfies SubmissionAdapter;
 
 describe("SubmissionAdapterRegistry", () => {
 	it("returns adapters by dataset", () => {
 		const registry = new SubmissionAdapterRegistry([
 			sweBenchVerifiedJsonlAdapter,
-			gaiaAdapter,
+			liteAdapter,
 		]);
 
 		expect(registry.get("swe-bench-verified")).toBe(
 			sweBenchVerifiedJsonlAdapter,
 		);
-		expect(registry.get("gaia")).toBe(gaiaAdapter);
+		expect(registry.get("swe-bench-lite")).toBe(liteAdapter);
 	});
 
 	it("registers adapters after construction", () => {
@@ -48,8 +48,8 @@ describe("SubmissionAdapterRegistry", () => {
 	it("throws for missing datasets", () => {
 		const registry = new SubmissionAdapterRegistry();
 
-		expect(() => registry.get("bfcl-v4")).toThrow(
-			"No submission adapter registered for dataset: bfcl-v4",
+		expect(() => registry.get("swe-bench-lite")).toThrow(
+			"No submission adapter registered for dataset: swe-bench-lite",
 		);
 	});
 

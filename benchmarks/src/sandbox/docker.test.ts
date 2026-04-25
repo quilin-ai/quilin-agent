@@ -56,17 +56,22 @@ describe("createDockerSandbox", () => {
 					"2",
 					"--memory",
 					"512m",
+					"--memory-swap",
+					"512m",
 					"--pids-limit",
 					"64",
+					"--stop-timeout",
+					"60",
 					"--read-only",
 					"-w",
 					"/workspace/task/subdir",
 					"alpine:3.20",
 					"/bin/sh",
 					"-lc",
-					"echo ok",
+					expect.stringContaining("timeout -s KILL 60s"),
 				]),
 			);
+			expect(calls[0]?.at(-1)).toContain("echo ok");
 			expect(calls[0]?.filter((arg) => arg === "--mount")).toHaveLength(4);
 			expect(
 				calls[0]?.some((arg) => /dst=\/workspace\/base,readonly$/.test(arg)),
@@ -120,8 +125,12 @@ describe("createDockerSandbox", () => {
 					"1",
 					"--memory",
 					"2g",
+					"--memory-swap",
+					"2g",
 					"--pids-limit",
 					"512",
+					"--stop-timeout",
+					"60",
 					"-w",
 					"/workspace/task",
 				]),
@@ -196,13 +205,13 @@ describe("createDockerSandbox", () => {
 		}
 	});
 
-	it("kills the container when the host-side timeout expires", async () => {
+	it("force removes the container when the host-side timeout expires", async () => {
 		const tmpRoot = await mkdtemp(join(tmpdir(), "quilin-docker-timeout-"));
 		const calls: string[][] = [];
 		const runner: DockerCliRunner = async (args, options) => {
 			calls.push([...args]);
-			if (args[0] === "kill") {
-				throw "kill failed";
+			if (args[0] === "rm") {
+				throw "rm failed";
 			}
 			return new Promise((_, reject) => {
 				options?.signal?.addEventListener("abort", () => {
@@ -234,7 +243,7 @@ describe("createDockerSandbox", () => {
 			expect(result.isError).toBe(true);
 			expect(payload).toMatchObject({ exitCode: null, timedOut: true });
 			expect(calls[0]?.[0]).toBe("run");
-			expect(calls[1]).toEqual(["kill", expect.stringMatching(/^quilin-/)]);
+			expect(calls[1]).toEqual(["rm", "-f", expect.stringMatching(/^quilin-/)]);
 		} finally {
 			await rm(tmpRoot, { force: true, recursive: true });
 		}
@@ -245,8 +254,8 @@ describe("createDockerSandbox", () => {
 			join(tmpdir(), "quilin-docker-timeout-text-"),
 		);
 		const runner: DockerCliRunner = async (args, options) => {
-			if (args[0] === "kill") {
-				throw new Error("kill failed");
+			if (args[0] === "rm") {
+				throw new Error("rm failed");
 			}
 			return new Promise((_, reject) => {
 				options?.signal?.addEventListener("abort", () => {
@@ -329,7 +338,74 @@ describe("createDockerSandbox", () => {
 			{ dockerBinary: process.execPath },
 		);
 
-		expect(result).toEqual({ exitCode: 0, stderr: "err", stdout: "out" });
+		expect(result).toEqual({
+			exitCode: 0,
+			outputTruncated: false,
+			stderr: "err",
+			stdout: "out",
+		});
+	});
+
+	it("bounds combined stdout and stderr collection by bytes", async () => {
+		const result = await runDockerCli(
+			[
+				"-e",
+				"process.stdout.write('a'.repeat(512)); process.stderr.write('b'.repeat(512));",
+			],
+			{ dockerBinary: process.execPath, maxOutputBytes: 64 },
+		);
+
+		expect(result.outputTruncated).toBe(true);
+		expect(
+			Buffer.byteLength(result.stdout) + Buffer.byteLength(result.stderr),
+		).toBeLessThanOrEqual(64);
+	});
+
+	it("marks truncated docker output as an error and force removes the container", async () => {
+		const tmpRoot = await mkdtemp(join(tmpdir(), "quilin-docker-truncated-"));
+		const calls: string[][] = [];
+		const runner: DockerCliRunner = async (args) => {
+			calls.push([...args]);
+			if (args[0] === "rm") {
+				return { exitCode: 0, stderr: "", stdout: "" };
+			}
+			return {
+				exitCode: null,
+				outputTruncated: true,
+				stderr: "",
+				stdout: "x".repeat(8),
+			};
+		};
+
+		try {
+			const sandbox = createDockerSandbox({
+				artifactsDir: join(tmpRoot, "artifacts"),
+				baseDir: join(tmpRoot, "base"),
+				cacheDir: join(tmpRoot, "cache"),
+				image: "alpine:3.20",
+				maxOutputBytes: 8,
+				runner,
+			});
+
+			const result = await sandbox.runShellCommand({
+				command: "yes",
+				cwd: join(tmpRoot, "scratch"),
+				workspaceDir: join(tmpRoot, "scratch"),
+			});
+			const payload = JSON.parse(result.content) as {
+				output_truncated: boolean;
+			};
+
+			expect(result.isError).toBe(true);
+			expect(payload.output_truncated).toBe(true);
+			expect(calls.at(-1)).toEqual([
+				"rm",
+				"-f",
+				expect.stringMatching(/^quilin-/),
+			]);
+		} finally {
+			await rm(tmpRoot, { force: true, recursive: true });
+		}
 	});
 
 	it("surfaces spawn failures from the generic CLI runner", async () => {

@@ -19,6 +19,7 @@ export const datasetManifestSchema = z
 		dataset: z.string().min(1),
 		fetched_at: z.string().min(1),
 		rows: z.number().int().nonnegative(),
+		requested_max_rows: z.number().int().positive().nullable(),
 		sha256: z.string().regex(/^[a-f0-9]{64}$/),
 		source_url: z.string().min(1),
 		data_file: z.string().min(1),

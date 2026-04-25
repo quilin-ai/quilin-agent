@@ -228,6 +228,7 @@ async function writeSweBenchVerifiedCache(
 		dataset: SWE_BENCH_VERIFIED_DATASET,
 		fetched_at: "2026-04-26T00:00:00.000Z",
 		rows: inputRecords.length,
+		requested_max_rows: null,
 		sha256: computeSha256(data),
 		source_url:
 			"https://datasets-server.huggingface.co/rows?dataset=princeton-nlp%2FSWE-bench_Verified",
@@ -253,6 +254,7 @@ async function rewriteManifest(
 		dataset: SWE_BENCH_VERIFIED_DATASET,
 		fetched_at: "2026-04-26T00:00:00.000Z",
 		rows: records.length,
+		requested_max_rows: null,
 		sha256: "",
 		source_url:
 			"https://datasets-server.huggingface.co/rows?dataset=princeton-nlp%2FSWE-bench_Verified",

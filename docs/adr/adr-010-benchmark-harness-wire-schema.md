@@ -39,7 +39,7 @@ E1-a (`2bb25d7`) + E1-b (`1298f3d`) 已被 `1eecb84` / `d538736` revert 掉，ma
 ```
 BenchmarkTask {
   task_id: string                 // 跨 leaderboard 唯一
-  dataset: string                 // "swe-bench-lite" / "swe-bench-verified" / "gaia" / "bfcl-v4"
+  dataset: string                 // "swe-bench-lite" / "swe-bench-verified"
   inputs: Record<string, unknown> // leaderboard-specific 输入
   expected: Record<string, unknown> // leaderboard-specific 预期（scorer 用）
   scorer_type: string             // "patch-apply" / "exact-match" / "tool-call" / ...
@@ -49,6 +49,7 @@ BenchmarkTask {
 ```
 
 `inputs` / `expected` 字段保持 leaderboard-specific，但顶层 `task_id` / `dataset` / `scorer_type` 必须冻结，scorer 与 runner 通过这些字段路由。
+Iter E1/E2 只接受 `swe-bench-lite` / `swe-bench-verified` 两个 dataset 枚举值；GAIA / BFCL v4 启动时必须先修订本 ADR 并扩展 zod enum，不允许 ad-hoc string。
 
 ### 3.2 Run 生命周期
 
@@ -97,10 +98,10 @@ BenchmarkCost {
 
 所有 dataset fetch 必须落盘到 `.benchmarks/datasets/<name>/`（已在 .gitignore）：
 
-- `manifest.json`：`{ schema_version: 1, dataset, fetched_at, rows: number, sha256: string, source_url: string }`
+- `manifest.json`：`{ schema_version: 1, dataset, fetched_at, rows: number, requested_max_rows: number | null, sha256: string, source_url: string, data_file: string }`
 - 数据文件（jsonl 或原始格式）+ sha256 哈希进 manifest
 - **Load 时强制 verify**：sha256 不匹配 / `schema_version != 1` 直接拒载并报 `CacheError`
-- Fetch 时分页 + retry；幂等：相同 source_url 已有合法 manifest 时跳过
+- Fetch 时分页 + retry；幂等：相同 source_url 已有合法 manifest 且 `requested_max_rows` 能覆盖当前请求时跳过。`requested_max_rows: null` 表示 full fetch；partial cache 不能满足 full fetch intent。
 
 ### 3.5 Scorer 协议
 
