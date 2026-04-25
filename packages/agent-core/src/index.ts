@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { generateText } from "ai";
+import { runConfigCommand } from "./cli/config-cmd.js";
 import {
 	buildCapabilitiesRuntime,
 	loadCapabilitiesConfig,
@@ -231,8 +232,22 @@ export async function main(options: MainOptions = {}): Promise<void> {
 	await (options.serviceRunner ?? runServiceLoop)();
 }
 
+async function dispatchCli(argv: readonly string[]): Promise<void> {
+	if (argv[0] === "config") {
+		const result = await runConfigCommand(argv.slice(1));
+		if (result.stdout.length > 0) {
+			process.stdout.write(result.stdout);
+		}
+		if (result.stderr.length > 0) {
+			process.stderr.write(result.stderr);
+		}
+		process.exit(result.exitCode);
+	}
+	await main();
+}
+
 if (import.meta.main) {
-	main().catch((err) => {
+	dispatchCli(process.argv.slice(2)).catch((err) => {
 		logger.fatal({ err }, "Unexpected error");
 		process.exit(1);
 	});
