@@ -27,9 +27,11 @@
 |---|---|---|---|---|
 | Day 0 | 本 plan + ADR-010 §3.1 enum 扩 `gaia` + `bfcl-v4` | ✅ closed | `d983f8b` / `f3b286a` | plan + ADR enum 文档落地 |
 | Day 0 spike | GAIA + BFCL v4 数据 / scorer / submission / sandbox 兼容性调研 | ✅ closed | `2442dfd` | 决议：拆 E3a GAIA → E3b BFCL single/live AST → E3c multi-turn/agentic 或降 E4 |
-| Iter E3a | GAIA loader + scorer + submission adapter | ⏳ 本轮进行中 | — | `task.ts` zod enum 先同步 `gaia`；HF gated fetch 需 `HF_TOKEN` |
-| Iter E3b/E3c | BFCL v4 loader + scorer + submission adapter | ⏳ 待启动 | — | E3a review 通过后启动 |
-| Iter E3 review | R1 独立 subagent + 主线 reconcile | ⏳ 待启动 | — | 第一轮收口后 |
+| Iter E3a | GAIA loader + scorer + submission adapter | ✅ first-cut land | `96a7971` | 9 files；benchmarks 248 passed；Branch 95.45/95.45；HF gated fetch via `HF_TOKEN` |
+| Iter E3a R1 review | R1 独立 subagent (Raman) | ✅ closed | `a161a86` | 2 BLOCKING（runner.collect 仅 patch / scorer 非官方 parity）+ 2 HIGH（attachment integrity / DockerSandbox container path）|
+| Iter E3a R1 fix | runner dataset-aware collect / scorer 官方 parity / attachment sha256+size / container path | ✅ closed | `f8f06cc` | 10 files +747/-57；benchmarks 252 passed / 1 skipped；Branch 95.01（default）/ 95.14（runner-loader）；just test-all TS717+Py187+Rust1 全绿；AMB p95 7.417ms ≤ 300ms |
+| Iter E3a R2 review | R2 独立 subagent (新名字，不复用 R1 Raman) | ⏳ 待启动 | — | R1 fix 后第二轮交叉 review |
+| Iter E3b/E3c | BFCL v4 loader + scorer + submission adapter | ⏳ 待启动 | — | E3a review chain 闭合后启动 |
 | Iter E3 收口 | review chain 闭合 + DockerSandbox 内 GAIA/BFCL smoke 通过 + 95% 覆盖率 + just test-all 三语言绿 | ⏳ 待启动 | — | review 通过后 |
 
 ---
