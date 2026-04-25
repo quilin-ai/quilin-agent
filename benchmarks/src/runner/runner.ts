@@ -1,0 +1,418 @@
+import { randomUUID } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { Scorer } from "../scorers/index.js";
+import type {
+	BenchmarkCost,
+	BenchmarkResult,
+	BenchmarkRun,
+	BenchmarkTask,
+} from "../wire/index.js";
+
+export type BenchmarkRunPhase =
+	| "setup"
+	| "agent_loop"
+	| "collect"
+	| "score"
+	| "cleanup";
+
+export interface BenchmarkSpanSnapshot {
+	readonly name: string;
+	readonly attributes: Readonly<Record<string, unknown>>;
+}
+
+export interface BenchmarkSpanProvider {
+	readonly snapshot: () => readonly BenchmarkSpanSnapshot[];
+	readonly clear?: () => void;
+}
+
+export interface BenchmarkAgentMessage {
+	readonly role: "system" | "user" | "assistant" | "tool";
+	readonly content: string;
+}
+
+export interface BenchmarkAgentLoopConfig {
+	readonly observability?: {
+		readonly spans?: BenchmarkSpanProvider;
+		readonly sessionId?: string;
+		readonly userId?: string;
+		readonly taskSummary?: string;
+	};
+	readonly [key: string]: unknown;
+}
+
+export interface BenchmarkScratchpad {
+	readonly write?: (input: {
+		readonly taskId: string;
+		readonly sessionId: string;
+		readonly key: string;
+		readonly value: string;
+	}) => Promise<void>;
+	readonly clear?: (input: {
+		readonly taskId: string;
+		readonly sessionId: string;
+	}) => Promise<void>;
+}
+
+export type BenchmarkScorer = Scorer;
+
+export interface BenchmarkScorerRegistry {
+	readonly get: (scorerType: string) => BenchmarkScorer;
+}
+
+export type AgentLoopRunner = (
+	config: BenchmarkAgentLoopConfig,
+	messages: readonly BenchmarkAgentMessage[],
+) => Promise<string>;
+
+export interface BenchmarkRunnerOptions {
+	readonly agentLoopConfig: Omit<BenchmarkAgentLoopConfig, "observability">;
+	readonly scorer?: BenchmarkScorer;
+	readonly scorerRegistry?: BenchmarkScorerRegistry;
+	readonly scratchpad?: BenchmarkScratchpad;
+	readonly spans?: BenchmarkSpanProvider;
+	readonly runAgent?: AgentLoopRunner;
+	readonly clock?: () => Date;
+	readonly createRunId?: () => string;
+	readonly tmpRoot?: string;
+	readonly userId?: string;
+}
+
+export interface RunBenchmarkTaskOptions {
+	readonly task: BenchmarkTask;
+	readonly options: BenchmarkRunnerOptions;
+}
+
+export interface BenchmarkRunExecution {
+	readonly run: BenchmarkRun;
+	readonly result: BenchmarkResult;
+	readonly phases: readonly BenchmarkRunPhase[];
+	readonly workspaceDir: string;
+}
+
+export class BenchmarkRunError extends Error {
+	constructor(
+		readonly phase: BenchmarkRunPhase,
+		message: string,
+		readonly cause?: unknown,
+	) {
+		super(`${phase}: ${message}`);
+		this.name = "BenchmarkRunError";
+	}
+}
+
+export async function runBenchmarkTask(
+	input: RunBenchmarkTaskOptions,
+): Promise<BenchmarkRunExecution> {
+	const { task, options } = input;
+	const runId = options.createRunId?.() ?? randomUUID();
+	const sessionId = `benchmark:${runId}`;
+	const phases: BenchmarkRunPhase[] = [];
+	const clock = options.clock ?? (() => new Date());
+	let workspaceDir = "";
+	let output: Record<string, unknown> = {};
+	let cost: BenchmarkCost = emptyCost();
+	let latencyMs = 0;
+	const startedAt = clock();
+
+	try {
+		phases.push("setup");
+		workspaceDir = await setupTaskWorkspace({
+			task,
+			options,
+			runId,
+			sessionId,
+		});
+
+		phases.push("agent_loop");
+		const loopOutput = await runAgentLoopForTask({
+			task,
+			options,
+			runId,
+			sessionId,
+			workspaceDir,
+		});
+
+		phases.push("collect");
+		output = collectOutput(loopOutput);
+		const spans = options.spans?.snapshot() ?? [];
+		cost = extractBenchmarkCost(spans);
+		latencyMs = extractLatencyMs(spans, startedAt, clock());
+
+		phases.push("score");
+		const scorer = resolveScorer(options, task.scorer_type);
+		const scoring = await scorer(task, output);
+
+		phases.push("cleanup");
+		await cleanupTaskWorkspace({ task, options, sessionId, workspaceDir });
+		options.spans?.clear?.();
+
+		const finishedAt = clock();
+		return {
+			run: {
+				run_id: runId,
+				task_id: task.task_id,
+				agent_session_id: sessionId,
+				started_at: startedAt.toISOString(),
+				finished_at: finishedAt.toISOString(),
+			},
+			result: {
+				run_id: runId,
+				task_id: task.task_id,
+				output,
+				passed: scoring.passed,
+				score: scoring.score,
+				details: scoring.details,
+				cost,
+				latency_ms: latencyMs,
+			},
+			phases,
+			workspaceDir,
+		};
+	} catch (error) {
+		const phase = phases.at(-1) ?? "setup";
+		await cleanupAfterFailure({
+			task,
+			options,
+			sessionId,
+			workspaceDir,
+			phase,
+		});
+		throw error instanceof BenchmarkRunError
+			? error
+			: new BenchmarkRunError(phase, errorMessage(error), error);
+	}
+}
+
+async function cleanupAfterFailure(input: {
+	readonly task: BenchmarkTask;
+	readonly options: BenchmarkRunnerOptions;
+	readonly sessionId: string;
+	readonly workspaceDir: string;
+	readonly phase: BenchmarkRunPhase;
+}): Promise<void> {
+	if (input.phase === "cleanup" || input.workspaceDir.length === 0) {
+		return;
+	}
+
+	try {
+		await cleanupTaskWorkspace(input);
+		input.options.spans?.clear?.();
+	} catch {
+		// Preserve the original phase error; cleanup failures are surfaced when
+		// cleanup itself is the active phase.
+	}
+}
+
+async function setupTaskWorkspace(input: {
+	readonly task: BenchmarkTask;
+	readonly options: BenchmarkRunnerOptions;
+	readonly runId: string;
+	readonly sessionId: string;
+}): Promise<string> {
+	return wrapPhase("setup", async () => {
+		const workspaceDir = await mkdtemp(
+			join(input.options.tmpRoot ?? tmpdir(), "quilin-benchmark-"),
+		);
+		try {
+			await input.options.scratchpad?.write?.({
+				taskId: input.task.task_id,
+				sessionId: input.sessionId,
+				key: "task",
+				value: JSON.stringify(input.task),
+			});
+			return workspaceDir;
+		} catch (error) {
+			await rm(workspaceDir, { recursive: true, force: true });
+			throw error;
+		}
+	});
+}
+
+async function runAgentLoopForTask(input: {
+	readonly task: BenchmarkTask;
+	readonly options: BenchmarkRunnerOptions;
+	readonly runId: string;
+	readonly sessionId: string;
+	readonly workspaceDir: string;
+}): Promise<string> {
+	return wrapPhase("agent_loop", async () => {
+		const run = input.options.runAgent ?? runAgentLoop;
+		return run(
+			{
+				...input.options.agentLoopConfig,
+				observability: {
+					spans: input.options.spans,
+					sessionId: input.sessionId,
+					userId: input.options.userId ?? "benchmark",
+					taskSummary: input.task.task_id,
+				},
+			},
+			createTaskMessages(input.task, input.workspaceDir),
+		);
+	});
+}
+
+function collectOutput(loopOutput: string): Record<string, unknown> {
+	return {
+		patch: loopOutput,
+	};
+}
+
+async function cleanupTaskWorkspace(input: {
+	readonly task: BenchmarkTask;
+	readonly options: BenchmarkRunnerOptions;
+	readonly sessionId: string;
+	readonly workspaceDir: string;
+}): Promise<void> {
+	await wrapPhase("cleanup", async () => {
+		await input.options.scratchpad?.clear?.({
+			taskId: input.task.task_id,
+			sessionId: input.sessionId,
+		});
+		if (input.workspaceDir.length > 0) {
+			await rm(input.workspaceDir, { recursive: true, force: true });
+		}
+	});
+}
+
+function createTaskMessages(
+	task: BenchmarkTask,
+	workspaceDir: string,
+): BenchmarkAgentMessage[] {
+	return [
+		{
+			role: "system",
+			content:
+				"You are running a benchmark task in an isolated workspace. Produce only the final patch diff.",
+		},
+		{
+			role: "user",
+			content: JSON.stringify({
+				task_id: task.task_id,
+				dataset: task.dataset,
+				workspace_dir: workspaceDir,
+				inputs: task.inputs,
+			}),
+		},
+	];
+}
+
+async function runAgentLoop(
+	config: BenchmarkAgentLoopConfig,
+	messages: readonly BenchmarkAgentMessage[],
+): Promise<string> {
+	const agentCoreModule = "@quilin/agent-core/src/loop.js";
+	const agentCore = (await import(agentCoreModule)) as {
+		readonly runAgentLoop: AgentLoopRunner;
+	};
+	return agentCore.runAgentLoop(config, messages);
+}
+
+function resolveScorer(
+	options: BenchmarkRunnerOptions,
+	scorerType: string,
+): BenchmarkScorer {
+	if (options.scorer != null) {
+		return options.scorer;
+	}
+	if (options.scorerRegistry != null) {
+		return options.scorerRegistry.get(scorerType);
+	}
+	throw new Error("Benchmark runner requires a scorer or scorerRegistry");
+}
+
+export function extractBenchmarkCost(
+	spans: readonly BenchmarkSpanSnapshot[],
+): BenchmarkCost {
+	let inputTokens = 0;
+	let outputTokens = 0;
+	let thinkingTokens = 0;
+	let llmCostUsd = 0;
+	let turnCostUsd = 0;
+	const perModelUsd: Record<string, number> = {};
+
+	for (const span of spans) {
+		const attributes = span.attributes;
+		if (span.name === "agent.turn") {
+			turnCostUsd += numberAttribute(attributes, "turn.cost_usd");
+		}
+		if (span.name !== "llm.invoke") {
+			continue;
+		}
+		const model = stringAttribute(attributes, "llm.model") ?? "unknown";
+		const modelCost = numberAttribute(attributes, "llm.cost_usd");
+		inputTokens += numberAttribute(attributes, "llm.tokens_input");
+		outputTokens += numberAttribute(attributes, "llm.tokens_output");
+		thinkingTokens += numberAttribute(attributes, "llm.tokens_thinking");
+		llmCostUsd += modelCost;
+		perModelUsd[model] = (perModelUsd[model] ?? 0) + modelCost;
+	}
+
+	return {
+		input_tokens: inputTokens,
+		output_tokens: outputTokens,
+		thinking_tokens: thinkingTokens,
+		total_usd: turnCostUsd > 0 ? turnCostUsd : llmCostUsd,
+		per_model_usd: perModelUsd,
+	};
+}
+
+function extractLatencyMs(
+	spans: readonly BenchmarkSpanSnapshot[],
+	startedAt: Date,
+	finishedAt: Date,
+): number {
+	const llmLatency = spans
+		.filter((span) => span.name === "llm.invoke")
+		.reduce(
+			(total, span) =>
+				total + numberAttribute(span.attributes, "llm.total_latency_ms"),
+			0,
+		);
+	return llmLatency > 0
+		? llmLatency
+		: finishedAt.getTime() - startedAt.getTime();
+}
+
+function emptyCost(): BenchmarkCost {
+	return {
+		input_tokens: 0,
+		output_tokens: 0,
+		thinking_tokens: 0,
+		total_usd: 0,
+		per_model_usd: {},
+	};
+}
+
+async function wrapPhase<T>(
+	phase: BenchmarkRunPhase,
+	operation: () => Promise<T>,
+): Promise<T> {
+	try {
+		return await operation();
+	} catch (error) {
+		throw new BenchmarkRunError(phase, errorMessage(error), error);
+	}
+}
+
+function numberAttribute(
+	attributes: Readonly<Record<string, unknown>>,
+	key: string,
+): number {
+	const value = attributes[key];
+	return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function stringAttribute(
+	attributes: Readonly<Record<string, unknown>>,
+	key: string,
+): string | undefined {
+	const value = attributes[key];
+	return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function errorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : "benchmark run failed";
+}
