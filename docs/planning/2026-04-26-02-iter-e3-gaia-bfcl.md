@@ -30,7 +30,9 @@
 | Iter E3a | GAIA loader + scorer + submission adapter | ✅ first-cut land | `96a7971` | 9 files；benchmarks 248 passed；Branch 95.45/95.45；HF gated fetch via `HF_TOKEN` |
 | Iter E3a R1 review | R1 独立 subagent (Raman) | ✅ closed | `a161a86` | 2 BLOCKING（runner.collect 仅 patch / scorer 非官方 parity）+ 2 HIGH（attachment integrity / DockerSandbox container path）|
 | Iter E3a R1 fix | runner dataset-aware collect / scorer 官方 parity / attachment sha256+size / container path | ✅ closed | `f8f06cc` | 10 files +747/-57；benchmarks 252 passed / 1 skipped；Branch 95.01（default）/ 95.14（runner-loader）；just test-all TS717+Py187+Rust1 全绿；AMB p95 7.417ms ≤ 300ms |
-| Iter E3a R2 review | R2 独立 subagent (新名字，不复用 R1 Raman) | ⏳ 待启动 | — | R1 fix 后第二轮交叉 review |
+| Iter E3a R2 review | R2 独立 subagent (Maxwell) | ✅ closed | `0c7744d` | 1 BLOCKING（Infinity-sentinel 哨兵碰撞）+ 2 HIGH（host_path 泄漏 prompt / 跨进程 fetch race）+ 3 MEDIUM（Unicode digits / manifest 双轨 / collect 错误 snippet）+ 1 LOW（graph per-symbol 误报） |
+| Iter E3a R2 fix | scorer undefined fallback / GAIA prompt sanitization / fetch lockfile / Unicode digit fold | ✅ closed | `6b94a97` | 9 files +415/-30；benchmarks 257 passed / 1 skipped；Branch 95.12（default+runner-loader）；just test-all TS717+Py187+Rust1 全绿；AMB p95 0.267ms ≤ 300ms；ADR-010 §3.1 GAIA file_attachments 元素 schema 同 commit 冻结 |
+| Iter E3a R3 review | R3 独立 subagent (新名字，不复用 R1 Raman / R2 Maxwell) | ⏳ 待启动 | — | R2 fix 后第三轮交叉 review |
 | Iter E3b/E3c | BFCL v4 loader + scorer + submission adapter | ⏳ 待启动 | — | E3a review chain 闭合后启动 |
 | Iter E3 收口 | review chain 闭合 + DockerSandbox 内 GAIA/BFCL smoke 通过 + 95% 覆盖率 + just test-all 三语言绿 | ⏳ 待启动 | — | review 通过后 |
 
