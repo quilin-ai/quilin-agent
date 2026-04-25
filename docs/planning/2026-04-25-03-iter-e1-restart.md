@@ -34,7 +34,9 @@
 |---|---|---|---|---|
 | Day 0 | ADR-010 + 本 plan + ADR-009 §3.4 加 `benchmarks` namespace | ✅ 完成 | `8254f70` | 3 files / 359 insertions |
 | 选择性 restore | `benchmarks/` workspace（package/tsconfig/vitest）+ `scripts/fetch-benchmark.ts` 339 LOC + `src/wire/{task,run,result,cost,index}.ts` 139 LOC + 4 个 wire test 240 LOC + `pnpm-workspace.yaml` + `index.ts` 加 `runAgentLoop / AgentLoopConfig / LoopHooks` export | ✅ 完成 | `b7e8e2f` | benchmarks vitest = 4 files / 45 tests passed；coverage lines/branches/functions/statements 全 100%；tsc 0；biome 0；root pnpm install OK；agent-core tsc 0；`just test-all` = TS 717 + Python 187 + Rust 1 不回归；Python TOTAL 95.28% 不回归；code-review-graph risk 0 |
-| Iter E1 第一轮（Pasteur runner + Galois dataset + Lavoisier scorer + Mendeleev submission） | 4 路并行 | ⏳ 待启动 | — | Codex 派任务书 |
+| Iter E1 第一轮（Pasteur runner + Galois dataset + Lavoisier scorer + Mendeleev submission） | 4 路并行：Pasteur 5 阶段 runner + scorer registry routing + lazy `runAgentLoop` + per-task scratchpad；Galois cache 协议 sha256 + SWE-bench-lite loader + iterator + takeFirstN；Lavoisier scorer registry + `swe-bench-patch-apply` scorer 走 Iter B `shell_exec` 不手写 spawn；Mendeleev submission registry + `swe-bench-verified-jsonl` adapter + `model_name_or_path` 字段 + Kelvin-shaped config resolver | ✅ 完成 | `a8f199d` | 23 files / 2443 insertions / runner 812 + datasets 523 + scorers 588 + submissions 477；benchmarks build/lint 0；vitest 11 files / 104 passed；coverage Stmt 98.96% / Branches 95.97% / Func 98.71% / Lines 98.96%（≥ 95% 门槛）；agent-core tsc 0；`just test-all` TS 717 + Python 187 + Rust 1（不回归）；Python 95.28%（不回归）|
+| Iter E1 R1 cross-track review | Codex 派独立 subagent 跨 4 轨道 review；BLOCKING/HIGH ≤ 0；契约一致性 + 边界硬隔离 + 测试质量 + plan §17 残余 | ⏳ 待启动 | — | E1 第一轮 commit 后启动 |
+| Iter E1 收口 | 4 轨道 ✅ + R1 ✅ + 95% coverage gate + just test-all 三语言绿 | ⏳ 待启动 | — | R1 review 通过后 |
 
 ---
 
