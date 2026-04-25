@@ -98,55 +98,96 @@ Day 0 是单线串行步骤；契约未冻结前不允许并行轨道开工。
 
 ## 4. Newton 轨道（Observability 主轴）
 
-**写边界**：`packages/agent-core/src/observability/**` + `packages/agent-core/src/agent-loop.ts`（仅添加 span 埋点）+ `providers/memory/src/omnimem/event_log.py`（仅添加 trace 列）+ 对应 tests。
+**写边界（第一轮 — TS only）**：`packages/agent-core/src/observability/**`（新） + `packages/agent-core/src/loop.ts` / `loop-tool-calls.ts` / `loop-types.ts`（仅添加 span 埋点；实证文件名为 `loop.ts` 而非 `agent-loop.ts`，CC-01 < 200 LOC 契约由本文件守住）+ `packages/agent-core/src/planning/executor.ts` / `llm/*.ts` / `tools/*.ts`（仅 wrap span）+ 对应 tests。
 
-### 4.1 任务明细
+**写边界（第二轮 — exporter + Python + M1.4）**：上述 + `packages/agent-core/src/observability/exporters/**`（新）+ `providers/memory/src/omnimem/event_log.py`（trace 列 + dual-emit）+ `providers/memory/src/omnimem/server.py`（MCP traceparent 解析）+ 对应 tests。
+
+**第一轮硬隔离**：Newton **不碰** `index.ts`（第一轮归 Kelvin owns，见 §5 写边界 + §8 S-wire）；Newton 第一轮 read-only `index.ts`。
+
+### 4.1 任务明细（第一轮 — TS-only span/log API + 埋点）
+
+> **第一轮范围钉死**：TS 内存 span provider + structured log API + `loop.ts` 五层埋点 + 测试。**不含** exporter / Python trace ingest / MCP traceparent 跨进程传递 / M1.4 dual-emit（这些全部留第二轮，见 §4.1b）。
 
 | 任务 | 写文件 | DoD |
 |---|---|---|
-| `OTelSpanProvider` 骨架 | `packages/agent-core/src/observability/span.ts`（新） | Span 创建/嵌套/end；attribute key 验证；不依赖具体 SDK，先用内存实现，留 OTel SDK 接口 |
-| 五层 span 埋点 | `agent-loop.ts` / `planning/executor.ts` / `llm/*.ts` / `tools/*.ts` | 按 ADR-008 §3.1 包裹；attribute 必填字段全部写入 |
-| `request_id` 注入 | `agent-loop.ts` + `tools/mcp-client.ts` | 一轮 turn 内 `request_id` 唯一；MCP 调用 metadata 携带 |
-| Structured JSON log | `packages/agent-core/src/observability/log.ts`（新） | 按 ADR-008 §3.5 schema；stdout 输出；level 由 `observability.log_level` 控制 |
+| `OTelSpanProvider` 骨架（**内存实现**） | `packages/agent-core/src/observability/span.ts`（新） | Span 创建/嵌套/end；attribute key 验证（按 ADR-008 §3.2/§3.3 枚举）；trace/span id、attributes、events、parent-child 接口设计完整；**不引** `@opentelemetry/api` SDK（避免与 Kelvin 依赖叠加，留第二轮真 SDK 接入选择） |
+| 五层 span 埋点 | `loop.ts` / `loop-tool-calls.ts` / `loop-types.ts` / `planning/executor.ts` / `llm/*.ts` / `tools/*.ts` | 按 ADR-008 §3.1 包裹五层（agent.session/turn/state_node/llm.invoke/tool.invoke）；attribute 必填字段全部写入；`loop.ts` 加埋点不得超过 CC-01 < 200 LOC 硬契约（当前 191 LOC，可写入预算 ≤ 9 行；超出必须把埋点抽到独立模块 import） |
+| `request_id` 注入 | `loop.ts` + `tools/mcp-client.ts` | 一轮 turn 内 `request_id` 唯一；MCP 调用 metadata 携带 placeholder（第二轮接 traceparent 完整传递）；`loop.ts` 同上 LOC 预算约束 |
+| Structured JSON log | `packages/agent-core/src/observability/log.ts`（新） | 按 ADR-008 §3.5 schema；stdout 输出；level 由 `observability.log_level` 控制（Kelvin 第一轮 schema 落地后 wire；第一轮可用默认 `INFO`）|
+
+### 4.1b 任务明细（第二轮 — exporter + Python + M1.4）
+
+| 任务 | 写文件 | DoD |
+|---|---|---|
 | `json_file_exporter` | `packages/agent-core/src/observability/exporters/json-file.ts`（新） | 写 `.logs/traces-YYYY-MM-DD.jsonl`；append 模式；并发安全 |
 | `composite_exporter` | `packages/agent-core/src/observability/exporters/composite.ts`（新） | 包装多个 exporter；任一失败不阻塞其他 |
 | Python trace ingest | `providers/memory/src/omnimem/event_log.py` | 增加 `trace_id` / `request_id` / `span_id` 列；MCP request 入口解析 `metadata.traceparent` |
 | Python span 写入 | `providers/memory/src/omnimem/server.py` | MCP request 处理时建本侧 span；response 回写 traceparent |
-| **M1.4 event_log OTel bridge** | `providers/memory/src/omnimem/event_log.py`（dual-emit 模块） | 检索/引用样本 dual-emit 到 OTel span event（attribute key 遵循 ADR-008）；SQLite 仍是 reranker 训练真相源；OTel 失败不阻塞写库；放 Newton **后半段**（依赖 OTelSpanProvider + Python trace ingest 就绪后接入） |
+| **M1.4 event_log OTel bridge** | `providers/memory/src/omnimem/event_log.py`（dual-emit 模块） | 检索/引用样本 dual-emit 到 OTel span event（attribute key 遵循 ADR-008）；SQLite 仍是 reranker 训练真相源；OTel 失败不阻塞写库；放第二轮**末尾**（依赖 OTelSpanProvider + Python trace ingest 就绪后接入）；AMB 100k benchmark p95 ≤ 300ms 不回归 |
 
 ### 4.2 Newton DoD
 
-- `pnpm test` 覆盖 5 层 span 创建 + attribute 必填校验
-- `pnpm test` 覆盖 `json_file_exporter` 并发写入
-- `uv run pytest` 覆盖 `event_log` 新增列读写 + traceparent 解析
+**第一轮 DoD（TS-only）**：
+
+- `pnpm test` 覆盖 5 层 span 创建 + attribute 必填校验 + parent-child 嵌套 + events 写入
+- `pnpm test` 覆盖 structured JSON log schema 必填字段 + level 阈值
+- `pnpm tsc --noEmit` exit 0；`pnpm exec biome check src` 0
+- `loop.ts` LOC 实证 `wc -l` ≤ 200（CC-01 硬契约）；超出必须 abort 并把埋点抽到 helper 模块
+- `request_id` 在一轮 turn 内唯一性测试
+
+**第二轮 DoD（exporter + Python + M1.4）**：
+
+- `pnpm test` 覆盖 `json_file_exporter` 并发写入 + `composite_exporter` 部分失败不阻塞
+- `uv run pytest` 覆盖 `event_log` 新增列读写 + `metadata.traceparent` 解析
 - 一次端到端 turn 在 `.logs/traces-*.jsonl` 中产出完整五层 span 链
 - TS / Python 两侧产出的 log 行 `trace_id` 相同（实证：单元测试 + 集成测试）
+- AMB 100k benchmark p95 ≤ 300ms（M1.4 dual-emit 不回归）
 
 ---
 
 ## 5. Kelvin 轨道（Config 统一）
 
-**写边界**：`packages/agent-core/src/config/user-config.ts`（新） + `packages/agent-core/src/cli/config-cmd.ts`（新） + `packages/agent-core/src/index.ts`（仅 wire）+ 对应 tests。**禁止**修改现有 `config/loader.ts`（capability YAML loader）。
+**写边界（第一轮 — schema/loader/env/wire）**：`packages/agent-core/src/config/user-config.ts`（新） + `packages/agent-core/src/config/user-config-schema.ts`（新） + `packages/agent-core/src/index.ts`（**Kelvin owns 第一轮**：wire user-config + Newton OTelSpanProvider + Newton structured log）+ 对应 tests。**禁止**修改现有 `config/loader.ts`（capability YAML loader 已 §16.4 闭合）。
 
-### 5.1 任务明细
+**写边界（第二轮 — CLI）**：上述 + `packages/agent-core/src/cli/config-cmd.ts`（新）+ `--config` 入口 + 对应 tests。
+
+**第一轮硬隔离**：Kelvin 第一轮**不接** CLI 参数（capability loader 已用 `--config`，避免冲突；CLI 留第二轮）；Newton 第一轮 read-only `index.ts`，wire 由 Kelvin 写。
+
+### 5.1 任务明细（第一轮 — schema/loader/env + index.ts wire）
+
+> **第一轮范围钉死**：smol-toml 接入 + UserConfigSchema zod + 四级合并 loader（CLI/env/file/default）+ env 映射 + 权限校验 + `index.ts` wire（含 Newton OTelSpanProvider + structured log consumer）。**不含** CLI 命令（`quilin config show/set` 留第二轮）。
 
 | 任务 | 写文件 | DoD |
 |---|---|---|
-| TOML parser 接入 | `package.json` + `pnpm-lock.yaml` | 引入 `smol-toml`；锁版本 |
-| `UserConfigSchema` zod | `config/user-config-schema.ts`（新） | 顶层 namespace 全部覆盖（ADR-009 §3.4）；strict mode |
+| TOML parser 接入 | `packages/agent-core/package.json` + `pnpm-lock.yaml` | 引入 `smol-toml`；锁版本 |
+| `UserConfigSchema` zod | `config/user-config-schema.ts`（新） | 顶层 namespace 全部覆盖（ADR-009 §3.4）；strict mode；`observability.log_level` 默认 `INFO` |
 | 四级合并 loader | `config/user-config.ts`（新） | CLI > env > file > default 合并；schema 校验；返回 `{ config, sources }` |
 | env var 映射 | 同上 | `OMNI_*` → 点路径；类型按 schema 解析；歧义按最长 prefix 匹配 |
 | 文件权限校验 | 同上 | `0600` 校验；`*_api_key/*_token/*_secret` 字段名拒绝 |
+| `index.ts` wire | `packages/agent-core/src/index.ts` | `main()` 顶部 load user-config；按 `observability.log_level` 初始化 Newton structured log；按需 wire OTelSpanProvider；不破坏现有 capability loader / SkillsManager / MCPClient 实例化路径 |
+
+### 5.1b 任务明细（第二轮 — CLI）
+
+| 任务 | 写文件 | DoD |
+|---|---|---|
 | `quilin config show` CLI | `cli/config-cmd.ts`（新） | 输出当前生效值；`--source` 显示来源（CLI/env/file/default） |
 | `quilin config set` CLI | 同上 | 写入 `~/.quilin/config.toml`；首次写入设 `0600`；schema 校验 |
 | `--config` 覆盖支持 | 同上 + `index.ts` | 自定义路径加载；不存在时不报错（与 `~/.quilin/config.toml` 一致） |
 
 ### 5.2 Kelvin DoD
 
+**第一轮 DoD（schema/loader/env/wire）**：
+
 - `pnpm test` 覆盖：四级合并优先级、env var 映射、schema 校验、权限拒绝、敏感字段拒绝
-- `quilin config show` 输出可消费 JSON
-- `quilin config set llm.default_model claude-opus-4-7` 实测写入正确
+- `pnpm tsc --noEmit` exit 0；`pnpm exec biome check src` 0
+- `index.ts` wire 不破坏现有 488 TS 测试基线
 - 现有 capability YAML loader 测试全部通过（无回归）
+
+**第二轮 DoD（CLI）**：
+
+- `quilin config show` 输出可消费 JSON + `--source` 标注来源
+- `quilin config set llm.default_model claude-opus-4-7` 实测写入正确
+- `--config <path>` 覆盖路径生效
 
 ---
 
@@ -176,15 +217,15 @@ Day 0 是单线串行步骤；契约未冻结前不允许并行轨道开工。
 
 ## 7. Curie 轨道（Rust stub + CI）
 
-**写边界**：`crates/mesh-sdk/`（新） + `justfile` + `.github/workflows/ci.yml` + `Cargo.toml` workspace root（如需要）。**禁止**写任何 mesh 实质代码。
+**写边界**：`crates/mesh-sdk/`（新） + `justfile` + `.github/workflows/ci.yml` + `Cargo.toml` workspace root（如需要）+ `quilin.md`（Rust 措辞同步）。**禁止**写任何 mesh 实质代码。
 
 ### 7.1 任务明细
 
 | 任务 | 写文件 | DoD |
 |---|---|---|
-| Workspace 骨架 | `Cargo.toml` workspace root + `crates/mesh-sdk/Cargo.toml` + `crates/mesh-sdk/src/lib.rs` | 空 trait stub；`cargo check` 通过 |
-| `justfile` 命令 | `justfile` | `just build-rs` / `just test-rs`（noop 测试套件可通过） |
-| CI matrix | `.github/workflows/ci.yml` | Rust job 加入；`cargo check` 强制；`cargo test` 允许 noop（按 §00-impl-plan §310 D-14 NEW-13 对齐） |
+| Workspace 骨架 | `Cargo.toml` workspace root + `Cargo.lock` + `crates/mesh-sdk/Cargo.toml` + `crates/mesh-sdk/src/lib.rs` | 空 trait stub；**保持无外部 crates 依赖**；`cargo check --workspace` 通过；`Cargo.lock` 同 commit 落地 |
+| `justfile` 命令 | `justfile` | `just build-rs` / `just test-rs`（noop 测试套件可通过）；`just test-all` **必须纳入** `test-rs`（Rust 从 Iter D 起正式进 workspace）|
+| CI matrix | `.github/workflows/ci.yml` | stable Rust job 加入；`cargo check --workspace` 强制通过；`cargo test --workspace` 允许 noop（按 §00-impl-plan §310 D-14 NEW-13 对齐） |
 | CLAUDE.md 调整 | `quilin.md` | "Rust 不存在"措辞改为"Rust mesh-sdk stub 已落地"；保留"实质代码留 Iter F"约束 |
 
 ### 7.2 Curie DoD
@@ -199,10 +240,11 @@ Day 0 是单线串行步骤；契约未冻结前不允许并行轨道开工。
 
 | 同步点 | 触达轨道 | 内容 |
 |---|---|---|
-| S1：trace 字段 | Newton ↔ Boyle | MCP `metadata.traceparent / tracestate / request_id` 解析与回写一致；event_log 列名一致；M1.4 dual-emit OTel span event 但**不替代** SQLite（SQLite 仍是 reranker 训练真相源） |
-| S2：config schema | Kelvin ↔ Newton/Boyle | `observability.*` 与 `memory.scratchpad.*` 字段名、默认值、热更新边界对齐 |
-| S3：log schema | Newton ↔ Kelvin | `observability.log_level` 控制 structured log level 阈值 |
-| S4：CI 矩阵 | Curie | TS / Python / Rust 三 job 共存；任一失败阻塞 merge |
+| S1：trace 字段 | Newton ↔ Boyle | MCP `metadata.traceparent / tracestate / request_id` 解析与回写一致；event_log 列名一致；M1.4 dual-emit OTel span event 但**不替代** SQLite（SQLite 仍是 reranker 训练真相源）；**第二轮闭合** |
+| S2：config schema | Kelvin ↔ Newton/Boyle | `observability.*` 与 `memory.scratchpad.*` 字段名、默认值、热更新边界对齐；**第一轮 Kelvin schema 落地后 Newton/Boyle consume** |
+| S3：log schema | Newton ↔ Kelvin | `observability.log_level` 控制 structured log level 阈值；**第一轮**：Kelvin schema → `index.ts` wire → Newton consumer |
+| **S-wire：`index.ts` 写权** | Kelvin ↔ Newton | **第一轮 `index.ts` 由 Kelvin owns**；Newton read-only；wire user-config + OTelSpanProvider + structured log 由 Kelvin 写；Newton 第一轮**不碰** `index.ts` |
+| S4：CI 矩阵 | Curie | TS / Python / Rust 三 job 共存；`cargo check --workspace` 强制；任一失败阻塞 merge；**第一轮闭合** |
 
 每轮收口前必须跑：`pnpm tsc --noEmit` + `pnpm test` + `pnpm exec biome check src` + `uv run pytest -q` + `uv run ruff check` + `cargo check`（Curie 落地后）。
 
@@ -234,15 +276,19 @@ Curie 可与任意轨道并行；Newton 与 Boyle 在 S1 同步点对齐 trace �
 
 ### 11.2 第一轮并行切片
 
-- **Newton 起步**：`OTelSpanProvider` 骨架 + 五层 span 埋点 + structured log（不含 exporter）
-- **Kelvin 起步**：`UserConfigSchema` + 四级合并 loader + env 映射（不含 CLI）
-- **Curie 一次过**：workspace 骨架 + `justfile` + CI matrix（量小）
+> 范围钉死：三路并行；Newton 与 Kelvin 在 `index.ts` 上 S-wire 同步（Kelvin owns）；Curie 完全独立。
+
+- **Newton 起步（TS-only）**：`OTelSpanProvider` 内存实现 + 五层 span 埋点（loop.ts/loop-tool-calls.ts/loop-types.ts/planning/llm/tools）+ structured log API + `request_id` placeholder。**不含** exporter / Python ingest / MCP traceparent / M1.4 dual-emit。
+- **Kelvin 起步（schema/loader/env + wire）**：`UserConfigSchema` zod + 四级合并 loader + env 映射 + 权限校验 + `index.ts` wire（含 Newton consumer）。**不含** CLI 命令。
+- **Curie 一次过（量小）**：`crates/mesh-sdk/` workspace + `Cargo.lock` + `justfile`（含 `test-all` 纳入 `test-rs`）+ CI matrix + `quilin.md` Rust 措辞同步。**保持无外部 Rust crates**。
 
 ### 11.3 第二轮并行切片
 
-- **Newton 收尾**：`json_file_exporter` + `composite_exporter` + Python trace ingest + **M1.4 event_log OTel bridge dual-emit** + S1 同步实证
-- **Kelvin 收尾**：`config show/set` CLI + 权限校验 + S2 同步实证
-- **Boyle 起步**：`Scratchpad` 模型 + MCP methods + TS client + Executor 集成
+> Newton 第一轮 land 后才能开始第二轮（exporter 依赖 span provider）；Kelvin 第二轮独立于 Newton 推进。
+
+- **Newton 收尾（exporter + Python + M1.4）**：`json_file_exporter` + `composite_exporter` + Python `event_log.py` trace ingest + Python `server.py` traceparent 解析 + **M1.4 event_log OTel bridge dual-emit**（末尾接入）+ S1 同步实证（端到端 turn `.logs/traces-*.jsonl` + AMB 100k p95 ≤ 300ms 不回归）
+- **Kelvin 收尾（CLI）**：`quilin config show/set` CLI + `--config` 覆盖支持 + S2 同步实证
+- **Boyle 起步**：`Scratchpad` 模型 + MCP methods + TS client + Executor 集成（依赖 Newton 第一轮 trace 上下文 + Kelvin 第一轮 `memory.scratchpad.*` schema）
 
 ### 11.4 Review gate
 
