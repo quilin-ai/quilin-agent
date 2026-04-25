@@ -32,7 +32,12 @@
 
 | 轮次 | 任务 | 状态 | commit | 实证 |
 |---|---|---|---|---|
-| Day 0 | ADR-008 / ADR-009 / 本计划 | ⏳ 待 commit | — | — |
+| Day 0 | ADR-008 / ADR-009 / 本计划 | ✅ 完成 | `56b7a46` | 3 files / 619 insertions / TS 488 + Python 155 + AMB p95 0.261ms 不回归 |
+| Day 0 | 25-01 §17 全部残余项归属 + 25-02 sweep plan + §15 状态回写 + 00-impl-plan 顶部更新 + Blocked 段 | ✅ 完成 | `5aeeaa2` | 4 files / +187/-15 / TS 488 + Python 155 不回归 |
+| Day 0 | 25-01 §4-§5/§7/§8/§11 第一轮范围细化（Codex review 反馈：loop.ts 文件名修正 / S-wire 同步点 / Newton 第一轮钉死 TS-only / Kelvin 第一轮 owns index.ts / Curie 加 Cargo.lock + test-all 纳入 test-rs） | ✅ 完成 | `29c093d` | 1 file / +76/-30 |
+| 第一轮 Kelvin | schema/loader/env：`smol-toml` 1.6.1 + `user-config-schema.ts` (145 LOC) + `user-config.ts` (522 LOC) + `user-config.test.ts` (247 LOC, 21 tests passed) | ⏳ 待 commit | — | tsc exit 0；biome 147 files clean；`pnpm test` = 63 files / 509 passed（基线 488 + 21 新增）；不动 capability YAML loader（§16.4 闭合保持）；index.ts wire 留至 Newton OTelSpanProvider land 后 |
+| 第一轮 Newton | TS-only span provider + 五层埋点 + structured log（Codex worker 推进中） | ⏳ in-flight | — | Codex 派 worker 处理，未交付 |
+| 第一轮 Curie | Rust mesh-sdk stub + Cargo workspace + justfile/CI matrix + quilin.md（Codex 主线推进中） | ⏳ in-flight | — | Codex 报 cargo check/test/fmt/clippy 通过；`just test-all` 等并行轨道稳定后跑 |
 
 ---
 
