@@ -53,7 +53,7 @@ Iter E1/E2 接受 `swe-bench-lite` / `swe-bench-verified`；**Iter E3（2026-04-
 
 新增两个 dataset 的字段约束：
 
-- `gaia`：`inputs.{question, level, file_name?, file_path?, file_attachments?}`；`expected.{final_answer, eval_metadata}`；`scorer_type = "gaia-exact-match"`。`file_path` 必须是 Docker/container 视角路径（当前 `/workspace/cache/datasets/gaia/attachments/<file>`），不得暴露 host 绝对路径。`file_attachments[]` 元素冻结为 `{container_path, file_name, file_path, sha256, size_bytes}`；禁止包含 `host_path` / `file_host_path` / `relative_path` 等 host filesystem 细节。
+- `gaia`：`inputs.{question, level, file_name?, file_path?, file_attachments?}`；`expected.{final_answer, eval_metadata}`；`scorer_type = "gaia-exact-match"`。`file_path` 必须是 Docker/container 视角 POSIX 路径（当前 `/workspace/cache/datasets/gaia/attachments/<file>`），不得暴露 host 绝对路径。`file_attachments[]` 元素冻结为 `{container_path, file_name, file_path, sha256, size_bytes}`，其中 `container_path` 与 `file_path` 均为 `/workspace/cache/datasets/gaia/attachments/<file_name>`，`file_name` 必须匹配 `^[A-Za-z0-9._-]+$` 且 UTF-8 byte length ≤ 255，`sha256` 必须匹配 lowercase hex64 `^[a-f0-9]{64}$`，`size_bytes` 必须是 non-negative integer；禁止包含 `host_path` / `file_host_path` / `relative_path` 等 host filesystem 细节。
 - `bfcl-v4`：`inputs.{prompt, candidate_functions, multi_turn?}`；`expected.{ground_truth_calls}`；`scorer_type = "bfcl-tool-call-match"`
 
 每个新 dataset 由独立 scorer + submission adapter 实现；runner 5 阶段生命周期 + DockerSandbox MVP DI 不变。
@@ -110,6 +110,10 @@ BenchmarkCost {
 - **Load 时强制 verify**：sha256 不匹配 / `schema_version != 1` 直接拒载并报 `CacheError`
 - Fetch 时分页 + retry；幂等：相同 source_url 已有合法 manifest 且 `requested_max_rows` 能覆盖当前请求时跳过。`requested_max_rows: null` 表示 full fetch；partial cache 不能满足 full fetch intent。
 - 兼容性：E2 之前写出的 legacy manifest 若缺少 `requested_max_rows`，loader 归一化为 `null`；fetch CLI 的 cache hit 判断仍按当前 intent 重新校验 rows/sha/source，legacy partial 不能满足 full fetch intent。
+
+#### Fetch lockfile protocol
+
+`fetch-benchmark` 对每个 dataset cache 目录使用 `<cacheDir>/.fetch.lock` 串行化同 dataset fetch；不同 dataset 使用不同 cacheDir，因此互不阻塞。锁文件通过 `open(..., "wx")` / `O_EXCL` 创建，body 为 `{created_at, pid, nonce}`；持有者每 5 分钟 heartbeat 更新 mtime，释放前必须 read-back 校验 `pid + nonce`，只删除自己持有的 lock。竞争者遇到已存在 lock 时先做 pid liveness check：pid 存活则等待；pid 已退出则清理 orphan lock；无效 lock 只有在 mtime 超过 30 分钟 stale threshold 后才清理。该协议在 macOS APFS 与 Linux ext4/tmpfs 上有效；NFS / Windows 不纳入 E2/E3 CI 支持面，必须 fail-loud 或改用平台原生锁。
 
 ### 3.5 Scorer 协议
 

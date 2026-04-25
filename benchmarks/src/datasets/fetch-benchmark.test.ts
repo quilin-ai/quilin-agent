@@ -1,17 +1,22 @@
+import { spawn } from "node:child_process";
 import {
 	mkdir,
 	mkdtemp,
 	readdir,
 	readFile,
 	rm,
+	stat,
 	utimes,
 	writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+	__privateForTests,
 	type FetchBenchmarkOptions,
+	type FetchResult,
 	fetchBenchmark,
 	main,
 	parseArgs,
@@ -274,12 +279,48 @@ describe("fetch-benchmark cache intent", () => {
 		expect(datasetEntries).not.toContain(".fetch.lock");
 	});
 
+	it("serializes cross-process fetches for the same dataset cache", async () => {
+		const cacheRoot = await tempCacheRoot();
+		const first = runFetchChild({ cacheRoot, delayMs: 250 });
+		await delay(50);
+		const second = runFetchChild({ cacheRoot, delayMs: 0 });
+
+		const results = await Promise.all([first, second]);
+		const datasetEntries = await readdir(
+			join(cacheRoot, "datasets", "swe-bench-lite"),
+		);
+
+		expect(results.every((result) => result.ok)).toBe(true);
+		expect(results.map((result) => result.result.skipped).sort()).toEqual([
+			false,
+			true,
+		]);
+		expect(results.reduce((sum, result) => sum + result.calls, 0)).toBe(1);
+		expect(datasetEntries).not.toContain(".fetch.lock");
+	});
+
+	it("clears a crash-orphaned fetch lock whose pid is no longer alive", async () => {
+		const cacheRoot = await tempCacheRoot();
+		const datasetDir = join(cacheRoot, "datasets", "swe-bench-lite");
+		const lockWriter = await writeCrashOrphanLock(datasetDir);
+		const fetchMock = mockRowsFetch(1);
+
+		expect(lockWriter.exitCode).toBe(0);
+		await expect(
+			fetchBenchmark(options({ cacheRoot, maxRows: 1 })),
+		).resolves.toMatchObject({ rows: 1, skipped: false });
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		await expect(
+			readFile(join(datasetDir, ".fetch.lock"), "utf8"),
+		).rejects.toThrow();
+	});
+
 	it("removes stale fetch locks before writing a dataset cache", async () => {
 		const cacheRoot = await tempCacheRoot();
 		const datasetDir = join(cacheRoot, "datasets", "swe-bench-lite");
 		await mkdir(datasetDir, { recursive: true });
 		await writeFile(join(datasetDir, ".fetch.lock"), "stale\n", "utf8");
-		const staleTime = new Date(Date.now() - 11 * 60 * 1000);
+		const staleTime = new Date(Date.now() - 31 * 60 * 1000);
 		await utimes(join(datasetDir, ".fetch.lock"), staleTime, staleTime);
 		const fetchMock = mockRowsFetch(1);
 
@@ -289,6 +330,162 @@ describe("fetch-benchmark cache intent", () => {
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 		await expect(
 			readFile(join(datasetDir, ".fetch.lock"), "utf8"),
+		).rejects.toThrow();
+	});
+
+	it("does not remove a stale lock whose pid is still alive", async () => {
+		const cacheRoot = await tempCacheRoot();
+		const datasetDir = join(cacheRoot, "datasets", "swe-bench-lite");
+		const lockPath = join(datasetDir, ".fetch.lock");
+		await mkdir(datasetDir, { recursive: true });
+		await writeFile(
+			lockPath,
+			JSON.stringify({
+				created_at: new Date().toISOString(),
+				nonce: "live-lock",
+				pid: process.pid,
+			}),
+			"utf8",
+		);
+		const staleTime = new Date(Date.now() - 31 * 60 * 1000);
+		await utimes(lockPath, staleTime, staleTime);
+
+		await expect(
+			__privateForTests.removeStaleFetchLock(lockPath),
+		).resolves.toBe(false);
+		await expect(readFile(lockPath, "utf8")).resolves.toContain("live-lock");
+	});
+
+	it("removes only the lock matching the owner nonce", async () => {
+		const cacheRoot = await tempCacheRoot();
+		const datasetDir = join(cacheRoot, "datasets", "swe-bench-lite");
+		const lockPath = join(datasetDir, ".fetch.lock");
+		const owner = {
+			created_at: new Date().toISOString(),
+			nonce: "owner-lock",
+			pid: process.pid,
+		};
+		const replacement = {
+			created_at: new Date().toISOString(),
+			nonce: "replacement-lock",
+			pid: process.pid,
+		};
+		await mkdir(datasetDir, { recursive: true });
+		await writeFile(lockPath, `${JSON.stringify(replacement)}\n`, "utf8");
+
+		await expect(
+			__privateForTests.releaseFetchLock(lockPath, owner),
+		).resolves.toBe(false);
+		await expect(readFile(lockPath, "utf8")).resolves.toContain(
+			"replacement-lock",
+		);
+
+		await expect(
+			__privateForTests.releaseFetchLock(lockPath, replacement),
+		).resolves.toBe(true);
+		await expect(readFile(lockPath, "utf8")).rejects.toThrow();
+	});
+
+	it("heartbeats only the matching lock owner", async () => {
+		const cacheRoot = await tempCacheRoot();
+		const datasetDir = join(cacheRoot, "datasets", "swe-bench-lite");
+		const lockPath = join(datasetDir, ".fetch.lock");
+		const owner = {
+			created_at: new Date().toISOString(),
+			nonce: "heartbeat-lock",
+			pid: process.pid,
+		};
+		await mkdir(datasetDir, { recursive: true });
+		await writeFile(lockPath, `${JSON.stringify(owner)}\n`, "utf8");
+		const oldTime = new Date(Date.now() - 60_000);
+		await utimes(lockPath, oldTime, oldTime);
+
+		await __privateForTests.refreshFetchLock(lockPath, {
+			...owner,
+			nonce: "wrong-lock",
+		});
+		const unchanged = await stat(lockPath);
+		expect(unchanged.mtimeMs).toBeLessThan(Date.now() - 10_000);
+
+		await __privateForTests.refreshFetchLock(lockPath, owner);
+		const refreshed = await stat(lockPath);
+		expect(refreshed.mtimeMs).toBeGreaterThan(unchanged.mtimeMs);
+	});
+
+	it("parses fetch lock bodies defensively", () => {
+		expect(
+			__privateForTests.parseFetchLockBody(
+				JSON.stringify({
+					created_at: "2026-04-26T00:00:00.000Z",
+					nonce: "ok",
+					pid: 123,
+				}),
+			),
+		).toEqual({
+			created_at: "2026-04-26T00:00:00.000Z",
+			nonce: "ok",
+			pid: 123,
+		});
+		expect(__privateForTests.parseFetchLockBody("{")).toBeUndefined();
+		expect(
+			__privateForTests.parseFetchLockBody(
+				JSON.stringify({ created_at: "x", nonce: "", pid: 1 }),
+			),
+		).toBeUndefined();
+		expect(
+			__privateForTests.parseFetchLockBody(
+				JSON.stringify({ created_at: "x", nonce: "x", pid: -1 }),
+			),
+		).toBeUndefined();
+		expect(
+			__privateForTests.parseFetchLockBody(
+				JSON.stringify({ created_at: 1, nonce: "x", pid: 1 }),
+			),
+		).toBeUndefined();
+		expect(
+			__privateForTests.parseFetchLockBody(
+				JSON.stringify({ created_at: "x", nonce: "x" }),
+			),
+		).toBeUndefined();
+		expect(__privateForTests.parseFetchLockBody("null")).toBeUndefined();
+	});
+
+	it("handles missing and invalid fresh fetch locks without unsafe cleanup", async () => {
+		const cacheRoot = await tempCacheRoot();
+		const datasetDir = join(cacheRoot, "datasets", "swe-bench-lite");
+		const lockPath = join(datasetDir, ".fetch.lock");
+		await mkdir(datasetDir, { recursive: true });
+
+		await expect(
+			__privateForTests.removeStaleFetchLock(lockPath),
+		).resolves.toBe(true);
+
+		await writeFile(lockPath, "not-json\n", "utf8");
+		await expect(
+			__privateForTests.removeStaleFetchLock(lockPath),
+		).resolves.toBe(false);
+		await expect(readFile(lockPath, "utf8")).resolves.toBe("not-json\n");
+		await expect(
+			__privateForTests.fetchLockMatches(lockPath, {
+				created_at: new Date().toISOString(),
+				nonce: "missing-lock",
+				pid: process.pid,
+			}),
+		).resolves.toBe(false);
+	});
+
+	it("propagates non-missing fetch lock read errors", async () => {
+		const cacheRoot = await tempCacheRoot();
+		const datasetDir = join(cacheRoot, "datasets", "swe-bench-lite");
+		const owner = {
+			created_at: new Date().toISOString(),
+			nonce: "directory-lock",
+			pid: process.pid,
+		};
+		await mkdir(datasetDir, { recursive: true });
+
+		await expect(
+			__privateForTests.fetchLockMatches(datasetDir, owner),
 		).rejects.toThrow();
 	});
 
@@ -787,6 +984,10 @@ async function tempCacheRoot(): Promise<string> {
 	return cacheRoot;
 }
 
+function delay(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function mockRowsFetch(totalRows: number): ReturnType<typeof vi.fn> {
 	const rows = Array.from({ length: totalRows }, (_entry, index) =>
 		makeSweBenchRow(index),
@@ -816,6 +1017,134 @@ function mockGaiaRowsFetch(totalRows: number): ReturnType<typeof vi.fn> {
 	});
 	vi.stubGlobal("fetch", fetchMock);
 	return fetchMock;
+}
+
+function runFetchChild(input: {
+	readonly cacheRoot: string;
+	readonly delayMs: number;
+}): Promise<ChildFetchResult> {
+	const script = `
+import { fetchBenchmark } from ${JSON.stringify(pathToFileURL(join(process.cwd(), "scripts", "fetch-benchmark.ts")).href)};
+
+const cacheRoot = process.env.CACHE_ROOT;
+const delayMs = Number(process.env.FETCH_DELAY_MS ?? "0");
+let calls = 0;
+globalThis.fetch = async () => {
+  calls += 1;
+  if (delayMs > 0) {
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+  return {
+    arrayBuffer: async () => Buffer.from("{}"),
+    json: async () => ({
+      rows: [
+        {
+          row: {
+            base_commit: "commit-child",
+            instance_id: "repo__project-child",
+            patch: "diff --git a/file.py b/file.py\\\\n+fix\\\\n",
+            problem_statement: "Fix child issue",
+            repo: "repo/project",
+            test_patch: "diff --git a/test.py b/test.py\\\\n+test\\\\n"
+          }
+        }
+      ]
+    }),
+    ok: true,
+    status: 200,
+    statusText: "OK"
+  };
+};
+try {
+  const result = await fetchBenchmark({
+    allowUnsafeRowsBaseUrl: false,
+    cacheRoot,
+    dataset: "swe-bench-lite",
+    force: false,
+    maxRows: 1,
+    pageSize: 100,
+    retries: 1,
+    rowsBaseUrl: ${JSON.stringify(defaultRowsBaseUrl)}
+  });
+  console.log(JSON.stringify({ calls, ok: true, pid: process.pid, result }));
+} catch (error) {
+  console.log(JSON.stringify({
+    calls,
+    error: error instanceof Error ? error.message : String(error),
+    ok: false,
+    pid: process.pid
+  }));
+  process.exitCode = 1;
+}
+`;
+	return runNodeModule(script, {
+		CACHE_ROOT: input.cacheRoot,
+		FETCH_DELAY_MS: String(input.delayMs),
+	});
+}
+
+function writeCrashOrphanLock(datasetDir: string): Promise<ChildProcessResult> {
+	const script = `
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+
+const datasetDir = process.env.DATASET_DIR;
+await mkdir(datasetDir, { recursive: true });
+await writeFile(
+  join(datasetDir, ".fetch.lock"),
+  JSON.stringify({
+    created_at: new Date().toISOString(),
+    nonce: "orphan-lock",
+    pid: process.pid
+  }) + "\\n",
+  "utf8"
+);
+console.log(JSON.stringify({ ok: true, pid: process.pid }));
+`;
+	return runNodeModule(script, { DATASET_DIR: datasetDir });
+}
+
+function runNodeModule<T extends ChildProcessResult>(
+	script: string,
+	env: Record<string, string>,
+): Promise<T> {
+	return new Promise((resolve) => {
+		const child = spawn(
+			process.execPath,
+			["--experimental-strip-types", "--input-type=module", "-e", script],
+			{
+				cwd: process.cwd(),
+				env: { ...process.env, ...env },
+				stdio: ["ignore", "pipe", "pipe"],
+			},
+		);
+		let stdout = "";
+		let stderr = "";
+		child.stdout.setEncoding("utf8");
+		child.stderr.setEncoding("utf8");
+		child.stdout.on("data", (chunk) => {
+			stdout += chunk;
+		});
+		child.stderr.on("data", (chunk) => {
+			stderr += chunk;
+		});
+		child.on("close", (exitCode) => {
+			const line = stdout.trim().split(/\r?\n/).at(-1) ?? "{}";
+			resolve({ ...JSON.parse(line), exitCode, stderr } as T);
+		});
+	});
+}
+
+interface ChildProcessResult {
+	readonly exitCode: number | null;
+	readonly ok: boolean;
+	readonly pid: number;
+	readonly stderr: string;
+}
+
+interface ChildFetchResult extends ChildProcessResult {
+	readonly calls: number;
+	readonly result: FetchResult;
 }
 
 function responseWithRows(rows: readonly Record<string, unknown>[]): Response {

@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
 	mkdir,
 	open,
@@ -6,6 +6,7 @@ import {
 	rename,
 	rm,
 	stat,
+	utimes,
 	writeFile,
 } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
@@ -37,7 +38,8 @@ const EXPECTED_ROWS: Record<string, number> = {
 const ALLOWED_ROWS_BASE_URLS = new Set([DATASETS_SERVER_ROWS_URL]);
 const MAX_GAIA_ATTACHMENT_FILENAME_BYTES = 255;
 const FETCH_LOCK_RETRY_MS = 25;
-const FETCH_LOCK_STALE_MS = 10 * 60 * 1000;
+const FETCH_LOCK_HEARTBEAT_MS = 5 * 60 * 1000;
+const FETCH_LOCK_STALE_MS = 30 * 60 * 1000;
 const gaiaAttachmentFilePattern = /^[A-Za-z0-9._-]+$/;
 
 interface FetchBenchmarkOptions {
@@ -71,6 +73,17 @@ interface DatasetManifest {
 interface AttachmentManifestEntry {
 	readonly sha256: string;
 	readonly size_bytes: number;
+}
+
+interface FetchLockBody {
+	readonly created_at: string;
+	readonly nonce: string;
+	readonly pid: number;
+}
+
+interface FetchLockRead {
+	readonly body?: FetchLockBody;
+	readonly mtimeMs: number;
 }
 
 interface FetchResult {
@@ -191,10 +204,16 @@ async function withDatasetFetchLock<T>(
 ): Promise<T> {
 	const lockPath = join(cacheDir, ".fetch.lock");
 	while (true) {
-		let handle: Awaited<ReturnType<typeof open>>;
+		const lockOwner = createFetchLockBody();
+		let handle: Awaited<ReturnType<typeof open>> | undefined;
 		try {
 			handle = await open(lockPath, "wx");
+			await handle.writeFile(`${JSON.stringify(lockOwner)}\n`, "utf8");
 		} catch (error) {
+			if (handle != null) {
+				await handle.close();
+				await releaseFetchLock(lockPath, lockOwner);
+			}
 			if (!isFileExistsError(error)) {
 				throw error;
 			}
@@ -203,36 +222,141 @@ async function withDatasetFetchLock<T>(
 			}
 			await delay(FETCH_LOCK_RETRY_MS);
 			continue;
+		} finally {
+			if (handle != null) {
+				await handle.close();
+			}
 		}
+		const heartbeat = startFetchLockHeartbeat(lockPath, lockOwner);
 		try {
-			await handle.writeFile(
-				`${JSON.stringify({
-					created_at: new Date().toISOString(),
-					pid: process.pid,
-				})}\n`,
-				"utf8",
-			);
 			return await operation();
 		} finally {
-			await handle.close();
-			await rm(lockPath, { force: true });
+			clearInterval(heartbeat);
+			await releaseFetchLock(lockPath, lockOwner);
 		}
 	}
 }
 
 async function removeStaleFetchLock(lockPath: string): Promise<boolean> {
 	try {
-		const lockStat = await stat(lockPath);
-		if (Date.now() - lockStat.mtimeMs <= FETCH_LOCK_STALE_MS) {
+		const lock = await readFetchLock(lockPath);
+		if (lock.body != null && isProcessAlive(lock.body.pid)) {
 			return false;
 		}
-		await rm(lockPath, { force: true });
-		return true;
+		if (lock.body == null && Date.now() - lock.mtimeMs <= FETCH_LOCK_STALE_MS) {
+			return false;
+		}
+		return releaseFetchLock(lockPath, lock.body);
 	} catch (error) {
 		if (isNotFoundError(error)) {
 			return true;
 		}
 		throw error;
+	}
+}
+
+function createFetchLockBody(): FetchLockBody {
+	return {
+		created_at: new Date().toISOString(),
+		nonce: randomUUID(),
+		pid: process.pid,
+	};
+}
+
+function startFetchLockHeartbeat(
+	lockPath: string,
+	owner: FetchLockBody,
+): ReturnType<typeof setInterval> {
+	const heartbeat = setInterval(() => {
+		void refreshFetchLock(lockPath, owner).catch(() => undefined);
+	}, FETCH_LOCK_HEARTBEAT_MS);
+	heartbeat.unref?.();
+	return heartbeat;
+}
+
+async function refreshFetchLock(
+	lockPath: string,
+	owner: FetchLockBody,
+): Promise<void> {
+	if (await fetchLockMatches(lockPath, owner)) {
+		const now = new Date();
+		await utimes(lockPath, now, now);
+	}
+}
+
+async function releaseFetchLock(
+	lockPath: string,
+	owner: FetchLockBody | undefined,
+): Promise<boolean> {
+	if (owner == null) {
+		await rm(lockPath, { force: true });
+		return true;
+	}
+	if (!(await fetchLockMatches(lockPath, owner))) {
+		return false;
+	}
+	await rm(lockPath, { force: true });
+	return true;
+}
+
+async function fetchLockMatches(
+	lockPath: string,
+	owner: FetchLockBody,
+): Promise<boolean> {
+	try {
+		const lock = await readFetchLock(lockPath);
+		return lock.body?.nonce === owner.nonce && lock.body.pid === owner.pid;
+	} catch (error) {
+		if (isNotFoundError(error)) {
+			return false;
+		}
+		throw error;
+	}
+}
+
+async function readFetchLock(lockPath: string): Promise<FetchLockRead> {
+	const [rawLock, lockStat] = await Promise.all([
+		readFile(lockPath, "utf8"),
+		stat(lockPath),
+	]);
+	return {
+		body: parseFetchLockBody(rawLock),
+		mtimeMs: lockStat.mtimeMs,
+	};
+}
+
+function parseFetchLockBody(rawLock: string): FetchLockBody | undefined {
+	try {
+		const parsed = JSON.parse(rawLock) as Partial<FetchLockBody>;
+		const pid = parsed.pid;
+		if (
+			typeof parsed.created_at !== "string" ||
+			typeof parsed.nonce !== "string" ||
+			parsed.nonce.length === 0 ||
+			!Number.isSafeInteger(pid) ||
+			(pid as number) <= 0
+		) {
+			return undefined;
+		}
+		return {
+			created_at: parsed.created_at,
+			nonce: parsed.nonce,
+			pid: pid as number,
+		};
+	} catch {
+		return undefined;
+	}
+}
+
+function isProcessAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		if (errorCode(error) === "ESRCH") {
+			return false;
+		}
+		return true;
 	}
 }
 
@@ -875,7 +999,16 @@ if (import.meta.main) {
 	});
 }
 
+const __privateForTests = {
+	fetchLockMatches,
+	parseFetchLockBody,
+	refreshFetchLock,
+	releaseFetchLock,
+	removeStaleFetchLock,
+} as const;
+
 export {
+	__privateForTests,
 	type FetchBenchmarkOptions,
 	type FetchResult,
 	fetchBenchmark,
