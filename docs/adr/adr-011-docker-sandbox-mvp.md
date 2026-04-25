@@ -11,6 +11,8 @@
 
 Draft. 本 ADR 先记录 DockerSandbox MVP 的待验证契约，不在 E1 定稿。E2 Day 0 spike 必须用实际 Docker smoke 验证可行性后，再把状态改为 Proposed / Accepted。
 
+Day 0 spike 初判见 [DockerSandbox MVP Spike](../research/2026-04-26-01-docker-sandbox-mvp-spike.md)：E2 hard isolation gate 采用 **Linux-only Docker**；macOS 只跑 non-Docker unit tests / optional local smoke；MVP 控制面优先 Docker CLI，不引入 `dockerode`。
+
 ---
 
 ## 2. Context
@@ -76,7 +78,7 @@ Artifacts 必须写入 `benchmarks.output_dir` / `benchmarks.submissions_dir` �
 
 ### 3.6 CI feasibility
 
-E2 Day 0 只把 Linux Docker runner 作为 gate。GitHub-hosted macOS runner 不作为 DockerSandbox gate；macOS 可跑 non-Docker unit tests。
+E2 Day 0 只把 Linux Docker runner 作为 gate。GitHub-hosted macOS runner 不作为 DockerSandbox gate；macOS 可跑 non-Docker unit tests 和 optional local smoke。
 
 当前外部依据：
 
@@ -87,6 +89,10 @@ Sources:
 - https://docs.github.com/en/actions/reference/runners/github-hosted-runners
 - https://docs.github.com/en/actions/reference/runners/self-hosted-runners
 
+### 3.7 Control plane
+
+MVP 优先通过 Docker CLI 调 `docker run` / `docker inspect` / `docker rm -f`，不引入新 npm dependency。`dockerode` 可作为后续增强（streaming logs / stats / attach），但不是 E2 Day 0 前置。
+
 ---
 
 ## 4. Open Questions
@@ -96,6 +102,7 @@ Sources:
 3. Package install：允许联网安装依赖，还是预bake image/cache？
 4. Mac local dev：Docker Desktop 可选支持是否进入 DoD？
 5. CI：`ubuntu-latest` 是否稳定跑 Docker smoke，还是需要 self-hosted Linux runner？
+6. Domain whitelist：是否需要 host egress proxy；Docker native network 不提供稳定 domain-level allowlist。
 
 ---
 
@@ -107,6 +114,7 @@ Sources:
 - memory / CPU limit 可配置并记录
 - network deny/allow 行为有真实 smoke
 - E2 implementation breakdown 更新到 `docs/planning/2026-04-26-01-iter-e2-swe-bench-verified.md`
+- 若 Linux Docker smoke 失败，则 E2 只能降级为 trusted/local smoke，不能 claim official Verified hard isolation。
 
 ---
 

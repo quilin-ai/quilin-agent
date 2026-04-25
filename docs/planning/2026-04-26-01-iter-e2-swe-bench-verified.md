@@ -16,6 +16,7 @@ Iter E2 的目标是把 E1 的通用 benchmark harness 推进到 SWE-bench Verif
 - Iter E1 已完成 benchmark workspace、wire schema、runner、dataset loader、scorer、submission adapter。
 - R1-R5 review 链证明 lexical shell sandbox 会持续出现新 token 形态；ADR-010 §3.7 已改为 best-effort workspace guard。
 - E2 hard isolation gate 转入 DockerSandbox MVP，ADR-011 先以 draft 启动，spike 后再定稿。
+- Day 0 spike 初判：**Pivot Linux-only**；macOS 不作为 DockerSandbox gate；MVP 先用 Docker CLI，不引入 `dockerode`。
 
 ### 0.2 Spike 问题
 
@@ -33,10 +34,14 @@ Iter E2 的目标是把 E1 的通用 benchmark harness 推进到 SWE-bench Verif
 - GitHub-hosted runner 文档列出 Linux / Windows / macOS hosted runners，并说明 macOS arm64 不支持 nested virtualization；因此 E2 不把 macOS runner 作为 DockerSandbox gate。
 - GitHub self-hosted runner 文档说明使用 Docker container actions / service containers 需要 Linux machine + Docker installed；E2 CI gate 优先 `ubuntu-latest`，self-hosted Linux 作为后备。
 - Day 0 必须用实际 workflow 或本地命令验证 `docker version`、`docker run --rm alpine:...`、bind mount、network deny/allow 是否成立。
+- 本机 macOS 实测 Docker CLI 存在，但 `orbstack` / `desktop-linux` / `default` context 均不能连接 daemon；本机不能作为 Docker gate 实证源。
 
 Sources:
 - https://docs.github.com/en/actions/reference/runners/github-hosted-runners
 - https://docs.github.com/en/actions/reference/runners/self-hosted-runners
+
+Spike report:
+- [DockerSandbox MVP Spike](../research/2026-04-26-01-docker-sandbox-mvp-spike.md)
 
 ### 0.4 Day 0 DoD
 
@@ -45,6 +50,7 @@ Sources:
 - [ ] 网络策略 spike：deny-by-default 可执行；LLM / dataset / leaderboard 白名单路径明确
 - [ ] E2 implementation breakdown 产出，明确 runner / SWE-bench dataset / harness / Docker / submission 五轨道写边界
 - [ ] 若 Docker 不可用：E2 降级为 trusted/local smoke，不 claim official Verified hard isolation
+- [ ] `ubuntu-latest` Docker smoke 通过；macOS 只跑 non-Docker unit tests
 
 ---
 
@@ -83,6 +89,7 @@ Sources:
 ## 3. 收口门槛
 
 - DockerSandbox gate：official / untrusted run 必须在 DockerSandbox 中执行 repo commands
+- CI gate：Linux Docker smoke 必须通过；macOS 不作为 DockerSandbox gate
 - Coverage：benchmarks lines / branches / functions / statements ≥ 95%
 - `pnpm --filter @quilin/benchmarks build` / lint / test 全绿
 - `just test-all` 三语言全绿
