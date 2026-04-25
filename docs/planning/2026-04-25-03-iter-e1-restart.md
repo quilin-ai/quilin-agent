@@ -32,8 +32,9 @@
 
 | 轮次 | 任务 | 状态 | commit | 实证 |
 |---|---|---|---|---|
-| Day 0 | ADR-010 + 本 plan + ADR-009 §3.4 加 `benchmarks` namespace | ⏳ 待 commit | — | — |
-| 选择性 restore | `benchmarks/` workspace + `pnpm-workspace.yaml` 注册 + `index.ts` 加 `runAgentLoop` export | ⏳ 待启动 | — | 由 Codex 主线做 |
+| Day 0 | ADR-010 + 本 plan + ADR-009 §3.4 加 `benchmarks` namespace | ✅ 完成 | `8254f70` | 3 files / 359 insertions |
+| 选择性 restore | `benchmarks/` workspace（package/tsconfig/vitest）+ `scripts/fetch-benchmark.ts` 339 LOC + `src/wire/{task,run,result,cost,index}.ts` 139 LOC + 4 个 wire test 240 LOC + `pnpm-workspace.yaml` + `index.ts` 加 `runAgentLoop / AgentLoopConfig / LoopHooks` export | ✅ 完成 | `b7e8e2f` | benchmarks vitest = 4 files / 45 tests passed；coverage lines/branches/functions/statements 全 100%；tsc 0；biome 0；root pnpm install OK；agent-core tsc 0；`just test-all` = TS 717 + Python 187 + Rust 1 不回归；Python TOTAL 95.28% 不回归；code-review-graph risk 0 |
+| Iter E1 第一轮（Pasteur runner + Galois dataset + Lavoisier scorer + Mendeleev submission） | 4 路并行 | ⏳ 待启动 | — | Codex 派任务书 |
 
 ---
 
