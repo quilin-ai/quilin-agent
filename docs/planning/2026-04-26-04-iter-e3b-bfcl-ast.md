@@ -26,9 +26,9 @@
 | 轮次 | 任务 | 状态 | commit | 实证 |
 |---|---|---|---|---|
 | Day 0 spike | BFCL v4 现状 + 路径 + category enum + 范围决议 | ✅ closed | `50c40f4` | 269 行；4 选 1 决议：直接实现 non-live + live AST slice |
-| Day 0 plan | 本 plan + ADR-010 §3.1 是否扩 metadata 字段 | 🔄 本轮 | — | reassessment + spike 的执行清单 |
-| Iter E3b first-cut | BFCL v4 loader + AST scorer + submission adapter | ⏳ 待启动 | — | non-live + live AST/relevance；partial_eval=true |
-| Iter E3b R1 review | R1 独立 subagent (新名字，不复用 E3a R1-R5 reviewers) | ⏳ 待启动 | — | first-cut 后 |
+| Day 0 plan | 本 plan + 4 轨道并行边界 | ✅ closed | `fa2a837` | reassessment + spike 的执行清单 |
+| Iter E3b first-cut | BFCL v4 loader + AST scorer + submission adapter + fetch CLI + runner.collect 分支 | ✅ closed | `d4fd62a` | 14 files +2287/-20；benchmarks 302 passed；Branch 95.23 双入口；just test-all 三语言绿；AMB p95 0.273ms ≤ 300ms |
+| Iter E3b R1 review | R1 独立 subagent (Lorentz，不复用 E3a R1-R5 reviewers) | ⏳ 进行中 | — | first-cut 后第一轮交叉 review |
 | Iter E3b R1 fix | 按 R1 finding 修复 | ⏳ 待启动 | — | review 后 |
 | Iter E3b 收口 | review chain 闭合 + 95% 覆盖率 + just test-all 三语言绿 + DockerSandbox smoke pass | ⏳ 待启动 | — | review 通过后 |
 
