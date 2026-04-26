@@ -31,7 +31,8 @@
 | Iter E3c1a first-cut | loader + official Python checker adapter + fixture submission + fetch CLI | ✅ closed | `976be69` | 15 files +1989/-16；benchmarks 331 passed / 1 skipped；Branch 95.11；just test-all 三语言绿；AMB p95 0.248ms |
 | Iter E3c1a R1 review | R1 独立 subagent (Heisenberg) | ✅ closed | `ae545bf` | 1 BLOCKING（mpmath 漏依赖）+ 2 HIGH（adapter error 失败模式坍缩 / signal forwarding 缺失）+ 2 MEDIUM（UTF-8 byte slicing / web_search backend latent gap）+ 1 LOW |
 | Iter E3c1a R1 fix | mpmath wheel vendor (zipimport sys.path) / BfclMultiTurnAdapterError throw / SIGINT-SIGTERM 转发 / UTF-8 byte-safe 截断 | ✅ closed | `5f4446b` | 7 files +376/-23；benchmarks 335 passed / 1 skipped；Branch 95.00 双入口（串行）；just test-all TS717+Py187+Rust1 全绿；AMB p95 0.219ms ≤ 300ms；mpmath wheel smoke PASS |
-| Iter E3c1a R2 review | R2 独立 subagent (Pauli，不复用 Heisenberg/Lorentz/Schrödinger/E3a R1-R5) | ⏳ 待启动 | — | R1 fix 后第二轮 confirm close；期望 close E3c1a |
+| Iter E3c1a R2 review | R2 独立 subagent (Pauli) | ✅ **closed** | TBD | 0 BLOCKING / 0 HIGH / 2 MEDIUM (defer) / 1 LOW；§5 验收全部 PASS：Branch 95.00 / 三语言绿 / AMB p95 0.219ms |
+| **Iter E3c1a 收口** | review chain (R1-R2) 闭合 + 全 §5 验收 PASS | ✅ **closed** | R2 commit | E3c1a 完整收口；3 finding 顺延 R3/E3c1b |
 | Iter E3c1a R1 fix（如需）| 按 R1 finding 修复 | ⏳ 待启动 | — | review 后 |
 | Iter E3c1a 收口 | review chain 闭合 + 95% 覆盖率 + just test-all 三语言绿 | ⏳ 待启动 | — | review 通过后 |
 
