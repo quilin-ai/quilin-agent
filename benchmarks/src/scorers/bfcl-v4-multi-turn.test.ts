@@ -426,7 +426,7 @@ describe("bfclV4MultiTurnScorer", () => {
 			timeoutMs: 2_000,
 		});
 
-		await new Promise((resolve) => setTimeout(resolve, 50));
+		await new Promise((resolve) => setTimeout(resolve, 200));
 		process.emit("SIGTERM", "SIGTERM");
 
 		await expect(run).resolves.toMatchObject({
