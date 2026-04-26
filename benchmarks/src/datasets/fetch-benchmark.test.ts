@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import {
 	mkdir,
 	mkdtemp,
+	open as openFile,
 	readdir,
 	readFile,
 	rm,
@@ -333,7 +334,7 @@ describe("fetch-benchmark cache intent", () => {
 		).rejects.toThrow();
 	});
 
-	it("does not remove a stale lock whose pid is still alive", async () => {
+	it("keeps a live lock when the lock freshness is still within the stale threshold", async () => {
 		const cacheRoot = await tempCacheRoot();
 		const datasetDir = join(cacheRoot, "datasets", "swe-bench-lite");
 		const lockPath = join(datasetDir, ".fetch.lock");
@@ -354,6 +355,29 @@ describe("fetch-benchmark cache intent", () => {
 			__privateForTests.removeStaleFetchLock(lockPath),
 		).resolves.toBe(false);
 		await expect(readFile(lockPath, "utf8")).resolves.toContain("live-lock");
+	});
+
+	it("removes a stale lock even when the stored pid now belongs to a live process", async () => {
+		const cacheRoot = await tempCacheRoot();
+		const datasetDir = join(cacheRoot, "datasets", "swe-bench-lite");
+		const lockPath = join(datasetDir, ".fetch.lock");
+		const oldTime = new Date(Date.now() - 31 * 60 * 1000);
+		await mkdir(datasetDir, { recursive: true });
+		await writeFile(
+			lockPath,
+			JSON.stringify({
+				created_at: oldTime.toISOString(),
+				nonce: "recycled-pid-lock",
+				pid: process.pid,
+			}),
+			"utf8",
+		);
+		await utimes(lockPath, oldTime, oldTime);
+
+		await expect(
+			__privateForTests.removeStaleFetchLock(lockPath),
+		).resolves.toBe(true);
+		await expect(readFile(lockPath, "utf8")).rejects.toThrow();
 	});
 
 	it("removes only the lock matching the owner nonce", async () => {
@@ -444,6 +468,11 @@ describe("fetch-benchmark cache intent", () => {
 		).toBeUndefined();
 		expect(
 			__privateForTests.parseFetchLockBody(
+				JSON.stringify({ created_at: "not-a-date", nonce: "x", pid: 1 }),
+			),
+		).toBeUndefined();
+		expect(
+			__privateForTests.parseFetchLockBody(
 				JSON.stringify({ created_at: "x", nonce: "x" }),
 			),
 		).toBeUndefined();
@@ -487,6 +516,45 @@ describe("fetch-benchmark cache intent", () => {
 		await expect(
 			__privateForTests.fetchLockMatches(datasetDir, owner),
 		).rejects.toThrow();
+	});
+
+	it("fails loudly on Windows instead of relying on unsupported pid liveness semantics", async () => {
+		const cacheRoot = await tempCacheRoot();
+		const restorePlatform = stubProcessPlatform("win32");
+		const fetchMock = mockRowsFetch(1);
+		try {
+			await expect(
+				fetchBenchmark(options({ cacheRoot, maxRows: 1 })),
+			).rejects.toThrow(/lockfile is not supported on Windows/);
+		} finally {
+			restorePlatform();
+		}
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("cleans up an empty lockfile if writing the lock owner fails", async () => {
+		const cacheRoot = await tempCacheRoot();
+		const datasetDir = join(cacheRoot, "datasets", "swe-bench-lite");
+		const lockPath = join(datasetDir, ".fetch.lock");
+		const probePath = join(cacheRoot, "probe.lock");
+		const probe = await openFile(probePath, "w");
+		const fileHandlePrototype = Object.getPrototypeOf(probe) as {
+			writeFile: typeof probe.writeFile;
+		};
+		await probe.close();
+		const writeSpy = vi
+			.spyOn(fileHandlePrototype, "writeFile")
+			.mockRejectedValueOnce(new Error("simulated lock write failure"));
+		const fetchMock = mockRowsFetch(1);
+		try {
+			await expect(
+				fetchBenchmark(options({ cacheRoot, maxRows: 1 })),
+			).rejects.toThrow(/simulated lock write failure/);
+		} finally {
+			writeSpy.mockRestore();
+		}
+		expect(fetchMock).not.toHaveBeenCalled();
+		await expect(readFile(lockPath, "utf8")).rejects.toThrow();
 	});
 
 	it("cleans staged GAIA attachments when an attachment fetch fails", async () => {
@@ -1133,6 +1201,20 @@ function runNodeModule<T extends ChildProcessResult>(
 			resolve({ ...JSON.parse(line), exitCode, stderr } as T);
 		});
 	});
+}
+
+function stubProcessPlatform(platform: NodeJS.Platform): () => void {
+	const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
+	Object.defineProperty(process, "platform", {
+		configurable: true,
+		value: platform,
+	});
+	return () => {
+		if (descriptor == null) {
+			return;
+		}
+		Object.defineProperty(process, "platform", descriptor);
+	};
 }
 
 interface ChildProcessResult {

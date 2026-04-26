@@ -202,6 +202,7 @@ async function withDatasetFetchLock<T>(
 	cacheDir: string,
 	operation: () => Promise<T>,
 ): Promise<T> {
+	assertFetchLockPlatformSupported();
 	const lockPath = join(cacheDir, ".fetch.lock");
 	while (true) {
 		const lockOwner = createFetchLockBody();
@@ -212,7 +213,8 @@ async function withDatasetFetchLock<T>(
 		} catch (error) {
 			if (handle != null) {
 				await handle.close();
-				await releaseFetchLock(lockPath, lockOwner);
+				handle = undefined;
+				await rm(lockPath, { force: true });
 			}
 			if (!isFileExistsError(error)) {
 				throw error;
@@ -240,10 +242,15 @@ async function withDatasetFetchLock<T>(
 async function removeStaleFetchLock(lockPath: string): Promise<boolean> {
 	try {
 		const lock = await readFetchLock(lockPath);
-		if (lock.body != null && isProcessAlive(lock.body.pid)) {
+		const lockAgeMs = fetchLockFreshnessAgeMs(lock);
+		if (lock.body == null && lockAgeMs <= FETCH_LOCK_STALE_MS) {
 			return false;
 		}
-		if (lock.body == null && Date.now() - lock.mtimeMs <= FETCH_LOCK_STALE_MS) {
+		if (
+			lock.body != null &&
+			isProcessAlive(lock.body.pid) &&
+			lockAgeMs <= FETCH_LOCK_STALE_MS
+		) {
 			return false;
 		}
 		return releaseFetchLock(lockPath, lock.body);
@@ -252,6 +259,14 @@ async function removeStaleFetchLock(lockPath: string): Promise<boolean> {
 			return true;
 		}
 		throw error;
+	}
+}
+
+function assertFetchLockPlatformSupported(): void {
+	if (process.platform === "win32") {
+		throw new Error(
+			"fetch-benchmark lockfile is not supported on Windows; use Linux/macOS or provide a platform-native lock implementation.",
+		);
 	}
 }
 
@@ -329,8 +344,13 @@ function parseFetchLockBody(rawLock: string): FetchLockBody | undefined {
 	try {
 		const parsed = JSON.parse(rawLock) as Partial<FetchLockBody>;
 		const pid = parsed.pid;
+		const createdAtMs =
+			typeof parsed.created_at === "string"
+				? Date.parse(parsed.created_at)
+				: Number.NaN;
 		if (
 			typeof parsed.created_at !== "string" ||
+			!Number.isFinite(createdAtMs) ||
 			typeof parsed.nonce !== "string" ||
 			parsed.nonce.length === 0 ||
 			!Number.isSafeInteger(pid) ||
@@ -346,6 +366,18 @@ function parseFetchLockBody(rawLock: string): FetchLockBody | undefined {
 	} catch {
 		return undefined;
 	}
+}
+
+function fetchLockFreshnessAgeMs(lock: FetchLockRead): number {
+	const createdAtMs =
+		lock.body == null
+			? Number.NEGATIVE_INFINITY
+			: Date.parse(lock.body.created_at);
+	const freshnessMs = Math.max(
+		lock.mtimeMs,
+		Number.isFinite(createdAtMs) ? createdAtMs : Number.NEGATIVE_INFINITY,
+	);
+	return Date.now() - freshnessMs;
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -1000,6 +1032,8 @@ if (import.meta.main) {
 }
 
 const __privateForTests = {
+	assertFetchLockPlatformSupported,
+	fetchLockFreshnessAgeMs,
 	fetchLockMatches,
 	parseFetchLockBody,
 	refreshFetchLock,

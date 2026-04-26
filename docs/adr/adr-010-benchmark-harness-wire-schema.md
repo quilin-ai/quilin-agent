@@ -113,7 +113,7 @@ BenchmarkCost {
 
 #### Fetch lockfile protocol
 
-`fetch-benchmark` 对每个 dataset cache 目录使用 `<cacheDir>/.fetch.lock` 串行化同 dataset fetch；不同 dataset 使用不同 cacheDir，因此互不阻塞。锁文件通过 `open(..., "wx")` / `O_EXCL` 创建，body 为 `{created_at, pid, nonce}`；持有者每 5 分钟 heartbeat 更新 mtime，释放前必须 read-back 校验 `pid + nonce`，只删除自己持有的 lock。竞争者遇到已存在 lock 时先做 pid liveness check：pid 存活则等待；pid 已退出则清理 orphan lock；无效 lock 只有在 mtime 超过 30 分钟 stale threshold 后才清理。该协议在 macOS APFS 与 Linux ext4/tmpfs 上有效；NFS / Windows 不纳入 E2/E3 CI 支持面，必须 fail-loud 或改用平台原生锁。
+`fetch-benchmark` 对每个 dataset cache 目录使用 `<cacheDir>/.fetch.lock` 串行化同 dataset fetch；不同 dataset 使用不同 cacheDir，因此互不阻塞。锁文件通过 `open(..., "wx")` / `O_EXCL` 创建，body 为 `{created_at, pid, nonce}`；持有者每 5 分钟 heartbeat 更新 mtime，释放前必须 read-back 校验 `pid + nonce`，只删除自己持有的 lock。竞争者遇到已存在 lock 时做双因子 stale 判定：pid 存活且 freshness timestamp（heartbeat mtime，`created_at` 作为初始 fallback）距今 ≤ 30 分钟才继续等待；pid 已退出、freshness 超过 30 分钟、或 lock body 无效且 mtime 超过 30 分钟时清理。该兜底用于避免 PID recycling 后无关进程让 orphan lock 永久存活。该协议在 macOS APFS 与 Linux ext4/tmpfs 上有效；NFS / Windows 不纳入 E2/E3 CI 支持面，必须 fail-loud 或改用平台原生锁。
 
 ### 3.5 Scorer 协议
 
