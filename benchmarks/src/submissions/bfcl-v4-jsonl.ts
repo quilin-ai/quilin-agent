@@ -50,6 +50,22 @@ export function createBfclV4JsonlAdapter(
 		serialize(results) {
 			return `${JSON.stringify(createBfclV4SubmissionManifest(results, modelName), null, 2)}\n`;
 		},
+		serializeFiles(results, runId) {
+			assertSafePathSegment(runId, "run_id");
+			const files = new Map<string, string>([
+				[
+					`bfcl-v4/${runId}/manifest.json`,
+					`${JSON.stringify(createBfclV4SubmissionManifest(results, modelName, runId), null, 2)}\n`,
+				],
+			]);
+			for (const file of createBfclV4ResultFiles(results, {
+				modelName,
+				runId,
+			})) {
+				files.set(file.path, file.content);
+			}
+			return files;
+		},
 		filename(runId) {
 			assertSafePathSegment(runId, "run_id");
 			return `bfcl-v4/${runId}/manifest.json`;
@@ -100,10 +116,11 @@ export function createBfclV4ResultFiles(
 function createBfclV4SubmissionManifest(
 	results: readonly BenchmarkResult[],
 	modelName: string,
+	runId = "RUN_ID",
 ): BfclSubmissionManifest {
 	const files = createBfclV4ResultFiles(results, {
 		modelName,
-		runId: "RUN_ID",
+		runId,
 	});
 	return {
 		categories_included: categoriesIncluded(results),

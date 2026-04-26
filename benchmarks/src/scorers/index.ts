@@ -1,4 +1,5 @@
 export {
+	__privateForTests as __bfclV4AstPrivateForTests,
 	BFCL_V4_AST_SCORER_TYPE,
 	bfclV4AstScorer,
 	scoreBfclV4Ast,

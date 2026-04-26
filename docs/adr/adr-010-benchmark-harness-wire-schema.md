@@ -54,7 +54,7 @@ Iter E1/E2 接受 `swe-bench-lite` / `swe-bench-verified`；**Iter E3（2026-04-
 新增两个 dataset 的字段约束：
 
 - `gaia`：`inputs.{question, level, file_name?, file_path?, file_attachments?}`；`expected.{final_answer, eval_metadata}`；`scorer_type = "gaia-exact-match"`。`file_path` 必须是 Docker/container 视角 POSIX 路径（当前 `/workspace/cache/datasets/gaia/attachments/<file>`），不得暴露 host 绝对路径。`file_attachments[]` 元素冻结为 `{container_path, file_name, file_path, sha256, size_bytes}`，其中 `container_path` 与 `file_path` 均为 `/workspace/cache/datasets/gaia/attachments/<file_name>`，`file_name` 必须匹配 `^[A-Za-z0-9._-]+$` 且 UTF-8 byte length ≤ 255，`sha256` 必须匹配 lowercase hex64 `^[a-f0-9]{64}$`，`size_bytes` 必须是 non-negative integer；禁止包含 `host_path` / `file_host_path` / `relative_path` 等 host filesystem 细节。
-- `bfcl-v4`：`inputs.{prompt, candidate_functions, multi_turn?}`；`expected.{ground_truth_calls}`；`scorer_type = "bfcl-tool-call-match"`
+- `bfcl-v4`（Iter E3b partial slice）：`inputs.{question, messages, function_definitions}`；`expected.{ground_truth, expected_tool_calls, category, general_category}`；`metadata.{category, general_category, partial_eval: true, official_parity: false, source_commit}`；`scorer_type = "bfcl-v4-ast"`。`function_definitions` 保留官方 BFCL v4 raw function schema，scorer 读取其中 `parameters.properties[*].type/items.type` 执行 Java / JavaScript type conversion；category 仅通过 `metadata.category` / `metadata.general_category` 路由，不新增 top-level enum。
 
 每个新 dataset 由独立 scorer + submission adapter 实现；runner 5 阶段生命周期 + DockerSandbox MVP DI 不变。
 

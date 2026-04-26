@@ -4,6 +4,7 @@ import {
 	bfclV4JsonlAdapter,
 	createBfclV4JsonlAdapter,
 	createBfclV4ResultFiles,
+	serializeSubmissionFiles,
 } from "./index.js";
 
 const baseResult: BenchmarkResult = {
@@ -81,6 +82,43 @@ describe("bfclV4JsonlAdapter", () => {
 				},
 			],
 		});
+	});
+
+	it("serializes manifest and per-category result files through the adapter interface", () => {
+		const files = serializeSubmissionFiles(
+			bfclV4JsonlAdapter,
+			[
+				baseResult,
+				{
+					...baseResult,
+					details: { category: "live_relevance", general_category: "live" },
+					output: { tool_calls: [] },
+					task_id: "live_relevance_0-0-0",
+				},
+			],
+			"run-xyz",
+		);
+
+		expect([...files.keys()]).toEqual([
+			"bfcl-v4/run-xyz/manifest.json",
+			"bfcl-v4/run-xyz/result/quilin-agent/live/BFCL_v4_live_relevance_result.json",
+			"bfcl-v4/run-xyz/result/quilin-agent/non_live/BFCL_v4_simple_python_result.json",
+		]);
+		expect(
+			JSON.parse(files.get("bfcl-v4/run-xyz/manifest.json") ?? "{}"),
+		).toMatchObject({
+			official_parity: false,
+			partial_eval: true,
+			result_files: [
+				"bfcl-v4/run-xyz/result/quilin-agent/live/BFCL_v4_live_relevance_result.json",
+				"bfcl-v4/run-xyz/result/quilin-agent/non_live/BFCL_v4_simple_python_result.json",
+			],
+		});
+		expect(
+			files.get(
+				"bfcl-v4/run-xyz/result/quilin-agent/non_live/BFCL_v4_simple_python_result.json",
+			),
+		).toContain("calculate_triangle_area");
 	});
 
 	it("uses nested submission filename and rejects unsafe path segments", () => {

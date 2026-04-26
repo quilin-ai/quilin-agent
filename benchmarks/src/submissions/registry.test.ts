@@ -4,6 +4,7 @@ import {
 	defaultSubmissionAdapterRegistry,
 	gaiaJsonlAdapter,
 	SubmissionAdapterRegistry,
+	serializeSubmissionFiles,
 	sweBenchVerifiedJsonlAdapter,
 } from "./index.js";
 import type { SubmissionAdapter } from "./types.js";
@@ -69,5 +70,11 @@ describe("SubmissionAdapterRegistry", () => {
 		expect(defaultSubmissionAdapterRegistry.get("bfcl-v4")).toBe(
 			bfclV4JsonlAdapter,
 		);
+	});
+
+	it("falls back to single-file serialization for adapters without multi-file support", () => {
+		expect([...serializeSubmissionFiles(liteAdapter, [], "run-1")]).toEqual([
+			["lite-run-1.json", "{}"],
+		]);
 	});
 });

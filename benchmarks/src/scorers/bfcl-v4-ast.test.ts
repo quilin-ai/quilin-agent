@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { BenchmarkTask } from "../wire/index.js";
 import {
+	__bfclV4AstPrivateForTests,
 	BFCL_V4_AST_SCORER_TYPE,
 	bfclV4AstScorer,
 	scoreBfclV4Ast,
@@ -262,6 +263,19 @@ describe("bfclV4AstScorer", () => {
 			scoreBfclV4Ast(
 				task({
 					category: "simple_python",
+					ground_truth: [{ lookup: { query: "weather" } }],
+				}),
+				{
+					tool_calls: [
+						{ function: "lookup", parameters: { query: "weather" } },
+					],
+				},
+			).passed,
+		).toBe(true);
+		expect(
+			scoreBfclV4Ast(
+				task({
+					category: "simple_python",
 					ground_truth: { lookup: { query: ["weather"] } },
 				}),
 				{
@@ -296,6 +310,18 @@ describe("bfclV4AstScorer", () => {
 				{ tool_calls: [] },
 			).passed,
 		).toBe(false);
+		expect(
+			scoreBfclV4Ast(
+				{
+					...task({
+						category: "simple_python",
+						ground_truth: [{ first: { value: [1] } }],
+					}),
+					metadata: {},
+				},
+				{ tool_calls: [{ arguments: { value: 1 }, function: "first" }] },
+			).passed,
+		).toBe(true);
 	});
 
 	it("rejects malformed nested argument objects and accepts alternate scalar values", async () => {
@@ -420,11 +446,295 @@ describe("bfclV4AstScorer", () => {
 			).passed,
 		).toBe(false);
 	});
+
+	it("converts Java string arguments before AST value matching", async () => {
+		const javaTask = task({
+			category: "simple_java",
+			function_definitions: [
+				functionDefinition("setUserFlags", {
+					enabled: { type: "boolean" },
+					ids: { items: { type: "integer" }, type: "Array" },
+					limit: { type: "long" },
+				}),
+			],
+			ground_truth: [
+				{
+					setUserFlags: {
+						enabled: [true],
+						ids: [[1, 2, 3]],
+						limit: [42],
+					},
+				},
+			],
+		});
+
+		expect(
+			scoreBfclV4Ast(javaTask, {
+				tool_calls: [
+					{
+						arguments: {
+							enabled: "true",
+							ids: "new int[]{1, 2, 3}",
+							limit: "42L",
+						},
+						function: "setUserFlags",
+					},
+				],
+			}).passed,
+		).toBe(true);
+		expect(
+			scoreBfclV4Ast(javaTask, {
+				tool_calls: [
+					{
+						arguments: {
+							enabled: true,
+							ids: "new int[]{1, 2, 3}",
+							limit: "42L",
+						},
+						function: "setUserFlags",
+					},
+				],
+			}).passed,
+		).toBe(false);
+	});
+
+	it("converts JavaScript string arguments before AST value matching", async () => {
+		const javascriptTask = task({
+			category: "simple_javascript",
+			function_definitions: [
+				functionDefinition("submitAtCoordinate", {
+					coordinates: { items: { type: "float" }, type: "array" },
+					formId: { type: "String" },
+					isComplete: { type: "Boolean" },
+				}),
+			],
+			ground_truth: [
+				{
+					submitAtCoordinate: {
+						coordinates: [[60, 30]],
+						formId: ["loginForm"],
+						isComplete: [true],
+					},
+				},
+			],
+		});
+
+		expect(
+			scoreBfclV4Ast(javascriptTask, {
+				tool_calls: [
+					{
+						arguments: {
+							coordinates: "[60, 30]",
+							formId: '"loginForm"',
+							isComplete: "true",
+						},
+						function: "submitAtCoordinate",
+					},
+				],
+			}).passed,
+		).toBe(true);
+		expect(
+			scoreBfclV4Ast(javascriptTask, {
+				tool_calls: [
+					{
+						arguments: {
+							coordinates: "[30, 60]",
+							formId: '"loginForm"',
+							isComplete: "true",
+						},
+						function: "submitAtCoordinate",
+					},
+				],
+			}).passed,
+		).toBe(false);
+	});
+
+	it("supports metadata language overrides for live AST fixtures", async () => {
+		const liveJavascriptTask = task({
+			category: "live_simple",
+			function_definitions: [
+				functionDefinition("toggleFeature", {
+					enabled: { type: "Boolean" },
+				}),
+			],
+			ground_truth: [{ toggleFeature: { enabled: [false] } }],
+			language: "javascript",
+		});
+
+		expect(
+			scoreBfclV4Ast(liveJavascriptTask, {
+				tool_calls: [
+					{ arguments: { enabled: "false" }, function: "toggleFeature" },
+				],
+			}).passed,
+		).toBe(true);
+	});
+
+	it("ports Java converter branches used by the official BFCL AST checker", () => {
+		const { convertJavaValue } = __bfclV4AstPrivateForTests;
+
+		expect(convertJavaValue("127", "byte")).toBe(127);
+		expect(convertJavaValue("bad", "short")).toBe("bad");
+		expect(convertJavaValue("3.5F", "float")).toBe(3.5);
+		expect(convertJavaValue("3.5", "float")).toBe("3.5");
+		expect(convertJavaValue("2.25", "double")).toBe(2.25);
+		expect(convertJavaValue("2.25D", "double")).toBe("2.25D");
+		expect(convertJavaValue("42L", "long")).toBe(42);
+		expect(convertJavaValue("42", "long")).toBe("42");
+		expect(convertJavaValue("false", "boolean")).toBe(false);
+		expect(convertJavaValue("maybe", "boolean")).toBe("maybe");
+		expect(convertJavaValue("'x'", "char")).toBe("x");
+		expect(convertJavaValue("xy", "char")).toBe("xy");
+		expect(convertJavaValue("abc", "String")).toBe("abc");
+		expect(convertJavaValue("123", "any")).toBe("123");
+		expect(convertJavaValue("new int[]{1, 2, 3}", "Array", "integer")).toEqual([
+			1, 2, 3,
+		]);
+		expect(
+			convertJavaValue('new Object[]{1L, 3f, 4.5, "x", false}', "Array"),
+		).toEqual([1, 3, 4.5, "x", false]);
+		expect(convertJavaValue("not-array", "Array")).toBe("not-array");
+		expect(
+			convertJavaValue(
+				'new ArrayList<>(Arrays.asList("a", "b"))',
+				"ArrayList",
+				"String",
+			),
+		).toEqual(["a", "b"]);
+		expect(
+			convertJavaValue("new ArrayList<>() {{ add(1); add(2); }}", "ArrayList"),
+		).toEqual([1, 2]);
+		expect(convertJavaValue("new ArrayList<>()", "ArrayList")).toEqual([]);
+		expect(convertJavaValue("bad-list", "ArrayList")).toBe("bad-list");
+		expect(
+			convertJavaValue(
+				'new HashMap<String, Object>() {{ put("key", true); }}',
+				"HashMap",
+			),
+		).toEqual({ key: true });
+		expect(convertJavaValue("new HashMap<>()", "HashMap")).toEqual({});
+		expect(convertJavaValue("bad-map", "HashMap")).toBe("bad-map");
+		expect(convertJavaValue("value", "Unsupported")).toBe("value");
+	});
+
+	it("ports JavaScript converter branches used by the official BFCL AST checker", () => {
+		const { convertJsValue, splitTopLevel, topLevelSeparatorIndex } =
+			__bfclV4AstPrivateForTests;
+
+		expect(convertJsValue('"abc"', "String")).toBe("abc");
+		expect(convertJsValue("abc", "String")).toBe("abc");
+		expect(convertJsValue("12", "integer")).toBe(12);
+		expect(convertJsValue("12.5", "integer")).toBe("12.5");
+		expect(convertJsValue("12.5", "float")).toBe(12.5);
+		expect(convertJsValue("12.5px", "float")).toBe("12.5px");
+		expect(convertJsValue("12n", "Bigint")).toBe(12);
+		expect(convertJsValue("12", "Bigint")).toBe("12");
+		expect(convertJsValue("true", "Boolean")).toBe(true);
+		expect(convertJsValue("maybe", "Boolean")).toBe("maybe");
+		expect(convertJsValue("new Array(1, 'two', true)", "array")).toEqual([
+			1,
+			"two",
+			true,
+		]);
+		expect(convertJsValue("[1n, 2.5, abc]", "array")).toEqual([1, 2.5, "abc"]);
+		expect(convertJsValue("[1.5, 2.5]", "array", "float")).toEqual([1.5, 2.5]);
+		expect(convertJsValue("[]", "array")).toEqual([]);
+		expect(convertJsValue("not-array", "array")).toBe("not-array");
+		expect(convertJsValue("{'key': 123, nested: [1, 2]}", "dict")).toEqual({
+			key: 123,
+			nested: [1, 2],
+		});
+		expect(convertJsValue("{nested: {enabled: true}}", "dict")).toEqual({
+			nested: { enabled: true },
+		});
+		expect(convertJsValue("{}", "dict")).toEqual({});
+		expect(convertJsValue("not-dict", "dict")).toBe("not-dict");
+		expect(convertJsValue("{bad}", "dict")).toBe("{bad}");
+		expect(convertJsValue("{123: true}", "dict")).toBe("{123: true}");
+		expect(convertJsValue("abc", "any")).toBe("abc");
+		expect(convertJsValue("abc", "Unsupported")).toBe("abc");
+		expect(splitTopLevel("1, ['a,b'], {x: true}")).toEqual([
+			"1",
+			"['a,b']",
+			"{x: true}",
+		]);
+		expect(topLevelSeparatorIndex("'a:b': 1", ":")).toBe(5);
+		expect(topLevelSeparatorIndex("arr: [1, {nested: 2}]", ":")).toBe(3);
+		expect(topLevelSeparatorIndex("{nested: 2}: value", ":")).toBe(11);
+		expect(topLevelSeparatorIndex("'a:b'", ":")).toBe(-1);
+	});
+
+	it("covers schema reader and conversion guard branches", () => {
+		const { convertActualValue, readFunctionSchemas } =
+			__bfclV4AstPrivateForTests;
+
+		expect(readFunctionSchemas("not-array").size).toBe(0);
+		const schemas = readFunctionSchemas([
+			null,
+			{ name: 42 },
+			{ name: "noParams", parameters: {} },
+			{
+				name: "mixed",
+				parameters: {
+					properties: {
+						bad: null,
+						noType: { items: {} },
+						typed: { items: { type: "integer" }, type: "array" },
+					},
+				},
+			},
+		]);
+		expect(schemas.get("mixed")?.get("bad")).toBeUndefined();
+		expect(schemas.get("mixed")?.get("noType")).toEqual({
+			nestedType: undefined,
+			type: undefined,
+		});
+		expect(schemas.get("mixed")?.get("typed")).toEqual({
+			nestedType: "integer",
+			type: "array",
+		});
+		expect(convertActualValue("1", undefined)).toEqual({
+			ok: true,
+			value: "1",
+		});
+		expect(
+			convertActualValue("1", {
+				language: "python",
+				schema: { type: "integer" },
+			}),
+		).toEqual({ ok: true, value: "1" });
+		expect(
+			convertActualValue(1, {
+				language: "java",
+				schema: { type: "String" },
+			}),
+		).toEqual({ ok: false });
+		expect(
+			convertActualValue(1, {
+				language: "java",
+				schema: { type: "Set" },
+			}),
+		).toEqual({ ok: true, value: 1 });
+		expect(
+			convertActualValue(1, {
+				language: "javascript",
+				schema: { type: "String" },
+			}),
+		).toEqual({ ok: false });
+		expect(
+			convertActualValue(1, {
+				language: "javascript",
+				schema: { type: "unknown" },
+			}),
+		).toEqual({ ok: true, value: 1 });
+	});
 });
 
 function task(input: {
 	readonly category: string;
+	readonly function_definitions?: readonly Record<string, unknown>[];
 	readonly ground_truth: unknown;
+	readonly language?: "java" | "javascript" | "python";
 }): BenchmarkTask {
 	const generalCategory = input.category.startsWith("live_")
 		? "live"
@@ -437,14 +747,29 @@ function task(input: {
 			ground_truth: input.ground_truth,
 		},
 		inputs: {
-			function_definitions: [],
+			function_definitions: input.function_definitions ?? [],
 			question: "Call the right function.",
 		},
 		metadata: {
 			category: input.category,
 			general_category: generalCategory,
+			...(input.language == null ? {} : { language: input.language }),
 		},
 		scorer_type: BFCL_V4_AST_SCORER_TYPE,
 		task_id: `${input.category}-fixture`,
+	};
+}
+
+function functionDefinition(
+	name: string,
+	properties: Record<string, unknown>,
+): Record<string, unknown> {
+	return {
+		name,
+		parameters: {
+			properties,
+			required: Object.keys(properties),
+			type: "dict",
+		},
 	};
 }

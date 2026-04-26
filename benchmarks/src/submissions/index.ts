@@ -23,6 +23,7 @@ export {
 	SubmissionAdapterError,
 	SubmissionAdapterRegistryError,
 	type SubmissionFormat,
+	serializeSubmissionFiles,
 } from "./types.js";
 
 import { bfclV4JsonlAdapter } from "./bfcl-v4-jsonl.js";
