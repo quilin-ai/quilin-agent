@@ -30,7 +30,8 @@
 | Day 0 spike (E3c1b 整体) | 拆 E3c1b1 + E3c1b2 决议 | ✅ closed | `717436d` | 303 行；reject generic runner / MCP / OmniMem state / E3c2 合并 |
 | Day 0 plan (E3c1b1) | 本 plan + worker contract 冻结 | 🔄 本轮 | — | — |
 | Iter E3c1b1 first-cut | Python stateful worker + TS thin adapter（不接 LLM）| ✅ closed | `151f1d7` | 4 files +1364/-1；benchmarks 343 passed / 1 skipped；Branch 95.00 双入口；just test-all 三语言绿；AMB p95 0.208ms |
-| Iter E3c1b1 R1 review | R1 独立 subagent (Dirac，不复用所有历史) | 🔄 进行中 | — | first-cut 后第一轮交叉 review |
+| Iter E3c1b1 R1 review | R1 独立 subagent (Dirac) | ✅ closed | `a505118` | 2 BLOCKING（stderr 字节累积无上限 / error_type namespace 无 layer 区分）+ 1 HIGH（method 名冲突 setdefault 静默选 first）+ 4 MEDIUM（protocol_version negotiation / close SIGKILL fallback / UTF-8 byte-safe / snapshot opt-in）+ 2 LOW |
+| Iter E3c1b1 R1 fix | stderr 累加器 / error_type source 字段双层 / ambiguous_method 检测 | ⏳ 待 Codex TUI reconnect | — | Codex 接 fix pass |
 | Iter E3c1b1 R1 fix（如需）| 按 R1 finding 修复 | ⏳ 待启动 | — | review 后 |
 | Iter E3c1b1 收口 | review chain 闭合 + 95% 覆盖率 + just test-all 三语言绿 | ⏳ 待启动 | — | review 通过后 |
 
