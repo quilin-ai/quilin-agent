@@ -30,7 +30,8 @@
 | Iter E3b first-cut | BFCL v4 loader + AST scorer + submission adapter + fetch CLI + runner.collect 分支 | ✅ closed | `d4fd62a` | 14 files +2287/-20；benchmarks 302 passed；Branch 95.23 双入口；just test-all 三语言绿；AMB p95 0.273ms ≤ 300ms |
 | Iter E3b R1 review | R1 独立 subagent (Lorentz) | ✅ closed | `d0d02e3` | 1 BLOCKING（multi-file submission 永不落盘）+ 1 HIGH（scorer 缺 Java/JS type converter）+ 1 MEDIUM（ADR-010 §3.1 doc-drift） |
 | Iter E3b R1 fix | SubmissionAdapter 加 optional serializeFiles + multi-file fallback / Java/JS type converter port from pinned f7cf735 / ADR-010 §3.1 sync | ✅ closed | `c8e221f` | 9 files +890/-12；benchmarks 310 passed / 1 skipped；Branch 95.35（default）/ 95.49（runner-loader）；just test-all TS717+Py187+Rust1 全绿；AMB p95 0.268ms ≤ 300ms |
-| Iter E3b R2 review | R2 独立 subagent (新名字，不复用 Lorentz / E3a R1-R5 reviewers) | ⏳ 待启动 | — | R1 fix 后第二轮 confirm close；期望 close E3b |
+| Iter E3b R2 review | R2 独立 subagent (Schrödinger) | ✅ **closed** | TBD | 0 BLOCKING / 0 HIGH / 3 MEDIUM (defer 至 E4) / 1 LOW；§6 验收全部 PASS：Branch 95.35/95.49 / 三语言绿 / AMB p95 0.268ms |
+| **Iter E3b 收口** | review chain (R1-R2) 闭合 + 全 §6 验收 PASS | ✅ **closed** | R2 commit | E3b 完整收口；3 MEDIUM 顺延 E4 official-parity slice |
 | Iter E3b R1 fix | 按 R1 finding 修复 | ⏳ 待启动 | — | review 后 |
 | Iter E3b 收口 | review chain 闭合 + 95% 覆盖率 + just test-all 三语言绿 + DockerSandbox smoke pass | ⏳ 待启动 | — | review 通过后 |
 
