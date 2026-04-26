@@ -29,8 +29,8 @@
 |---|---|---|---|---|
 | Day 0 spike (E3c1b 整体) | 拆 E3c1b1 + E3c1b2 决议 | ✅ closed | `717436d` | 303 行；reject generic runner / MCP / OmniMem state / E3c2 合并 |
 | Day 0 plan (E3c1b1) | 本 plan + worker contract 冻结 | 🔄 本轮 | — | — |
-| Iter E3c1b1 first-cut | Python stateful worker + TS thin adapter（不接 LLM）| ⏳ 待启动 | — | 长 session lifecycle + backend state 跨 turn 保留 |
-| Iter E3c1b1 R1 review | R1 独立 subagent (新名字) | ⏳ 待启动 | — | first-cut 后 |
+| Iter E3c1b1 first-cut | Python stateful worker + TS thin adapter（不接 LLM）| ✅ closed | `151f1d7` | 4 files +1364/-1；benchmarks 343 passed / 1 skipped；Branch 95.00 双入口；just test-all 三语言绿；AMB p95 0.208ms |
+| Iter E3c1b1 R1 review | R1 独立 subagent (Dirac，不复用所有历史) | 🔄 进行中 | — | first-cut 后第一轮交叉 review |
 | Iter E3c1b1 R1 fix（如需）| 按 R1 finding 修复 | ⏳ 待启动 | — | review 后 |
 | Iter E3c1b1 收口 | review chain 闭合 + 95% 覆盖率 + just test-all 三语言绿 | ⏳ 待启动 | — | review 通过后 |
 
