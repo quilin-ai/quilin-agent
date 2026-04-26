@@ -36,9 +36,10 @@
 | Iter E3a R3 fix | nonce-based lockfile ownership / pid liveness check / heartbeat 5min / stale 30min / ADR-010 §3.1 type constraints + §3.4 lockfile protocol | ✅ closed | `9910571` | 3 files +483/-17；benchmarks 265 passed / 1 skipped；Branch 95.17（default+runner-loader）；新增 cross-process serialization + crash-orphan + nonce mismatch + heartbeat ownership + invalid lock + non-ENOENT 透传测试；just test-all TS717+Py187+Rust1 全绿；AMB p95 1.888ms ≤ 300ms |
 | Iter E3a R4 review | R4 独立 subagent (Boltzmann) | ✅ closed | `0668741` | 1 BLOCKING（PID recycling 永久卡死，30min stale 阈值不可达）+ 2 HIGH（ADR §3.4 PID recycling 兜底未冻结 / Windows isProcessAlive 永远 true）+ 1 MEDIUM（writeFile 失败 leak 空 lockfile）+ 1 LOW（heartbeat.unref + SIGTERM cascade） |
 | Iter E3a R4 fix | removeStaleFetchLock 双因子 (PID liveness AND mtime ≤ 30min) / Windows fail-loud / writeFile failure cleanup / ADR-010 §3.4 PID recycling 语义 | ✅ closed | `cf88a30` | 3 files +121/-5；benchmarks 268 passed / 1 skipped；Branch 95.45（default）/ 95.22（runner-loader）；新增 recycled PID + Windows reject + writeFile failure cleanup 测试；just test-all TS717+Py187+Rust1 全绿；AMB p95 0.278ms ≤ 300ms |
-| Iter E3a R5 review | R5 独立 subagent (新名字，不复用 R1-R4 全部 reviewers) | ⏳ 待启动 | — | R4 fix 后第五轮交叉 review；期望 close E3a |
-| Roadmap reassessment 2026-04-26 | 用户指令：每个新 sub-iter 启动前评估方案合理性 (E3b/E3c/F/§17/conversation eng) | ⏳ 待启动 | — | 与 R5 并行 web research subagents (Mem0/Letta/Cognee/AutoGen/Magentic/Swarm/DSPy/TextGrad/Anthropic Skills 现状) |
-| Iter E3b/E3c | BFCL v4 loader + scorer + submission adapter | ⏳ 待启动 | — | E3a review chain 闭合 + roadmap reassessment 共识后启动 |
+| Iter E3a R5 review | R5 独立 subagent (Faraday) | ✅ **closed** | `bc9e008` | 0 BLOCKING / 0 HIGH / 1 MEDIUM (doc-only ADR drift) / 1 LOW；§6 验收全部 PASS：Branch 95.22% / 三语言绿 / AMB p95 0.278ms |
+| **Iter E3a 收口** | review chain (R1-R5) 闭合 + 全 §6 验收 PASS | ✅ **closed** | R5 commit | E3a 完整收口；M-1 + L-1 在 E3b 启动文档同 commit 顺手清理 |
+| Roadmap reassessment 2026-04-26 | 用户指令：每个新 sub-iter 启动前评估方案合理性 (E3b/E3c/F/§17/conversation eng) | 🔄 进行中 | — | Memory framework research (推荐保留 hand-rolled) + Multi-agent/self-evolution research (推荐 Claude Agent SDK + DSPy GEPA) 已 land；Codex 自己 BFCL v4 + memory research 待 merge |
+| Iter E3b/E3c | BFCL v4 loader + scorer + submission adapter | ⏳ 待启动 | — | roadmap reassessment plan commit 后启动 |
 | Iter E3 收口 | review chain 闭合 + DockerSandbox 内 GAIA/BFCL smoke 通过 + 95% 覆盖率 + just test-all 三语言绿 | ⏳ 待启动 | — | review 通过后 |
 
 ---
