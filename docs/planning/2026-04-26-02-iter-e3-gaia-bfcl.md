@@ -34,8 +34,11 @@
 | Iter E3a R2 fix | scorer undefined fallback / GAIA prompt sanitization / fetch lockfile / Unicode digit fold | ✅ closed | `6b94a97` | 9 files +415/-30；benchmarks 257 passed / 1 skipped；Branch 95.12（default+runner-loader）；just test-all TS717+Py187+Rust1 全绿；AMB p95 0.267ms ≤ 300ms；ADR-010 §3.1 GAIA file_attachments 元素 schema 同 commit 冻结 |
 | Iter E3a R3 review | R3 独立 subagent (Hertz) | ✅ closed | `ecf7c32` | 1 BLOCKING（lockfile finally rm cascade — R2 lock fix 自身 race）+ 2 HIGH（ADR 字段类型未冻结 / pid liveness 缺失 + 10min stale 不够）+ 1 MEDIUM（lockfile 协议未文档化）+ 1 LOW（Unicode codepoint drift） |
 | Iter E3a R3 fix | nonce-based lockfile ownership / pid liveness check / heartbeat 5min / stale 30min / ADR-010 §3.1 type constraints + §3.4 lockfile protocol | ✅ closed | `9910571` | 3 files +483/-17；benchmarks 265 passed / 1 skipped；Branch 95.17（default+runner-loader）；新增 cross-process serialization + crash-orphan + nonce mismatch + heartbeat ownership + invalid lock + non-ENOENT 透传测试；just test-all TS717+Py187+Rust1 全绿；AMB p95 1.888ms ≤ 300ms |
-| Iter E3a R4 review | R4 独立 subagent (新名字，不复用 R1 Raman / R2 Maxwell / R3 Hertz) | ⏳ 待启动 | — | R3 fix 后第四轮交叉 review |
-| Iter E3b/E3c | BFCL v4 loader + scorer + submission adapter | ⏳ 待启动 | — | E3a review chain 闭合后启动 |
+| Iter E3a R4 review | R4 独立 subagent (Boltzmann) | ✅ closed | `0668741` | 1 BLOCKING（PID recycling 永久卡死，30min stale 阈值不可达）+ 2 HIGH（ADR §3.4 PID recycling 兜底未冻结 / Windows isProcessAlive 永远 true）+ 1 MEDIUM（writeFile 失败 leak 空 lockfile）+ 1 LOW（heartbeat.unref + SIGTERM cascade） |
+| Iter E3a R4 fix | removeStaleFetchLock 双因子 (PID liveness AND mtime ≤ 30min) / Windows fail-loud / writeFile failure cleanup / ADR-010 §3.4 PID recycling 语义 | ✅ closed | `cf88a30` | 3 files +121/-5；benchmarks 268 passed / 1 skipped；Branch 95.45（default）/ 95.22（runner-loader）；新增 recycled PID + Windows reject + writeFile failure cleanup 测试；just test-all TS717+Py187+Rust1 全绿；AMB p95 0.278ms ≤ 300ms |
+| Iter E3a R5 review | R5 独立 subagent (新名字，不复用 R1-R4 全部 reviewers) | ⏳ 待启动 | — | R4 fix 后第五轮交叉 review；期望 close E3a |
+| Roadmap reassessment 2026-04-26 | 用户指令：每个新 sub-iter 启动前评估方案合理性 (E3b/E3c/F/§17/conversation eng) | ⏳ 待启动 | — | 与 R5 并行 web research subagents (Mem0/Letta/Cognee/AutoGen/Magentic/Swarm/DSPy/TextGrad/Anthropic Skills 现状) |
+| Iter E3b/E3c | BFCL v4 loader + scorer + submission adapter | ⏳ 待启动 | — | E3a review chain 闭合 + roadmap reassessment 共识后启动 |
 | Iter E3 收口 | review chain 闭合 + DockerSandbox 内 GAIA/BFCL smoke 通过 + 95% 覆盖率 + just test-all 三语言绿 | ⏳ 待启动 | — | review 通过后 |
 
 ---
