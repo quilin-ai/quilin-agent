@@ -294,6 +294,46 @@ describe("createDockerSandbox", () => {
 		}
 	});
 
+	it("bounds docker cleanup when rm hangs after a host-side timeout", async () => {
+		const tmpRoot = await mkdtemp(
+			join(tmpdir(), "quilin-docker-cleanup-timeout-"),
+		);
+		const runner: DockerCliRunner = async (args, options) => {
+			if (args[0] === "rm") {
+				return new Promise(() => undefined);
+			}
+			return new Promise((_, reject) => {
+				options?.signal?.addEventListener("abort", () => {
+					reject(new Error("aborted"));
+				});
+			});
+		};
+
+		try {
+			const sandbox = createDockerSandbox({
+				artifactsDir: join(tmpRoot, "artifacts"),
+				baseDir: join(tmpRoot, "base"),
+				cacheDir: join(tmpRoot, "cache"),
+				image: "alpine:3.20",
+				runner,
+				timeoutMs: 1,
+			});
+
+			const result = await sandbox.runShellCommand({
+				command: "sleep 60",
+				cwd: join(tmpRoot, "scratch"),
+				workspaceDir: join(tmpRoot, "scratch"),
+			});
+
+			expect(result.isError).toBe(true);
+			expect(JSON.parse(result.content)).toMatchObject({
+				timedOut: true,
+			});
+		} finally {
+			await rm(tmpRoot, { force: true, recursive: true });
+		}
+	});
+
 	it("reports docker daemon availability from the CLI", async () => {
 		const runner: DockerCliRunner = async () => ({
 			exitCode: 0,

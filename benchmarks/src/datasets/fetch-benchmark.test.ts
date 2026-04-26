@@ -207,7 +207,11 @@ describe("fetch-benchmark cache intent", () => {
 		expect(fetchMock).toHaveBeenCalledWith(
 			expect.stringContaining("/multi_turn_eval/multi_turn_checker.py"),
 		);
+		expect(fetchMock).toHaveBeenCalledWith(
+			expect.stringContaining("/mpmath-1.4.1-py3-none-any.whl"),
+		);
 		expect(manifest).toContain("bfcl_eval/eval_checker/multi_turn_eval");
+		expect(manifest).toContain("vendor/mpmath-1.4.1-py3-none-any.whl");
 		expect(data).toContain('"category":"multi_turn_base"');
 		expect(data).toContain('"possible_answer"');
 		expect(data).toContain('"fixture_result"');
@@ -313,6 +317,11 @@ describe("fetch-benchmark cache intent", () => {
 		expect(() =>
 			__privateForTests.validateBfclV4RawUrl(
 				"https://raw.githubusercontent.com/ShishirPatil/gorilla/f7cf735/berkeley-function-call-leaderboard/bfcl_eval/eval_checker/multi_turn_eval/multi_turn_checker.py",
+			),
+		).not.toThrow();
+		expect(() =>
+			__privateForTests.validateBfclV4RawUrl(
+				"https://files.pythonhosted.org/packages/13/f2/abeec3db71d221ccd3cd89d206be1fabf5a3ee7178862f5fba23a59607e0/mpmath-1.4.1-py3-none-any.whl",
 			),
 		).not.toThrow();
 	});
@@ -1416,6 +1425,11 @@ function mockBfclV4Fetch(): ReturnType<typeof vi.fn> {
 		if (url.includes("/bfcl_eval/") && !url.includes("/bfcl_eval/data/")) {
 			return responseWithText(`# ${url}\n`);
 		}
+		if (url.includes("/mpmath-1.4.1-py3-none-any.whl")) {
+			return responseWithBinary(
+				Buffer.from(minimalMpmathWheelBase64, "base64"),
+			);
+		}
 		return responseWithText("");
 	});
 	vi.stubGlobal("fetch", fetchMock);
@@ -1643,9 +1657,22 @@ function responseWithText(text: string): Response {
 	} as unknown as Response;
 }
 
+function responseWithBinary(data: Buffer): Response {
+	return {
+		arrayBuffer: async () =>
+			data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
+		ok: true,
+		status: 200,
+		statusText: "OK",
+	} as unknown as Response;
+}
+
 interface DatasetServerRowsPayload {
 	readonly rows?: readonly { readonly row?: Record<string, unknown> }[];
 }
+
+const minimalMpmathWheelBase64 =
+	"UEsDBBQAAAAIADEfm1wOW1saSwAAAGAAAAASAAAAbXBtYXRoL19faW5pdF9fLnB5S85JLC5WiPcNsOJSAIKUgmIFWwVDUy6u3AIgAyiuocnFlZKappCTn65RlphTmqoJUZmZW5BfVKKQm1iSAeYXpZaUFuWB+XoItVwAUEsBAhQDFAAAAAgAMR+bXA5bWxpLAAAAYAAAABIAAAAAAAAAAAAAAIABAAAAAG1wbWF0aC9fX2luaXRfXy5weVBLBQYAAAAAAQABAEAAAAB7AAAAAAA=";
 
 function makeSweBenchRow(index: number): Record<string, string> {
 	return {

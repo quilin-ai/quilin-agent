@@ -7,6 +7,7 @@ export {
 export {
 	__privateForTests as __bfclV4MultiTurnPrivateForTests,
 	BFCL_V4_MULTI_TURN_SCORER_TYPE,
+	BfclMultiTurnAdapterError,
 	type BfclV4MultiTurnScorerOptions,
 	bfclV4MultiTurnScorer,
 	scoreBfclV4MultiTurn,

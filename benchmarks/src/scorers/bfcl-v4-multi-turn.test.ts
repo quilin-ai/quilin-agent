@@ -7,6 +7,7 @@ import type { BenchmarkTask } from "../wire/task.js";
 import {
 	__bfclV4MultiTurnPrivateForTests,
 	BFCL_V4_MULTI_TURN_SCORER_TYPE,
+	BfclMultiTurnAdapterError,
 	bfclV4MultiTurnScorer,
 	scoreBfclV4MultiTurn,
 } from "./index.js";
@@ -118,6 +119,64 @@ describe("bfclV4MultiTurnScorer", () => {
 		).rejects.toThrow(/timed out/);
 	});
 
+	it("throws adapter errors instead of scoring checker infrastructure failures as model misses", async () => {
+		await expect(
+			scoreBfclV4MultiTurn(
+				task,
+				{ model_output_trajectory: [] },
+				{
+					spawnChecker: async () => ({
+						stderr: "",
+						stdout: JSON.stringify({
+							breakdown: {
+								error_message: "No module named 'mpmath'",
+								error_type: "quilin_checker_adapter_error",
+							},
+							score: 0,
+							valid: false,
+						}),
+					}),
+				},
+			),
+		).rejects.toThrow(BfclMultiTurnAdapterError);
+		await expect(
+			scoreBfclV4MultiTurn(
+				task,
+				{ model_output_trajectory: [] },
+				{
+					spawnChecker: async () => ({
+						stderr: "",
+						stdout: JSON.stringify({
+							breakdown: {
+								error_type: "quilin_checker_adapter_error",
+							},
+							score: 0,
+							valid: false,
+						}),
+					}),
+				},
+			),
+		).rejects.toThrow(/quilin_checker_adapter_error/);
+		await expect(
+			scoreBfclV4MultiTurn(
+				task,
+				{ model_output_trajectory: [] },
+				{
+					spawnChecker: async () => ({
+						stderr: "",
+						stdout: JSON.stringify({
+							breakdown: {
+								error_type: "model_error",
+							},
+							score: 0,
+							valid: false,
+						}),
+					}),
+				},
+			),
+		).resolves.toMatchObject({ passed: false, score: 0 });
+	});
+
 	it("normalizes checker score edge cases and accepts trajectory aliases", async () => {
 		await expect(
 			scoreBfclV4MultiTurn(
@@ -218,9 +277,23 @@ describe("bfclV4MultiTurnScorer", () => {
 		const checkerRoot = join(cacheRoot, "datasets", "bfcl-v4");
 		await writeSupportFile(
 			checkerRoot,
+			"bfcl_eval/eval_checker/multi_turn_eval/func_source_code/math_api.py",
+			[
+				"import mpmath",
+				"class MathAPI:",
+				"    def logarithm(self, value, base, precision):",
+				"        mpmath.mp.dps = precision",
+				"        return {'result': mpmath.log(value) / mpmath.log(base)}",
+				"",
+			].join("\n"),
+		);
+		await writeSupportFile(
+			checkerRoot,
 			"bfcl_eval/eval_checker/multi_turn_eval/multi_turn_checker.py",
 			[
+				"from bfcl_eval.eval_checker.multi_turn_eval.func_source_code.math_api import MathAPI",
 				"def multi_turn_checker(decoded, possible_answer, test_entry, category, model_name):",
+				"    assert round(float(MathAPI().logarithm(8, 2, 10)['result'])) == 3",
 				"    return {'valid': decoded and decoded[0] and decoded[0][0] == possible_answer[0], 'category': category}",
 				"def multi_turn_irrelevance_checker(decoded, possible_answer):",
 				"    return {'valid': True}",
@@ -238,6 +311,38 @@ describe("bfclV4MultiTurnScorer", () => {
 			details: { breakdown: { category: "multi_turn_base", valid: true } },
 			passed: true,
 			score: 1,
+		});
+	});
+
+	it("imports the vendored mpmath wheel from the cached checker bundle", async () => {
+		const cacheRoot = await writeCheckerBundle();
+		const checkerRoot = join(cacheRoot, "datasets", "bfcl-v4");
+		const probeScriptPath = join(cacheRoot, "probe-mpmath.py");
+		await writeFile(
+			probeScriptPath,
+			[
+				"import json",
+				"import os",
+				"import sys",
+				"sys.path.insert(0, os.path.join(os.environ['BFCL_CHECKER_ROOT'], 'vendor', 'mpmath-1.4.1-py3-none-any.whl'))",
+				"import mpmath",
+				"print(json.dumps({'valid': True, 'score': 1, 'breakdown': {'log2_8': float(mpmath.log(8) / mpmath.log(2))}}))",
+				"",
+			].join("\n"),
+			"utf8",
+		);
+
+		await expect(
+			__bfclV4MultiTurnPrivateForTests.runChecker({
+				checkerRoot,
+				checkerScriptPath: probeScriptPath,
+				payload: {},
+				timeoutMs: 1_000,
+			}),
+		).resolves.toMatchObject({
+			breakdown: { log2_8: 3 },
+			score: 1,
+			valid: true,
 		});
 	});
 
@@ -298,6 +403,39 @@ describe("bfclV4MultiTurnScorer", () => {
 		).rejects.toThrow(/timed out/);
 	});
 
+	it("forwards parent termination signals to checker subprocesses", async () => {
+		const cacheRoot = await writeCheckerBundle();
+		const signalScriptPath = join(cacheRoot, "signal.mjs");
+		await writeFile(
+			signalScriptPath,
+			[
+				"process.on('SIGTERM', () => {",
+				"  console.log(JSON.stringify({ valid: true, score: 1, breakdown: { signal: 'SIGTERM' } }));",
+				"  process.exit(0);",
+				"});",
+				"setInterval(() => {}, 1_000);",
+				"",
+			].join("\n"),
+			"utf8",
+		);
+		const run = __bfclV4MultiTurnPrivateForTests.runChecker({
+			checkerRoot: join(cacheRoot, "datasets", "bfcl-v4"),
+			checkerScriptPath: signalScriptPath,
+			payload: {},
+			pythonExecutable: process.execPath,
+			timeoutMs: 2_000,
+		});
+
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		process.emit("SIGTERM", "SIGTERM");
+
+		await expect(run).resolves.toMatchObject({
+			breakdown: { signal: "SIGTERM" },
+			score: 1,
+			valid: true,
+		});
+	});
+
 	it("bounds checker output buffers", () => {
 		expect(
 			__bfclV4MultiTurnPrivateForTests.appendBounded("", Buffer.from("ok")),
@@ -308,6 +446,18 @@ describe("bfclV4MultiTurnScorer", () => {
 				Buffer.alloc(1024 * 1024 + 10, "x"),
 			),
 		).toHaveLength(1024 * 1024);
+		const prefix = "x".repeat(1024 * 1024 - 1);
+		const truncated = __bfclV4MultiTurnPrivateForTests.appendBounded(
+			prefix,
+			Buffer.from("€"),
+		);
+		expect(Buffer.byteLength(truncated, "utf8")).toBeLessThanOrEqual(
+			1024 * 1024,
+		);
+		expect(truncated).not.toContain("\uFFFD");
+		expect(
+			__bfclV4MultiTurnPrivateForTests.decodeUtf8Prefix(Buffer.from([0xff]), 1),
+		).toBe("");
 	});
 
 	it("verifies checker bundle sha256 entries before running the official adapter", async () => {
@@ -359,13 +509,22 @@ async function writeCheckerBundle(): Promise<string> {
 	> = {};
 	for (const relativePath of checkerSupportFiles()) {
 		const filePath = join(checkerRoot, relativePath);
-		const content = `# ${relativePath}\n`;
 		await mkdir(dirname(filePath), { recursive: true });
-		await writeFile(filePath, content, "utf8");
-		attachments[relativePath] = {
-			sha256: sha256(content),
-			size_bytes: Buffer.byteLength(content),
-		};
+		if (relativePath === "vendor/mpmath-1.4.1-py3-none-any.whl") {
+			const content = Buffer.from(minimalMpmathWheelBase64, "base64");
+			await writeFile(filePath, content);
+			attachments[relativePath] = {
+				sha256: sha256(content),
+				size_bytes: content.byteLength,
+			};
+		} else {
+			const content = `# ${relativePath}\n`;
+			await writeFile(filePath, content, "utf8");
+			attachments[relativePath] = {
+				sha256: sha256(content),
+				size_bytes: Buffer.byteLength(content),
+			};
+		}
 	}
 	await writeFile(
 		join(checkerRoot, "manifest.json"),
@@ -409,9 +568,13 @@ function checkerSupportFiles(): readonly string[] {
 		"bfcl_eval/eval_checker/multi_turn_eval/func_source_code/trading_bot.py",
 		"bfcl_eval/eval_checker/multi_turn_eval/func_source_code/travel_booking.py",
 		"bfcl_eval/eval_checker/multi_turn_eval/func_source_code/vehicle_control.py",
+		"vendor/mpmath-1.4.1-py3-none-any.whl",
 	];
 }
 
-function sha256(value: string): string {
+const minimalMpmathWheelBase64 =
+	"UEsDBBQAAAAIADEfm1wOW1saSwAAAGAAAAASAAAAbXBtYXRoL19faW5pdF9fLnB5S85JLC5WiPcNsOJSAIKUgmIFWwVDUy6u3AIgAyiuocnFlZKappCTn65RlphTmqoJUZmZW5BfVKKQm1iSAeYXpZaUFuWB+XoItVwAUEsBAhQDFAAAAAgAMR+bXA5bWxpLAAAAYAAAABIAAAAAAAAAAAAAAIABAAAAAG1wbWF0aC9fX2luaXRfXy5weVBLBQYAAAAAAQABAEAAAAB7AAAAAAA=";
+
+function sha256(value: string | Uint8Array): string {
 	return createHash("sha256").update(value).digest("hex");
 }

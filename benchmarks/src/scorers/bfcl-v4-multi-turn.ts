@@ -32,6 +32,8 @@ type CheckerResponse = {
 
 const DEFAULT_CHECKER_TIMEOUT_MS = 10_000;
 const MAX_CHECKER_OUTPUT_BYTES = 1024 * 1024;
+const ADAPTER_ERROR_TYPE = "quilin_checker_adapter_error";
+const MPMATH_WHEEL_RELATIVE_PATH = "vendor/mpmath-1.4.1-py3-none-any.whl";
 const checkerSupportFiles = [
 	"bfcl_eval/__init__.py",
 	"bfcl_eval/constants/__init__.py",
@@ -50,10 +52,21 @@ const checkerSupportFiles = [
 	"bfcl_eval/eval_checker/multi_turn_eval/func_source_code/trading_bot.py",
 	"bfcl_eval/eval_checker/multi_turn_eval/func_source_code/travel_booking.py",
 	"bfcl_eval/eval_checker/multi_turn_eval/func_source_code/vehicle_control.py",
+	MPMATH_WHEEL_RELATIVE_PATH,
 ] as const;
 
 export const bfclV4MultiTurnScorer: Scorer = async (task, output) =>
 	scoreBfclV4MultiTurn(task, output);
+
+export class BfclMultiTurnAdapterError extends Error {
+	readonly details: unknown;
+
+	constructor(message: string, details: unknown) {
+		super(message);
+		this.name = "BfclMultiTurnAdapterError";
+		this.details = details;
+	}
+}
 
 export async function scoreBfclV4MultiTurn(
 	task: BenchmarkTask,
@@ -89,6 +102,13 @@ export async function scoreBfclV4MultiTurn(
 		spawnChecker: options.spawnChecker,
 		timeoutMs: options.timeoutMs ?? DEFAULT_CHECKER_TIMEOUT_MS,
 	});
+	const adapterError = readAdapterError(response.breakdown);
+	if (adapterError != null) {
+		throw new BfclMultiTurnAdapterError(
+			`BFCL multi-turn checker adapter failed: ${adapterError}`,
+			response.breakdown,
+		);
+	}
 	const passed = response.valid === true || response.score === 1;
 	const score = normalizeScore(response.score, passed);
 	return {
@@ -183,13 +203,26 @@ function spawnCheckerProcess(input: {
 		let stdout = "";
 		let stderr = "";
 		let settled = false;
+		const forwardSignal = (signal: NodeJS.Signals) => {
+			if (!settled) {
+				child.kill(signal);
+			}
+		};
 		const timer = setTimeout(() => {
 			if (!settled) {
 				child.kill("SIGKILL");
 				settled = true;
+				cleanup();
 				reject(new Error("BFCL multi-turn checker timed out"));
 			}
 		}, input.timeoutMs);
+		const cleanup = () => {
+			clearTimeout(timer);
+			process.removeListener("SIGINT", forwardSignal);
+			process.removeListener("SIGTERM", forwardSignal);
+		};
+		process.on("SIGINT", forwardSignal);
+		process.on("SIGTERM", forwardSignal);
 
 		child.stdout.on("data", (chunk: Buffer) => {
 			stdout = appendBounded(stdout, chunk);
@@ -200,7 +233,7 @@ function spawnCheckerProcess(input: {
 		child.on("error", (error) => {
 			if (!settled) {
 				settled = true;
-				clearTimeout(timer);
+				cleanup();
 				reject(error);
 			}
 		});
@@ -209,7 +242,7 @@ function spawnCheckerProcess(input: {
 				return;
 			}
 			settled = true;
-			clearTimeout(timer);
+			cleanup();
 			if (code !== 0) {
 				reject(
 					new Error(
@@ -225,11 +258,26 @@ function spawnCheckerProcess(input: {
 }
 
 function appendBounded(current: string, chunk: Buffer): string {
-	const next = current + chunk.toString("utf8");
-	if (Buffer.byteLength(next, "utf8") <= MAX_CHECKER_OUTPUT_BYTES) {
-		return next;
+	const next = Buffer.concat([Buffer.from(current, "utf8"), chunk]);
+	if (next.byteLength <= MAX_CHECKER_OUTPUT_BYTES) {
+		return next.toString("utf8");
 	}
-	return next.slice(0, MAX_CHECKER_OUTPUT_BYTES);
+	return decodeUtf8Prefix(next, MAX_CHECKER_OUTPUT_BYTES);
+}
+
+function decodeUtf8Prefix(buffer: Buffer, maxBytes: number): string {
+	let end = Math.min(maxBytes, buffer.byteLength);
+	while (end > 0) {
+		const decoded = buffer.subarray(0, end).toString("utf8");
+		if (
+			Buffer.byteLength(decoded, "utf8") <= maxBytes &&
+			!decoded.endsWith("\uFFFD")
+		) {
+			return decoded;
+		}
+		end -= 1;
+	}
+	return "";
 }
 
 function computeSha256(data: Uint8Array): string {
@@ -258,6 +306,21 @@ function failedResult(
 	};
 }
 
+function readAdapterError(breakdown: unknown): string | undefined {
+	if (breakdown == null || typeof breakdown !== "object") {
+		return undefined;
+	}
+	const errorType = (breakdown as { readonly error_type?: unknown }).error_type;
+	if (errorType !== ADAPTER_ERROR_TYPE) {
+		return undefined;
+	}
+	const message = (breakdown as { readonly error_message?: unknown })
+		.error_message;
+	return typeof message === "string" && message.length > 0
+		? message
+		: ADAPTER_ERROR_TYPE;
+}
+
 function readString(value: unknown): string {
 	return typeof value === "string" ? value : "";
 }
@@ -271,6 +334,8 @@ function defaultCheckerScriptPath(): string {
 
 export const __privateForTests = {
 	appendBounded,
+	decodeUtf8Prefix,
 	runChecker,
+	spawnCheckerProcess,
 	verifyCheckerBundle,
 } as const;

@@ -26,6 +26,9 @@ const BFCL_V4_RAW_BASE_URL = `https://raw.githubusercontent.com/ShishirPatil/gor
 const BFCL_V4_SOURCE_URL = `${BFCL_V4_RAW_BASE_URL}/data?categories=non_live,live,multi_turn`;
 const BFCL_V4_RESULT_FIXTURE_BASE_URL =
 	"https://raw.githubusercontent.com/HuanzhiMao/BFCL-Result/main/2025-12-16/result/gpt-5-mini-2025-08-07-FC/multi_turn";
+const BFCL_MPMATH_WHEEL_RELATIVE_PATH = "vendor/mpmath-1.4.1-py3-none-any.whl";
+const BFCL_MPMATH_WHEEL_URL =
+	"https://files.pythonhosted.org/packages/13/f2/abeec3db71d221ccd3cd89d206be1fabf5a3ee7178862f5fba23a59607e0/mpmath-1.4.1-py3-none-any.whl";
 const DEFAULT_PAGE_SIZE = 100;
 const DEFAULT_RETRIES = 3;
 const MAX_PAGE_SIZE = 100;
@@ -104,6 +107,7 @@ const bfclV4CheckerSupportFiles = [
 	"bfcl_eval/eval_checker/multi_turn_eval/func_source_code/trading_bot.py",
 	"bfcl_eval/eval_checker/multi_turn_eval/func_source_code/travel_booking.py",
 	"bfcl_eval/eval_checker/multi_turn_eval/func_source_code/vehicle_control.py",
+	BFCL_MPMATH_WHEEL_RELATIVE_PATH,
 ] as const;
 
 interface FetchBenchmarkOptions {
@@ -803,17 +807,30 @@ async function fetchBfclV4CheckerFilesIfNeeded(
 ): Promise<Record<string, AttachmentManifestEntry>> {
 	const manifest: Record<string, AttachmentManifestEntry> = {};
 	for (const relativePath of bfclV4CheckerSupportFiles) {
-		const content = await fetchTextWithRetry(
-			bfclV4SupportFileUrl(relativePath),
-			retries,
-		);
 		const outputPath = join(cacheDir, relativePath);
 		await mkdir(dirname(outputPath), { recursive: true });
-		await writeFile(outputPath, content, "utf8");
-		manifest[relativePath] = {
-			sha256: computeSha256(content),
-			size_bytes: Buffer.byteLength(content, "utf8"),
-		};
+		if (relativePath === BFCL_MPMATH_WHEEL_RELATIVE_PATH) {
+			const content = await fetchPublicBinaryWithRetry(
+				bfclV4SupportFileUrl(relativePath),
+				retries,
+				"BFCL v4 mpmath wheel",
+			);
+			await writeFile(outputPath, content);
+			manifest[relativePath] = {
+				sha256: computeSha256(content),
+				size_bytes: content.byteLength,
+			};
+		} else {
+			const content = await fetchTextWithRetry(
+				bfclV4SupportFileUrl(relativePath),
+				retries,
+			);
+			await writeFile(outputPath, content, "utf8");
+			manifest[relativePath] = {
+				sha256: computeSha256(content),
+				size_bytes: Buffer.byteLength(content, "utf8"),
+			};
+		}
 	}
 	return manifest;
 }
@@ -872,6 +889,34 @@ async function fetchTextWithRetry(
 	throw lastError instanceof Error
 		? lastError
 		: new Error("Failed to fetch BFCL v4 support file");
+}
+
+async function fetchPublicBinaryWithRetry(
+	url: string,
+	retries: number,
+	label: string,
+): Promise<Buffer> {
+	validateBfclV4RawUrl(url);
+	let lastError: unknown;
+	for (let attempt = 1; attempt <= retries; attempt += 1) {
+		try {
+			const response = await fetch(url);
+			if (!response.ok) {
+				throw new Error(
+					`Failed to fetch ${label}: ${response.status} ${response.statusText}`,
+				);
+			}
+			return Buffer.from(await response.arrayBuffer());
+		} catch (error) {
+			lastError = error;
+			if (attempt < retries) {
+				await delay(100 * attempt);
+			}
+		}
+	}
+	throw lastError instanceof Error
+		? lastError
+		: new Error(`Failed to fetch ${label}`);
 }
 
 async function tryReadValidManifest(options: {
@@ -1172,11 +1217,17 @@ function bfclV4FixtureResultUrl(category: string): string {
 }
 
 function bfclV4SupportFileUrl(relativePath: string): string {
+	if (relativePath === BFCL_MPMATH_WHEEL_RELATIVE_PATH) {
+		return BFCL_MPMATH_WHEEL_URL;
+	}
 	return `${BFCL_V4_RAW_BASE_URL.replace(/\/bfcl_eval$/, "")}/${relativePath}`;
 }
 
 function validateBfclV4RawUrl(url: string): void {
 	const parsed = new URL(url);
+	if (url === BFCL_MPMATH_WHEEL_URL) {
+		return;
+	}
 	const allowedDataPrefix = `/ShishirPatil/gorilla/${BFCL_V4_PINNED_COMMIT}/berkeley-function-call-leaderboard/bfcl_eval/data/`;
 	const allowedFixturePrefix =
 		"/HuanzhiMao/BFCL-Result/main/2025-12-16/result/gpt-5-mini-2025-08-07-FC/multi_turn/";
@@ -1437,7 +1488,7 @@ async function main(
 	process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 
-/* v8 ignore next 7 -- direct CLI process exit path; main() is covered directly. */
+/* v8 ignore start -- direct CLI process exit path; main() is covered directly. */
 if (import.meta.main) {
 	main().catch((error: unknown) => {
 		process.stderr.write(
@@ -1446,6 +1497,7 @@ if (import.meta.main) {
 		process.exit(1);
 	});
 }
+/* v8 ignore stop */
 
 const __privateForTests = {
 	assertFetchLockPlatformSupported,

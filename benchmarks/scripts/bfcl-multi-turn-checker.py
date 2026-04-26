@@ -16,6 +16,11 @@ def main() -> int:
         if not checker_root:
             raise ValueError("BFCL_CHECKER_ROOT is required")
         sys.path.insert(0, checker_root)
+        mpmath_wheel = os.path.join(
+            checker_root, "vendor", "mpmath-1.4.1-py3-none-any.whl"
+        )
+        if os.path.exists(mpmath_wheel):
+            sys.path.insert(0, mpmath_wheel)
 
         from bfcl_eval.eval_checker.multi_turn_eval.multi_turn_checker import (
             multi_turn_checker,
