@@ -84,6 +84,10 @@ export async function* iterateBfclV4Tasks(
 		if (line.length === 0) {
 			continue;
 		}
+		if (isMultiTurnLine(line)) {
+			index += 1;
+			continue;
+		}
 		const record = parseJsonlRecord(line, index);
 		if (matchesFilter(record, filter)) {
 			yield toBenchmarkTask(record, index);
@@ -139,7 +143,6 @@ function parseJsonlRecord(line: string, index: number): BfclV4RawRecord {
 			`Invalid BFCL v4 JSONL at row ${index}: ${formatCause(error)}`,
 		);
 	}
-
 	const result = bfclV4RawRecordSchema.safeParse(parsed);
 	if (!result.success) {
 		throw new CacheError(
@@ -147,6 +150,15 @@ function parseJsonlRecord(line: string, index: number): BfclV4RawRecord {
 		);
 	}
 	return result.data;
+}
+
+function isMultiTurnLine(line: string): boolean {
+	try {
+		const parsed = JSON.parse(line);
+		return isRecord(parsed) && parsed.general_category === "multi_turn";
+	} catch {
+		return false;
+	}
 }
 
 function toBenchmarkTask(

@@ -6,6 +6,12 @@ export {
 	createBfclV4ResultFiles,
 } from "./bfcl-v4-jsonl.js";
 export {
+	type BfclV4MultiTurnSubmissionAdapterOptions,
+	bfclV4MultiTurnJsonlAdapter,
+	createBfclV4MultiTurnJsonlAdapter,
+	createBfclV4MultiTurnResultFiles,
+} from "./bfcl-v4-multi-turn-jsonl.js";
+export {
 	type BenchmarkSubmissionConfig,
 	type BenchmarkSubmissionConfigProvider,
 	type ResolvedBenchmarkSubmissionPaths,

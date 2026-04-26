@@ -361,6 +361,20 @@ describe("createDockerSandbox", () => {
 		).toBeLessThanOrEqual(64);
 	});
 
+	it("marks stderr-only truncation and already-full output as truncated", async () => {
+		const result = await runDockerCli(
+			[
+				"-e",
+				"process.stdout.write('a'.repeat(64)); process.stderr.write('b'.repeat(16));",
+			],
+			{ dockerBinary: process.execPath, maxOutputBytes: 64 },
+		);
+
+		expect(result.outputTruncated).toBe(true);
+		expect(Buffer.byteLength(result.stdout)).toBeLessThanOrEqual(64);
+		expect(Buffer.byteLength(result.stderr)).toBe(0);
+	});
+
 	it("marks truncated docker output as an error and force removes the container", async () => {
 		const tmpRoot = await mkdtemp(join(tmpdir(), "quilin-docker-truncated-"));
 		const calls: string[][] = [];

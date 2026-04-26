@@ -5,6 +5,13 @@ export {
 	scoreBfclV4Ast,
 } from "./bfcl-v4-ast.js";
 export {
+	__privateForTests as __bfclV4MultiTurnPrivateForTests,
+	BFCL_V4_MULTI_TURN_SCORER_TYPE,
+	type BfclV4MultiTurnScorerOptions,
+	bfclV4MultiTurnScorer,
+	scoreBfclV4MultiTurn,
+} from "./bfcl-v4-multi-turn.js";
+export {
 	GAIA_EXACT_MATCH_SCORER_TYPE,
 	gaiaExactMatchScorer,
 	normalizeGaiaAnswer,

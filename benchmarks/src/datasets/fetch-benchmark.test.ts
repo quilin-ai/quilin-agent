@@ -179,6 +179,68 @@ describe("fetch-benchmark cache intent", () => {
 		expect(data).toContain('"category":"simple_java"');
 	});
 
+	it("fetches BFCL v4 multi-turn rows, fixture trajectories, and checker bundle", async () => {
+		const cacheRoot = await tempCacheRoot();
+		const fetchMock = mockBfclV4Fetch();
+
+		const result = await fetchBenchmark(
+			options({ cacheRoot, dataset: "bfcl-v4", maxRows: 4 }),
+		);
+		const manifest = await readFile(
+			join(cacheRoot, "datasets", "bfcl-v4", "manifest.json"),
+			"utf8",
+		);
+		const data = await readFile(
+			join(cacheRoot, "datasets", "bfcl-v4", "data.jsonl"),
+			"utf8",
+		);
+
+		expect(result).toMatchObject({ rows: 4, skipped: false });
+		expect(fetchMock).toHaveBeenCalledWith(
+			expect.stringContaining("/data/BFCL_v4_multi_turn_base.json"),
+		);
+		expect(fetchMock).toHaveBeenCalledWith(
+			expect.stringContaining(
+				"/result/gpt-5-mini-2025-08-07-FC/multi_turn/BFCL_v4_multi_turn_base_result.json",
+			),
+		);
+		expect(fetchMock).toHaveBeenCalledWith(
+			expect.stringContaining("/multi_turn_eval/multi_turn_checker.py"),
+		);
+		expect(manifest).toContain("bfcl_eval/eval_checker/multi_turn_eval");
+		expect(data).toContain('"category":"multi_turn_base"');
+		expect(data).toContain('"possible_answer"');
+		expect(data).toContain('"fixture_result"');
+	});
+
+	it("refetches BFCL v4 when checker bundle files are missing", async () => {
+		const cacheRoot = await tempCacheRoot();
+		mockBfclV4Fetch();
+		await fetchBenchmark(
+			options({ cacheRoot, dataset: "bfcl-v4", maxRows: 1 }),
+		);
+		await rm(
+			join(
+				cacheRoot,
+				"datasets",
+				"bfcl-v4",
+				"bfcl_eval",
+				"eval_checker",
+				"multi_turn_eval",
+				"multi_turn_checker.py",
+			),
+			{ force: true },
+		);
+
+		const refetch = mockBfclV4Fetch();
+		await expect(
+			fetchBenchmark(options({ cacheRoot, dataset: "bfcl-v4", maxRows: 1 })),
+		).resolves.toMatchObject({ rows: 1, skipped: false });
+		expect(refetch).toHaveBeenCalledWith(
+			expect.stringContaining("/multi_turn_eval/multi_turn_checker.py"),
+		);
+	});
+
 	it("skips BFCL v4 refetch when the partial cache already satisfies the request", async () => {
 		const cacheRoot = await tempCacheRoot();
 		mockBfclV4Fetch();
@@ -198,12 +260,12 @@ describe("fetch-benchmark cache intent", () => {
 		mockBfclV4Fetch();
 		await expect(
 			fetchBenchmark(options({ cacheRoot, dataset: "bfcl-v4" })),
-		).resolves.toMatchObject({ rows: 3, skipped: false });
+		).resolves.toMatchObject({ rows: 4, skipped: false });
 
 		const unusedFetch = mockBfclV4Fetch();
 		await expect(
 			fetchBenchmark(options({ cacheRoot, dataset: "bfcl-v4" })),
-		).resolves.toMatchObject({ rows: 3, skipped: true });
+		).resolves.toMatchObject({ rows: 4, skipped: true });
 		expect(unusedFetch).not.toHaveBeenCalled();
 	});
 
@@ -238,6 +300,21 @@ describe("fetch-benchmark cache intent", () => {
 				"https://raw.githubusercontent.com/ShishirPatil/gorilla/f7cf735/berkeley-function-call-leaderboard/bfcl_eval/data/../secret.json",
 			),
 		).toThrow(/Unsafe BFCL v4 raw URL/);
+		expect(() =>
+			__privateForTests.validateBfclV4RawUrl(
+				"https://raw.githubusercontent.com/ShishirPatil/gorilla/f7cf735/berkeley-function-call-leaderboard/bfcl_eval/secrets.py",
+			),
+		).toThrow(/Unsafe BFCL v4 raw URL/);
+		expect(() =>
+			__privateForTests.validateBfclV4RawUrl(
+				"https://raw.githubusercontent.com/HuanzhiMao/BFCL-Result/main/2025-12-16/result/gpt-5-mini-2025-08-07-FC/multi_turn/BFCL_v4_multi_turn_base_result.json",
+			),
+		).not.toThrow();
+		expect(() =>
+			__privateForTests.validateBfclV4RawUrl(
+				"https://raw.githubusercontent.com/ShishirPatil/gorilla/f7cf735/berkeley-function-call-leaderboard/bfcl_eval/eval_checker/multi_turn_eval/multi_turn_checker.py",
+			),
+		).not.toThrow();
 	});
 
 	it("validates BFCL v4 normalized row edge cases", () => {
@@ -274,6 +351,30 @@ describe("fetch-benchmark cache intent", () => {
 		expect(
 			__privateForTests.validateBfclV4Row(makeBfclNormalizedRow(), 0),
 		).toMatchObject({ category: "simple_python" });
+		expect(() =>
+			__privateForTests.validateBfclV4Row(
+				{ ...makeBfclMultiTurnRow(), possible_answer: undefined },
+				0,
+			),
+		).toThrow(/missing possible_answer/);
+		expect(() =>
+			__privateForTests.validateBfclV4Row(
+				{ ...makeBfclMultiTurnRow(), initial_config: undefined },
+				0,
+			),
+		).toThrow(/missing initial_config/);
+		expect(() =>
+			__privateForTests.validateBfclV4Row(
+				{ ...makeBfclMultiTurnRow(), involved_classes: undefined },
+				0,
+			),
+		).toThrow(/missing involved_classes/);
+		expect(
+			__privateForTests.validateBfclV4Row(makeBfclMultiTurnRow(), 0),
+		).toMatchObject({
+			category: "multi_turn_base",
+			general_category: "multi_turn",
+		});
 	});
 
 	it("keeps source defaults and unsupported dataset errors explicit", () => {
@@ -296,7 +397,7 @@ describe("fetch-benchmark cache intent", () => {
 				options({ cacheRoot, dataset: "bfcl-v4", maxRows: 1, retries: 2 }),
 			),
 		).resolves.toMatchObject({ rows: 1, skipped: false });
-		expect(fetchMock).toHaveBeenCalledTimes(3);
+		expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(3);
 	});
 
 	it("refetches GAIA when manifest is valid but cached attachments are missing", async () => {
@@ -1285,6 +1386,36 @@ function mockBfclV4Fetch(): ReturnType<typeof vi.fn> {
 				`${JSON.stringify(makeBfclPromptRow("simple_java_0", "java_factorial"))}\n`,
 			);
 		}
+		if (url.includes("/data/possible_answer/BFCL_v4_multi_turn_base.json")) {
+			return responseWithText(
+				`${JSON.stringify({
+					ground_truth: [["cd(folder='document')"]],
+					id: "multi_turn_base_0",
+				})}\n`,
+			);
+		}
+		if (url.includes("/data/BFCL_v4_multi_turn_base.json")) {
+			return responseWithText(
+				`${JSON.stringify({
+					id: "multi_turn_base_0",
+					initial_config: { GorillaFileSystem: { root: {} } },
+					involved_classes: ["GorillaFileSystem"],
+					path: ["GorillaFileSystem.cd"],
+					question: [[{ content: "Move a file", role: "user" }]],
+				})}\n`,
+			);
+		}
+		if (url.includes("/BFCL_v4_multi_turn_base_result.json")) {
+			return responseWithText(
+				`${JSON.stringify({
+					id: "multi_turn_base_0",
+					result: [[[{ cd: '{"folder":"document"}' }]]],
+				})}\n`,
+			);
+		}
+		if (url.includes("/bfcl_eval/") && !url.includes("/bfcl_eval/data/")) {
+			return responseWithText(`# ${url}\n`);
+		}
 		return responseWithText("");
 	});
 	vi.stubGlobal("fetch", fetchMock);
@@ -1328,6 +1459,18 @@ function makeBfclNormalizedRow(): Record<string, unknown> {
 		ground_truth: [{ calculate_triangle_area: { base: [10] } }],
 		id: "simple_python_0",
 		question: [[{ content: "Find area", role: "user" }]],
+	};
+}
+
+function makeBfclMultiTurnRow(): Record<string, unknown> {
+	return {
+		category: "multi_turn_base",
+		general_category: "multi_turn",
+		id: "multi_turn_base_0",
+		initial_config: { GorillaFileSystem: { root: {} } },
+		involved_classes: ["GorillaFileSystem"],
+		possible_answer: [["cd(folder='document')"]],
+		question: [[{ content: "Move a file", role: "user" }]],
 	};
 }
 

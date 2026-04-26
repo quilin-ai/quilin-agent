@@ -13,6 +13,15 @@ export {
 	loadBfclV4Tasks,
 } from "./bfcl-v4.js";
 export {
+	BFCL_V4_MULTI_TURN_CATEGORIES,
+	BFCL_V4_MULTI_TURN_SCORER_TYPE,
+	type BfclV4MultiTurnCategory,
+	type BfclV4MultiTurnTaskFilter,
+	iterateBfclV4MultiTurnTasks,
+	type LoadBfclV4MultiTurnTasksOptions,
+	loadBfclV4MultiTurnTasks,
+} from "./bfcl-v4-multi-turn.js";
+export {
 	CacheError,
 	computeSha256,
 	type DatasetCache,

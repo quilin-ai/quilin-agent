@@ -23,7 +23,9 @@ const GAIA_ATTACHMENT_BASE_URL =
 	"https://huggingface.co/datasets/gaia-benchmark/GAIA/resolve/main/2023/validation";
 const BFCL_V4_PINNED_COMMIT = "f7cf735";
 const BFCL_V4_RAW_BASE_URL = `https://raw.githubusercontent.com/ShishirPatil/gorilla/${BFCL_V4_PINNED_COMMIT}/berkeley-function-call-leaderboard/bfcl_eval`;
-const BFCL_V4_SOURCE_URL = `${BFCL_V4_RAW_BASE_URL}/data?categories=non_live,live`;
+const BFCL_V4_SOURCE_URL = `${BFCL_V4_RAW_BASE_URL}/data?categories=non_live,live,multi_turn`;
+const BFCL_V4_RESULT_FIXTURE_BASE_URL =
+	"https://raw.githubusercontent.com/HuanzhiMao/BFCL-Result/main/2025-12-16/result/gpt-5-mini-2025-08-07-FC/multi_turn";
 const DEFAULT_PAGE_SIZE = 100;
 const DEFAULT_RETRIES = 3;
 const MAX_PAGE_SIZE = 100;
@@ -67,12 +69,42 @@ const bfclV4AstCategories = [
 	...bfclV4NonLiveCategories,
 	...bfclV4LiveCategories,
 ] as const;
+const bfclV4MultiTurnCategories = [
+	"multi_turn_base",
+	"multi_turn_miss_func",
+	"multi_turn_miss_param",
+	"multi_turn_long_context",
+] as const;
+const bfclV4SupportedCategories = [
+	...bfclV4AstCategories,
+	...bfclV4MultiTurnCategories,
+] as const;
 const bfclV4PossibleAnswerCategories: ReadonlySet<string> = new Set([
 	...bfclV4NonLiveCategories.filter((category) => category !== "irrelevance"),
 	...bfclV4LiveCategories.filter(
 		(category) => !["live_irrelevance", "live_relevance"].includes(category),
 	),
+	...bfclV4MultiTurnCategories,
 ]);
+const bfclV4CheckerSupportFiles = [
+	"bfcl_eval/__init__.py",
+	"bfcl_eval/constants/__init__.py",
+	"bfcl_eval/constants/executable_backend_config.py",
+	"bfcl_eval/eval_checker/__init__.py",
+	"bfcl_eval/eval_checker/multi_turn_eval/__init__.py",
+	"bfcl_eval/eval_checker/multi_turn_eval/multi_turn_checker.py",
+	"bfcl_eval/eval_checker/multi_turn_eval/multi_turn_utils.py",
+	"bfcl_eval/eval_checker/multi_turn_eval/func_source_code/__init__.py",
+	"bfcl_eval/eval_checker/multi_turn_eval/func_source_code/gorilla_file_system.py",
+	"bfcl_eval/eval_checker/multi_turn_eval/func_source_code/long_context.py",
+	"bfcl_eval/eval_checker/multi_turn_eval/func_source_code/math_api.py",
+	"bfcl_eval/eval_checker/multi_turn_eval/func_source_code/message_api.py",
+	"bfcl_eval/eval_checker/multi_turn_eval/func_source_code/posting_api.py",
+	"bfcl_eval/eval_checker/multi_turn_eval/func_source_code/ticket_api.py",
+	"bfcl_eval/eval_checker/multi_turn_eval/func_source_code/trading_bot.py",
+	"bfcl_eval/eval_checker/multi_turn_eval/func_source_code/travel_booking.py",
+	"bfcl_eval/eval_checker/multi_turn_eval/func_source_code/vehicle_control.py",
+] as const;
 
 interface FetchBenchmarkOptions {
 	readonly dataset: string;
@@ -192,7 +224,7 @@ async function fetchBenchmarkWithLock(input: {
 		options.dataset === "bfcl-v4"
 			? await fetchBfclV4Rows(options)
 			: await fetchAllRows(options, sourceDataset, sourceConfig, sourceSplit);
-	const attachments = await fetchGaiaAttachmentsIfNeeded({
+	const attachments = await fetchDatasetSupportFilesIfNeeded({
 		cacheDir,
 		dataset: options.dataset,
 		hfToken: options.hfToken,
@@ -511,7 +543,7 @@ async function fetchBfclV4Rows(
 ): Promise<Record<string, unknown>[]> {
 	const rows: Record<string, unknown>[] = [];
 	const targetRows = options.maxRows ?? Number.POSITIVE_INFINITY;
-	for (const category of bfclV4AstCategories) {
+	for (const category of bfclV4SupportedCategories) {
 		if (rows.length >= targetRows) {
 			break;
 		}
@@ -526,22 +558,41 @@ async function fetchBfclV4Rows(
 					options.retries,
 				)
 			: [];
+		const fixtureRows = isBfclV4MultiTurnCategory(category)
+			? await fetchBfclV4Jsonl(
+					bfclV4FixtureResultUrl(category),
+					options.retries,
+				)
+			: [];
 		const answersById = new Map(
 			possibleAnswers
 				.map((entry) => [stringField(entry, "id"), entry.ground_truth] as const)
+				.filter(([id]) => id != null),
+		);
+		const fixturesById = new Map(
+			fixtureRows
+				.map((entry) => [stringField(entry, "id"), entry] as const)
 				.filter(([id]) => id != null),
 		);
 		for (const prompt of prompts) {
 			if (rows.length >= targetRows) {
 				break;
 			}
+			const promptId = stringField(prompt, "id") ?? "";
 			rows.push(
 				validateBfclV4Row(
 					{
 						category,
+						excluded_function: prompt.excluded_function,
+						fixture_result: fixturesById.get(promptId),
 						function: prompt.function,
 						general_category: generalCategory,
-						ground_truth: answersById.get(stringField(prompt, "id") ?? ""),
+						initial_config: prompt.initial_config,
+						involved_classes: prompt.involved_classes,
+						missed_function: prompt.missed_function,
+						path: prompt.path,
+						possible_answer: answersById.get(promptId),
+						ground_truth: answersById.get(promptId),
 						id: prompt.id,
 						question: prompt.question,
 					},
@@ -605,6 +656,19 @@ function parseBfclV4Jsonl(raw: string, url: string): Record<string, unknown>[] {
 		index += 1;
 	}
 	return rows;
+}
+
+async function fetchDatasetSupportFilesIfNeeded(options: {
+	readonly cacheDir: string;
+	readonly dataset: string;
+	readonly hfToken?: string;
+	readonly retries: number;
+	readonly rows: readonly Record<string, unknown>[];
+}): Promise<Record<string, AttachmentManifestEntry> | undefined> {
+	if (options.dataset === "bfcl-v4") {
+		return fetchBfclV4CheckerFilesIfNeeded(options.cacheDir, options.retries);
+	}
+	return fetchGaiaAttachmentsIfNeeded(options);
 }
 
 async function fetchGaiaAttachmentsIfNeeded(options: {
@@ -706,6 +770,54 @@ async function gaiaAttachmentsComplete(
 	return true;
 }
 
+async function bfclV4SupportFilesComplete(
+	cacheDir: string,
+	attachments: Readonly<Record<string, AttachmentManifestEntry>> | undefined,
+): Promise<boolean> {
+	if (attachments == null) {
+		return false;
+	}
+	for (const relativePath of bfclV4CheckerSupportFiles) {
+		const manifestEntry = attachments[relativePath];
+		if (manifestEntry == null) {
+			return false;
+		}
+		try {
+			const file = await readFile(join(cacheDir, relativePath));
+			if (
+				computeSha256(file) !== manifestEntry.sha256 ||
+				file.byteLength !== manifestEntry.size_bytes
+			) {
+				return false;
+			}
+		} catch {
+			return false;
+		}
+	}
+	return true;
+}
+
+async function fetchBfclV4CheckerFilesIfNeeded(
+	cacheDir: string,
+	retries: number,
+): Promise<Record<string, AttachmentManifestEntry>> {
+	const manifest: Record<string, AttachmentManifestEntry> = {};
+	for (const relativePath of bfclV4CheckerSupportFiles) {
+		const content = await fetchTextWithRetry(
+			bfclV4SupportFileUrl(relativePath),
+			retries,
+		);
+		const outputPath = join(cacheDir, relativePath);
+		await mkdir(dirname(outputPath), { recursive: true });
+		await writeFile(outputPath, content, "utf8");
+		manifest[relativePath] = {
+			sha256: computeSha256(content),
+			size_bytes: Buffer.byteLength(content, "utf8"),
+		};
+	}
+	return manifest;
+}
+
 async function fetchBinaryWithRetry(
 	url: string,
 	retries: number,
@@ -733,6 +845,33 @@ async function fetchBinaryWithRetry(
 	throw lastError instanceof Error
 		? lastError
 		: new Error("Failed to fetch GAIA attachment");
+}
+
+async function fetchTextWithRetry(
+	url: string,
+	retries: number,
+): Promise<string> {
+	validateBfclV4RawUrl(url);
+	let lastError: unknown;
+	for (let attempt = 1; attempt <= retries; attempt += 1) {
+		try {
+			const response = await fetch(url);
+			if (!response.ok) {
+				throw new Error(
+					`Failed to fetch BFCL v4 support file: ${response.status} ${response.statusText}`,
+				);
+			}
+			return await response.text();
+		} catch (error) {
+			lastError = error;
+			if (attempt < retries) {
+				await delay(100 * attempt);
+			}
+		}
+	}
+	throw lastError instanceof Error
+		? lastError
+		: new Error("Failed to fetch BFCL v4 support file");
 }
 
 async function tryReadValidManifest(options: {
@@ -769,6 +908,15 @@ async function tryReadValidManifest(options: {
 			!(await gaiaAttachmentsComplete(
 				dirname(options.outputPath),
 				data,
+				manifest.attachments,
+			))
+		) {
+			return null;
+		}
+		if (
+			options.dataset === "bfcl-v4" &&
+			!(await bfclV4SupportFilesComplete(
+				dirname(options.outputPath),
 				manifest.attachments,
 			))
 		) {
@@ -853,7 +1001,11 @@ function validateBfclV4Row(
 	if (typeof category !== "string" || !isBfclV4Category(category)) {
 		throw new Error(`Invalid bfcl-v4 row at index ${index}: missing category`);
 	}
-	if (generalCategory !== "non_live" && generalCategory !== "live") {
+	if (
+		generalCategory !== "non_live" &&
+		generalCategory !== "live" &&
+		generalCategory !== "multi_turn"
+	) {
 		throw new Error(
 			`Invalid bfcl-v4 row at index ${index}: missing general_category`,
 		);
@@ -863,7 +1015,23 @@ function validateBfclV4Row(
 			`Invalid bfcl-v4 row at index ${index}: category/general_category mismatch`,
 		);
 	}
-	if (!Array.isArray(record.function)) {
+	if (generalCategory === "multi_turn") {
+		if (!Array.isArray(record.possible_answer)) {
+			throw new Error(
+				`Invalid bfcl-v4 row at index ${index}: missing possible_answer`,
+			);
+		}
+		if (!isRecord(record.initial_config)) {
+			throw new Error(
+				`Invalid bfcl-v4 row at index ${index}: missing initial_config`,
+			);
+		}
+		if (!Array.isArray(record.involved_classes)) {
+			throw new Error(
+				`Invalid bfcl-v4 row at index ${index}: missing involved_classes`,
+			);
+		}
+	} else if (!Array.isArray(record.function)) {
 		throw new Error(
 			`Invalid bfcl-v4 row at index ${index}: missing function definitions`,
 		);
@@ -974,12 +1142,21 @@ function readGaiaLevel(record: Record<string, unknown>, index: number): number {
 	return level;
 }
 
-function bfclV4GeneralCategory(category: string): "non_live" | "live" {
+function bfclV4GeneralCategory(
+	category: string,
+): "non_live" | "live" | "multi_turn" {
+	if (isBfclV4MultiTurnCategory(category)) {
+		return "multi_turn";
+	}
 	return category.startsWith("live_") ? "live" : "non_live";
 }
 
 function isBfclV4Category(category: string): boolean {
-	return (bfclV4AstCategories as readonly string[]).includes(category);
+	return (bfclV4SupportedCategories as readonly string[]).includes(category);
+}
+
+function isBfclV4MultiTurnCategory(category: string): boolean {
+	return (bfclV4MultiTurnCategories as readonly string[]).includes(category);
 }
 
 function bfclV4DataUrl(category: string): string {
@@ -990,16 +1167,38 @@ function bfclV4PossibleAnswerUrl(category: string): string {
 	return `${BFCL_V4_RAW_BASE_URL}/data/possible_answer/BFCL_v4_${category}.json`;
 }
 
+function bfclV4FixtureResultUrl(category: string): string {
+	return `${BFCL_V4_RESULT_FIXTURE_BASE_URL}/BFCL_v4_${category}_result.json`;
+}
+
+function bfclV4SupportFileUrl(relativePath: string): string {
+	return `${BFCL_V4_RAW_BASE_URL.replace(/\/bfcl_eval$/, "")}/${relativePath}`;
+}
+
 function validateBfclV4RawUrl(url: string): void {
 	const parsed = new URL(url);
-	const allowedPrefix = `/ShishirPatil/gorilla/${BFCL_V4_PINNED_COMMIT}/berkeley-function-call-leaderboard/bfcl_eval/data/`;
+	const allowedDataPrefix = `/ShishirPatil/gorilla/${BFCL_V4_PINNED_COMMIT}/berkeley-function-call-leaderboard/bfcl_eval/data/`;
+	const allowedFixturePrefix =
+		"/HuanzhiMao/BFCL-Result/main/2025-12-16/result/gpt-5-mini-2025-08-07-FC/multi_turn/";
+	const allowedSupportPaths = new Set(
+		bfclV4CheckerSupportFiles.map(
+			(relativePath) =>
+				`/ShishirPatil/gorilla/${BFCL_V4_PINNED_COMMIT}/berkeley-function-call-leaderboard/${relativePath}`,
+		),
+	);
 	if (
 		parsed.origin !== "https://raw.githubusercontent.com" ||
-		!parsed.pathname.startsWith(allowedPrefix) ||
-		parsed.pathname.includes("..")
+		parsed.pathname.includes("..") ||
+		(!parsed.pathname.startsWith(allowedDataPrefix) &&
+			!parsed.pathname.startsWith(allowedFixturePrefix) &&
+			!allowedSupportPaths.has(parsed.pathname))
 	) {
 		throw new Error(`Unsafe BFCL v4 raw URL rejected: ${url}`);
 	}
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return value != null && typeof value === "object" && !Array.isArray(value);
 }
 
 function stringField(
