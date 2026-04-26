@@ -144,6 +144,161 @@ describe("fetch-benchmark cache intent", () => {
 		expect(attachment).toBe("gaia attachment fixture");
 	});
 
+	it("fetches BFCL v4 non-live/live rows from pinned raw GitHub data", async () => {
+		const cacheRoot = await tempCacheRoot();
+		const fetchMock = mockBfclV4Fetch();
+
+		const result = await fetchBenchmark(
+			options({ cacheRoot, dataset: "bfcl-v4", maxRows: 3 }),
+		);
+		const manifest = await readFile(
+			join(cacheRoot, "datasets", "bfcl-v4", "manifest.json"),
+			"utf8",
+		);
+		const data = await readFile(
+			join(cacheRoot, "datasets", "bfcl-v4", "data.jsonl"),
+			"utf8",
+		);
+
+		expect(result).toMatchObject({ rows: 3, skipped: false });
+		expect(fetchMock).toHaveBeenCalledWith(
+			expect.stringContaining(
+				"raw.githubusercontent.com/ShishirPatil/gorilla/f7cf735",
+			),
+		);
+		expect(fetchMock).toHaveBeenCalledWith(
+			expect.stringContaining(
+				"/data/possible_answer/BFCL_v4_simple_python.json",
+			),
+		);
+		expect(manifest).toContain('"dataset": "bfcl-v4"');
+		expect(manifest).toContain('"requested_max_rows": 3');
+		expect(manifest).toContain("categories=non_live,live");
+		expect(data).toContain('"category":"simple_python"');
+		expect(data).toContain('"general_category":"non_live"');
+		expect(data).toContain('"category":"simple_java"');
+	});
+
+	it("skips BFCL v4 refetch when the partial cache already satisfies the request", async () => {
+		const cacheRoot = await tempCacheRoot();
+		mockBfclV4Fetch();
+		await fetchBenchmark(
+			options({ cacheRoot, dataset: "bfcl-v4", maxRows: 3 }),
+		);
+
+		const unusedFetch = mockBfclV4Fetch();
+		await expect(
+			fetchBenchmark(options({ cacheRoot, dataset: "bfcl-v4", maxRows: 2 })),
+		).resolves.toMatchObject({ rows: 3, skipped: true });
+		expect(unusedFetch).not.toHaveBeenCalled();
+	});
+
+	it("skips a full BFCL v4 cache when it was fetched as a full slice", async () => {
+		const cacheRoot = await tempCacheRoot();
+		mockBfclV4Fetch();
+		await expect(
+			fetchBenchmark(options({ cacheRoot, dataset: "bfcl-v4" })),
+		).resolves.toMatchObject({ rows: 3, skipped: false });
+
+		const unusedFetch = mockBfclV4Fetch();
+		await expect(
+			fetchBenchmark(options({ cacheRoot, dataset: "bfcl-v4" })),
+		).resolves.toMatchObject({ rows: 3, skipped: true });
+		expect(unusedFetch).not.toHaveBeenCalled();
+	});
+
+	it("rejects invalid BFCL v4 raw JSONL before writing cache", async () => {
+		const cacheRoot = await tempCacheRoot();
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => responseWithText("{not-json}\n")),
+		);
+
+		await expect(
+			fetchBenchmark(options({ cacheRoot, dataset: "bfcl-v4", maxRows: 1 })),
+		).rejects.toThrow(/Invalid BFCL v4 JSONL/);
+	});
+
+	it("validates BFCL v4 private parser and raw URL guard edge cases", () => {
+		const validUrl =
+			"https://raw.githubusercontent.com/ShishirPatil/gorilla/f7cf735/berkeley-function-call-leaderboard/bfcl_eval/data/BFCL_v4_simple_python.json";
+		expect(
+			__privateForTests.parseBfclV4Jsonl('{"id":"ok"}\n', validUrl),
+		).toEqual([{ id: "ok" }]);
+		expect(() => __privateForTests.parseBfclV4Jsonl("42\n", validUrl)).toThrow(
+			/row is not an object/,
+		);
+		expect(() =>
+			__privateForTests.validateBfclV4RawUrl(
+				"https://example.com/ShishirPatil/gorilla/f7cf735/berkeley-function-call-leaderboard/bfcl_eval/data/BFCL_v4_simple_python.json",
+			),
+		).toThrow(/Unsafe BFCL v4 raw URL/);
+		expect(() =>
+			__privateForTests.validateBfclV4RawUrl(
+				"https://raw.githubusercontent.com/ShishirPatil/gorilla/f7cf735/berkeley-function-call-leaderboard/bfcl_eval/data/../secret.json",
+			),
+		).toThrow(/Unsafe BFCL v4 raw URL/);
+	});
+
+	it("validates BFCL v4 normalized row edge cases", () => {
+		expect(() =>
+			__privateForTests.validateBfclV4Row(
+				{ ...makeBfclNormalizedRow(), id: "" },
+				0,
+			),
+		).toThrow(/missing id/);
+		expect(() =>
+			__privateForTests.validateBfclV4Row(
+				{ ...makeBfclNormalizedRow(), category: "unknown" },
+				0,
+			),
+		).toThrow(/missing category/);
+		expect(() =>
+			__privateForTests.validateBfclV4Row(
+				{ ...makeBfclNormalizedRow(), general_category: "live" },
+				0,
+			),
+		).toThrow(/mismatch/);
+		expect(() =>
+			__privateForTests.validateBfclV4Row(
+				{ ...makeBfclNormalizedRow(), function: {} },
+				0,
+			),
+		).toThrow(/missing function definitions/);
+		expect(() =>
+			__privateForTests.validateBfclV4Row(
+				{ ...makeBfclNormalizedRow(), question: undefined },
+				0,
+			),
+		).toThrow(/missing question/);
+		expect(
+			__privateForTests.validateBfclV4Row(makeBfclNormalizedRow(), 0),
+		).toMatchObject({ category: "simple_python" });
+	});
+
+	it("keeps source defaults and unsupported dataset errors explicit", () => {
+		expect(__privateForTests.sourceConfigFor("gaia")).toBe("2023_all");
+		expect(__privateForTests.sourceConfigFor("swe-bench-lite")).toBe("default");
+		expect(__privateForTests.sourceSplitFor("gaia")).toBe("validation");
+		expect(__privateForTests.sourceSplitFor("swe-bench-lite")).toBe("test");
+		expect(() => __privateForTests.expectedRowsFor("unknown")).toThrow(
+			/Unsupported dataset/,
+		);
+	});
+
+	it("retries transient BFCL v4 raw fetch failures", async () => {
+		const cacheRoot = await tempCacheRoot();
+		const fetchMock = mockBfclV4Fetch();
+		fetchMock.mockRejectedValueOnce(new Error("temporary raw outage"));
+
+		await expect(
+			fetchBenchmark(
+				options({ cacheRoot, dataset: "bfcl-v4", maxRows: 1, retries: 2 }),
+			),
+		).resolves.toMatchObject({ rows: 1, skipped: false });
+		expect(fetchMock).toHaveBeenCalledTimes(3);
+	});
+
 	it("refetches GAIA when manifest is valid but cached attachments are missing", async () => {
 		const cacheRoot = await tempCacheRoot();
 		mockGaiaRowsFetch(2);
@@ -960,6 +1115,15 @@ describe("fetch-benchmark cache intent", () => {
 		}
 	});
 
+	it("parses BFCL aliases without requiring HF_TOKEN", () => {
+		expect(parseArgs(["BFCL", "--max-rows", "5"])).toMatchObject({
+			dataset: "bfcl-v4",
+			hfToken: undefined,
+			maxRows: 5,
+		});
+		expect(parseArgs(["bfcl"])).toMatchObject({ dataset: "bfcl-v4" });
+	});
+
 	it("parses all CLI options and rejects malformed arguments", () => {
 		expect(
 			parseArgs([
@@ -1085,6 +1249,86 @@ function mockGaiaRowsFetch(totalRows: number): ReturnType<typeof vi.fn> {
 	});
 	vi.stubGlobal("fetch", fetchMock);
 	return fetchMock;
+}
+
+function mockBfclV4Fetch(): ReturnType<typeof vi.fn> {
+	const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+		const url = String(input);
+		if (url.includes("/data/possible_answer/BFCL_v4_simple_python.json")) {
+			return responseWithText(
+				`${JSON.stringify({
+					ground_truth: [
+						{ calculate_triangle_area: { base: [10], height: [5] } },
+					],
+					id: "simple_python_0",
+				})}\n${JSON.stringify({
+					ground_truth: [{ math_factorial: { number: [5] } }],
+					id: "simple_python_1",
+				})}\n`,
+			);
+		}
+		if (url.includes("/data/BFCL_v4_simple_python.json")) {
+			return responseWithText(
+				`${JSON.stringify(makeBfclPromptRow("simple_python_0", "calculate_triangle_area"))}\n${JSON.stringify(makeBfclPromptRow("simple_python_1", "math_factorial"))}\n`,
+			);
+		}
+		if (url.includes("/data/possible_answer/BFCL_v4_simple_java.json")) {
+			return responseWithText(
+				`${JSON.stringify({
+					ground_truth: [{ java_factorial: { number: [5] } }],
+					id: "simple_java_0",
+				})}\n`,
+			);
+		}
+		if (url.includes("/data/BFCL_v4_simple_java.json")) {
+			return responseWithText(
+				`${JSON.stringify(makeBfclPromptRow("simple_java_0", "java_factorial"))}\n`,
+			);
+		}
+		return responseWithText("");
+	});
+	vi.stubGlobal("fetch", fetchMock);
+	return fetchMock;
+}
+
+function makeBfclPromptRow(
+	id: string,
+	functionName: string,
+): Record<string, unknown> {
+	return {
+		function: [
+			{
+				name: functionName,
+				parameters: {
+					properties: { number: { type: "integer" } },
+					required: ["number"],
+					type: "dict",
+				},
+			},
+		],
+		id,
+		question: [[{ content: `Call ${functionName}`, role: "user" }]],
+	};
+}
+
+function makeBfclNormalizedRow(): Record<string, unknown> {
+	return {
+		category: "simple_python",
+		function: [
+			{
+				name: "calculate_triangle_area",
+				parameters: {
+					properties: { base: { type: "integer" } },
+					required: ["base"],
+					type: "dict",
+				},
+			},
+		],
+		general_category: "non_live",
+		ground_truth: [{ calculate_triangle_area: { base: [10] } }],
+		id: "simple_python_0",
+		question: [[{ content: "Find area", role: "user" }]],
+	};
 }
 
 function runFetchChild(input: {
@@ -1252,6 +1496,7 @@ function responseWithText(text: string): Response {
 		ok: true,
 		status: 200,
 		statusText: "OK",
+		text: async () => text,
 	} as unknown as Response;
 }
 

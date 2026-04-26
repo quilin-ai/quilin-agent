@@ -40,6 +40,37 @@ const gaiaTask: BenchmarkTask = {
 	scorer_type: "gaia-exact-match",
 };
 
+const bfclTask: BenchmarkTask = {
+	task_id: "simple_python_0",
+	dataset: "bfcl-v4",
+	inputs: {
+		function_definitions: [
+			{
+				name: "calculate_triangle_area",
+				parameters: {
+					properties: {
+						base: { type: "integer" },
+						height: { type: "integer" },
+					},
+					required: ["base", "height"],
+					type: "dict",
+				},
+			},
+		],
+		question: "Find the triangle area.",
+	},
+	expected: {
+		category: "simple_python",
+		general_category: "non_live",
+		ground_truth: [{ calculate_triangle_area: { base: [10], height: [5] } }],
+	},
+	metadata: {
+		category: "simple_python",
+		general_category: "non_live",
+	},
+	scorer_type: "bfcl-v4-ast",
+};
+
 describe("runBenchmarkTask", () => {
 	it("runs setup, agent_loop, collect, score, and cleanup for one task", async () => {
 		const tmpRoot = await mkdtemp(join(tmpdir(), "quilin-runner-test-"));
@@ -317,24 +348,89 @@ describe("runBenchmarkTask", () => {
 		expect(result.result.output).toEqual({ model_answer: "Paris" });
 	});
 
-	it("fails fast for datasets whose loader/scorer/adapter are not implemented yet", async () => {
+	it("collects BFCL v4 strict tool_calls JSON and prompts the output contract", async () => {
+		let capturedSystemPrompt = "";
+		const result = await runBenchmarkTask({
+			task: bfclTask,
+			options: {
+				agentLoopConfig: makeLoopConfig(),
+				createRunId: () => "run-bfcl",
+				runAgent: async (_config, messages) => {
+					capturedSystemPrompt = messages[0]?.content ?? "";
+					return JSON.stringify({
+						tool_calls: [
+							{
+								arguments: { base: 10, height: 5 },
+								function: "calculate_triangle_area",
+							},
+						],
+					});
+				},
+				scorer: async (_task, output) => ({
+					details: { output },
+					passed: Array.isArray(output.tool_calls),
+					score: 1,
+				}),
+			},
+		});
+
+		expect(capturedSystemPrompt).toContain("BFCL v4");
+		expect(result.result.output).toEqual({
+			tool_calls: [
+				{
+					arguments: { base: 10, height: 5 },
+					function: "calculate_triangle_area",
+				},
+			],
+		});
+		expect(result.result.passed).toBe(true);
+	});
+
+	it("fails loudly when BFCL v4 agent output is not strict tool_calls JSON", async () => {
 		await expect(
 			runBenchmarkTask({
-				task: {
-					...gaiaTask,
-					dataset: "bfcl-v4",
-					scorer_type: "bfcl-tool-call-match",
-				},
+				task: bfclTask,
 				options: {
 					agentLoopConfig: makeLoopConfig(),
-					runAgent: async () => "{}",
+					runAgent: async () => "[]",
 					scorer: async () => ({ passed: true, score: 1, details: {} }),
 				},
 			}),
 		).rejects.toMatchObject({
 			name: "BenchmarkRunError",
-			phase: "setup",
-			message: "setup: Benchmark dataset not implemented: bfcl-v4",
+			phase: "collect",
+			message: "collect: BFCL v4 agent output must be a JSON object",
+		});
+
+		await expect(
+			runBenchmarkTask({
+				task: bfclTask,
+				options: {
+					agentLoopConfig: makeLoopConfig(),
+					runAgent: async () => JSON.stringify({ tool_calls: "bad" }),
+					scorer: async () => ({ passed: true, score: 1, details: {} }),
+				},
+			}),
+		).rejects.toMatchObject({
+			name: "BenchmarkRunError",
+			phase: "collect",
+			message: "collect: BFCL v4 agent output requires tool_calls array",
+		});
+
+		await expect(
+			runBenchmarkTask({
+				task: bfclTask,
+				options: {
+					agentLoopConfig: makeLoopConfig(),
+					runAgent: async () =>
+						JSON.stringify({ tool_calls: [{ function: "x" }] }),
+					scorer: async () => ({ passed: true, score: 1, details: {} }),
+				},
+			}),
+		).rejects.toMatchObject({
+			name: "BenchmarkRunError",
+			phase: "collect",
+			message: "collect: BFCL v4 tool_call requires arguments object",
 		});
 	});
 

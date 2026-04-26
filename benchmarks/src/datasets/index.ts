@@ -1,4 +1,18 @@
 export {
+	BFCL_V4_DATASET,
+	BFCL_V4_LIVE_CATEGORIES,
+	BFCL_V4_NON_LIVE_CATEGORIES,
+	BFCL_V4_PINNED_COMMIT,
+	BFCL_V4_SCORER_TYPE,
+	BFCL_V4_SUPPORTED_AST_CATEGORIES,
+	type BfclV4Category,
+	type BfclV4GeneralCategory,
+	type BfclV4TaskFilter,
+	iterateBfclV4Tasks,
+	type LoadBfclV4TasksOptions,
+	loadBfclV4Tasks,
+} from "./bfcl-v4.js";
+export {
 	CacheError,
 	computeSha256,
 	type DatasetCache,

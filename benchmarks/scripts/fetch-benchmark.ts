@@ -21,17 +21,22 @@ const GAIA_CONFIG = "2023_all";
 const GAIA_SPLIT = "validation";
 const GAIA_ATTACHMENT_BASE_URL =
 	"https://huggingface.co/datasets/gaia-benchmark/GAIA/resolve/main/2023/validation";
+const BFCL_V4_PINNED_COMMIT = "f7cf735";
+const BFCL_V4_RAW_BASE_URL = `https://raw.githubusercontent.com/ShishirPatil/gorilla/${BFCL_V4_PINNED_COMMIT}/berkeley-function-call-leaderboard/bfcl_eval`;
+const BFCL_V4_SOURCE_URL = `${BFCL_V4_RAW_BASE_URL}/data?categories=non_live,live`;
 const DEFAULT_PAGE_SIZE = 100;
 const DEFAULT_RETRIES = 3;
 const MAX_PAGE_SIZE = 100;
 const MAX_RETRIES = 5;
 const SOURCE_DATASETS: Record<string, string> = {
 	gaia: GAIA_SOURCE_DATASET,
+	"bfcl-v4": "ShishirPatil/gorilla",
 	"swe-bench-lite": SWE_BENCH_LITE_SOURCE_DATASET,
 	"swe-bench-verified": SWE_BENCH_VERIFIED_SOURCE_DATASET,
 };
 const EXPECTED_ROWS: Record<string, number> = {
 	gaia: 165,
+	"bfcl-v4": Number.MAX_SAFE_INTEGER,
 	"swe-bench-lite": 300,
 	"swe-bench-verified": 500,
 };
@@ -41,6 +46,33 @@ const FETCH_LOCK_RETRY_MS = 25;
 const FETCH_LOCK_HEARTBEAT_MS = 5 * 60 * 1000;
 const FETCH_LOCK_STALE_MS = 30 * 60 * 1000;
 const gaiaAttachmentFilePattern = /^[A-Za-z0-9._-]+$/;
+const bfclV4NonLiveCategories = [
+	"simple_python",
+	"simple_java",
+	"simple_javascript",
+	"multiple",
+	"parallel",
+	"parallel_multiple",
+	"irrelevance",
+] as const;
+const bfclV4LiveCategories = [
+	"live_simple",
+	"live_multiple",
+	"live_parallel",
+	"live_parallel_multiple",
+	"live_irrelevance",
+	"live_relevance",
+] as const;
+const bfclV4AstCategories = [
+	...bfclV4NonLiveCategories,
+	...bfclV4LiveCategories,
+] as const;
+const bfclV4PossibleAnswerCategories: ReadonlySet<string> = new Set([
+	...bfclV4NonLiveCategories.filter((category) => category !== "irrelevance"),
+	...bfclV4LiveCategories.filter(
+		(category) => !["live_irrelevance", "live_relevance"].includes(category),
+	),
+]);
 
 interface FetchBenchmarkOptions {
 	readonly dataset: string;
@@ -126,12 +158,15 @@ async function fetchBenchmarkWithLock(input: {
 	const { cacheDir, options, sourceConfig, sourceDataset, sourceSplit } = input;
 	const outputPath = join(cacheDir, "data.jsonl");
 	const manifestPath = join(cacheDir, "manifest.json");
-	const sourceUrl = buildSourceUrl({
-		baseUrl: options.rowsBaseUrl,
-		config: sourceConfig,
-		dataset: sourceDataset,
-		split: sourceSplit,
-	});
+	const sourceUrl =
+		options.dataset === "bfcl-v4"
+			? BFCL_V4_SOURCE_URL
+			: buildSourceUrl({
+					baseUrl: options.rowsBaseUrl,
+					config: sourceConfig,
+					dataset: sourceDataset,
+					split: sourceSplit,
+				});
 	if (!options.force) {
 		const cached = await tryReadValidManifest({
 			currentMaxRows: options.maxRows ?? null,
@@ -153,12 +188,10 @@ async function fetchBenchmarkWithLock(input: {
 		}
 	}
 
-	const rows = await fetchAllRows(
-		options,
-		sourceDataset,
-		sourceConfig,
-		sourceSplit,
-	);
+	const rows =
+		options.dataset === "bfcl-v4"
+			? await fetchBfclV4Rows(options)
+			: await fetchAllRows(options, sourceDataset, sourceConfig, sourceSplit);
 	const attachments = await fetchGaiaAttachmentsIfNeeded({
 		cacheDir,
 		dataset: options.dataset,
@@ -473,6 +506,107 @@ async function fetchJsonWithRetry(
 		: new Error("Failed to fetch benchmark rows");
 }
 
+async function fetchBfclV4Rows(
+	options: FetchBenchmarkOptions,
+): Promise<Record<string, unknown>[]> {
+	const rows: Record<string, unknown>[] = [];
+	const targetRows = options.maxRows ?? Number.POSITIVE_INFINITY;
+	for (const category of bfclV4AstCategories) {
+		if (rows.length >= targetRows) {
+			break;
+		}
+		const generalCategory = bfclV4GeneralCategory(category);
+		const prompts = await fetchBfclV4Jsonl(
+			bfclV4DataUrl(category),
+			options.retries,
+		);
+		const possibleAnswers = bfclV4PossibleAnswerCategories.has(category)
+			? await fetchBfclV4Jsonl(
+					bfclV4PossibleAnswerUrl(category),
+					options.retries,
+				)
+			: [];
+		const answersById = new Map(
+			possibleAnswers
+				.map((entry) => [stringField(entry, "id"), entry.ground_truth] as const)
+				.filter(([id]) => id != null),
+		);
+		for (const prompt of prompts) {
+			if (rows.length >= targetRows) {
+				break;
+			}
+			rows.push(
+				validateBfclV4Row(
+					{
+						category,
+						function: prompt.function,
+						general_category: generalCategory,
+						ground_truth: answersById.get(stringField(prompt, "id") ?? ""),
+						id: prompt.id,
+						question: prompt.question,
+					},
+					rows.length,
+				),
+			);
+		}
+	}
+	return rows;
+}
+
+async function fetchBfclV4Jsonl(
+	url: string,
+	retries: number,
+): Promise<Record<string, unknown>[]> {
+	validateBfclV4RawUrl(url);
+	let lastError: unknown;
+	for (let attempt = 1; attempt <= retries; attempt += 1) {
+		try {
+			const response = await fetch(url);
+			if (!response.ok) {
+				throw new Error(
+					`Failed to fetch BFCL v4 data: ${response.status} ${response.statusText}`,
+				);
+			}
+			return parseBfclV4Jsonl(await response.text(), url);
+		} catch (error) {
+			lastError = error;
+			if (attempt < retries) {
+				await delay(100 * attempt);
+			}
+		}
+	}
+	throw lastError instanceof Error
+		? lastError
+		: new Error("Failed to fetch BFCL v4 data");
+}
+
+function parseBfclV4Jsonl(raw: string, url: string): Record<string, unknown>[] {
+	const rows: Record<string, unknown>[] = [];
+	let index = 0;
+	for (const line of raw.split(/\r?\n/)) {
+		if (line.length === 0) {
+			continue;
+		}
+		try {
+			const parsed = JSON.parse(line);
+			if (
+				parsed == null ||
+				typeof parsed !== "object" ||
+				Array.isArray(parsed)
+			) {
+				throw new Error("row is not an object");
+			}
+			rows.push(parsed as Record<string, unknown>);
+		} catch (error) {
+			throw new Error(
+				`Invalid BFCL v4 JSONL from ${url} at row ${index}: ${errorMessage(error)}`,
+			);
+		}
+		index += 1;
+	}
+	return rows;
+}
+
 async function fetchGaiaAttachmentsIfNeeded(options: {
 	readonly cacheDir: string;
 	readonly dataset: string;
@@ -659,6 +793,9 @@ function cacheSatisfiesRequest(
 		return false;
 	}
 	if (currentMaxRows == null) {
+		if (dataset === "bfcl-v4") {
+			return cachedMaxRows === null && cachedRows > 0;
+		}
 		return cachedMaxRows === null && cachedRows === expectedRowsFor(dataset);
 	}
 	if (cachedMaxRows == null) {
@@ -672,6 +809,9 @@ function validateBenchmarkRow(
 	dataset: string,
 	index: number,
 ): Record<string, unknown> {
+	if (dataset === "bfcl-v4") {
+		return validateBfclV4Row(record, index);
+	}
 	if (dataset === "gaia") {
 		return validateGaiaRow(record, index);
 	}
@@ -696,6 +836,40 @@ function validateSweBenchRow(
 				`Invalid ${dataset} row at index ${index}: missing ${field}`,
 			);
 		}
+	}
+	return record;
+}
+
+function validateBfclV4Row(
+	record: Record<string, unknown>,
+	index: number,
+): Record<string, unknown> {
+	const id = record.id;
+	const category = record.category;
+	const generalCategory = record.general_category;
+	if (typeof id !== "string" || id.length === 0) {
+		throw new Error(`Invalid bfcl-v4 row at index ${index}: missing id`);
+	}
+	if (typeof category !== "string" || !isBfclV4Category(category)) {
+		throw new Error(`Invalid bfcl-v4 row at index ${index}: missing category`);
+	}
+	if (generalCategory !== "non_live" && generalCategory !== "live") {
+		throw new Error(
+			`Invalid bfcl-v4 row at index ${index}: missing general_category`,
+		);
+	}
+	if (generalCategory !== bfclV4GeneralCategory(category)) {
+		throw new Error(
+			`Invalid bfcl-v4 row at index ${index}: category/general_category mismatch`,
+		);
+	}
+	if (!Array.isArray(record.function)) {
+		throw new Error(
+			`Invalid bfcl-v4 row at index ${index}: missing function definitions`,
+		);
+	}
+	if (record.question == null) {
+		throw new Error(`Invalid bfcl-v4 row at index ${index}: missing question`);
 	}
 	return record;
 }
@@ -798,6 +972,42 @@ function readGaiaLevel(record: Record<string, unknown>, index: number): number {
 		throw new Error(`Invalid gaia row at index ${index}: missing Level`);
 	}
 	return level;
+}
+
+function bfclV4GeneralCategory(category: string): "non_live" | "live" {
+	return category.startsWith("live_") ? "live" : "non_live";
+}
+
+function isBfclV4Category(category: string): boolean {
+	return (bfclV4AstCategories as readonly string[]).includes(category);
+}
+
+function bfclV4DataUrl(category: string): string {
+	return `${BFCL_V4_RAW_BASE_URL}/data/BFCL_v4_${category}.json`;
+}
+
+function bfclV4PossibleAnswerUrl(category: string): string {
+	return `${BFCL_V4_RAW_BASE_URL}/data/possible_answer/BFCL_v4_${category}.json`;
+}
+
+function validateBfclV4RawUrl(url: string): void {
+	const parsed = new URL(url);
+	const allowedPrefix = `/ShishirPatil/gorilla/${BFCL_V4_PINNED_COMMIT}/berkeley-function-call-leaderboard/bfcl_eval/data/`;
+	if (
+		parsed.origin !== "https://raw.githubusercontent.com" ||
+		!parsed.pathname.startsWith(allowedPrefix) ||
+		parsed.pathname.includes("..")
+	) {
+		throw new Error(`Unsafe BFCL v4 raw URL rejected: ${url}`);
+	}
+}
+
+function stringField(
+	record: Record<string, unknown>,
+	field: string,
+): string | undefined {
+	const value = record[field];
+	return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function sourceDatasetFor(dataset: string): string {
@@ -910,6 +1120,10 @@ function errorCode(error: unknown): unknown {
 		: undefined;
 }
 
+function errorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
 function parsePositiveInt(flag: string, value: string): number {
 	const parsed = Number.parseInt(value, 10);
 	if (!Number.isFinite(parsed) || parsed <= 0 || String(parsed) !== value) {
@@ -1010,6 +1224,9 @@ function normalizeDataset(value: string): string {
 	if (value === "GAIA") {
 		return "gaia";
 	}
+	if (value === "BFCL" || value === "bfcl") {
+		return "bfcl-v4";
+	}
 	return value;
 }
 
@@ -1035,10 +1252,16 @@ const __privateForTests = {
 	assertFetchLockPlatformSupported,
 	fetchLockFreshnessAgeMs,
 	fetchLockMatches,
+	expectedRowsFor,
 	parseFetchLockBody,
+	parseBfclV4Jsonl,
 	refreshFetchLock,
 	releaseFetchLock,
 	removeStaleFetchLock,
+	sourceConfigFor,
+	sourceSplitFor,
+	validateBfclV4RawUrl,
+	validateBfclV4Row,
 } as const;
 
 export {

@@ -1,4 +1,9 @@
 export {
+	BFCL_V4_AST_SCORER_TYPE,
+	bfclV4AstScorer,
+	scoreBfclV4Ast,
+} from "./bfcl-v4-ast.js";
+export {
 	GAIA_EXACT_MATCH_SCORER_TYPE,
 	gaiaExactMatchScorer,
 	normalizeGaiaAnswer,

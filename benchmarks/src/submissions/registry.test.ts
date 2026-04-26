@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	bfclV4JsonlAdapter,
 	defaultSubmissionAdapterRegistry,
 	gaiaJsonlAdapter,
 	SubmissionAdapterRegistry,
@@ -62,5 +63,11 @@ describe("SubmissionAdapterRegistry", () => {
 
 	it("pre-registers the GAIA adapter in the default registry", () => {
 		expect(defaultSubmissionAdapterRegistry.get("gaia")).toBe(gaiaJsonlAdapter);
+	});
+
+	it("pre-registers the BFCL v4 adapter in the default registry", () => {
+		expect(defaultSubmissionAdapterRegistry.get("bfcl-v4")).toBe(
+			bfclV4JsonlAdapter,
+		);
 	});
 });

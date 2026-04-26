@@ -165,6 +165,7 @@ const runnableDatasets = new Set([
 	"swe-bench-lite",
 	"swe-bench-verified",
 	"gaia",
+	"bfcl-v4",
 ]);
 let guardedFetch: typeof globalThis.fetch | undefined;
 let fetchGuardInstalled = false;
@@ -334,6 +335,9 @@ function collectOutput(
 	if (task.dataset === "gaia") {
 		return collectGaiaOutput(loopOutput);
 	}
+	if (task.dataset === "bfcl-v4") {
+		return collectBfclV4Output(loopOutput);
+	}
 	return {
 		patch: loopOutput,
 	};
@@ -361,6 +365,45 @@ function collectGaiaOutput(loopOutput: string): Record<string, unknown> {
 		...(typeof reasoningTrace === "string" && reasoningTrace.trim().length > 0
 			? { reasoning_trace: reasoningTrace }
 			: {}),
+	};
+}
+
+function collectBfclV4Output(loopOutput: string): Record<string, unknown> {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(loopOutput);
+	} catch (error) {
+		throw new Error(
+			`BFCL v4 agent output must be a JSON object with tool_calls (${errorMessage(error)})`,
+		);
+	}
+	if (!isRecord(parsed)) {
+		throw new Error("BFCL v4 agent output must be a JSON object");
+	}
+	const toolCalls = parsed.tool_calls;
+	if (!Array.isArray(toolCalls)) {
+		throw new Error("BFCL v4 agent output requires tool_calls array");
+	}
+	return {
+		tool_calls: toolCalls.map((entry) => normalizeBfclV4ToolCall(entry)),
+	};
+}
+
+function normalizeBfclV4ToolCall(entry: unknown): Record<string, unknown> {
+	if (!isRecord(entry)) {
+		throw new Error("BFCL v4 tool_call must be an object");
+	}
+	const functionName = entry.function ?? entry.name;
+	if (typeof functionName !== "string" || functionName.trim().length === 0) {
+		throw new Error("BFCL v4 tool_call requires non-empty function");
+	}
+	const args = entry.arguments ?? entry.args ?? entry.parameters;
+	if (!isRecord(args)) {
+		throw new Error("BFCL v4 tool_call requires arguments object");
+	}
+	return {
+		arguments: args,
+		function: functionName,
 	};
 }
 
@@ -440,6 +483,9 @@ function sanitizeGaiaAttachmentForPrompt(entry: unknown): unknown {
 function systemPromptForTask(task: BenchmarkTask): string {
 	if (task.dataset === "gaia") {
 		return "You are running a GAIA benchmark task in an isolated workspace. Return only a JSON object with a non-empty model_answer string and, if useful, a reasoning_trace string.";
+	}
+	if (task.dataset === "bfcl-v4") {
+		return "You are running a BFCL v4 function-calling benchmark task in an isolated workspace. Return only a JSON object with tool_calls: [{ function: string, arguments: object }, ...]. Return an empty tool_calls array when no tool should be called.";
 	}
 	return "You are running a benchmark task in an isolated workspace. Produce only the final patch diff.";
 }
