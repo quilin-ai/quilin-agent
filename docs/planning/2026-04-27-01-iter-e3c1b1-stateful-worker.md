@@ -82,7 +82,8 @@ E3c1b2（BFCL-specific runner adapter）独立 sub-iter，不在本 plan 范围�
 
 | 同步点 | 内容 |
 |---|---|
-| S-e3c1b1-jsonl | stdin/stdout JSONL 协议固定（`{type, tool?, args?, value?, error?, state?}`）；与 E3c1a checker subprocess 同模式 |
+| S-e3c1b1-jsonl | stdin/stdout JSONL 协议固定（command envelope）：stdin `{type: "init_task" \| "call_tool" \| "snapshot" \| "close", ...}`；stdout `{type: "ready" \| "result" \| "snapshot" \| "closed" \| "error", ...}`；E3c1b2 扩展时只加新 type，不破现有 envelope（避免 E3c1b2 协议破坏） |
+| S-e3c1b1-call-args | `call_tool` payload 是 structured `{function: string, arguments: object}`（不接受任意 Python call string，降低 escaping 攻击面）；worker 内部 dispatch 到 backend object method；TS adapter 不做 string concat |
 | S-e3c1b1-error-type | worker error_type 分类：`backend_class_not_found` / `tool_method_not_found` / `tool_args_invalid` / `tool_runtime_error` / `eval_security_violation`；TS adapter 区分 throw vs return |
 | S-e3c1b1-cleanup | TS adapter SIGINT/SIGTERM forward + child exit deregister（沿用 E3c1a R1 fix 模式） |
 | S-e3c1b1-timeout | worker 单 tool-call timeout（默认 10s）；session-level idle timeout（默认 60s）|
