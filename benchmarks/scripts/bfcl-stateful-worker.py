@@ -50,6 +50,7 @@ FORBIDDEN_METHOD_NAMES = {
 
 ERROR_BACKEND_CLASS_NOT_FOUND = "backend_class_not_found"
 ERROR_TOOL_METHOD_NOT_FOUND = "tool_method_not_found"
+ERROR_AMBIGUOUS_METHOD = "ambiguous_method"
 ERROR_TOOL_ARGS_INVALID = "tool_args_invalid"
 ERROR_TOOL_RUNTIME = "tool_runtime_error"
 ERROR_EVAL_SECURITY = "eval_security_violation"
@@ -78,6 +79,7 @@ class BfclStatefulWorker:
         self.task_id: str | None = None
         self.instances: dict[str, Any] = {}
         self.method_to_class: dict[str, str] = {}
+        self.ambiguous_methods: dict[str, list[str]] = {}
         self.initialized = False
 
     def init_task(self, command: Mapping[str, Any]) -> dict[str, Any]:
@@ -92,6 +94,7 @@ class BfclStatefulWorker:
 
         self.instances = {}
         self.method_to_class = {}
+        self.ambiguous_methods = {}
         self.task_id = task_id
         for class_name in involved_classes:
             self.instances[class_name] = self._create_instance(
@@ -150,6 +153,7 @@ class BfclStatefulWorker:
     def close(self) -> dict[str, Any]:
         self.instances = {}
         self.method_to_class = {}
+        self.ambiguous_methods = {}
         self.task_id = None
         self.initialized = False
         return {"type": "closed"}
@@ -218,13 +222,24 @@ class BfclStatefulWorker:
 
     def _refresh_method_mapping(self) -> None:
         self.method_to_class = {}
+        owners: dict[str, list[str]] = {}
         for class_name, instance in self.instances.items():
             for method_name in dir(instance):
                 if method_name.startswith("_"):
                     continue
                 attr = getattr(instance, method_name)
                 if callable(attr):
-                    self.method_to_class.setdefault(method_name, class_name)
+                    owners.setdefault(method_name, []).append(class_name)
+        self.ambiguous_methods = {
+            method_name: class_names
+            for method_name, class_names in owners.items()
+            if len(class_names) > 1
+        }
+        self.method_to_class = {
+            method_name: class_names[0]
+            for method_name, class_names in owners.items()
+            if len(class_names) == 1
+        }
 
     def _resolve_method(self, function_name: str) -> tuple[str, str]:
         class_name: str | None = None
@@ -263,6 +278,16 @@ class BfclStatefulWorker:
 
         owner = self.method_to_class.get(method_name)
         if owner is None:
+            ambiguous_owners = self.ambiguous_methods.get(method_name)
+            if ambiguous_owners is not None:
+                qualified = [
+                    f"{class_name}.{method_name}" for class_name in ambiguous_owners
+                ]
+                raise WorkerError(
+                    ERROR_AMBIGUOUS_METHOD,
+                    f"Ambiguous tool method {method_name}; use a qualified name",
+                    details={"method": method_name, "candidates": qualified},
+                )
             raise WorkerError(
                 ERROR_TOOL_METHOD_NOT_FOUND,
                 f"Tool method not found: {method_name}",

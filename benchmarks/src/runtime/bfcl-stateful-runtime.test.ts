@@ -131,7 +131,7 @@ describe("BFCL stateful runtime", () => {
 		});
 	});
 
-	it("preserves the five worker error types", async () => {
+	it("preserves worker error types and marks them as worker-sourced", async () => {
 		const checkerRoot = await writeRuntimeBundle();
 		const session = await spawnBfclStatefulRuntime(
 			"task-errors",
@@ -141,16 +141,28 @@ describe("BFCL stateful runtime", () => {
 
 		await expect(
 			session.callTool("GorillaFileSystem.missing", {}),
-		).rejects.toMatchObject({ errorType: "tool_method_not_found" });
+		).rejects.toMatchObject({
+			errorType: "tool_method_not_found",
+			source: "worker",
+		});
 		await expect(
 			session.callTool("GorillaFileSystem.write_file", { path: "x" }),
-		).rejects.toMatchObject({ errorType: "tool_args_invalid" });
+		).rejects.toMatchObject({
+			errorType: "tool_args_invalid",
+			source: "worker",
+		});
 		await expect(
 			session.callTool("GorillaFileSystem.read_file", { path: "missing" }),
-		).rejects.toMatchObject({ errorType: "tool_runtime_error" });
+		).rejects.toMatchObject({
+			errorType: "tool_runtime_error",
+			source: "worker",
+		});
 		await expect(
 			session.callTool("GorillaFileSystem.remove", { path: "x" }),
-		).rejects.toMatchObject({ errorType: "eval_security_violation" });
+		).rejects.toMatchObject({
+			errorType: "eval_security_violation",
+			source: "worker",
+		});
 		await session.close();
 
 		await expect(
@@ -159,7 +171,37 @@ describe("BFCL stateful runtime", () => {
 				commandTimeoutMs: 1_000,
 				forwardSignals: false,
 			}),
-		).rejects.toMatchObject({ errorType: "backend_class_not_found" });
+		).rejects.toMatchObject({
+			errorType: "backend_class_not_found",
+			source: "worker",
+		});
+	});
+
+	it("requires qualified method names when multiple backend classes expose the same method", async () => {
+		const checkerRoot = await writeRuntimeBundle();
+		const session = await spawnBfclStatefulRuntime(
+			"task-ambiguous-method",
+			["MessageAPI", "TwitterAPI"],
+			{ checkerRoot, commandTimeoutMs: 1_000, forwardSignals: false },
+		);
+
+		await expect(
+			session.callTool("ping", { value: "amb" }),
+		).rejects.toMatchObject({
+			errorType: "ambiguous_method",
+			source: "worker",
+			details: {
+				candidates: ["MessageAPI.ping", "TwitterAPI.ping"],
+				method: "ping",
+			},
+		});
+		await expect(
+			session.callTool("TwitterAPI.ping", { value: "qualified" }),
+		).resolves.toMatchObject({
+			class: "TwitterAPI",
+			returnValue: { value: "qualified" },
+		});
+		await session.close();
 	});
 
 	it("times out stalled commands and removes signal listeners after close", async () => {
@@ -182,6 +224,18 @@ describe("BFCL stateful runtime", () => {
 				workerScriptPath: scriptPath,
 			}),
 		).rejects.toThrow(/timed out/);
+		await expect(
+			spawnBfclStatefulRuntime("task-timeout-source", ["GorillaFileSystem"], {
+				checkerRoot,
+				commandTimeoutMs: 20,
+				forwardSignals: false,
+				pythonExecutable: process.execPath,
+				workerScriptPath: scriptPath,
+			}),
+		).rejects.toMatchObject({
+			errorType: "worker_timeout",
+			source: "adapter",
+		} satisfies Partial<BfclStatefulRuntimeError>);
 		await new Promise((resolve) => setTimeout(resolve, 25));
 		expect(process.listenerCount("SIGTERM")).toBe(before);
 	});
@@ -275,6 +329,7 @@ describe("BFCL stateful runtime", () => {
 			}),
 		).rejects.toMatchObject({
 			errorType: "worker_protocol_error",
+			source: "adapter",
 		} satisfies Partial<BfclStatefulRuntimeError>);
 		const nonObjectJsonScript = await writeNodeWorkerScript(
 			"process.stdout.write('[]\\n'); setInterval(() => {}, 1000);",
@@ -289,6 +344,7 @@ describe("BFCL stateful runtime", () => {
 			}),
 		).rejects.toMatchObject({
 			errorType: "worker_protocol_error",
+			source: "adapter",
 		} satisfies Partial<BfclStatefulRuntimeError>);
 
 		const largeOutputScript = await writeNodeWorkerScript(
@@ -305,6 +361,7 @@ describe("BFCL stateful runtime", () => {
 			}),
 		).rejects.toMatchObject({
 			errorType: "worker_output_limit",
+			source: "adapter",
 		} satisfies Partial<BfclStatefulRuntimeError>);
 
 		const largeStderrScript = await writeNodeWorkerScript(
@@ -315,11 +372,40 @@ describe("BFCL stateful runtime", () => {
 				checkerRoot,
 				commandTimeoutMs: 100,
 				forwardSignals: false,
-				maxOutputBytes: 8,
+				maxOutputBytes: 32,
 				pythonExecutable: process.execPath,
 				workerScriptPath: largeStderrScript,
 			}),
-		).rejects.toThrow();
+		).rejects.toMatchObject({
+			errorType: "worker_output_limit",
+			source: "adapter",
+		} satisfies Partial<BfclStatefulRuntimeError>);
+
+		const cumulativeStderrScript = await writeNodeWorkerScript(
+			[
+				"process.stdout.write(JSON.stringify({type:'ready'}) + '\\n');",
+				"process.stderr.write('x'.repeat(12));",
+				"setTimeout(() => process.stderr.write('y'.repeat(12)), 5);",
+				"setInterval(() => {}, 1000);",
+			].join("\n"),
+		);
+		await expect(
+			spawnBfclStatefulRuntime(
+				"task-cumulative-stderr-limit",
+				["GorillaFileSystem"],
+				{
+					checkerRoot,
+					commandTimeoutMs: 100,
+					forwardSignals: false,
+					maxOutputBytes: 20,
+					pythonExecutable: process.execPath,
+					workerScriptPath: cumulativeStderrScript,
+				},
+			),
+		).rejects.toMatchObject({
+			errorType: "worker_output_limit",
+			source: "adapter",
+		} satisfies Partial<BfclStatefulRuntimeError>);
 	});
 
 	it("ignores unrelated protocol messages and rejects malformed result payloads", async () => {
@@ -359,6 +445,54 @@ describe("BFCL stateful runtime", () => {
 			/missing class/,
 		);
 		await session.close();
+	});
+
+	it("persists terminal stderr limit errors between commands", async () => {
+		const checkerRoot = await writeRuntimeBundle();
+		const markerRoot = await makeTempRoot("quilin-bfcl-stderr-marker-");
+		const markerPath = join(markerRoot, "stderr-flushed");
+		const scriptPath = await writeNodeWorkerScript(
+			[
+				"const { writeFileSync } = require('node:fs');",
+				`const markerPath = ${JSON.stringify(markerPath)};`,
+				"process.stdout.write(JSON.stringify({type:'ready'}) + '\\n');",
+				"process.stdin.on('data', (chunk) => {",
+				"  for (const line of String(chunk).trim().split(/\\n+/)) {",
+				"    if (!line) continue;",
+				"    const command = JSON.parse(line);",
+				"    if (command.type === 'init_task') {",
+				"      process.stdout.write(JSON.stringify({type:'ready', id: command.id}) + '\\n');",
+				"      setTimeout(() => { process.stderr.write('x'.repeat(20_000)); writeFileSync(markerPath, 'done'); }, 5);",
+				"    }",
+				"    if (command.type === 'call_tool') process.stdout.write(JSON.stringify({type:'result', id: command.id, class:'GorillaFileSystem', function:'read_file', return_value: 1, state_snapshot: {}}) + '\\n');",
+				"  }",
+				"});",
+				"setInterval(() => {}, 1000);",
+			].join("\n"),
+		);
+		const session = await spawnBfclStatefulRuntime(
+			"task-idle-stderr-limit",
+			["GorillaFileSystem"],
+			{
+				checkerRoot,
+				commandTimeoutMs: 100,
+				forwardSignals: false,
+				maxOutputBytes: 16_384,
+				pythonExecutable: process.execPath,
+				workerScriptPath: scriptPath,
+			},
+		);
+
+		await waitFor(() => existsSync(markerPath));
+		await waitForRuntimeError(
+			() => session.callTool("GorillaFileSystem.read_file", {}),
+			{
+				errorType: "worker_output_limit",
+				source: "adapter",
+			} satisfies Partial<BfclStatefulRuntimeError>,
+			/stderr limit/,
+		);
+		await session.close().catch(() => undefined);
 	});
 });
 
@@ -495,4 +629,29 @@ async function waitFor(predicate: () => boolean): Promise<void> {
 		await new Promise((resolve) => setTimeout(resolve, 10));
 	}
 	throw new Error("timed out waiting for condition");
+}
+
+async function waitForRuntimeError(
+	action: () => Promise<unknown>,
+	expected: Partial<BfclStatefulRuntimeError>,
+	messagePattern?: RegExp,
+): Promise<void> {
+	const deadline = Date.now() + 1_000;
+	let lastResult: unknown;
+	while (Date.now() < deadline) {
+		try {
+			lastResult = await action();
+		} catch (error) {
+			expect(error).toMatchObject(expected);
+			if (messagePattern != null) {
+				expect(error).toBeInstanceOf(Error);
+				expect((error as Error).message).toMatch(messagePattern);
+			}
+			return;
+		}
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+	throw new Error(
+		`timed out waiting for runtime error; last result: ${JSON.stringify(lastResult)}`,
+	);
 }

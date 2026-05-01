@@ -38,14 +38,23 @@ export interface BfclStatefulSession {
 	close(): Promise<void>;
 }
 
+export type BfclStatefulRuntimeErrorSource = "worker" | "adapter";
+
 export class BfclStatefulRuntimeError extends Error {
 	readonly errorType: string;
+	readonly source: BfclStatefulRuntimeErrorSource;
 	readonly details: unknown;
 
-	constructor(message: string, errorType: string, details?: unknown) {
+	constructor(
+		message: string,
+		errorType: string,
+		details?: unknown,
+		source: BfclStatefulRuntimeErrorSource = "adapter",
+	) {
 		super(message);
 		this.name = "BfclStatefulRuntimeError";
 		this.errorType = errorType;
+		this.source = source;
 		this.details = details;
 	}
 }
@@ -93,8 +102,10 @@ class BfclStatefulRuntimeSession implements BfclStatefulSession {
 	private child: ChildProcessWithoutNullStreams | undefined;
 	private stdoutBuffer = "";
 	private stdoutBytes = 0;
+	private stderrBytes = 0;
 	private nextId = 1;
 	private pending = new Map<string, PendingRequest>();
+	private terminalError: Error | undefined;
 	private startupReady:
 		| {
 				readonly promise: Promise<void>;
@@ -212,10 +223,13 @@ class BfclStatefulRuntimeSession implements BfclStatefulSession {
 	private sendCommand(
 		command: Record<string, unknown>,
 	): Promise<WorkerMessage> {
-		const child = this.requireChild();
+		if (this.terminalError != null) {
+			return Promise.reject(this.terminalError);
+		}
 		if (this.closed) {
 			return Promise.reject(new Error("BFCL stateful session is closed"));
 		}
+		const child = this.requireChild();
 		this.refreshIdleTimer();
 		const id = String(this.nextId);
 		this.nextId += 1;
@@ -242,7 +256,7 @@ class BfclStatefulRuntimeSession implements BfclStatefulSession {
 	private handleStdout(chunk: Buffer): void {
 		this.stdoutBytes += chunk.byteLength;
 		if (this.stdoutBytes > this.options.maxOutputBytes) {
-			this.rejectAll(
+			this.failTerminal(
 				new BfclStatefulRuntimeError(
 					"BFCL stateful worker exceeded stdout limit",
 					"worker_output_limit",
@@ -278,7 +292,7 @@ class BfclStatefulRuntimeSession implements BfclStatefulSession {
 			}
 			message = parsed as WorkerMessage;
 		} catch (error) {
-			this.rejectAll(
+			this.failTerminal(
 				new BfclStatefulRuntimeError(
 					`BFCL stateful worker emitted invalid JSON: ${error}`,
 					"worker_protocol_error",
@@ -309,6 +323,7 @@ class BfclStatefulRuntimeSession implements BfclStatefulSession {
 					readString(message.message, "message"),
 					readString(message.error_type, "error_type"),
 					message.details,
+					"worker",
 				),
 			);
 			return;
@@ -317,7 +332,14 @@ class BfclStatefulRuntimeSession implements BfclStatefulSession {
 	}
 
 	private handleStderr(chunk: Buffer): void {
-		if (chunk.byteLength > this.options.maxOutputBytes) {
+		this.stderrBytes += chunk.byteLength;
+		if (this.stderrBytes > this.options.maxOutputBytes) {
+			this.failTerminal(
+				new BfclStatefulRuntimeError(
+					"BFCL stateful worker exceeded stderr limit",
+					"worker_output_limit",
+				),
+			);
 			this.killChild("SIGKILL");
 		}
 	}
@@ -361,6 +383,11 @@ class BfclStatefulRuntimeSession implements BfclStatefulSession {
 
 	private killChild(signal: NodeJS.Signals): void {
 		this.child?.kill(signal);
+	}
+
+	private failTerminal(error: Error): void {
+		this.terminalError ??= error;
+		this.rejectAll(error);
 	}
 
 	private rejectAll(error: Error): void {
