@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	DELEGATION_HANDOFF_SCHEMA_VERSION,
 	type DelegationCandidate,
 	type DelegationTriggerConditions,
 	evaluateDelegation,
@@ -90,6 +91,95 @@ describe("evaluateDelegation", () => {
 					checkpoint: true,
 					heartbeat: true,
 				},
+				handoff: {
+					kind: "delegation_handoff",
+					schemaVersion: DELEGATION_HANDOFF_SCHEMA_VERSION,
+					route: "sub_agent",
+					traceId: "run-c3:delegated:delegated-research:handoff",
+					parentRunId: "run-c3",
+					childRunId: "run-c3:delegated:delegated-research",
+					task: {
+						id: "delegated-research",
+						action: "research",
+						name: "Step delegated-research",
+						description: "Execute delegated-research",
+						estimatedTokens: 100,
+						estimatedSteps: 30,
+						preconditions: [],
+						effects: ["effect:delegated-research"],
+						arguments: { path: "research.md" },
+					},
+					agent: {
+						role: "research-worker",
+						goal: "Complete delegated research without blocking the supervisor",
+					},
+					receiver: {
+						role: "research-worker",
+						requiredCapabilities: ["research"],
+					},
+					inputSchemaRef: "planning.subtask.arguments.v1",
+					inputPayload: { path: "research.md" },
+					historyFilter: "task_only",
+					writeSet: {
+						scope: "episodic",
+						resources: ["research.md"],
+						unknown: false,
+					},
+					writeScope: ["episodic:research.md"],
+					risk: "medium",
+					retryPolicy: {
+						maxAttempts: 1,
+						backoff: "none",
+					},
+					cancelToken: "run-c3:delegated:delegated-research:cancel",
+					resultSchemaRef: "planning.delegation.result.v1",
+					resume: {
+						checkpointRequired: true,
+						heartbeatRequired: true,
+						resumeFrom: "latest_checkpoint",
+						checkpointOwner: "child_agent",
+					},
+				},
+			},
+		});
+	});
+
+	it("produces a serializable typed handoff for cross-process supervisor routing", () => {
+		const decision = evaluateDelegation(makeCandidate());
+		if (!decision.delegate) {
+			throw new Error("expected delegation to be accepted");
+		}
+
+		expect(JSON.parse(JSON.stringify(decision.assignment.handoff))).toEqual(
+			decision.assignment.handoff,
+		);
+		expect(decision.assignment.handoff).toMatchObject({
+			kind: "delegation_handoff",
+			schemaVersion: 1,
+			route: "sub_agent",
+			traceId: "run-c3:delegated:delegated-research:handoff",
+			receiver: {
+				role: "research-worker",
+				requiredCapabilities: ["research"],
+			},
+			task: {
+				id: decision.assignment.taskId,
+				action: "research",
+			},
+			inputSchemaRef: "planning.subtask.arguments.v1",
+			inputPayload: { path: "research.md" },
+			historyFilter: "task_only",
+			writeScope: ["episodic:research.md"],
+			retryPolicy: {
+				maxAttempts: 1,
+				backoff: "none",
+			},
+			cancelToken: "run-c3:delegated:delegated-research:cancel",
+			resultSchemaRef: "planning.delegation.result.v1",
+			resume: {
+				checkpointRequired: true,
+				heartbeatRequired: true,
+				resumeFrom: "latest_checkpoint",
 			},
 		});
 	});
@@ -112,6 +202,24 @@ describe("evaluateDelegation", () => {
 		).toEqual({ delegate: false, reason });
 	});
 
+	it("rejects unavailable worker candidates before producing a handoff", () => {
+		const decision = evaluateDelegation(
+			makeCandidate({
+				triggers: {
+					...allTriggers,
+					subAgentCapabilityAvailable: false,
+				},
+				subAgent: undefined as unknown as DelegationCandidate["subAgent"],
+			}),
+		);
+
+		expect(decision).toEqual({
+			delegate: false,
+			reason: "missing_sub_agent_capability_trigger",
+		});
+		expect("assignment" in decision).toBe(false);
+	});
+
 	it("rejects delegated writes that overlap the main agent write set", () => {
 		const candidateStep = makeStep("delegated-write", {
 			writeScope: "working",
@@ -132,6 +240,34 @@ describe("evaluateDelegation", () => {
 						makeStep("main-write", {
 							writeScope: "working",
 							arguments: { path: "same.md" },
+							risk: "low",
+						}),
+					],
+				}),
+			),
+		).toEqual({ delegate: false, reason: "shared_write_set" });
+	});
+
+	it("rejects delegated writes whose normalized path overlaps the main agent write set", () => {
+		const candidateStep = makeStep("delegated-normalized-write", {
+			writeScope: "working",
+			arguments: { path: "./notes/../notes/research.md" },
+			risk: "medium",
+		});
+
+		expect(
+			evaluateDelegation(
+				makeCandidate({
+					candidateStep,
+					plan: {
+						kind: "dag",
+						subtasks: [candidateStep],
+						edges: [],
+					},
+					mainAgentSteps: [
+						makeStep("main-normalized-write", {
+							writeScope: "working",
+							arguments: { path: "notes/research.md" },
 							risk: "low",
 						}),
 					],
@@ -169,6 +305,81 @@ describe("evaluateDelegation", () => {
 		).toEqual({ delegate: false, reason: "high_risk_write" });
 	});
 
+	it("rejects unknown write sets before producing a handoff", () => {
+		const candidateStep = makeStep("unknown-write", {
+			writeScope: "episodic",
+			arguments: {},
+			risk: "medium",
+		});
+
+		expect(
+			evaluateDelegation(
+				makeCandidate({
+					candidateStep,
+					plan: {
+						kind: "dag",
+						subtasks: [candidateStep],
+						edges: [],
+					},
+					mainAgentSteps: [],
+				}),
+			),
+		).toEqual({ delegate: false, reason: "unknown_write_set" });
+	});
+
+	it("rejects non-JSON-safe handoff payloads", () => {
+		const cyclic: Record<string, unknown> = { path: "research.md" };
+		cyclic.self = cyclic;
+		const candidateStep = makeStep("cyclic-payload", {
+			action: "research",
+			writeScope: "episodic",
+			arguments: cyclic,
+			risk: "medium",
+		});
+
+		expect(
+			evaluateDelegation(
+				makeCandidate({
+					candidateStep,
+					plan: {
+						kind: "dag",
+						subtasks: [candidateStep],
+						edges: [],
+					},
+					mainAgentSteps: [],
+				}),
+			),
+		).toEqual({ delegate: false, reason: "non_serializable_handoff" });
+	});
+
+	it("rejects non-JSON-safe handoff metadata", () => {
+		const candidateStep = makeStep("function-metadata", {
+			action: "research",
+			writeScope: "episodic",
+			arguments: {
+				path: "research.md",
+				metadata: {
+					onCheckpoint: () => "not serializable",
+				},
+			},
+			risk: "medium",
+		});
+
+		expect(
+			evaluateDelegation(
+				makeCandidate({
+					candidateStep,
+					plan: {
+						kind: "dag",
+						subtasks: [candidateStep],
+						edges: [],
+					},
+					mainAgentSteps: [],
+				}),
+			),
+		).toEqual({ delegate: false, reason: "non_serializable_handoff" });
+	});
+
 	it("rejects invalid DAG candidates before producing an assignment", () => {
 		const step = makeStep("loop");
 
@@ -180,6 +391,27 @@ describe("evaluateDelegation", () => {
 						kind: "dag",
 						subtasks: [step],
 						edges: [["loop", "loop"]],
+					},
+				}),
+			),
+		).toEqual({ delegate: false, reason: "invalid_dag" });
+	});
+
+	it("rejects dependency edges that reference missing steps", () => {
+		const step = makeStep("delegated-edge", {
+			writeScope: "episodic",
+			arguments: { path: "edge.md" },
+			risk: "medium",
+		});
+
+		expect(
+			evaluateDelegation(
+				makeCandidate({
+					candidateStep: step,
+					plan: {
+						kind: "dag",
+						subtasks: [step],
+						edges: [["missing-predecessor", "delegated-edge"]],
 					},
 				}),
 			),

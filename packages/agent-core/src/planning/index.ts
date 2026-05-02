@@ -9,6 +9,7 @@ export * from "./goal-drift.js";
 export * from "./intent.js";
 export * from "./memory-writer.js";
 export * from "./planner.js";
+export * from "./production-route-score.js";
 export * from "./replan.js";
 export * from "./state.js";
 export * from "./strategy.js";
