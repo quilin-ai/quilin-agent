@@ -5,6 +5,7 @@ import {
 	createFileListTool,
 	createFileReadTool,
 	createFileWriteTool,
+	type FileListToolOptions,
 	type FileReadToolOptions,
 	type FileWriteToolOptions,
 } from "./file-tools.js";
@@ -16,16 +17,21 @@ import {
 	createSkillManageTool,
 	type SkillManageToolOptions,
 } from "./skill-manage.js";
-import { createSkillViewTool } from "./skill-view.js";
+import {
+	createSkillViewTool,
+	type SkillViewToolOptions,
+} from "./skill-view.js";
 import { createWebFetchTool, type WebFetchToolOptions } from "./web-fetch.js";
 
 export interface BuiltinToolOptions {
 	readonly fileRead?: FileReadToolOptions;
 	readonly fileWrite?: FileWriteToolOptions;
+	readonly fileList?: FileListToolOptions;
 	readonly shellExec?: ShellExecToolOptions;
 	readonly webFetch?: WebFetchToolOptions;
 	readonly writeAuthority?: WriteAuthority;
 	readonly skillsManager?: SkillsManager;
+	readonly skillView?: Omit<SkillViewToolOptions, "skillsManager">;
 	readonly skillManage?: Omit<
 		SkillManageToolOptions,
 		"skillsManager" | "writeAuthority"
@@ -41,7 +47,7 @@ export function createBuiltinTools(
 			...options.fileWrite,
 			authority: options.writeAuthority ?? options.fileWrite?.authority,
 		}),
-		createFileListTool(),
+		createFileListTool(options.fileList),
 		createShellExecTool({
 			...options.shellExec,
 			authority: options.writeAuthority ?? options.shellExec?.authority,
@@ -53,6 +59,7 @@ export function createBuiltinTools(
 		tools.push(
 			createSkillViewTool({
 				skillsManager: options.skillsManager,
+				...options.skillView,
 			}),
 		);
 		if (options.writeAuthority != null) {
@@ -68,6 +75,16 @@ export function createBuiltinTools(
 
 	return tools;
 }
+
+export type {
+	FileListToolOptions,
+	FileReadToolOptions,
+	FileWriteToolOptions,
+	ShellExecToolOptions,
+	SkillManageToolOptions,
+	SkillViewToolOptions,
+	WebFetchToolOptions,
+};
 
 export {
 	createFileListTool,

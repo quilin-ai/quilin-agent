@@ -149,8 +149,17 @@ describe("builtin skill_view tool", () => {
 		});
 
 		expect(result.isError).toBe(true);
-		expect(JSON.parse(result.content)).toEqual({
+		expect(JSON.parse(result.content)).toMatchObject({
 			error: expect.stringContaining("skill_id"),
+			code: "invalid_arguments",
+			details: {
+				issues: [
+					expect.objectContaining({
+						code: "invalid_type",
+						path: ["skill_id"],
+					}),
+				],
+			},
 		});
 	});
 

@@ -5,6 +5,7 @@ import {
 	WriteAuthority,
 	type WriteOrigin,
 } from "../../safety/write-authority.js";
+import type { SandboxPolicy, SandboxRequest } from "../sandbox.js";
 import type { ToolWithMetadata } from "../tool-metadata.js";
 import type { ToolResult } from "../types.js";
 
@@ -48,6 +49,49 @@ const SHELL_WRAPPER_EXECUTABLES = new Set([
 	"zsh",
 ]);
 const SHELL_WRAPPER_ARGS = new Set(["-c", "/c"]);
+const READONLY_EXECUTABLES = new Set([
+	"cat",
+	"date",
+	"echo",
+	"env",
+	"false",
+	"head",
+	"id",
+	"ls",
+	"printenv",
+	"printf",
+	"pwd",
+	"tail",
+	"true",
+	"uname",
+	"wc",
+	"whoami",
+]);
+const FILESYSTEM_WRITE_EXECUTABLES = new Set([
+	"chmod",
+	"chown",
+	"chgrp",
+	"cp",
+	"dd",
+	"install",
+	"ln",
+	"mkdir",
+	"mv",
+	"rm",
+	"rmdir",
+	"tee",
+	"touch",
+	"truncate",
+]);
+const GIT_READONLY_SUBCOMMANDS = new Set([
+	"branch",
+	"diff",
+	"grep",
+	"log",
+	"rev-parse",
+	"show",
+	"status",
+]);
 const FORK_BOMB_PATTERN = /:\(\)\s*\{\s*:\|:&\s*\}\s*;:/;
 const DISK_WIPE_PATTERN =
 	/\bdd\s+if=\/dev\/(?:zero|random|urandom)\s+of=\/dev\/(?:sd|nvme|disk)\w*/i;
@@ -119,13 +163,74 @@ function clampTimeoutMs(timeoutMs: number): number {
 	return Math.min(MAX_TIMEOUT_MS, Math.max(MIN_TIMEOUT_MS, timeoutMs));
 }
 
+function executableBaseName(executable: string): string {
+	return (
+		executable.split(/[\\/]/).pop()?.toLowerCase() ?? executable.toLowerCase()
+	);
+}
+
+function isShellWrapperInvocation(
+	executable: string | undefined,
+	args: readonly string[],
+): boolean {
+	if (executable == null) {
+		return false;
+	}
+
+	return (
+		SHELL_WRAPPER_EXECUTABLES.has(executableBaseName(executable)) &&
+		args.some((arg) => SHELL_WRAPPER_ARGS.has(arg.toLowerCase()))
+	);
+}
+
+function mayWriteFilesystem(
+	command: string,
+	executable: string | undefined,
+	args: readonly string[],
+	tokens: readonly string[],
+): boolean {
+	if (tokens.some((token) => token === ">" || token === ">>")) {
+		return true;
+	}
+
+	if (DISK_WIPE_PATTERN.test(command)) {
+		return true;
+	}
+
+	if (executable == null) {
+		return true;
+	}
+
+	const baseName = executableBaseName(executable);
+	if (FILESYSTEM_WRITE_EXECUTABLES.has(baseName)) {
+		return true;
+	}
+
+	if (
+		baseName === "sed" &&
+		args.some((arg) => arg === "-i" || arg.startsWith("-i"))
+	) {
+		return true;
+	}
+
+	if (baseName === "git") {
+		const subcommand = args.find((arg) => !arg.startsWith("-"))?.toLowerCase();
+		if (subcommand == null) {
+			return true;
+		}
+
+		return !GIT_READONLY_SUBCOMMANDS.has(subcommand);
+	}
+
+	return !READONLY_EXECUTABLES.has(baseName);
+}
+
 function findBlockedCommandReason(
 	command: string,
 	executable: string,
 	args: readonly string[],
 ): string | undefined {
-	const executableBase =
-		executable.split(/[\\/]/).pop()?.toLowerCase() ?? executable.toLowerCase();
+	const executableBase = executableBaseName(executable);
 
 	if (FORK_BOMB_PATTERN.test(command)) {
 		return "fork bomb patterns are not allowed";
@@ -173,6 +278,46 @@ function findBlockedCommandReason(
 
 	return undefined;
 }
+
+function createSandboxRequestFromArgs(
+	args: unknown,
+	origin: SandboxRequest["origin"],
+): SandboxRequest {
+	const { command } = args as { command?: string };
+	const commandLine = typeof command === "string" ? command : "";
+	let executable: string | undefined;
+	let commandArgs: string[] = [];
+	let tokens: string[] = [];
+
+	try {
+		tokens = tokenizeCommand(commandLine);
+		[executable, ...commandArgs] = tokens;
+	} catch {
+		tokens = [];
+	}
+
+	return {
+		operation: "process",
+		...(origin == null ? {} : { origin }),
+		signals: {
+			process: {
+				commandLine,
+				...(executable == null ? {} : { executable }),
+				args: commandArgs,
+				shell: isShellWrapperInvocation(executable, commandArgs),
+				writesFilesystem: mayWriteFilesystem(
+					commandLine,
+					executable,
+					commandArgs,
+					tokens,
+				),
+			},
+		},
+	};
+}
+
+const shellExecSandboxPolicy: SandboxPolicy = (context) =>
+	createSandboxRequestFromArgs(context.parsedArguments, context.origin);
 
 function tokenizeCommand(command: string): string[] {
 	const trimmed = command.trim();
@@ -356,6 +501,8 @@ export function createShellExecTool(
 		}),
 		category: "programmatic",
 		riskLevel: "exec",
+		sandboxOperation: "process",
+		sandboxPolicy: shellExecSandboxPolicy,
 		timeoutMs: options.defaultTimeoutMs ?? DEFAULT_TIMEOUT_MS,
 		execute: async (args) => {
 			const { command, cwd, timeoutMs } = args as {
@@ -390,19 +537,6 @@ export function createShellExecTool(
 				});
 			}
 
-			const blockedReason = findBlockedCommandReason(command, executable, argv);
-			if (blockedReason != null) {
-				return createErrorResult("builtin-shell-exec", {
-					error: `Command blocked: ${blockedReason}`,
-				});
-			}
-
-			if (tokens.some((token) => CONTROL_OPERATOR_TOKENS.has(token))) {
-				return createErrorResult("builtin-shell-exec", {
-					error: "Command blocked: shell control operators are not allowed",
-				});
-			}
-
 			const writeDecision = await authority.authorize({
 				tool: "shell_exec",
 				riskLevel: "high",
@@ -416,6 +550,19 @@ export function createShellExecTool(
 						writeDecision.kind === "deny"
 							? writeDecision.reason
 							: writeDecision.prompt,
+				});
+			}
+
+			const blockedReason = findBlockedCommandReason(command, executable, argv);
+			if (blockedReason != null) {
+				return createErrorResult("builtin-shell-exec", {
+					error: `Command blocked: ${blockedReason}`,
+				});
+			}
+
+			if (tokens.some((token) => CONTROL_OPERATOR_TOKENS.has(token))) {
+				return createErrorResult("builtin-shell-exec", {
+					error: "Command blocked: shell control operators are not allowed",
 				});
 			}
 

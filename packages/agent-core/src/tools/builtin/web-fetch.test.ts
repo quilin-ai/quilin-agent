@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { resolveSandboxPolicy } from "../sandbox.js";
 import { createWebFetchTool } from "./web-fetch.js";
 
 function createResolver(records: Record<string, readonly string[]>) {
@@ -18,6 +19,44 @@ describe("builtin web_fetch tool", () => {
 		expect(result.isError).toBe(true);
 		expect(JSON.parse(result.content)).toEqual({
 			error: expect.stringContaining("http"),
+		});
+	});
+
+	it("builds dynamic sandbox signals from request arguments", async () => {
+		const tool = createWebFetchTool();
+		if (tool.sandboxPolicy == null) {
+			throw new Error("web_fetch sandbox policy is not configured");
+		}
+
+		const request = await resolveSandboxPolicy(tool.sandboxPolicy, {
+			toolCallId: "call-web-fetch",
+			requestedToolName: "web_fetch",
+			resolvedToolName: "web_fetch",
+			parsedArguments: {
+				url: "https://api.example.com:8443/data",
+				method: "POST",
+				headers: {
+					Authorization: "Bearer token",
+					"x-test": "1",
+				},
+			},
+			origin: "agent",
+			category: "programmatic",
+			riskLevel: "read",
+			sandboxOperation: "network",
+		});
+
+		expect(request).toEqual({
+			operation: "network",
+			origin: "agent",
+			signals: {
+				network: {
+					destination: "api.example.com:8443",
+					protocol: "https",
+					method: "POST",
+					sendsCredentials: true,
+				},
+			},
 		});
 	});
 

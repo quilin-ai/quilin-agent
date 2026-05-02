@@ -1,3 +1,4 @@
+import type { SandboxOperationType, SandboxRiskSignals } from "./sandbox.js";
 import type { Tool } from "./types.js";
 
 /** 工具分类 — 对应 4 类混合动作空间 */
@@ -12,6 +13,8 @@ export interface ToolWithMetadata extends Tool {
 	readonly riskLevel: RiskLevel;
 	readonly timeoutMs?: number;
 	readonly namespace?: string;
+	readonly sandboxOperation?: SandboxOperationType;
+	readonly sandboxSignals?: SandboxRiskSignals;
 }
 
 /** 用于 PromptBuilder tool-guidance section 的精简描述 */

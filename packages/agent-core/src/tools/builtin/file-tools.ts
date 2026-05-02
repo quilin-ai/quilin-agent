@@ -22,6 +22,11 @@ import {
 	WriteAuthority,
 	type WriteOrigin,
 } from "../../safety/write-authority.js";
+import type {
+	SandboxPathAccess,
+	SandboxPolicy,
+	SandboxRequest,
+} from "../sandbox.js";
 import type { ToolWithMetadata } from "../tool-metadata.js";
 import type { ToolResult } from "../types.js";
 
@@ -147,6 +152,44 @@ async function isSensitivePath(filePath: string): Promise<boolean> {
 function toAbsolutePath(filePath: string): string {
 	return resolve(filePath);
 }
+
+function createFileSandboxRequest(
+	args: unknown,
+	operation: SandboxRequest["operation"],
+	access: SandboxPathAccess,
+	origin: SandboxRequest["origin"],
+): SandboxRequest {
+	const { path } = args as { readonly path: string };
+
+	return {
+		operation,
+		...(origin == null ? {} : { origin }),
+		signals: {
+			paths: [
+				{
+					path,
+					access,
+				},
+			],
+		},
+	};
+}
+
+function createFileSandboxPolicy(
+	operation: SandboxRequest["operation"],
+	access: SandboxPathAccess,
+): SandboxPolicy {
+	return (context) =>
+		createFileSandboxRequest(
+			context.parsedArguments,
+			operation,
+			access,
+			context.origin,
+		);
+}
+
+const fileReadSandboxPolicy = createFileSandboxPolicy("read", "read");
+const fileWriteSandboxPolicy = createFileSandboxPolicy("write", "write");
 
 function globToRegExp(pattern: string): RegExp {
 	const normalizedPattern = pattern
@@ -349,6 +392,8 @@ export function createFileReadTool(
 		}),
 		category: "programmatic",
 		riskLevel: "read",
+		sandboxOperation: "read",
+		sandboxPolicy: fileReadSandboxPolicy,
 		execute: async (args) => {
 			const {
 				path,
@@ -418,6 +463,8 @@ export function createFileWriteTool(
 		}),
 		category: "programmatic",
 		riskLevel: "write",
+		sandboxOperation: "write",
+		sandboxPolicy: fileWriteSandboxPolicy,
 		execute: async (args) => {
 			const { path, content } = args as {
 				path: string;
@@ -501,6 +548,8 @@ export function createFileListTool(
 		}),
 		category: "programmatic",
 		riskLevel: "read",
+		sandboxOperation: "read",
+		sandboxPolicy: fileReadSandboxPolicy,
 		execute: async (args) => {
 			const { path, pattern } = args as {
 				path: string;

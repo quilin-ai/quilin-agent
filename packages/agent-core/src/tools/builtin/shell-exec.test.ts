@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { WriteAuthority } from "../../safety/write-authority.js";
+import { resolveSandboxPolicy } from "../sandbox.js";
 import { createShellExecTool } from "./shell-exec.js";
 
 function createPermissiveAuthority(): WriteAuthority {
@@ -10,6 +11,67 @@ function createPermissiveAuthority(): WriteAuthority {
 }
 
 describe("builtin shell_exec tool", () => {
+	it("builds dynamic sandbox process signals from request arguments", async () => {
+		const tool = createShellExecTool();
+		if (tool.sandboxPolicy == null) {
+			throw new Error("shell_exec sandbox policy is not configured");
+		}
+
+		const readRequest = await resolveSandboxPolicy(tool.sandboxPolicy, {
+			toolCallId: "call-shell-exec-read",
+			requestedToolName: "shell_exec",
+			resolvedToolName: "shell_exec",
+			parsedArguments: {
+				command: "echo hello",
+			},
+			origin: "agent",
+			category: "programmatic",
+			riskLevel: "exec",
+			sandboxOperation: "process",
+		});
+
+		expect(readRequest).toEqual({
+			operation: "process",
+			origin: "agent",
+			signals: {
+				process: {
+					commandLine: "echo hello",
+					executable: "echo",
+					args: ["hello"],
+					shell: false,
+					writesFilesystem: false,
+				},
+			},
+		});
+
+		const writeRequest = await resolveSandboxPolicy(tool.sandboxPolicy, {
+			toolCallId: "call-shell-exec-write",
+			requestedToolName: "shell_exec",
+			resolvedToolName: "shell_exec",
+			parsedArguments: {
+				command: "touch output.txt",
+			},
+			origin: "agent",
+			category: "programmatic",
+			riskLevel: "exec",
+			sandboxOperation: "process",
+		});
+
+		expect(writeRequest).toEqual({
+			operation: "process",
+			origin: "agent",
+			signals: {
+				process: {
+					commandLine: "touch output.txt",
+					executable: "touch",
+					args: ["output.txt"],
+					shell: false,
+					writesFilesystem: true,
+				},
+			},
+		});
+	});
+
 	it("executes commands through the injected runner and returns stdout", async () => {
 		const runner = vi.fn(async () => ({
 			stdout: "hello\n",
@@ -125,7 +187,7 @@ describe("builtin shell_exec tool", () => {
 		}
 	});
 
-	it("blocks destructive rm and disk wipe patterns before authorization", async () => {
+	it("blocks destructive rm and disk wipe patterns after authorization", async () => {
 		const runner = vi.fn();
 		const confirm = vi.fn(async () => true);
 		const tool = createShellExecTool({
@@ -144,7 +206,24 @@ describe("builtin shell_exec tool", () => {
 		);
 		expect(ddResult.isError).toBe(true);
 		expect(JSON.parse(ddResult.content).error).toContain("disk wipe");
-		expect(confirm).not.toHaveBeenCalled();
+		expect(confirm).toHaveBeenNthCalledWith(
+			1,
+			expect.objectContaining({
+				origin: "agent",
+				riskLevel: "high",
+				summary: "rm -rf /tmp",
+				tool: "shell_exec",
+			}),
+		);
+		expect(confirm).toHaveBeenNthCalledWith(
+			2,
+			expect.objectContaining({
+				origin: "agent",
+				riskLevel: "high",
+				summary: "dd if=/dev/zero of=/dev/sda",
+				tool: "shell_exec",
+			}),
+		);
 		expect(runner).not.toHaveBeenCalled();
 	});
 
@@ -502,6 +581,84 @@ describe("builtin shell_exec tool", () => {
 		expect(JSON.parse(result.content)).toEqual({
 			error: expect.stringContaining("write authority"),
 		});
+		expect(runner).not.toHaveBeenCalled();
+	});
+
+	it("routes filesystem-mutating command forms through WriteAuthority", async () => {
+		const runner = vi.fn(async () => ({
+			stdout: "ok\n",
+			stderr: "",
+			exitCode: 0,
+			timedOut: false,
+		}));
+		const confirm = vi.fn(async () => true);
+		const tool = createShellExecTool({
+			runner,
+			authority: new WriteAuthority({ mode: "ask", confirm }),
+		});
+		const commands = [
+			"touch output.txt",
+			"tee output.txt",
+			"git checkout feature-branch",
+			"sed -i s/old/new/ file.txt",
+		];
+
+		for (const command of commands) {
+			const result = await tool.execute({ command });
+			expect(result.isError).toBe(false);
+		}
+
+		expect(confirm).toHaveBeenCalledTimes(commands.length);
+		for (const [index, command] of commands.entries()) {
+			expect(confirm).toHaveBeenNthCalledWith(
+				index + 1,
+				expect.objectContaining({
+					origin: "agent",
+					riskLevel: "high",
+					summary: command,
+					tool: "shell_exec",
+				}),
+			);
+		}
+		expect(runner).toHaveBeenCalledTimes(commands.length);
+	});
+
+	it("denies idle filesystem writes through WriteAuthority before execution", async () => {
+		const runner = vi.fn(async () => ({
+			stdout: "ok\n",
+			stderr: "",
+			exitCode: 0,
+			timedOut: false,
+		}));
+		const auditLog = vi.fn();
+		const tool = createShellExecTool({
+			runner,
+			origin: "idle",
+			authority: new WriteAuthority({ mode: "ask", auditLog }),
+		});
+
+		const result = await tool.execute({
+			command: "touch output.txt",
+		});
+
+		expect(result.isError).toBe(true);
+		expect(JSON.parse(result.content)).toEqual({
+			error: "idle writes require explicit AUTO opt-in",
+		});
+		expect(auditLog).toHaveBeenCalledWith(
+			expect.objectContaining({
+				decision: expect.objectContaining({
+					kind: "deny",
+					reason: "idle writes require explicit AUTO opt-in",
+				}),
+				request: expect.objectContaining({
+					origin: "idle",
+					riskLevel: "high",
+					summary: "touch output.txt",
+					tool: "shell_exec",
+				}),
+			}),
+		);
 		expect(runner).not.toHaveBeenCalled();
 	});
 

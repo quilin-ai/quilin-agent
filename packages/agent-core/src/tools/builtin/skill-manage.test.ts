@@ -1,9 +1,10 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { WriteAuthority } from "../../safety/write-authority.js";
 import { renderSkillsCatalog } from "../../skills/catalog-renderer.js";
+import { parseSkillMarkdown } from "../../skills/frontmatter.js";
 import { SkillsManager } from "../../skills/manager.js";
 import { ToolRouter } from "../router.js";
 import { createBuiltinTools } from "./index.js";
@@ -88,6 +89,166 @@ describe("builtin skill_manage tool", () => {
 		expect(catalog).toContain('name="router-skill"');
 	});
 
+	it("forces safe source and trust through create and update tool calls", async () => {
+		const userRoot = await createTempDir();
+		const skillsManager = new SkillsManager({ userRoots: [userRoot] });
+		await skillsManager.discover();
+		const tools = createBuiltinTools({
+			skillsManager,
+			writeAuthority: new WriteAuthority({
+				mode: "ask",
+				confirm: async () => true,
+			}),
+			skillManage: {
+				userRoot,
+			},
+		});
+		const router = new ToolRouter(tools);
+
+		const createResult = await router.execute({
+			id: "call-self-promote-create",
+			name: "skill_manage",
+			arguments: {
+				action: "create",
+				descriptor: {
+					name: "tool-self-promote",
+					description: "Tool self promote description",
+					path: "/tmp/tool-self-promote/SKILL.md",
+					source: "bundled",
+					frontmatter: {
+						name: "tool-self-promote",
+						description: "Tool self promote description",
+						userInvocable: true,
+						disableModelInvocation: false,
+						trust: "builtin",
+					},
+				},
+				body: "# Tool Self Promote",
+			},
+		});
+
+		expect(createResult.isError).toBe(false);
+		expect(JSON.parse(createResult.content)).toMatchObject({
+			descriptor: {
+				source: "user",
+				frontmatter: {
+					trust: "community",
+				},
+			},
+		});
+
+		const updateResult = await router.execute({
+			id: "call-self-promote-update",
+			name: "skill_manage",
+			arguments: {
+				action: "update",
+				name: "tool-self-promote",
+				patch: {
+					frontmatter: {
+						trust: "builtin",
+					},
+				},
+			},
+		});
+
+		expect(updateResult.isError).toBe(false);
+		expect(JSON.parse(updateResult.content)).toMatchObject({
+			descriptor: {
+				source: "user",
+				frontmatter: {
+					trust: "community",
+				},
+			},
+		});
+		const markdown = await readFile(
+			join(userRoot, "tool-self-promote", "SKILL.md"),
+			"utf8",
+		);
+		expect(parseSkillMarkdown(markdown).frontmatter.trust).toBe("community");
+	});
+
+	it("accepts dependency metadata on create and update actions", async () => {
+		const userRoot = await createTempDir();
+		const skillsManager = new SkillsManager({ userRoots: [userRoot] });
+		await skillsManager.discover();
+		const tools = createBuiltinTools({
+			skillsManager,
+			writeAuthority: new WriteAuthority({
+				mode: "ask",
+				confirm: async () => true,
+			}),
+			skillManage: {
+				userRoot,
+			},
+		});
+		const router = new ToolRouter(tools);
+		const initialDependencies = {
+			skills: ["planner"],
+			tools: ["file_read"],
+		};
+		const nextDependencies = {
+			skills: ["planner", "browser-use"],
+			toolsets: ["filesystem"],
+			packages: ["zod"],
+		};
+
+		const createResult = await router.execute({
+			id: "call-dependency-create",
+			name: "skill_manage",
+			arguments: {
+				action: "create",
+				descriptor: {
+					name: "dependency-router-skill",
+					description: "Dependency router skill description",
+					path: "/tmp/dependency-router-skill/SKILL.md",
+					source: "user",
+					frontmatter: {
+						name: "dependency-router-skill",
+						description: "Dependency router skill description",
+						dependencies: initialDependencies,
+						userInvocable: true,
+						disableModelInvocation: false,
+						trust: "community",
+					},
+				},
+				body: "# Dependency Router Skill",
+			},
+		});
+
+		expect(createResult.isError).toBe(false);
+		expect(
+			skillsManager.findByName("dependency-router-skill")?.frontmatter
+				.dependencies,
+		).toEqual(initialDependencies);
+
+		const updateResult = await router.execute({
+			id: "call-dependency-update",
+			name: "skill_manage",
+			arguments: {
+				action: "update",
+				name: "dependency-router-skill",
+				patch: {
+					frontmatter: {
+						dependencies: nextDependencies,
+					},
+				},
+			},
+		});
+
+		expect(updateResult.isError).toBe(false);
+		const markdown = await readFile(
+			join(userRoot, "dependency-router-skill", "SKILL.md"),
+			"utf8",
+		);
+		expect(parseSkillMarkdown(markdown).frontmatter.dependencies).toEqual(
+			nextDependencies,
+		);
+		expect(
+			skillsManager.findByName("dependency-router-skill")?.frontmatter
+				.dependencies,
+		).toEqual(nextDependencies);
+	});
+
 	it("creates project skills when projectRoot is configured", async () => {
 		const userRoot = await createTempDir();
 		const projectRoot = await createTempDir();
@@ -162,8 +323,18 @@ describe("builtin skill_manage tool", () => {
 		});
 
 		expect(result.isError).toBe(true);
-		expect(JSON.parse(result.content)).toEqual({
+		expect(JSON.parse(result.content)).toMatchObject({
 			error: expect.stringContaining("Invalid"),
+			code: "invalid_arguments",
+			details: {
+				issues: [
+					expect.objectContaining({
+						code: "invalid_union",
+						path: ["action"],
+						message: "Invalid input",
+					}),
+				],
+			},
 		});
 	});
 

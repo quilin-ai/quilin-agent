@@ -12,6 +12,13 @@ import type {
 import type { ToolWithMetadata } from "../tool-metadata.js";
 import type { ToolResult } from "../types.js";
 
+const skillDependenciesSchema = z.object({
+	skills: z.array(z.string()).optional(),
+	tools: z.array(z.string()).optional(),
+	toolsets: z.array(z.string()).optional(),
+	packages: z.array(z.string()).optional(),
+});
+
 const skillFrontmatterSchema = z.object({
 	name: z.string().trim().min(1),
 	description: z.string().trim().min(1),
@@ -22,6 +29,7 @@ const skillFrontmatterSchema = z.object({
 	requiresToolsets: z.array(z.string()).optional(),
 	platforms: z.array(z.string()).optional(),
 	version: z.string().optional(),
+	dependencies: skillDependenciesSchema.optional(),
 	userInvocable: z.boolean(),
 	disableModelInvocation: z.boolean(),
 	trust: z
@@ -145,6 +153,7 @@ export function createSkillManageTool(
 			"Create, update, or delete user/project skills through the WriteAuthority gate.",
 		category: "programmatic",
 		riskLevel: "high-risk",
+		sandboxOperation: "write",
 		parameters: skillManageSchema,
 		async execute(args: unknown): Promise<ToolResult> {
 			try {

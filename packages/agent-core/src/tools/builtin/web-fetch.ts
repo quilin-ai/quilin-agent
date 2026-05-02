@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import { BlockList, isIP } from "node:net";
 import { z } from "zod";
 import { logger } from "../../logger.js";
+import type { SandboxPolicy, SandboxRequest } from "../sandbox.js";
 import type { ToolWithMetadata } from "../tool-metadata.js";
 import type { ToolResult } from "../types.js";
 
@@ -274,6 +275,67 @@ function normalizeAuthHost(hostname: string): string {
 	return normalizeHostname(hostname);
 }
 
+function hasSensitiveHeaders(
+	headers: Record<string, string> | undefined,
+): boolean {
+	return Object.keys(headers ?? {}).some((name) =>
+		SENSITIVE_HEADER_NAMES.has(name.toLowerCase()),
+	);
+}
+
+function normalizeProtocol(protocol: string): string {
+	return protocol.endsWith(":") ? protocol.slice(0, -1) : protocol;
+}
+
+function createSandboxRequestFromArgs(
+	args: unknown,
+	origin: SandboxRequest["origin"],
+): SandboxRequest {
+	const {
+		url,
+		method = "GET",
+		headers,
+	} = args as {
+		url?: string;
+		method?: "GET" | "POST";
+		headers?: Record<string, string>;
+	};
+
+	let networkSignal: NonNullable<
+		NonNullable<SandboxRequest["signals"]>["network"]
+	> = {
+		method,
+		sendsCredentials: hasSensitiveHeaders(headers),
+	};
+
+	if (typeof url === "string") {
+		try {
+			const parsedUrl = new URL(url);
+			networkSignal = {
+				...networkSignal,
+				destination: parsedUrl.host,
+				protocol: normalizeProtocol(parsedUrl.protocol),
+			};
+		} catch {
+			networkSignal = {
+				...networkSignal,
+				destination: url,
+			};
+		}
+	}
+
+	return {
+		operation: "network",
+		...(origin == null ? {} : { origin }),
+		signals: {
+			network: networkSignal,
+		},
+	};
+}
+
+const webFetchSandboxPolicy: SandboxPolicy = (context) =>
+	createSandboxRequestFromArgs(context.parsedArguments, context.origin);
+
 function sanitizeHeaders(
 	headers: Record<string, string> | undefined,
 	url: URL,
@@ -419,6 +481,8 @@ export function createWebFetchTool(
 		}),
 		category: "programmatic",
 		riskLevel: "read",
+		sandboxOperation: "network",
+		sandboxPolicy: webFetchSandboxPolicy,
 		execute: async (args) => {
 			const {
 				url,
