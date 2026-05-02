@@ -4,30 +4,60 @@ on:
   push:
     branches: [master]
     paths:
-      - "**/*.md"
       - "docs/**"
+      - "*.md"
+      - "README.md"
+      - "readme.md"
+      - "quilin.md"
+      - "AGENTS.md"
+      - "CLAUDE.md"
+      - "agent-bridge.md"
+      - "justfile"
       - "scripts/lint-glossary.py"
+      - "scripts/lint-docs-process.py"
+      - "scripts/test_lint_docs_process.py"
       - ".github/workflows/docs.yml"
       - ".github/markdown-link-check.json"
   pull_request:
     branches: [master]
     paths:
-      - "**/*.md"
       - "docs/**"
+      - "*.md"
+      - "README.md"
+      - "readme.md"
+      - "quilin.md"
+      - "AGENTS.md"
+      - "CLAUDE.md"
+      - "agent-bridge.md"
+      - "justfile"
       - "scripts/lint-glossary.py"
+      - "scripts/lint-docs-process.py"
+      - "scripts/test_lint_docs_process.py"
       - ".github/workflows/docs.yml"
       - ".github/markdown-link-check.json"
 
 jobs:
-  glossary:
-    name: Glossary Lint
+  docs-process:
+    name: Docs Process Lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.14"
       - run: python3 scripts/lint-glossary.py
+      - run: python3 scripts/test_lint_docs_process.py
+      - name: Docs/process gate
+        run: |
+          set -euo pipefail
+          base="${{ github.event.pull_request.base.sha || github.event.before }}"
+          if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            base="HEAD"
+          fi
+          mapfile -t changed_docs < <(git diff --name-only --diff-filter=ACMR "$base" HEAD -- 'docs/*.md' 'docs/**/*.md' '*.md')
+          python3 scripts/lint-docs-process.py --strict-warnings "${changed_docs[@]}"
 
   links:
     name: Markdown Link Check
@@ -36,7 +66,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install markdown-link-check
         run: npm install -g markdown-link-check@3.12.2
-      - name: Check links (docs/**/*.md and root *.md, excluding upstreams/)
+      - name: Check links (current docs and root *.md, excluding upstreams/)
         run: |
           set -euo pipefail
           mapfile -t files < <(find . \

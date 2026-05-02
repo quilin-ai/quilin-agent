@@ -34,7 +34,7 @@ restart: stop start
 test-all: test test-py test-rs
 
 # 一键质量检查
-check: lint fmt
+check: lint fmt lint-docs-process
 
 # 一键清理
 clean:
@@ -64,6 +64,12 @@ lint:
     cd packages/agent-core && bun run biome check src/
 fmt:
     cd packages/agent-core && bun run biome format --write src/
+
+# Docs/process lint
+lint-docs-process:
+    python3 scripts/test_lint_docs_process.py
+    python3 scripts/lint-glossary.py
+    python3 scripts/lint-docs-process.py --strict-warnings
 
 # 构建
 build:

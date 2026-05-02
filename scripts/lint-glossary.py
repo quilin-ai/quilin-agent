@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Glossary lint — enforces the key terminology drifts called out in
-`docs/architecture/glossary.md` (D-10 / R-08, 2026-04-17 ultra-review).
+`docs/00-core-loop/glossary.md` (D-10 / R-08, 2026-04-17 ultra-review).
 
 The lint is intentionally **narrow**: it checks only the specific drift
 items escalated by Coherence reviewers (C-01..C-14), not every term in
@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Iterable
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-GLOSSARY = REPO_ROOT / "docs" / "architecture" / "glossary.md"
+GLOSSARY = REPO_ROOT / "docs" / "00-core-loop" / "glossary.md"
 
 IGNORE_PREFIXES = (
     "upstreams/",
@@ -37,10 +37,8 @@ IGNORE_PREFIXES = (
     "dist/",
     "target/",
     "__pycache__/",
-    # Historical artifacts — intentionally cite old terminology
-    "docs/review/",
     # Glossary & lint script — self-references allowed
-    "docs/architecture/glossary.md",
+    "docs/00-core-loop/glossary.md",
     "scripts/lint-glossary.py",
     # Superpowers are upstream-style skills content
     "docs/superpowers/",
@@ -180,7 +178,7 @@ def main() -> int:
 
     if total:
         print(
-            f"\n{total} glossary violation(s) — see docs/architecture/glossary.md"
+            f"\n{total} glossary violation(s) — see docs/00-core-loop/glossary.md"
         )
         return 1
 
