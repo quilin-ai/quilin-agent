@@ -3,6 +3,7 @@ import {
 	defaultSandboxEvaluator,
 	genericSandboxPolicy,
 	resolveSandboxPolicy,
+	type SandboxApprovalSummary,
 	type SandboxDecision,
 	type SandboxEvaluator,
 	type SandboxOrigin,
@@ -49,6 +50,13 @@ export interface ToolRouterOptions {
 	readonly sandboxEvaluator?: SandboxEvaluator;
 	readonly sandboxPolicy?: SandboxPolicy;
 	readonly sandboxOrigin?: SandboxOrigin;
+	readonly sandboxApproval?: SandboxApprovalHandler;
+}
+
+export interface SandboxApprovalRequest {
+	readonly decision: SandboxDecision;
+	readonly context: SandboxToolContext;
+	readonly summary: SandboxApprovalSummary;
 }
 
 export interface ToolInvocationAuditInput {
@@ -56,6 +64,16 @@ export interface ToolInvocationAuditInput {
 	readonly toolCallId: string;
 	readonly outcome: ToolInvocationAuditOutcome;
 	readonly errorDetails?: ToolError | Record<string, unknown>;
+	readonly approvalSummary?: SandboxApprovalSummary;
+}
+
+export type SandboxApprovalHandler = (
+	request: SandboxApprovalRequest,
+) => boolean | Promise<boolean>;
+
+interface SandboxEvaluationResult {
+	readonly blockedResult?: ToolResult;
+	readonly approvedSummary?: SandboxApprovalSummary;
 }
 
 function getShortName(tool: Tool | ToolWithMetadata): string {
@@ -160,7 +178,8 @@ export function createToolInvocationAuditSummary(
 ): ToolInvocationAuditSummary {
 	const errorDetails = asRecord(input.errorDetails);
 	const nestedDetails = asRecord(errorDetails?.details);
-	const approvalSummary = asRecord(nestedDetails?.approvalSummary);
+	const approvalSummary =
+		input.approvalSummary ?? asRecord(nestedDetails?.approvalSummary);
 	const decision = asRecord(nestedDetails?.decision);
 	const requiredApprovalsSource =
 		approvalSummary?.requiredApprovals ?? decision?.requiredApprovals;
@@ -389,6 +408,7 @@ function withInvocationAudit(
 	outcome: ToolInvocationAuditOutcome = result.isError
 		? auditOutcomeForError(result.error)
 		: "success",
+	approvalSummary?: SandboxApprovalSummary,
 ): ToolResult {
 	return {
 		...result,
@@ -396,6 +416,7 @@ function withInvocationAudit(
 			toolCallId,
 			toolName,
 			outcome,
+			...(approvalSummary == null ? {} : { approvalSummary }),
 			...(result.error == null ? {} : { errorDetails: result.error }),
 		}),
 	};
@@ -409,6 +430,7 @@ function createRouterErrorResult(options: {
 	readonly retryable?: boolean;
 	readonly details?: Record<string, unknown>;
 	readonly outcome?: ToolInvocationAuditOutcome;
+	readonly approvalSummary?: SandboxApprovalSummary;
 }): ToolResult {
 	return withInvocationAudit(
 		options.toolCallId,
@@ -421,6 +443,7 @@ function createRouterErrorResult(options: {
 			...(options.details == null ? {} : { details: options.details }),
 		}),
 		options.outcome,
+		options.approvalSummary,
 	);
 }
 
@@ -428,6 +451,7 @@ function normalizeToolResult(
 	toolCallId: string,
 	toolName: string,
 	result: ToolResult,
+	approvalSummary?: SandboxApprovalSummary,
 ): ToolResult {
 	const normalized = {
 		toolCallId,
@@ -436,13 +460,25 @@ function normalizeToolResult(
 	};
 
 	if (result.isError && result.error != null) {
-		return withInvocationAudit(toolCallId, toolName, {
-			...normalized,
-			error: result.error,
-		});
+		return withInvocationAudit(
+			toolCallId,
+			toolName,
+			{
+				...normalized,
+				error: result.error,
+			},
+			auditOutcomeForError(result.error),
+			approvalSummary,
+		);
 	}
 
-	return withInvocationAudit(toolCallId, toolName, normalized);
+	return withInvocationAudit(
+		toolCallId,
+		toolName,
+		normalized,
+		"success",
+		approvalSummary,
+	);
 }
 
 function validationIssues(error: { issues: readonly unknown[] }): {
@@ -492,6 +528,10 @@ function sandboxBlockedResult(
 	toolCallId: string,
 	decision: SandboxDecision,
 	context: SandboxToolContext,
+	approvalSummary: SandboxApprovalSummary = createSandboxApprovalSummary(
+		decision,
+		context,
+	),
 ): ToolResult {
 	const approvalRequired = decision.kind === "ask";
 	return createRouterErrorResult({
@@ -503,7 +543,7 @@ function sandboxBlockedResult(
 			: "Tool execution denied by sandbox policy.",
 		details: {
 			decision,
-			approvalSummary: createSandboxApprovalSummary(decision, context),
+			approvalSummary,
 		},
 		outcome: approvalRequired ? "sandbox_ask" : "sandbox_deny",
 	});
@@ -519,7 +559,7 @@ export class ToolRouter {
 		tool: Tool | ToolWithMetadata,
 		call: ToolCall,
 		parsedArguments: unknown,
-	): Promise<ToolResult | undefined> {
+	): Promise<SandboxEvaluationResult> {
 		const policy =
 			tool.sandboxPolicy ??
 			this.options.sandboxPolicy ??
@@ -528,7 +568,7 @@ export class ToolRouter {
 				: genericSandboxPolicy);
 
 		if (policy == null) {
-			return undefined;
+			return {};
 		}
 
 		const context: SandboxToolContext = {
@@ -544,15 +584,41 @@ export class ToolRouter {
 		const request = await resolveSandboxPolicy(policy, context);
 
 		if (request == null) {
-			return undefined;
+			return {};
 		}
 
 		const evaluator = this.options.sandboxEvaluator ?? defaultSandboxEvaluator;
 		const decision = await evaluator(request, context);
 
-		return decision.kind === "allow"
-			? undefined
-			: sandboxBlockedResult(call.id, decision, context);
+		if (decision.kind === "allow") {
+			return {};
+		}
+
+		const approvalSummary = createSandboxApprovalSummary(decision, context);
+		if (decision.kind === "ask" && this.options.sandboxApproval != null) {
+			let approved = false;
+			try {
+				approved = await this.options.sandboxApproval({
+					decision,
+					context,
+					summary: approvalSummary,
+				});
+			} catch {
+				approved = false;
+			}
+			if (approved) {
+				return { approvedSummary: approvalSummary };
+			}
+		}
+
+		return {
+			blockedResult: sandboxBlockedResult(
+				call.id,
+				decision,
+				context,
+				approvalSummary,
+			),
+		};
 	}
 
 	async execute(call: ToolCall): Promise<ToolResult> {
@@ -601,18 +667,20 @@ export class ToolRouter {
 			});
 		}
 
+		let approvedSummary: SandboxApprovalSummary | undefined;
 		try {
-			const sandboxResult = await this.evaluateSandbox(
+			const sandboxEvaluation = await this.evaluateSandbox(
 				tool,
 				call,
 				parsedArgs.data,
 			);
-			if (sandboxResult != null) {
-				return sandboxResult;
+			if (sandboxEvaluation.blockedResult != null) {
+				return sandboxEvaluation.blockedResult;
 			}
+			approvedSummary = sandboxEvaluation.approvedSummary;
 
 			const result = await tool.execute(parsedArgs.data);
-			return normalizeToolResult(call.id, tool.name, result);
+			return normalizeToolResult(call.id, tool.name, result, approvedSummary);
 		} catch (error) {
 			const code = classifyToolException(error);
 			return createRouterErrorResult({
@@ -622,6 +690,7 @@ export class ToolRouter {
 				message: toolExceptionMessage(error),
 				...(code === "timeout" ? { retryable: true } : {}),
 				outcome: error instanceof Error ? "tool_error" : "unknown_error",
+				approvalSummary: approvedSummary,
 			});
 		}
 	}

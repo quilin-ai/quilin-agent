@@ -7,6 +7,44 @@ import { z } from "zod";
 export const USER_CONFIG_SCHEMA_VERSION = 1 as const;
 export type UserConfigSchemaVersion = 1;
 
+const llmProviderSchema = z.enum(["anthropic", "deepseek", "gemini", "openai"]);
+const thinkingModeSchema = z.enum(["disabled", "enabled", "auto"]);
+const modelTierSchema = z.enum(["flash", "lite", "pro"]);
+
+const defaultLlmTiers = {
+	flash: {
+		provider: "deepseek" as const,
+		model: "deepseek-v4-flash",
+		thinking: "disabled" as const,
+	},
+	lite: {
+		provider: "deepseek" as const,
+		model: "deepseek-v4-flash",
+		thinking: "enabled" as const,
+	},
+	pro: {
+		provider: "deepseek" as const,
+		model: "deepseek-v4-pro",
+		thinking: "enabled" as const,
+	},
+} as const;
+
+function llmTierProfileSchema(
+	defaultProfile: (typeof defaultLlmTiers)[keyof typeof defaultLlmTiers],
+) {
+	return z
+		.object({
+			provider: llmProviderSchema.default(defaultProfile.provider),
+			model: z.string().min(1).default(defaultProfile.model),
+			thinking: thinkingModeSchema.default(defaultProfile.thinking),
+			temperature: z.number().min(0).max(2).optional(),
+			max_tokens: z.number().int().positive().optional(),
+			thinking_budget_tokens: z.number().int().positive().optional(),
+			top_p: z.number().min(0).max(1).optional(),
+		})
+		.strict();
+}
+
 export const llmConfigSchema = z
 	.object({
 		default_model: z.string().min(1).default("claude-sonnet-4-6"),
@@ -20,6 +58,32 @@ export const llmConfigSchema = z
 			})
 			.strict()
 			.default({ enabled: true, budget_tokens: 10_000 }),
+		routing: z
+			.object({
+				mode: z.enum(["auto", "flash", "lite", "pro"]).default("auto"),
+				default_tier: modelTierSchema.default("lite"),
+				allow_escalation: z.boolean().default(true),
+			})
+			.strict()
+			.default({
+				mode: "auto",
+				default_tier: "lite",
+				allow_escalation: true,
+			}),
+		tiers: z
+			.object({
+				flash: llmTierProfileSchema(defaultLlmTiers.flash).default(
+					defaultLlmTiers.flash,
+				),
+				lite: llmTierProfileSchema(defaultLlmTiers.lite).default(
+					defaultLlmTiers.lite,
+				),
+				pro: llmTierProfileSchema(defaultLlmTiers.pro).default(
+					defaultLlmTiers.pro,
+				),
+			})
+			.strict()
+			.default(defaultLlmTiers),
 	})
 	.strict();
 
@@ -122,6 +186,12 @@ export const userConfigSchema = z
 			temperature: 0.7,
 			max_tokens: 8192,
 			thinking: { enabled: true, budget_tokens: 10_000 },
+			routing: {
+				mode: "auto",
+				default_tier: "lite",
+				allow_escalation: true,
+			},
+			tiers: defaultLlmTiers,
 		}),
 		memory: memoryConfigSchema,
 		observability: observabilityConfigSchema,

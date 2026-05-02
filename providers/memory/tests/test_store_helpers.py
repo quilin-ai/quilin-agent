@@ -8,10 +8,12 @@ import pytest
 from omnimem.store_filters import coerce_filter_datetime, layer_filter, matches_filters
 from omnimem.store_serialization import (
     deserialize_embedding,
+    deserialize_memory_tier,
     deserialize_metadata,
     parse_datetime,
     row_to_record,
     serialize_embedding,
+    validate_memory_tier,
 )
 from omnimem.types import MemoryItem
 
@@ -59,6 +61,35 @@ def test_row_to_record_uses_safe_defaults_for_nullable_legacy_rows() -> None:
     assert record.embedding is None
     assert record.created_at == now
     assert record.last_accessed == now
+
+
+def test_row_to_record_maps_legacy_short_tier_without_accepting_new_short_writes() -> None:
+    now = datetime(2026, 4, 25, tzinfo=UTC)
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        """
+        SELECT
+            'memory-legacy-short' AS id,
+            'legacy short memory' AS content,
+            'text' AS content_type,
+            'short' AS tier,
+            NULL AS metadata_json,
+            NULL AS embedding_json,
+            NULL AS created_at,
+            NULL AS last_accessed,
+            0 AS access_count,
+            0.5 AS importance_score
+        """
+    ).fetchone()
+
+    record = row_to_record(row, now=lambda: now)
+    conn.close()
+
+    assert record.layer == "working"
+    assert deserialize_memory_tier("short") == "working"
+    with pytest.raises(ValueError, match="Invalid memory tier"):
+        validate_memory_tier("short")
 
 
 def test_store_filters_cover_aliases_dates_and_invalid_values() -> None:

@@ -1,5 +1,8 @@
 import { describe, expect, test } from "vitest";
-import { createToolGuidanceSection } from "./default-sections.js";
+import {
+	createToolGuidanceSection,
+	createToolProvenanceSection,
+} from "./default-sections.js";
 import type { BuildContext } from "./prompt-types.js";
 
 const baseContext: BuildContext = {
@@ -52,6 +55,12 @@ describe("createToolGuidanceSection", () => {
 
 		expect(content).toContain("Memory guidelines:");
 		expect(content).toContain("call omnimem/memory_store immediately");
+		expect(content).toContain(
+			'first-person words ("I", "me", "my", "我", "我的")',
+		);
+		expect(content).toContain('If the user says "你是小明，我是孟哥"');
+		expect(content).toContain('do not store "用户叫小明"');
+		expect(content).toContain("metadata.source and metadata.stability_reason");
 		expect(content).toContain("call omnimem/memory_recall with a broad query");
 		expect(content).toContain("## Programmatic Tools");
 		expect(content).toContain(
@@ -86,5 +95,81 @@ describe("createToolGuidanceSection", () => {
 
 		expect(content).toContain("Available tools: memory_recall, memory_store");
 		expect(content).not.toContain("## Programmatic Tools");
+	});
+});
+
+describe("createToolProvenanceSection", () => {
+	test("renders recent tool source provenance for follow-up source questions", () => {
+		const section = createToolProvenanceSection();
+
+		const content = section.compute({
+			...baseContext,
+			sessionState: {
+				toolProvenance: {
+					recent: [
+						{
+							tool: "web_fetch",
+							url: "https://news.example.com/codex?token=secret#frag",
+							host: "news.example.com",
+							status: 200,
+							at: "2026-05-02T13:00:00.000Z",
+							auditOutcome: "usable_evidence",
+							usableEvidence: true,
+						},
+						{
+							tool: "web_fetch",
+							url: "https://blocked.example.com/prompt",
+							host: "blocked.example.com",
+							at: "2026-05-02T13:01:00.000Z",
+							auditOutcome: "blocked_output",
+							usableEvidence: false,
+						},
+						{
+							tool: "web_fetch",
+							url: "https://warned.example.com/hidden",
+							host: "warned.example.com",
+							at: "2026-05-02T13:02:00.000Z",
+							auditOutcome: "sanitized_warning",
+							usableEvidence: false,
+						},
+						{
+							tool: "web_fetch",
+							url: "https://failed.example.com/source",
+							host: "failed.example.com",
+							at: "2026-05-02T13:03:00.000Z",
+							auditOutcome: "failed",
+							usableEvidence: false,
+						},
+					],
+				},
+			},
+		});
+
+		expect(content).toContain("Recent tool/source provenance");
+		expect(content).toContain(
+			"https://news.example.com/[path-redacted]?[redacted]#[redacted]",
+		);
+		expect(content).not.toContain("/codex");
+		expect(content).not.toContain("/prompt");
+		expect(content).not.toContain("token=secret");
+		expect(content).toContain("status=200");
+		expect(content).toContain("[usable]");
+		expect(content).toContain("[not_evidence:blocked_output]");
+		expect(content).toContain("[not_evidence:sanitized_warning]");
+		expect(content).toContain("[not_evidence:failed]");
+		expect(content).not.toContain("usable_after_sanitization");
+		expect(content).toContain("cite only entries marked usable");
+		expect(content).toContain(
+			"never treat not_evidence entries as factual sources",
+		);
+		expect(content).toContain(
+			"Do not say the information came only from training data",
+		);
+	});
+
+	test("omits the provenance section when no tool sources are known", () => {
+		const section = createToolProvenanceSection();
+
+		expect(section.compute(baseContext)).toBeNull();
 	});
 });

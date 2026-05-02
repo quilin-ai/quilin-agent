@@ -143,6 +143,68 @@ async def test_memory_store_tool_with_tier(server: object) -> None:
     )
 
 
+async def test_memory_store_tool_defaults_semantic_metadata(server: object) -> None:
+    store_result = _decode_call_tool_result(
+        await server.call_tool(  # type: ignore[attr-defined]
+            "memory_store",
+            {
+                "content": "user prefers direct corrections",
+                "layer": "semantic",
+            },
+        )
+    )
+    recall_result = _decode_call_tool_result(
+        await server.call_tool(  # type: ignore[attr-defined]
+            "memory_recall",
+            {"query": "direct corrections"},
+        )
+    )
+
+    assert "id" in store_result
+    record = recall_result["records"][0]  # type: ignore[index]
+    _assert_memory_item_record(
+        record,
+        content="user prefers direct corrections",
+        layer="semantic",
+        memory_id=store_result["id"],  # type: ignore[arg-type]
+        recall_source="direct_recall",
+        memory_source="memory_store_tool",
+    )
+    assert record["metadata"]["stability_reason"] == "caller_selected_semantic_tier"
+
+
+async def test_memory_store_tool_defaults_semantic_metadata_from_tier(
+    server: object,
+) -> None:
+    store_result = _decode_call_tool_result(
+        await server.call_tool(  # type: ignore[attr-defined]
+            "memory_store",
+            {
+                "content": "user prefers tier semantic defaults",
+                "tier": "semantic",
+            },
+        )
+    )
+    recall_result = _decode_call_tool_result(
+        await server.call_tool(  # type: ignore[attr-defined]
+            "memory_recall",
+            {"query": "tier semantic defaults"},
+        )
+    )
+
+    assert "id" in store_result
+    record = recall_result["records"][0]  # type: ignore[index]
+    _assert_memory_item_record(
+        record,
+        content="user prefers tier semantic defaults",
+        layer="semantic",
+        memory_id=store_result["id"],  # type: ignore[arg-type]
+        recall_source="direct_recall",
+        memory_source="memory_store_tool",
+    )
+    assert record["metadata"]["stability_reason"] == "caller_selected_semantic_tier"
+
+
 async def test_memory_store_tool_accepts_canonical_layer(server: object) -> None:
     await server.call_tool(  # type: ignore[attr-defined]
         "memory_store",

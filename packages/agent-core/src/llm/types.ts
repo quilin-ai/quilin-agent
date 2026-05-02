@@ -75,6 +75,10 @@ export interface TokenUsage {
 
 export type LLMProviderId = "anthropic" | "deepseek" | "gemini" | "openai";
 
+export type LLMModelTier = "flash" | "lite" | "pro";
+
+export type LLMRoutingMode = "auto" | LLMModelTier;
+
 export type LLMProviderStatus = "enabled" | "blocked" | "candidate";
 
 export type ProviderLiveEvidenceStatus =
@@ -82,7 +86,10 @@ export type ProviderLiveEvidenceStatus =
 	| "missing"
 	| "not-required";
 
-export type ReasoningStateAdapter = "none" | "captured_not_replayed";
+export type ReasoningStateAdapter =
+	| "none"
+	| "captured_not_replayed"
+	| "captured_replayed_for_tool_calls";
 
 export interface ProviderCatalogEntry {
 	readonly provider: LLMProviderId;
@@ -90,6 +97,7 @@ export interface ProviderCatalogEntry {
 	readonly transport: "direct" | "gateway" | "candidate";
 	readonly defaultModel?: string;
 	readonly models: readonly string[];
+	readonly allowCustomModels?: boolean;
 	readonly requiredEnv?: readonly string[];
 	readonly liveEvidence: ProviderLiveEvidenceStatus;
 	readonly blockReason?: string;
@@ -105,6 +113,29 @@ export interface LLMRouteRequest {
 	readonly thinkingMode?: ThinkingMode;
 }
 
+export interface LLMModelProfile {
+	readonly provider: LLMProviderId;
+	readonly model: string;
+	readonly thinkingMode: ThinkingMode;
+	readonly temperature?: number;
+	readonly maxTokens?: number;
+	readonly thinkingBudget?: number;
+	readonly topP?: number;
+}
+
+export interface LLMTierRoutingConfig {
+	readonly mode: LLMRoutingMode;
+	readonly defaultTier: LLMModelTier;
+	readonly allowEscalation: boolean;
+	readonly tiers: Readonly<Record<LLMModelTier, LLMModelProfile>>;
+}
+
+export interface LLMTierRouteSelection {
+	readonly tier: LLMModelTier;
+	readonly reason: string;
+	readonly mode: LLMRoutingMode;
+}
+
 export interface LLMRouteBudget {
 	readonly maxTokens: number;
 	readonly thinkingBudget?: number;
@@ -117,6 +148,10 @@ export interface LLMRouteDecision {
 	readonly fallbackUsed: false;
 	readonly reasoningStateAdapter: ReasoningStateAdapter;
 	readonly budget?: LLMRouteBudget;
+	readonly selectedTier?: LLMModelTier;
+	readonly routingMode?: LLMRoutingMode;
+	readonly routeReason?: string;
+	readonly thinkingMode?: ThinkingMode;
 }
 
 export interface NormalizedProviderError {

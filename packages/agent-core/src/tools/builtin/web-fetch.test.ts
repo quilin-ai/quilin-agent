@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { ToolRouter } from "../router.js";
 import { resolveSandboxPolicy } from "../sandbox.js";
 import { createWebFetchTool } from "./web-fetch.js";
 
@@ -61,6 +62,132 @@ describe("builtin web_fetch tool", () => {
 		});
 	});
 
+	it("marks URL userinfo as credential-bearing sandbox traffic", async () => {
+		const tool = createWebFetchTool();
+		if (tool.sandboxPolicy == null) {
+			throw new Error("web_fetch sandbox policy is not configured");
+		}
+
+		const request = await resolveSandboxPolicy(tool.sandboxPolicy, {
+			toolCallId: "call-web-fetch-userinfo",
+			requestedToolName: "web_fetch",
+			resolvedToolName: "web_fetch",
+			parsedArguments: {
+				url: "https://user:pass@example.com/data",
+			},
+			origin: "agent",
+			category: "programmatic",
+			riskLevel: "read",
+			sandboxOperation: "network",
+		});
+
+		expect(request).toEqual({
+			operation: "network",
+			origin: "agent",
+			signals: {
+				network: {
+					destination: "example.com",
+					protocol: "https",
+					method: "GET",
+					sendsCredentials: true,
+				},
+			},
+		});
+	});
+
+	it("requires sandbox approval for POST bodies before fetching", async () => {
+		const fetcher = vi.fn();
+		const router = new ToolRouter(
+			[
+				createWebFetchTool({
+					fetcher,
+				}),
+			],
+			{ sandboxOrigin: "agent" },
+		);
+
+		const result = await router.execute({
+			id: "call-web-fetch-post-body",
+			name: "web_fetch",
+			arguments: {
+				url: "https://example.com/data",
+				method: "POST",
+				body: "ping",
+				headers: { "x-test": "1" },
+			},
+		});
+
+		expect(fetcher).not.toHaveBeenCalled();
+		expect(result.isError).toBe(true);
+		expect(JSON.parse(result.content)).toMatchObject({
+			error: "Tool execution requires sandbox approval.",
+			code: "sandbox_approval_required",
+			details: {
+				decision: {
+					kind: "ask",
+					reasonCodes: ["network_operation_requires_approval"],
+					requiredApprovals: ["network_access", "user_confirmation"],
+				},
+				approvalSummary: {
+					tool: "web_fetch",
+					call: "call-web-fetch-post-body",
+					origin: "agent",
+					kind: "ask",
+					requiredApprovals: ["network_access", "user_confirmation"],
+					reasonCodes: ["network_operation_requires_approval"],
+				},
+			},
+		});
+		expect(result.error?.code).toBe("sandbox_approval_required");
+	});
+
+	it("allows ordinary GET sandbox checks before fetching", async () => {
+		const fetcher = vi.fn(
+			async () =>
+				new Response("hello world", {
+					status: 200,
+					headers: {
+						"content-type": "text/plain",
+					},
+				}),
+		);
+		const router = new ToolRouter(
+			[
+				createWebFetchTool({
+					fetcher,
+					resolver: createResolver({ "example.com": ["93.184.216.34"] }),
+				}),
+			],
+			{ sandboxOrigin: "agent" },
+		);
+
+		const result = await router.execute({
+			id: "call-web-fetch-get",
+			name: "web_fetch",
+			arguments: {
+				url: "https://example.com/data",
+			},
+		});
+
+		expect(result.isError).toBe(false);
+		expect(fetcher).toHaveBeenCalledWith(
+			"https://example.com/data",
+			expect.objectContaining({
+				method: "GET",
+				body: undefined,
+				redirect: "manual",
+				signal: expect.any(AbortSignal),
+			}),
+		);
+		expect(JSON.parse(result.content)).toEqual({
+			url: "https://example.com/data",
+			status: 200,
+			contentType: "text/plain",
+			body: "hello world",
+			truncated: false,
+		});
+	});
+
 	it("uses the injected fetcher and returns response metadata", async () => {
 		const fetcher = vi.fn(
 			async () =>
@@ -98,6 +225,21 @@ describe("builtin web_fetch tool", () => {
 			body: "hello world",
 			truncated: false,
 		});
+	});
+
+	it("does not pass URL userinfo credentials to fetch", async () => {
+		const fetcher = vi.fn();
+		const tool = createWebFetchTool({ fetcher });
+
+		const result = await tool.execute({
+			url: "https://user:pass@example.com/data",
+		});
+
+		expect(result.isError).toBe(true);
+		expect(JSON.parse(result.content)).toEqual({
+			error: expect.stringContaining("URL userinfo credentials"),
+		});
+		expect(fetcher).not.toHaveBeenCalled();
 	});
 
 	it("marks HTTP errors and truncates oversized bodies", async () => {
@@ -157,13 +299,18 @@ describe("builtin web_fetch tool", () => {
 			"169.254.169.254": ["169.254.169.254"],
 			"127.0.0.1": ["127.0.0.1"],
 			"10.0.0.1": ["10.0.0.1"],
+			localhost: ["127.0.0.1"],
+			"[::]": ["::"],
+			"::": ["::"],
 		});
 		const tool = createWebFetchTool({ fetcher, resolver });
 
 		for (const url of [
 			"http://169.254.169.254/latest/meta-data/",
 			"http://127.0.0.1:3000/health",
+			"http://localhost:3000/health",
 			"http://10.0.0.1/internal",
+			"http://[::]/health",
 		]) {
 			const result = await tool.execute({ url });
 			expect(result.isError).toBe(true);
@@ -219,6 +366,36 @@ describe("builtin web_fetch tool", () => {
 			error: expect.stringContaining("not allowed"),
 		});
 		expect(fetcher).toHaveBeenCalledTimes(1);
+	});
+
+	it("rejects redirects that introduce URL userinfo credentials", async () => {
+		const fetcher = vi.fn().mockResolvedValueOnce(
+			new Response(null, {
+				status: 302,
+				headers: {
+					location: "https://user:pass@example.com/secret",
+				},
+			}),
+		);
+		const resolver = createResolver({
+			"safe.example": ["93.184.216.34"],
+			"example.com": ["93.184.216.34"],
+		});
+		const tool = createWebFetchTool({ fetcher, resolver });
+
+		const result = await tool.execute({
+			url: "https://safe.example/start",
+		});
+
+		expect(result.isError).toBe(true);
+		expect(JSON.parse(result.content)).toEqual({
+			error: expect.stringContaining("URL userinfo credentials"),
+		});
+		expect(fetcher).toHaveBeenCalledTimes(1);
+		expect(fetcher).toHaveBeenCalledWith(
+			"https://safe.example/start",
+			expect.any(Object),
+		);
 	});
 
 	it("rewrites POST bodies on 303 redirects and preserves them on 307 redirects", async () => {

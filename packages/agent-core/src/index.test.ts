@@ -7,8 +7,11 @@ import { z } from "zod";
 import type {
 	BuiltinToolOptions,
 	ChildRunStatusRecord,
+	ContextCachePlan,
 	CreateToolErrorOptions,
 	CreateToolErrorResultOptions,
+	DagPlan,
+	DraftContextSource,
 	FileListToolOptions,
 	FileReadToolOptions,
 	FileWriteToolOptions,
@@ -17,6 +20,7 @@ import type {
 	JsonSchemaObject,
 	MCPServerEntry,
 	MetricsSnapshot,
+	ProductionRouteDelegationHandoffPlan,
 	ProductionRouteExplanationBatchSummary,
 	ProductionRouteHandoffRecommendation,
 	ProductionRouteScore,
@@ -47,6 +51,7 @@ import type {
 	SpanSnapshot,
 	StoredProposalRecord,
 	StoredTrajectoryRecord,
+	SubTask,
 	SupervisorProgressDashboardRecord,
 	SupervisorProgressSnapshot,
 	Tool,
@@ -164,6 +169,8 @@ describe("main", () => {
 		delete process.env.OMNI_LLM_TEMPERATURE;
 		delete process.env.OMNI_LLM_THINKING_ENABLED;
 		delete process.env.OMNI_LLM_THINKING_BUDGET_TOKENS;
+		delete process.env.OMNI_LLM_ROUTING_MODE;
+		delete process.env.OMNI_LLM_TIERS_PRO_MODEL;
 		delete process.env.OMNI_SAFETY_TRUST_MODE;
 		delete process.env.OMNI_TOOLS_ENABLED;
 		delete process.env.OMNI_TOOLS_DISABLED;
@@ -241,13 +248,17 @@ describe("main", () => {
 			expect.objectContaining({
 				runtime_phase: "startup_verification",
 				provider: "deepseek",
-				configured_model: "deepseek-chat",
-				effective_model: "deepseek-chat",
+				configured_model: "deepseek-v4-flash",
+				effective_model: "deepseek-v4-flash",
+				selected_tier: "flash",
+				routing_mode: "flash",
+				route_reason: "forced_flash",
+				route_thinking_mode: "disabled",
 				fallback_used: false,
 				outcome: "success",
 				attempt_count: 1,
 				attempt_provider: "deepseek",
-				attempt_model: "deepseek-chat",
+				attempt_model: "deepseek-v4-flash",
 				attempt_outcome: "success",
 				input_tokens: 18,
 				output_tokens: 5,
@@ -260,11 +271,12 @@ describe("main", () => {
 				response: "Quilin Agent online.",
 				inputTokens: 18,
 				outputTokens: 5,
+				tier: "flash",
 			},
 			"LLM connection verified",
 		);
 		expect(logger.info).toHaveBeenNthCalledWith(
-			6,
+			10,
 			{ mode: "repl" },
 			"Starting CLI REPL...",
 		);
@@ -284,6 +296,11 @@ describe("main", () => {
 					thinkingMode: "enabled",
 					thinkingBudget: 10_000,
 				},
+				tierRouting: expect.objectContaining({
+					mode: "auto",
+					defaultTier: "lite",
+					allowEscalation: true,
+				}),
 				writeAuthorityMode: "ask",
 				toolFilter: {
 					enabled: [],
@@ -299,7 +316,7 @@ describe("main", () => {
 				configuredModel: "deepseek-chat",
 				effectiveModel: "deepseek-reasoner",
 				fallbackUsed: false,
-				reasoningStateAdapter: "captured_not_replayed",
+				reasoningStateAdapter: "captured_replayed_for_tool_calls",
 			},
 			attempts: [
 				{
@@ -356,7 +373,7 @@ describe("main", () => {
 		expect(exitSpy).toHaveBeenCalledWith(0);
 	});
 
-	it("uses an explicit user config default model for runtime routing", async () => {
+	it("uses an explicit user config default model without rewriting tier profiles", async () => {
 		const requestedModels: string[] = [];
 		const provider = createMockProvider((requestedModelId: string) => {
 			requestedModels.push(requestedModelId);
@@ -382,7 +399,8 @@ describe("main", () => {
 
 		await main({ runtimeMode: "repl" });
 
-		expect(requestedModels).toContain("deepseek-reasoner");
+		expect(requestedModels).toContain("deepseek-v4-flash");
+		expect(requestedModels).toContain("deepseek-v4-pro");
 		expect(logger.info).toHaveBeenNthCalledWith(
 			2,
 			expect.objectContaining({
@@ -400,6 +418,113 @@ describe("main", () => {
 				provider,
 				providerId: "deepseek",
 				modelId: "deepseek-reasoner",
+				tierRouting: expect.objectContaining({
+					tiers: {
+						flash: expect.objectContaining({
+							model: "deepseek-v4-flash",
+							thinkingMode: "disabled",
+						}),
+						lite: expect.objectContaining({
+							model: "deepseek-v4-flash",
+							thinkingMode: "enabled",
+						}),
+						pro: expect.objectContaining({
+							model: "deepseek-v4-pro",
+							thinkingMode: "enabled",
+						}),
+					},
+				}),
+			}),
+		);
+	});
+
+	it("rejects providerless custom llm.default_model without explicit tier profiles", async () => {
+		const provider = createMockProvider(() => createMockLanguageModel());
+		process.env.OMNI_LLM_DEFAULT_MODEL = "gpt-4.1";
+		process.env.OMNI_LLM_ROUTING_MODE = "auto";
+		vi.mocked(createProvider).mockReturnValue(provider);
+		vi.mocked(getDefaultModel).mockReturnValue("deepseek-v4-pro");
+
+		const { main } = await import("./index.js");
+
+		await expect(main({ runtimeMode: "repl" })).rejects.toThrow(
+			/llm\.default_model gpt-4\.1 is providerless/,
+		);
+		expect(startRepl).not.toHaveBeenCalled();
+		expect(vi.mocked(generateText)).not.toHaveBeenCalled();
+	});
+
+	it("allows custom model ids through explicit tier model profiles", async () => {
+		const provider = createMockProvider(() => createMockLanguageModel());
+		process.env.OMNI_LLM_TIERS_PRO_MODEL = "gpt-4.1";
+		vi.mocked(createProvider).mockReturnValue(provider);
+		vi.mocked(getDefaultModel).mockReturnValue("deepseek-v4-pro");
+		vi.mocked(generateText).mockResolvedValue(
+			mockGenerateTextResult({
+				text: "Quilin Agent online.",
+				usage: {
+					promptTokens: 18,
+					completionTokens: 5,
+				},
+				finishReason: "stop",
+			}),
+		);
+
+		const { main } = await import("./index.js");
+
+		await main({ runtimeMode: "repl" });
+
+		expect(startRepl).toHaveBeenCalledWith(
+			expect.objectContaining({
+				tierRouting: expect.objectContaining({
+					tiers: expect.objectContaining({
+						pro: expect.objectContaining({
+							provider: "deepseek",
+							model: "gpt-4.1",
+						}),
+					}),
+				}),
+			}),
+		);
+	});
+
+	it("does not let QUILIN_DEFAULT_MODEL rewrite tier profiles", async () => {
+		const provider = createMockProvider(() => createMockLanguageModel());
+		process.env.QUILIN_DEFAULT_MODEL = "deepseek-v4-pro";
+		vi.mocked(createProvider).mockReturnValue(provider);
+		vi.mocked(getDefaultModel).mockReturnValue("deepseek-v4-pro");
+		vi.mocked(generateText).mockResolvedValue(
+			mockGenerateTextResult({
+				text: "Quilin Agent online.",
+				usage: {
+					promptTokens: 18,
+					completionTokens: 5,
+				},
+				finishReason: "stop",
+			}),
+		);
+
+		const { main } = await import("./index.js");
+
+		await main({ runtimeMode: "repl" });
+
+		expect(startRepl).toHaveBeenCalledWith(
+			expect.objectContaining({
+				modelId: "deepseek-v4-pro",
+				tierRouting: expect.objectContaining({
+					defaultTier: "lite",
+					tiers: {
+						flash: expect.objectContaining({
+							model: "deepseek-v4-flash",
+						}),
+						lite: expect.objectContaining({
+							model: "deepseek-v4-flash",
+						}),
+						pro: expect.objectContaining({
+							model: "deepseek-v4-pro",
+						}),
+					},
+				}),
 			}),
 		);
 	});
@@ -432,11 +557,12 @@ describe("main", () => {
 				response: "Quilin Agent online.",
 				inputTokens: 21,
 				outputTokens: 6,
+				tier: "flash",
 			},
 			"LLM connection verified",
 		);
 		expect(logger.info).toHaveBeenNthCalledWith(
-			6,
+			10,
 			{ mode: "service" },
 			"Starting agent-core service loop...",
 		);
@@ -764,6 +890,7 @@ describe("package entrypoint runtime config public boundary exports", () => {
 		const {
 			USER_CONFIG_SCHEMA_VERSION,
 			buildRuntimeInferenceConfig,
+			buildRuntimeTierRoutingConfig,
 			buildRuntimeToolFilter,
 			isRuntimeToolEnabled,
 			loadUserConfig,
@@ -795,6 +922,9 @@ describe("package entrypoint runtime config public boundary exports", () => {
 			thinkingMode: "enabled",
 			thinkingBudget: 512,
 		});
+		expect(buildRuntimeTierRoutingConfig(loaded.config).defaultTier).toBe(
+			"lite",
+		);
 		expect(resolveRuntimeWriteAuthorityMode(loaded.config)).toBe("auto-medium");
 		expect(isRuntimeToolEnabled("file_read", toolFilter)).toBe(true);
 		expect(isRuntimeToolEnabled("shell_exec", toolFilter)).toBe(false);
@@ -1164,16 +1294,37 @@ describe("package entrypoint production route exports", () => {
 
 	it("exposes batch readiness helper and type for package consumers", async () => {
 		const {
+			buildProductionRouteDelegationHandoffPlan,
+			buildProductionRouteSupervisorHandoffPlan,
 			classifyProductionRouteScoreBatchReadiness,
 			scoreProductionRoutes,
 			summarizeProductionRouteScoreBatchReadiness,
 		} = await import("./index.js");
+		const step: SubTask = {
+			id: "delegated-root",
+			action: "research",
+			name: "Delegated root",
+			description: "Test root package handoff export",
+			estimatedTokens: 120,
+			estimatedSteps: 1,
+			preconditions: [],
+			effects: ["root-export-covered"],
+			arguments: { path: "root.md" },
+			writeScope: "episodic",
+			risk: "medium",
+		};
+		const plan: DagPlan = {
+			kind: "dag",
+			subtasks: [step],
+			edges: [],
+		};
 		const batch: ProductionRouteScoreBatch = scoreProductionRoutes([
 			{
-				taskRisk: "critical",
+				taskRisk: "medium",
 				complexity: 0,
 				cost: 0,
 				capabilityFit: 1,
+				nonBlockingSupervisorRequired: true,
 			},
 		]);
 
@@ -1186,6 +1337,17 @@ describe("package entrypoint production route exports", () => {
 			]);
 		const counts: ProductionRouteScoreBatchReadinessCounts =
 			summary.byReadiness;
+		const supervisorPlan = buildProductionRouteSupervisorHandoffPlan(batch);
+		const delegationPlan: ProductionRouteDelegationHandoffPlan =
+			buildProductionRouteDelegationHandoffPlan({
+				parentRunId: "run-package-root",
+				plan,
+				batch,
+				subAgentForStep: () => ({
+					role: "planning-worker",
+					goal: "Cover package root delegation handoff export",
+				}),
+			});
 
 		expect(readiness).toBe("handoff_required");
 		expect(counts).toEqual({
@@ -1199,6 +1361,20 @@ describe("package entrypoint production route exports", () => {
 			totalScores: 1,
 			byReadiness: counts,
 			highestRequiredReadiness: "handoff_required",
+		});
+		expect(supervisorPlan.handoffCount).toBe(1);
+		expect(delegationPlan).toMatchObject({
+			kind: "production_route_delegation_handoff_plan",
+			handoffReadyCount: 1,
+			blockedCount: 0,
+			acceptedAssignments: [
+				{
+					taskId: "delegated-root",
+					assignment: {
+						childRunId: "run-package-root:delegated:delegated-root",
+					},
+				},
+			],
 		});
 	});
 });
@@ -1399,6 +1575,45 @@ describe("package entrypoint multi-agent exports", () => {
 		expect(snapshot.counts.active).toBe(1);
 		expect(snapshot.activeRunIds).toEqual(["run-1"]);
 		expect(snapshot.reviewedArtifactCount).toBe(1);
+	});
+});
+
+describe("package entrypoint context cache plan exports", () => {
+	it("exposes cache plan helper and type for package consumers", async () => {
+		const { buildContextCachePlan } = await import("./index.js");
+		const source: DraftContextSource = {
+			sourceId: "stable-source",
+			sourceType: "memory",
+			content: "stable rendered source",
+			tokenCount: 4,
+			relevanceScore: 1,
+			timestamp: 1,
+			metadata: {},
+			isExternal: false,
+			cacheVolatility: "stable",
+		};
+		const plan: ContextCachePlan = buildContextCachePlan({
+			prompt: {
+				segments: [],
+				recommendedBreakpoints: [],
+				staticPrefix: "stable prefix",
+				dynamicSuffix: "dynamic suffix",
+				sectionTokens: {},
+				totalTokens: 0,
+			},
+			contextSources: [source],
+			promptBuildId: "prompt-package-root",
+			modelId: "deepseek-chat",
+			renderedCacheBoundarySourceIds: ["stable-source"],
+		});
+
+		expect(plan).toMatchObject({
+			promptBuildId: "prompt-package-root",
+			cacheStrategy: "stable-system-prefix",
+			cacheBoundarySourceIds: ["stable-source"],
+			excludedVolatileSourceIds: [],
+		});
+		expect(plan.cachePlanId).toMatch(/^cache-plan:[a-f0-9]{16}$/);
 	});
 });
 

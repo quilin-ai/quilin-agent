@@ -42,6 +42,7 @@ const THREAT_PATTERNS: ReadonlyArray<{
 	readonly name: string;
 	readonly regex: RegExp;
 	readonly severity: "warn" | "block";
+	readonly shouldReport?: (matchedText: string) => boolean;
 }> = [
 	{
 		name: "invisible_unicode",
@@ -69,8 +70,17 @@ const THREAT_PATTERNS: ReadonlyArray<{
 		name: "base64_suspicious",
 		regex: /[A-Za-z0-9+/]{40,}={0,2}/g,
 		severity: "warn",
+		shouldReport: (matchedText) => !isCommonHexDigest(matchedText),
 	},
 ];
+
+function isCommonHexDigest(value: string): boolean {
+	const normalized = value.replace(/=+$/u, "");
+	return (
+		/^[a-f0-9]+$/iu.test(normalized) &&
+		[40, 64, 96, 128].includes(normalized.length)
+	);
+}
 
 /**
  * 扫描外部来源内容，检测 prompt injection 威胁。
@@ -83,17 +93,27 @@ export function scanExternalContext(
 	options: ScanExternalContextOptions = {},
 ): ScanResult {
 	const threats: ThreatMatch[] = [];
+	const seenThreats = new Set<string>();
 	let sanitized = content;
 	const location = options.trustedSource ? `${source} (trusted)` : source;
 
 	for (const pattern of THREAT_PATTERNS) {
 		const matches = content.matchAll(pattern.regex);
 		for (const match of matches) {
+			const matchedText = match[0].slice(0, 100);
+			if (pattern.shouldReport && !pattern.shouldReport(match[0])) {
+				continue;
+			}
+			const dedupeKey = `${pattern.name}\0${location}\0${pattern.severity}\0${matchedText}`;
+			if (seenThreats.has(dedupeKey)) {
+				continue;
+			}
+			seenThreats.add(dedupeKey);
 			threats.push({
 				pattern: pattern.name,
 				location,
 				severity: pattern.severity,
-				matchedText: match[0].slice(0, 100),
+				matchedText,
 			});
 		}
 

@@ -9,6 +9,7 @@ import type { Message, ReasoningPart } from "../state/types.js";
 import type { Tool } from "../tools/types.js";
 import { adaptMessagesForModel } from "./cache-adapter.js";
 import { DEFAULT_PROVIDER_CATALOG, decideLLMRoute } from "./provider.js";
+import { selectLLMModelTier } from "./tier-router.js";
 import { normalizeTokenUsage } from "./token-usage.js";
 import type {
 	InferenceConfig,
@@ -18,6 +19,8 @@ import type {
 	LLMRouteDecision,
 	LLMRouteRequest,
 	LLMStreamEvent,
+	LLMTierRouteSelection,
+	LLMTierRoutingConfig,
 	NormalizedProviderError,
 	ProviderCatalog,
 	ProviderCatalogEntry,
@@ -42,6 +45,7 @@ interface PreparedInvocation {
 	readonly messages: ReturnType<typeof adaptMessagesForModel>["messages"];
 	readonly providerOptions?: InvocationProviderOptions;
 	readonly warnings: readonly InvocationWarning[];
+	readonly toolNameMapping: ModelToolNameMapping;
 }
 
 type InvocationWarning =
@@ -55,6 +59,11 @@ type InvocationProviderOptions = NonNullable<
 interface ProviderOptionsBuildResult {
 	readonly providerOptions?: InvocationProviderOptions;
 	readonly warnings: readonly InvocationWarning[];
+}
+
+interface ModelToolNameMapping {
+	readonly toModelName: ReadonlyMap<string, string>;
+	readonly toOriginalName: ReadonlyMap<string, string>;
 }
 
 interface ResolvedInvocationModel {
@@ -95,23 +104,129 @@ interface ProviderControlPlaneOptions {
 	readonly catalog?: ProviderCatalog;
 	readonly env?: Readonly<Record<string, string | undefined>>;
 	readonly routeRequest: Omit<LLMRouteRequest, "thinkingMode">;
+	readonly tierRouting?: LLMTierRoutingConfig;
 	readonly onRunRecord?: (record: ProviderRunRecord) => void;
 	readonly now?: () => Date;
 }
 
 const REDACTED_PROVIDER_ERROR_MESSAGE = "Provider error details redacted.";
+const MODEL_TOOL_NAME_PATTERN = /^[A-Za-z0-9_-]+$/u;
 const SAFE_ERROR_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_.:-]{0,119}$/u;
 const SAFE_ERROR_FIELD_PATTERN = /^[A-Za-z0-9_.:-]{1,120}$/u;
 const UNSAFE_ERROR_FIELD_PATTERN = /(?:\bBearer\b|^sk-|token=|secret)/iu;
 
-function toSdkTools(tools: readonly Tool[]) {
+function hashToolName(name: string): string {
+	let hash = 0x811c9dc5;
+	for (const char of name) {
+		hash ^= char.codePointAt(0) ?? 0;
+		hash = Math.imul(hash, 0x01000193);
+	}
+
+	return (hash >>> 0).toString(36);
+}
+
+function toBaseModelToolName(name: string): string {
+	const normalized = name.replace(/[^A-Za-z0-9_-]/gu, "_");
+	return MODEL_TOOL_NAME_PATTERN.test(normalized) && normalized.length > 0
+		? normalized
+		: `tool_${hashToolName(name)}`;
+}
+
+function createModelToolNameMapping(
+	toolNames: readonly string[],
+): ModelToolNameMapping {
+	const toModelName = new Map<string, string>();
+	const toOriginalName = new Map<string, string>();
+	const usedModelNames = new Set<string>();
+
+	for (const originalName of toolNames) {
+		if (toModelName.has(originalName)) {
+			continue;
+		}
+
+		const baseName = toBaseModelToolName(originalName);
+		let modelName = baseName;
+		if (usedModelNames.has(modelName)) {
+			const hash = hashToolName(originalName);
+			modelName = `${baseName}_${hash}`;
+			let suffix = 2;
+			while (usedModelNames.has(modelName)) {
+				modelName = `${baseName}_${hash}_${suffix}`;
+				suffix += 1;
+			}
+		}
+
+		usedModelNames.add(modelName);
+		toModelName.set(originalName, modelName);
+		toOriginalName.set(modelName, originalName);
+	}
+
+	return { toModelName, toOriginalName };
+}
+
+function getMessageToolNames(messages: readonly Message[]): string[] {
+	const names: string[] = [];
+	for (const message of messages) {
+		if (message.role === "assistant" && message.toolCalls != null) {
+			for (const toolCall of message.toolCalls) {
+				names.push(toolCall.name);
+			}
+			continue;
+		}
+
+		if (message.role === "tool" && message.name != null) {
+			names.push(message.name);
+		}
+	}
+
+	return names;
+}
+
+function toModelToolName(name: string, mapping: ModelToolNameMapping): string {
+	return mapping.toModelName.get(name) ?? name;
+}
+
+function toOriginalToolName(
+	name: string,
+	mapping: ModelToolNameMapping,
+): string {
+	return mapping.toOriginalName.get(name) ?? name;
+}
+
+function mapMessagesToModelToolNames(
+	messages: readonly Message[],
+	mapping: ModelToolNameMapping,
+): Message[] {
+	return messages.map((message) => {
+		if (message.role === "assistant" && message.toolCalls != null) {
+			return {
+				...message,
+				toolCalls: message.toolCalls.map((toolCall) => ({
+					...toolCall,
+					name: toModelToolName(toolCall.name, mapping),
+				})),
+			};
+		}
+
+		if (message.role === "tool" && message.name != null) {
+			return {
+				...message,
+				name: toModelToolName(message.name, mapping),
+			};
+		}
+
+		return message;
+	});
+}
+
+function toSdkTools(tools: readonly Tool[], mapping: ModelToolNameMapping) {
 	if (tools.length === 0) {
 		return undefined;
 	}
 
 	return Object.fromEntries(
 		tools.map((tool) => [
-			tool.name,
+			toModelToolName(tool.name, mapping),
 			sdkTool({
 				description: tool.description,
 				inputSchema: tool.parameters,
@@ -128,10 +243,11 @@ function mapToolCalls(
 				input: unknown;
 		  }[]
 		| undefined,
+	mapping: ModelToolNameMapping,
 ) {
 	return toolCalls?.map((toolCall) => ({
 		id: toolCall.toolCallId,
-		name: toolCall.toolName,
+		name: toOriginalToolName(toolCall.toolName, mapping),
 		arguments:
 			toolCall.input != null && typeof toolCall.input === "object"
 				? (toolCall.input as Record<string, unknown>)
@@ -270,7 +386,20 @@ function buildProviderOptions(
 						warnings,
 					};
 		}
-		case "deepseek":
+		case "deepseek": {
+			const reasoningEffort = mapOpenAIReasoningEffort(config.thinkingMode);
+			return reasoningEffort == null
+				? { warnings: [] }
+				: {
+						providerOptions: {
+							deepseek: {
+								thinking: { type: "enabled" },
+								reasoningEffort,
+							},
+						},
+						warnings: [],
+					};
+		}
 		case "unknown":
 			return { warnings: [] };
 	}
@@ -284,6 +413,7 @@ function resolveInvocationModel(
 	const baseModelMetadata = getLanguageModelMetadata(baseModel);
 	if (
 		normalizeProviderName(baseModelMetadata.provider) === "deepseek" &&
+		baseModelMetadata.modelId === "deepseek-chat" &&
 		config.thinkingMode !== "disabled" &&
 		isResolvableModelHandle(modelHandle) &&
 		modelHandle.resolveModel != null
@@ -305,15 +435,21 @@ function resolveInvocationModel(
 function prepareInvocation(
 	modelHandle: ModelHandle,
 	messages: readonly Message[],
+	tools: readonly Tool[],
 	config: InferenceConfig,
 	prompt?: AssembledPrompt,
 ): PreparedInvocation {
 	const resolvedModel = resolveInvocationModel(modelHandle, config);
 	const modelMetadata = getLanguageModelMetadata(resolvedModel.model);
+	const toolNameMapping = createModelToolNameMapping([
+		...tools.map((tool) => tool.name),
+		...getMessageToolNames(messages),
+	]);
 	const adaptedPrompt = adaptMessagesForModel({
-		messages,
+		messages: mapMessagesToModelToolNames(messages, toolNameMapping),
 		prompt,
 		provider: modelMetadata.provider,
+		thinkingMode: config.thinkingMode,
 	});
 	const providerOptions = buildProviderOptions(modelMetadata.provider, config);
 
@@ -323,6 +459,7 @@ function prepareInvocation(
 		messages: adaptedPrompt.messages,
 		providerOptions: providerOptions.providerOptions,
 		warnings: [...resolvedModel.warnings, ...providerOptions.warnings],
+		toolNameMapping,
 	};
 }
 
@@ -670,12 +807,14 @@ export function normalizeProviderError(
 	};
 }
 
-function reasoningStateAdapterForThinking(
-	thinkingMode: ThinkingMode | undefined,
+function reasoningStateAdapterForRequest(
+	request: LLMRouteRequest,
 ): LLMRouteDecision["reasoningStateAdapter"] {
-	return thinkingMode == null || thinkingMode === "disabled"
+	return request.thinkingMode == null || request.thinkingMode === "disabled"
 		? "none"
-		: "captured_not_replayed";
+		: request.provider === "deepseek"
+			? "captured_replayed_for_tool_calls"
+			: "captured_not_replayed";
 }
 
 function routeDecisionFromRequest(request: LLMRouteRequest): LLMRouteDecision {
@@ -684,9 +823,53 @@ function routeDecisionFromRequest(request: LLMRouteRequest): LLMRouteDecision {
 		configuredModel: request.model,
 		effectiveModel: request.model,
 		fallbackUsed: false,
-		reasoningStateAdapter: reasoningStateAdapterForThinking(
-			request.thinkingMode,
-		),
+		reasoningStateAdapter: reasoningStateAdapterForRequest(request),
+	};
+}
+
+function applyTierSelectionToRoute(
+	route: LLMRouteDecision,
+	selection: LLMTierRouteSelection | undefined,
+	thinkingMode: ThinkingMode,
+): LLMRouteDecision {
+	if (selection == null) {
+		return route;
+	}
+
+	return {
+		...route,
+		selectedTier: selection.tier,
+		routingMode: selection.mode,
+		routeReason: selection.reason,
+		thinkingMode,
+	};
+}
+
+function applyTierProfileToConfig(
+	config: InferenceConfig,
+	routing: LLMTierRoutingConfig | undefined,
+	selection: LLMTierRouteSelection | undefined,
+): InferenceConfig {
+	if (routing == null || selection == null) {
+		return config;
+	}
+
+	const profile = routing.tiers[selection.tier];
+	const { thinkingBudget: _thinkingBudget, ...configWithoutThinkingBudget } =
+		config;
+	const baseConfig =
+		profile.thinkingMode === "disabled" ? configWithoutThinkingBudget : config;
+	return {
+		...baseConfig,
+		thinkingMode: profile.thinkingMode,
+		...(profile.temperature == null
+			? {}
+			: { temperature: profile.temperature }),
+		...(profile.maxTokens == null ? {} : { maxTokens: profile.maxTokens }),
+		...(profile.thinkingMode === "disabled" || profile.thinkingBudget == null
+			? {}
+			: { thinkingBudget: profile.thinkingBudget }),
+		...(profile.topP == null ? {} : { topP: profile.topP }),
 	};
 }
 
@@ -761,7 +944,10 @@ function validateSelectedProviderCatalogEntry(
 
 	if (
 		entry.defaultModel == null ||
-		!entry.models.includes(entry.defaultModel)
+		!(
+			entry.allowCustomModels === true ||
+			entry.models.includes(entry.defaultModel)
+		)
 	) {
 		throw new Error(
 			`Enabled provider ${entry.provider} requires a default model in its model list.`,
@@ -811,37 +997,96 @@ export class ProviderControlPlaneLLMClient implements LLMClient {
 		return this.records;
 	}
 
+	private recordRun(record: ProviderRunRecord): void {
+		this.records.push(record);
+		try {
+			this.options.onRunRecord?.(record);
+		} catch {
+			// Provider run observers must not affect model execution.
+		}
+	}
+
 	async chat(
 		messages: readonly Message[],
 		tools: readonly Tool[],
 		config: InferenceConfig,
 		prompt?: AssembledPrompt,
 	): Promise<LLMResponse> {
+		const selection =
+			this.options.tierRouting == null
+				? undefined
+				: selectLLMModelTier(this.options.tierRouting, {
+						messages,
+						tools,
+						prompt,
+					});
+		const routedConfig = applyTierProfileToConfig(
+			config,
+			this.options.tierRouting,
+			selection,
+		);
+		const selectedProfile =
+			this.options.tierRouting == null || selection == null
+				? undefined
+				: this.options.tierRouting.tiers[selection.tier];
 		const routeRequest = {
-			...this.options.routeRequest,
-			thinkingMode: config.thinkingMode,
+			provider: selectedProfile?.provider ?? this.options.routeRequest.provider,
+			model: selectedProfile?.model ?? this.options.routeRequest.model,
+			thinkingMode: routedConfig.thinkingMode,
 		};
 		let route: LLMRouteDecision;
-		try {
-			validateInferenceBudget(config);
-			route = attachRouteBudget(
-				decideLLMRoute(routeRequest, this.catalog),
-				config,
+		if (routeRequest.provider !== this.options.routeRequest.provider) {
+			const error = new Error(
+				`LLM tier routing cannot switch runtime provider from ${this.options.routeRequest.provider} to ${routeRequest.provider}; configure a matching provider delegate before enabling that tier.`,
 			);
-			validateSelectedProviderCatalogEntry(this.catalog, route, this.env);
-		} catch (error) {
 			const record: ProviderRunRecord = {
-				route: attachRouteBudget(
-					routeDecisionFromRequest(routeRequest),
-					config,
+				route: applyTierSelectionToRoute(
+					attachRouteBudget(
+						routeDecisionFromRequest({
+							...this.options.routeRequest,
+							thinkingMode: routedConfig.thinkingMode,
+						}),
+						routedConfig,
+					),
+					selection,
+					routedConfig.thinkingMode,
 				),
 				attempts: [],
 				outcome: "error",
 				fallbackUsed: false,
 				error: normalizeProviderError(error),
 			};
-			this.records.push(record);
-			this.options.onRunRecord?.(record);
+			this.recordRun(record);
+			throw error;
+		}
+
+		try {
+			validateInferenceBudget(routedConfig);
+			route = applyTierSelectionToRoute(
+				attachRouteBudget(
+					decideLLMRoute(routeRequest, this.catalog),
+					routedConfig,
+				),
+				selection,
+				routedConfig.thinkingMode,
+			);
+			validateSelectedProviderCatalogEntry(this.catalog, route, this.env);
+		} catch (error) {
+			const record: ProviderRunRecord = {
+				route: applyTierSelectionToRoute(
+					attachRouteBudget(
+						routeDecisionFromRequest(routeRequest),
+						routedConfig,
+					),
+					selection,
+					routedConfig.thinkingMode,
+				),
+				attempts: [],
+				outcome: "error",
+				fallbackUsed: false,
+				error: normalizeProviderError(error),
+			};
+			this.recordRun(record);
 			throw error;
 		}
 
@@ -856,8 +1101,7 @@ export class ProviderControlPlaneLLMClient implements LLMClient {
 				fallbackUsed: false,
 				error: normalizeProviderError(error),
 			};
-			this.records.push(record);
-			this.options.onRunRecord?.(record);
+			this.recordRun(record);
 			throw error;
 		}
 
@@ -866,7 +1110,7 @@ export class ProviderControlPlaneLLMClient implements LLMClient {
 			const response = await routedDelegate.chat(
 				messages,
 				tools,
-				config,
+				routedConfig,
 				prompt,
 			);
 			const completedAt = this.now().toISOString();
@@ -886,8 +1130,7 @@ export class ProviderControlPlaneLLMClient implements LLMClient {
 				outcome: "success",
 				fallbackUsed: false,
 			};
-			this.records.push(record);
-			this.options.onRunRecord?.(record);
+			this.recordRun(record);
 			return response;
 		} catch (error) {
 			const completedAt = this.now().toISOString();
@@ -907,8 +1150,7 @@ export class ProviderControlPlaneLLMClient implements LLMClient {
 				outcome: "error",
 				fallbackUsed: false,
 			};
-			this.records.push(record);
-			this.options.onRunRecord?.(record);
+			this.recordRun(record);
 			throw error;
 		}
 	}
@@ -934,13 +1176,19 @@ export class VercelLLMClient implements LLMClient {
 		config: InferenceConfig,
 		prompt?: AssembledPrompt,
 	): Promise<LLMResponse> {
-		const prepared = prepareInvocation(this.model, messages, config, prompt);
+		const prepared = prepareInvocation(
+			this.model,
+			messages,
+			tools,
+			config,
+			prompt,
+		);
 		emitInvocationWarnings(prepared.warnings, this.seenWarnings);
 
 		const result = await generateText({
 			model: prepared.model,
 			messages: prepared.messages,
-			tools: toSdkTools(tools),
+			tools: toSdkTools(tools, prepared.toolNameMapping),
 			maxOutputTokens: config.maxTokens,
 			temperature: config.temperature,
 			topP: config.topP,
@@ -955,7 +1203,7 @@ export class VercelLLMClient implements LLMClient {
 
 		return {
 			content: result.text,
-			toolCalls: mapToolCalls(result.toolCalls),
+			toolCalls: mapToolCalls(result.toolCalls, prepared.toolNameMapping),
 			...(thinking == null ? {} : { thinking }),
 			usage: normalizeTokenUsage(result.usage, result.providerMetadata),
 			finishReason: mapFinishReason(result.finishReason),
@@ -989,13 +1237,19 @@ export class StreamingLLMClient implements LLMClient {
 		config: InferenceConfig,
 		prompt?: AssembledPrompt,
 	): Promise<LLMResponse> {
-		const prepared = prepareInvocation(this.model, messages, config, prompt);
+		const prepared = prepareInvocation(
+			this.model,
+			messages,
+			tools,
+			config,
+			prompt,
+		);
 		emitInvocationWarnings(prepared.warnings, this.seenWarnings);
 
 		const result = streamText({
 			model: prepared.model,
 			messages: prepared.messages,
-			tools: toSdkTools(tools),
+			tools: toSdkTools(tools, prepared.toolNameMapping),
 			maxOutputTokens: config.maxTokens,
 			temperature: config.temperature,
 			topP: config.topP,
@@ -1048,11 +1302,11 @@ export class StreamingLLMClient implements LLMClient {
 					);
 					break;
 				case "tool-input-start": {
-					const state = ensureToolCallState(
-						toolCallStates,
-						chunk.id,
+					const toolName = toOriginalToolName(
 						chunk.toolName,
+						prepared.toolNameMapping,
 					);
+					const state = ensureToolCallState(toolCallStates, chunk.id, toolName);
 					emitToolCallStart(state, chunk.id, this.onEvent);
 					flushBufferedToolCallInput(state, chunk.id, this.onEvent);
 					break;
@@ -1078,10 +1332,14 @@ export class StreamingLLMClient implements LLMClient {
 					break;
 				}
 				case "tool-call": {
+					const toolName = toOriginalToolName(
+						chunk.toolName,
+						prepared.toolNameMapping,
+					);
 					const state = ensureToolCallState(
 						toolCallStates,
 						chunk.toolCallId,
-						chunk.toolName,
+						toolName,
 					);
 					state.input = chunk.input;
 					if (state.inputText.length === 0) {
@@ -1097,7 +1355,10 @@ export class StreamingLLMClient implements LLMClient {
 						this.onEvent?.({
 							type: "tool-result",
 							toolCallId: chunk.toolCallId,
-							toolName: chunk.toolName,
+							toolName: toOriginalToolName(
+								chunk.toolName,
+								prepared.toolNameMapping,
+							),
 							output: chunk.output,
 						});
 					}
@@ -1106,7 +1367,10 @@ export class StreamingLLMClient implements LLMClient {
 					this.onEvent?.({
 						type: "tool-result",
 						toolCallId: chunk.toolCallId,
-						toolName: chunk.toolName,
+						toolName: toOriginalToolName(
+							chunk.toolName,
+							prepared.toolNameMapping,
+						),
 						output: chunk.error,
 						isError: true,
 					});
@@ -1136,7 +1400,7 @@ export class StreamingLLMClient implements LLMClient {
 
 		return {
 			content: fullText,
-			toolCalls: mapToolCalls(toolCalls),
+			toolCalls: mapToolCalls(toolCalls, prepared.toolNameMapping),
 			...(thinking == null ? {} : { thinking }),
 			usage: normalizeTokenUsage(usage, providerMetadata),
 			finishReason: mapFinishReason(finishReason),

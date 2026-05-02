@@ -34,6 +34,7 @@ BLOCKED_IPS.addSubnet("100.64.0.0", 10, "ipv4");
 BLOCKED_IPS.addSubnet("172.16.0.0", 12, "ipv4");
 BLOCKED_IPS.addSubnet("192.168.0.0", 16, "ipv4");
 BLOCKED_IPS.addSubnet("169.254.0.0", 16, "ipv4");
+BLOCKED_IPS.addAddress("::", "ipv6");
 BLOCKED_IPS.addAddress("::1", "ipv6");
 BLOCKED_IPS.addSubnet("fc00::", 7, "ipv6");
 BLOCKED_IPS.addSubnet("fe80::", 10, "ipv6");
@@ -289,6 +290,32 @@ function hasSensitiveHeaders(
 	);
 }
 
+function hasUrlUserinfo(url: URL): boolean {
+	return url.username !== "" || url.password !== "";
+}
+
+function normalizeRequestMethod(method: unknown): string {
+	if (typeof method !== "string" || method.length === 0) {
+		return "GET";
+	}
+
+	return method.toUpperCase();
+}
+
+function hasNonEmptyRequestBody(body: unknown): boolean {
+	return typeof body === "string" ? body.length > 0 : body != null;
+}
+
+function isKnownPrivateDestination(url: URL): boolean {
+	const hostname = normalizeHostname(url.hostname);
+	if (hostname === "localhost" || hostname.endsWith(".localhost")) {
+		return true;
+	}
+
+	const family = isIP(hostname);
+	return family !== 0 && isBlockedAddress(hostname, family as IPFamily);
+}
+
 function normalizeProtocol(protocol: string): string {
 	return protocol.endsWith(":") ? protocol.slice(0, -1) : protocol;
 }
@@ -297,35 +324,44 @@ function createSandboxRequestFromArgs(
 	args: unknown,
 	origin: SandboxRequest["origin"],
 ): SandboxRequest {
-	const {
-		url,
-		method = "GET",
-		headers,
-	} = args as {
+	const { url, method, body, headers } = args as {
 		url?: string;
-		method?: "GET" | "POST";
+		method?: string;
+		body?: unknown;
 		headers?: Record<string, string>;
 	};
+	const requestMethod = normalizeRequestMethod(method);
+	const hasRequestBody = hasNonEmptyRequestBody(body);
+	const requiresNetworkApproval = requestMethod !== "GET" || hasRequestBody;
 
 	let networkSignal: NonNullable<
 		NonNullable<SandboxRequest["signals"]>["network"]
 	> = {
-		method,
+		method: requestMethod,
 		sendsCredentials: hasSensitiveHeaders(headers),
 	};
 
 	if (typeof url === "string") {
 		try {
 			const parsedUrl = new URL(url);
+			const sendsCredentials =
+				networkSignal.sendsCredentials || hasUrlUserinfo(parsedUrl);
+			const shouldPreserveDestination =
+				!requiresNetworkApproval ||
+				sendsCredentials ||
+				isKnownPrivateDestination(parsedUrl);
 			networkSignal = {
 				...networkSignal,
-				destination: parsedUrl.host,
 				protocol: normalizeProtocol(parsedUrl.protocol),
+				sendsCredentials,
+				...(shouldPreserveDestination ? { destination: parsedUrl.host } : {}),
 			};
 		} catch {
 			networkSignal = {
 				...networkSignal,
-				destination: url,
+				...(requiresNetworkApproval && networkSignal.sendsCredentials !== true
+					? {}
+					: { destination: url }),
 			};
 		}
 	}
@@ -518,6 +554,13 @@ export function createWebFetchTool(
 				});
 			}
 
+			if (hasUrlUserinfo(parsedUrl)) {
+				return createErrorResult("builtin-web-fetch", {
+					error:
+						"URL userinfo credentials are not supported; pass credentials through approved headers instead.",
+				});
+			}
+
 			const fetcher = options.fetcher ?? fetch;
 			const resolver = options.resolver ?? defaultResolver;
 			const dispatcherFactory =
@@ -576,6 +619,12 @@ export function createWebFetchTool(
 						if (!["http:", "https:"].includes(currentUrl.protocol)) {
 							return createErrorResult("builtin-web-fetch", {
 								error: `Only http and https URLs are allowed: ${currentUrl.toString()}`,
+							});
+						}
+						if (hasUrlUserinfo(currentUrl)) {
+							return createErrorResult("builtin-web-fetch", {
+								error:
+									"URL userinfo credentials are not supported; pass credentials through approved headers instead.",
 							});
 						}
 

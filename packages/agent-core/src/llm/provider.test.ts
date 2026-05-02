@@ -41,7 +41,7 @@ describe("createProvider", () => {
 		expect(createOpenAICompatible).toHaveBeenCalledWith(
 			expect.objectContaining({
 				name: "deepseek",
-				baseURL: "https://api.deepseek.com/v1",
+				baseURL: "https://api.deepseek.com",
 				apiKey: "test-key",
 				includeUsage: true,
 				metadataExtractor: expect.objectContaining({
@@ -158,19 +158,19 @@ describe("createProvider", () => {
 });
 
 describe("getDefaultModel", () => {
-	it("falls back to deepseek-chat when no override is configured", () => {
+	it("falls back to deepseek-v4-pro when no override is configured", () => {
 		delete process.env.QUILIN_DEFAULT_MODEL;
 
-		expect(getDefaultModel()).toBe("deepseek-chat");
+		expect(getDefaultModel()).toBe("deepseek-v4-pro");
 	});
 
 	it("uses the configured model override", () => {
-		process.env.QUILIN_DEFAULT_MODEL = "deepseek-reasoner";
+		process.env.QUILIN_DEFAULT_MODEL = "deepseek-v4-flash";
 
-		expect(getDefaultModel()).toBe("deepseek-reasoner");
+		expect(getDefaultModel()).toBe("deepseek-v4-flash");
 	});
 
-	it("rejects model overrides outside the enabled default catalog", () => {
+	it("rejects providerless model overrides outside the enabled default catalog", () => {
 		process.env.QUILIN_DEFAULT_MODEL = "gpt-4.1";
 
 		expect(() => getDefaultModel()).toThrow(
@@ -201,8 +201,8 @@ describe("provider catalog", () => {
 							provider: "deepseek",
 							status: "enabled",
 							transport: "direct",
-							defaultModel: "deepseek-chat",
-							models: ["deepseek-chat"],
+							defaultModel: "deepseek-v4-pro",
+							models: ["deepseek-v4-pro"],
 							requiredEnv: ["DEEPSEEK_API_KEY"],
 							liveEvidence: "missing",
 						},
@@ -220,6 +220,25 @@ describe("decideLLMRoute", () => {
 			decideLLMRoute(
 				{
 					provider: "deepseek",
+					model: "deepseek-v4-pro",
+					thinkingMode: "enabled",
+				},
+				DEFAULT_PROVIDER_CATALOG,
+			),
+		).toEqual({
+			provider: "deepseek",
+			configuredModel: "deepseek-v4-pro",
+			effectiveModel: "deepseek-v4-pro",
+			fallbackUsed: false,
+			reasoningStateAdapter: "captured_replayed_for_tool_calls",
+		});
+	});
+
+	it("keeps legacy DeepSeek thinking compatibility for deepseek-chat", () => {
+		expect(
+			decideLLMRoute(
+				{
+					provider: "deepseek",
 					model: "deepseek-chat",
 					thinkingMode: "enabled",
 				},
@@ -230,7 +249,26 @@ describe("decideLLMRoute", () => {
 			configuredModel: "deepseek-chat",
 			effectiveModel: "deepseek-reasoner",
 			fallbackUsed: false,
-			reasoningStateAdapter: "captured_not_replayed",
+			reasoningStateAdapter: "captured_replayed_for_tool_calls",
+		});
+	});
+
+	it("allows arbitrary DeepSeek model ids without changing the effective model", () => {
+		expect(
+			decideLLMRoute(
+				{
+					provider: "deepseek",
+					model: "deepseek-custom-router-target",
+					thinkingMode: "disabled",
+				},
+				DEFAULT_PROVIDER_CATALOG,
+			),
+		).toEqual({
+			provider: "deepseek",
+			configuredModel: "deepseek-custom-router-target",
+			effectiveModel: "deepseek-custom-router-target",
+			fallbackUsed: false,
+			reasoningStateAdapter: "none",
 		});
 	});
 

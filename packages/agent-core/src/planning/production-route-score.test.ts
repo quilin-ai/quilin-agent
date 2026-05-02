@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type {
+	DagPlan,
+	ProductionRouteDelegationHandoffPlan,
 	ProductionRouteScore,
 	ProductionRouteScoreBatch,
 	ProductionRouteScoreExplanation,
+	SubTask,
 } from "./index.js";
 import {
+	buildProductionRouteDelegationHandoffPlan,
+	buildProductionRouteSupervisorHandoffPlan,
 	classifyProductionRouteScoreBatchReadiness,
 	explainProductionRoute,
 	scoreProductionRoute,
@@ -13,6 +18,25 @@ import {
 	summarizeProductionRouteScoreBatchReadiness,
 	summarizeProductionRouteScores,
 } from "./index.js";
+
+function makeStep(id: string, overrides: Partial<SubTask> = {}): SubTask {
+	return {
+		id,
+		action: overrides.action ?? "tool",
+		name: overrides.name ?? `Step ${id}`,
+		description: overrides.description ?? `Execute ${id}`,
+		estimatedTokens: overrides.estimatedTokens ?? 100,
+		estimatedSteps: overrides.estimatedSteps ?? 1,
+		preconditions: overrides.preconditions ?? [],
+		effects: overrides.effects ?? [`effect:${id}`],
+		skillHint: overrides.skillHint,
+		arguments: overrides.arguments,
+		depth: overrides.depth,
+		writeScope: overrides.writeScope,
+		risk: overrides.risk,
+		scratchpad: overrides.scratchpad,
+	};
+}
 
 describe("scoreProductionRoute", () => {
 	it("recommends supervisor handoff for high-risk tasks", () => {
@@ -907,5 +931,281 @@ describe("summarizeProductionRouteScoreBatchReadiness", () => {
 			},
 			highestRequiredReadiness: "handoff_required",
 		});
+	});
+});
+
+describe("buildProductionRouteSupervisorHandoffPlan", () => {
+	it("builds a stable empty handoff plan", () => {
+		expect(
+			buildProductionRouteSupervisorHandoffPlan(scoreProductionRoutes([])),
+		).toEqual({
+			kind: "production_route_supervisor_handoff_plan",
+			schemaVersion: 1,
+			readiness: "empty",
+			handoffRequired: false,
+			handoffCount: 0,
+			keepLocalCount: 0,
+			handoffItems: [],
+			keepLocalIndexes: [],
+		});
+	});
+
+	it("lists handoff items and local indexes in score order", () => {
+		const batch = scoreProductionRoutes([
+			{
+				taskRisk: "safe",
+				complexity: 0,
+				cost: 0,
+				capabilityFit: 1,
+			},
+			{
+				taskRisk: "high",
+				complexity: 0.1,
+				cost: 0.1,
+				capabilityFit: 0.95,
+			},
+			{
+				taskRisk: "low",
+				complexity: 0.2,
+				cost: 0.2,
+				capabilityFit: 0.95,
+			},
+			{
+				taskRisk: "critical",
+				complexity: 0,
+				cost: 0,
+				capabilityFit: 1,
+			},
+		]);
+
+		expect(buildProductionRouteSupervisorHandoffPlan(batch)).toEqual({
+			kind: "production_route_supervisor_handoff_plan",
+			schemaVersion: 1,
+			readiness: "mixed",
+			handoffRequired: true,
+			handoffCount: 2,
+			keepLocalCount: 2,
+			handoffItems: [
+				{
+					index: 1,
+					score: 61,
+					scoreBand: "high",
+					taskRisk: "high",
+					reasonCodes: [
+						"risk_requires_supervisor_handoff",
+						"score_above_threshold",
+						"recommend_handoff_to_supervisor",
+					],
+				},
+				{
+					index: 3,
+					score: 65,
+					scoreBand: "high",
+					taskRisk: "critical",
+					reasonCodes: [
+						"risk_requires_supervisor_handoff",
+						"score_above_threshold",
+						"recommend_handoff_to_supervisor",
+					],
+				},
+			],
+			keepLocalIndexes: [0, 2],
+		});
+	});
+
+	it("derives readiness from scores even when the stored summary is stale", () => {
+		const handoffBatch = scoreProductionRoutes([
+			{
+				taskRisk: "critical",
+				complexity: 0,
+				cost: 0,
+				capabilityFit: 1,
+			},
+		]);
+
+		const staleBatch: ProductionRouteScoreBatch = {
+			scores: handoffBatch.scores,
+			summary: scoreProductionRoutes([]).summary,
+		};
+
+		expect(buildProductionRouteSupervisorHandoffPlan(staleBatch)).toMatchObject(
+			{
+				readiness: "handoff_required",
+				handoffRequired: true,
+				handoffCount: 1,
+				keepLocalCount: 0,
+				keepLocalIndexes: [],
+			},
+		);
+	});
+});
+
+describe("buildProductionRouteDelegationHandoffPlan", () => {
+	it("bridges a production route handoff item into a typed delegation assignment", () => {
+		const mainStep = makeStep("main-local", {
+			writeScope: "working",
+			arguments: { path: "main.md" },
+			risk: "low",
+		});
+		const delegatedStep = makeStep("delegated-research", {
+			action: "research",
+			estimatedSteps: 12,
+			writeScope: "episodic",
+			arguments: { path: "research.md", topic: "handoff bridge" },
+			risk: "medium",
+		});
+		const plan: DagPlan = {
+			kind: "dag",
+			subtasks: [mainStep, delegatedStep],
+			edges: [],
+		};
+		const batch = scoreProductionRoutes([
+			{
+				taskRisk: "low",
+				complexity: 0.1,
+				cost: 0.1,
+				capabilityFit: 1,
+			},
+			{
+				taskRisk: "medium",
+				complexity: 0.1,
+				cost: 0.1,
+				capabilityFit: 0.95,
+				nonBlockingSupervisorRequired: true,
+			},
+		]);
+
+		const handoffPlan: ProductionRouteDelegationHandoffPlan =
+			buildProductionRouteDelegationHandoffPlan({
+				parentRunId: "run-production-route",
+				plan,
+				batch,
+				subAgentForStep: (step) => ({
+					role: "planning-worker",
+					goal: `Complete ${step.name}`,
+				}),
+			});
+
+		expect(handoffPlan).toMatchObject({
+			kind: "production_route_delegation_handoff_plan",
+			schemaVersion: 1,
+			handoffReadyCount: 1,
+			blockedCount: 0,
+			supervisorPlan: {
+				readiness: "mixed",
+				handoffRequired: true,
+				handoffCount: 1,
+				keepLocalIndexes: [0],
+			},
+			acceptedAssignments: [
+				{
+					index: 1,
+					taskId: "delegated-research",
+					taskRisk: "medium",
+					reasonCodes: [
+						"non_blocking_supervisor_required",
+						"score_above_threshold",
+						"recommend_handoff_to_supervisor",
+					],
+					assignment: {
+						parentRunId: "run-production-route",
+						childRunId: "run-production-route:delegated:delegated-research",
+						taskId: "delegated-research",
+						progressReporting: {
+							checkpoint: true,
+							heartbeat: true,
+						},
+						handoff: {
+							kind: "delegation_handoff",
+							route: "sub_agent",
+							inputPayload: {
+								path: "research.md",
+								topic: "handoff bridge",
+							},
+							writeScope: ["episodic:research.md"],
+						},
+					},
+				},
+			],
+			blockedItems: [],
+		});
+		expect(
+			JSON.parse(
+				JSON.stringify(handoffPlan.acceptedAssignments[0]?.assignment.handoff),
+			),
+		).toEqual(handoffPlan.acceptedAssignments[0]?.assignment.handoff);
+	});
+
+	it("keeps high-risk route handoffs explicit as blocked items", () => {
+		const plan: DagPlan = {
+			kind: "dag",
+			subtasks: [
+				makeStep("dangerous-write", {
+					writeScope: "semantic",
+					arguments: { path: "profile.json" },
+					risk: "high",
+				}),
+			],
+			edges: [],
+		};
+		const batch = scoreProductionRoutes([
+			{
+				taskRisk: "high",
+				complexity: 0.1,
+				cost: 0.1,
+				capabilityFit: 0.95,
+			},
+		]);
+
+		const handoffPlan = buildProductionRouteDelegationHandoffPlan({
+			parentRunId: "run-high-risk",
+			plan,
+			batch,
+			subAgentForStep: (step) => ({
+				role: "planning-worker",
+				goal: `Complete ${step.name}`,
+			}),
+		});
+
+		expect(handoffPlan).toMatchObject({
+			handoffReadyCount: 0,
+			blockedCount: 1,
+			acceptedAssignments: [],
+			blockedItems: [
+				{
+					index: 0,
+					taskId: "dangerous-write",
+					reason: "high_risk_write",
+					score: 61,
+					scoreBand: "high",
+					taskRisk: "high",
+				},
+			],
+		});
+	});
+
+	it("fails closed when score and plan indexes cannot be matched", () => {
+		const plan: DagPlan = {
+			kind: "dag",
+			subtasks: [makeStep("first"), makeStep("second")],
+			edges: [],
+		};
+
+		expect(() =>
+			buildProductionRouteDelegationHandoffPlan({
+				parentRunId: "run-mismatch",
+				plan,
+				batch: scoreProductionRoutes([
+					{
+						taskRisk: "medium",
+						nonBlockingSupervisorRequired: true,
+					},
+				]),
+				subAgentForStep: (step) => ({
+					role: "planning-worker",
+					goal: `Complete ${step.name}`,
+				}),
+			}),
+		).toThrow(/route_plan_length_mismatch/);
 	});
 });

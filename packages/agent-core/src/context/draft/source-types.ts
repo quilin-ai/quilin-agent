@@ -217,3 +217,28 @@ export interface ContextTraceSummary {
 	readonly sourceSummaries: readonly ContextTraceSourceSummary[];
 	readonly determinismKey: string;
 }
+
+export type ContextCacheStrategy =
+	| "stable-system-prefix"
+	| "provider-explicit-breakpoint"
+	| "conversation-append-only-prefix"
+	| "route-local-cache-identity";
+
+export type ContextCacheRetentionPolicy = "none" | "ephemeral" | "session";
+
+export interface ContextCachePlan {
+	readonly cachePlanId: string;
+	readonly promptBuildId: string;
+	readonly providerPath: string;
+	readonly modelFamily: string;
+	readonly cacheStrategy: ContextCacheStrategy;
+	readonly stablePrefixHash: string;
+	readonly eligiblePrefixTokens: number;
+	readonly dynamicSuffixTokens: number;
+	readonly cacheBoundarySourceIds: readonly string[];
+	readonly excludedVolatileSourceIds: readonly string[];
+	readonly retentionPolicy: ContextCacheRetentionPolicy;
+	readonly providerOptions: Readonly<Record<string, unknown>>;
+	readonly expectedUsageFields: readonly string[];
+	readonly determinismKey: string;
+}

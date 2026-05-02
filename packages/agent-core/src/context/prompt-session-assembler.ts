@@ -1,4 +1,9 @@
 import type { Message } from "../state/types.js";
+import type {
+	ContextCachePlan,
+	ContextTraceSummary,
+} from "./draft/source-types.js";
+import type { ContextTraceDelta } from "./draft/trace-delta.js";
 import type { PromptBuilder } from "./prompt-builder.js";
 import type { AssembledPrompt, BuildContext } from "./prompt-types.js";
 import {
@@ -23,10 +28,13 @@ interface BuildOutboundMessagesInput {
 	readonly lastMessageTime?: string;
 }
 
-interface OutboundPromptRequest {
+export interface OutboundPromptRequest {
 	readonly messages: readonly Message[];
 	readonly prompt: AssembledPrompt;
 	readonly temporal: TemporalContext;
+	readonly contextTraceSummary?: ContextTraceSummary;
+	readonly contextTraceDelta?: ContextTraceDelta;
+	readonly cachePlan?: ContextCachePlan;
 }
 
 function renderPromptText(prompt: AssembledPrompt): string {

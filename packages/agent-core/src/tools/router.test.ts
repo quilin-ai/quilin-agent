@@ -1310,6 +1310,219 @@ describe("ToolRouter", () => {
 		expect(JSON.stringify(result.audit)).not.toContain("hello");
 	});
 
+	it("sandbox 审批通过后继续执行同一次工具调用", async () => {
+		const execute = vi.fn().mockResolvedValue({
+			toolCallId: "wrong-id",
+			content: JSON.stringify({ ok: true }),
+			isError: false,
+		});
+		const sandboxApproval = vi.fn(async () => true);
+		const tool: ToolWithMetadata = {
+			name: "file_write",
+			description: "Write a file.",
+			parameters: z.object({ path: z.string(), content: z.string() }),
+			sandboxPolicy: { operation: "write" },
+			execute,
+			category: "programmatic",
+			riskLevel: "write",
+		};
+		const router = new ToolRouter([tool], {
+			sandboxApproval,
+			sandboxOrigin: "agent",
+		});
+
+		const result = await router.execute({
+			id: "call-sandbox-approved",
+			name: "file_write",
+			arguments: { path: "demo.txt", content: "hello" },
+		});
+
+		expect(sandboxApproval).toHaveBeenCalledWith({
+			decision: {
+				kind: "ask",
+				reasonCodes: ["write_operation_requires_approval"],
+				requiredApprovals: ["write_authority", "user_confirmation"],
+			},
+			context: expect.objectContaining({
+				toolCallId: "call-sandbox-approved",
+				requestedToolName: "file_write",
+				resolvedToolName: "file_write",
+				origin: "agent",
+			}),
+			summary: expect.objectContaining({
+				tool: "file_write",
+				call: "call-sandbox-approved",
+				origin: "agent",
+				kind: "ask",
+				reasonCodes: ["write_operation_requires_approval"],
+			}),
+		});
+		expect(execute).toHaveBeenCalledWith({
+			path: "demo.txt",
+			content: "hello",
+		});
+		expect(result).toMatchObject({
+			toolCallId: "call-sandbox-approved",
+			isError: false,
+			content: JSON.stringify({ ok: true }),
+			audit: {
+				tool: "file_write",
+				call: "call-sandbox-approved",
+				outcome: "success",
+				sandboxKind: "ask",
+				sandboxOrigin: "agent",
+				requiredApprovals: ["write_authority", "user_confirmation"],
+				reasonCodes: ["write_operation_requires_approval"],
+				summary: "Tool file_write completed successfully.",
+				detail:
+					"tool=file_write; call=call-sandbox-approved; outcome=success; sandboxKind=ask; sandboxOrigin=agent; requiredApprovals=write_authority,user_confirmation; reasonCodes=write_operation_requires_approval",
+			},
+		});
+		expect(JSON.stringify(result.audit)).not.toContain("hello");
+	});
+
+	it("sandbox 审批通过后工具执行失败仍保留审批审计来源", async () => {
+		const execute = vi
+			.fn()
+			.mockRejectedValue(new Error("unexpected write failure"));
+		const sandboxApproval = vi.fn(async () => true);
+		const tool: ToolWithMetadata = {
+			name: "file_write",
+			description: "Write a file.",
+			parameters: z.object({ path: z.string(), content: z.string() }),
+			sandboxPolicy: { operation: "write" },
+			execute,
+			category: "programmatic",
+			riskLevel: "write",
+		};
+		const router = new ToolRouter([tool], {
+			sandboxApproval,
+			sandboxOrigin: "agent",
+		});
+
+		const result = await router.execute({
+			id: "call-sandbox-approved-error",
+			name: "file_write",
+			arguments: { path: "demo.txt", content: "hello" },
+		});
+
+		expect(execute).toHaveBeenCalledTimes(1);
+		expect(result).toMatchObject({
+			toolCallId: "call-sandbox-approved-error",
+			isError: true,
+			error: {
+				code: "execution_failed",
+			},
+			audit: {
+				tool: "file_write",
+				call: "call-sandbox-approved-error",
+				outcome: "tool_error",
+				errorCode: "execution_failed",
+				sandboxKind: "ask",
+				sandboxOrigin: "agent",
+				requiredApprovals: ["write_authority", "user_confirmation"],
+				reasonCodes: ["write_operation_requires_approval"],
+				summary: "Tool file_write failed with execution_failed.",
+				detail:
+					"tool=file_write; call=call-sandbox-approved-error; outcome=tool_error; code=execution_failed; sandboxKind=ask; sandboxOrigin=agent; requiredApprovals=write_authority,user_confirmation; reasonCodes=write_operation_requires_approval",
+			},
+		});
+		expect(JSON.stringify(result.audit)).not.toContain("hello");
+	});
+
+	it("sandbox 审批拒绝后不执行工具调用", async () => {
+		const execute = vi.fn();
+		const sandboxApproval = vi.fn(async () => false);
+		const tool: ToolWithMetadata = {
+			name: "file_write",
+			description: "Write a file.",
+			parameters: z.object({ path: z.string(), content: z.string() }),
+			sandboxPolicy: { operation: "write" },
+			execute,
+			category: "programmatic",
+			riskLevel: "write",
+		};
+		const router = new ToolRouter([tool], { sandboxApproval });
+
+		const result = await router.execute({
+			id: "call-sandbox-rejected",
+			name: "file_write",
+			arguments: { path: "demo.txt", content: "hello" },
+		});
+
+		expect(sandboxApproval).toHaveBeenCalledTimes(1);
+		expect(execute).not.toHaveBeenCalled();
+		expect(result.error?.code).toBe("sandbox_approval_required");
+	});
+
+	it("sandbox 审批 handler 抛错时 fail-closed 且不执行工具调用", async () => {
+		const execute = vi.fn();
+		const sandboxApproval = vi.fn(async () => {
+			throw new Error("approval prompt failed");
+		});
+		const tool: ToolWithMetadata = {
+			name: "file_write",
+			description: "Write a file.",
+			parameters: z.object({ path: z.string(), content: z.string() }),
+			sandboxPolicy: { operation: "write" },
+			execute,
+			category: "programmatic",
+			riskLevel: "write",
+		};
+		const router = new ToolRouter([tool], { sandboxApproval });
+
+		const result = await router.execute({
+			id: "call-sandbox-handler-error",
+			name: "file_write",
+			arguments: { path: "demo.txt", content: "hello" },
+		});
+
+		expect(sandboxApproval).toHaveBeenCalledTimes(1);
+		expect(execute).not.toHaveBeenCalled();
+		expect(result.error?.code).toBe("sandbox_approval_required");
+	});
+
+	it("裸 network sandbox policy 缺少目标信号时需要审批", async () => {
+		const execute = vi.fn();
+		const tool: ToolWithMetadata = {
+			name: "network_probe",
+			description: "Probe a network target.",
+			parameters: z.object({ url: z.string() }),
+			sandboxPolicy: { operation: "network" },
+			execute,
+			category: "programmatic",
+			riskLevel: "read",
+		};
+		const router = new ToolRouter([tool], { sandboxOrigin: "agent" });
+
+		const result = await router.execute({
+			id: "call-network-no-signal",
+			name: "network_probe",
+			arguments: { url: "https://example.com" },
+		});
+
+		expect(execute).not.toHaveBeenCalled();
+		expect(result.error).toEqual({
+			code: "sandbox_approval_required",
+			message: "Tool execution requires sandbox approval.",
+			details: {
+				decision: {
+					kind: "ask",
+					reasonCodes: ["network_operation_requires_approval"],
+					requiredApprovals: ["network_access", "user_confirmation"],
+				},
+				approvalSummary: expect.objectContaining({
+					tool: "network_probe",
+					call: "call-network-no-signal",
+					origin: "agent",
+					kind: "ask",
+					requiredApprovals: ["network_access", "user_confirmation"],
+					reasonCodes: ["network_operation_requires_approval"],
+				}),
+			},
+		});
+	});
+
 	it("传入 sandbox evaluator 时使用 metadata 生成默认 sandbox request", async () => {
 		const execute = vi.fn();
 		const sandboxEvaluator = vi.fn<SandboxEvaluator>().mockReturnValue({
@@ -1357,7 +1570,7 @@ describe("ToolRouter", () => {
 		const execute = vi.fn();
 		const sandboxEvaluator = vi.fn<SandboxEvaluator>().mockReturnValue({
 			kind: "ask",
-			reasonCodes: ["network_operation_requires_approval"],
+			reasonCodes: ["network_credentials_require_approval"],
 			requiredApprovals: ["network_access", "user_confirmation"],
 		});
 		const router = new ToolRouter(
@@ -1365,7 +1578,10 @@ describe("ToolRouter", () => {
 				{
 					name: "web_fetch",
 					description: "Fetch a URL.",
-					parameters: z.object({ url: z.string() }),
+					parameters: z.object({
+						url: z.string(),
+						headers: z.record(z.string(), z.string()).optional(),
+					}),
 					execute,
 					category: "programmatic",
 					riskLevel: "read",
@@ -1378,7 +1594,10 @@ describe("ToolRouter", () => {
 		const result = await router.execute({
 			id: "call-network-sandbox",
 			name: "web_fetch",
-			arguments: { url: "https://example.com" },
+			arguments: {
+				url: "https://example.com",
+				headers: { Authorization: "Bearer token" },
+			},
 		});
 
 		expect(execute).not.toHaveBeenCalled();
@@ -1397,7 +1616,7 @@ describe("ToolRouter", () => {
 			details: {
 				decision: {
 					kind: "ask",
-					reasonCodes: ["network_operation_requires_approval"],
+					reasonCodes: ["network_credentials_require_approval"],
 					requiredApprovals: ["network_access", "user_confirmation"],
 				},
 				approvalSummary: expect.objectContaining({
@@ -1406,7 +1625,117 @@ describe("ToolRouter", () => {
 					origin: "agent",
 					kind: "ask",
 					requiredApprovals: ["network_access", "user_confirmation"],
-					reasonCodes: ["network_operation_requires_approval"],
+					reasonCodes: ["network_credentials_require_approval"],
+				}),
+			},
+		});
+	});
+
+	it("默认允许 built-in web_fetch 执行普通公网读取", async () => {
+		const fetcher = vi.fn(
+			async () =>
+				new Response("latest codex news", {
+					status: 200,
+					headers: { "content-type": "text/plain" },
+				}),
+		);
+		const sandboxEvaluator = vi.fn<SandboxEvaluator>((request, context) =>
+			defaultSandboxEvaluator(request, context),
+		);
+		const router = new ToolRouter(
+			[
+				createWebFetchTool({
+					fetcher,
+					resolver: async () => ["93.184.216.34"],
+				}),
+			],
+			{ sandboxEvaluator, sandboxOrigin: "agent" },
+		);
+
+		const result = await router.execute({
+			id: "call-web-fetch-public",
+			name: "web_fetch",
+			arguments: { url: "https://example.com/news" },
+		});
+
+		expect(sandboxEvaluator).toHaveBeenCalledWith(
+			{
+				operation: "network",
+				origin: "agent",
+				signals: {
+					network: {
+						destination: "example.com",
+						protocol: "https",
+						method: "GET",
+						sendsCredentials: false,
+					},
+				},
+			},
+			expect.objectContaining({
+				toolCallId: "call-web-fetch-public",
+				requestedToolName: "web_fetch",
+				resolvedToolName: "web_fetch",
+				riskLevel: "read",
+				sandboxOperation: "network",
+				origin: "agent",
+			}),
+		);
+		expect(fetcher).toHaveBeenCalledWith(
+			"https://example.com/news",
+			expect.objectContaining({
+				method: "GET",
+				redirect: "manual",
+			}),
+		);
+		expect(result.toolCallId).toBe("call-web-fetch-public");
+		expect(result.isError).toBe(false);
+		expect(JSON.parse(result.content)).toEqual({
+			url: "https://example.com/news",
+			status: 200,
+			contentType: "text/plain",
+			body: "latest codex news",
+			truncated: false,
+		});
+		expect(result.error).toBeUndefined();
+	});
+
+	it("默认在 sandbox 层拒绝 built-in web_fetch 访问本机地址", async () => {
+		const fetcher = vi.fn();
+		const sandboxEvaluator = vi.fn<SandboxEvaluator>((request, context) =>
+			defaultSandboxEvaluator(request, context),
+		);
+		const router = new ToolRouter(
+			[
+				createWebFetchTool({
+					fetcher,
+				}),
+			],
+			{ sandboxEvaluator, sandboxOrigin: "agent" },
+		);
+
+		const result = await router.execute({
+			id: "call-web-fetch-loopback",
+			name: "web_fetch",
+			arguments: { url: "http://127.0.0.1:3000/debug" },
+		});
+
+		expect(fetcher).not.toHaveBeenCalled();
+		expect(result.error).toEqual({
+			code: "sandbox_denied",
+			message: "Tool execution denied by sandbox policy.",
+			details: {
+				decision: {
+					kind: "deny",
+					reasonCodes: ["private_network_denied"],
+					requiredApprovals: [],
+				},
+				approvalSummary: expect.objectContaining({
+					tool: "web_fetch",
+					call: "call-web-fetch-loopback",
+					origin: "agent",
+					kind: "deny",
+					requiredApprovals: [],
+					reasonCodes: ["private_network_denied"],
 				}),
 			},
 		});
@@ -1481,10 +1810,7 @@ describe("ToolRouter", () => {
 			details: {
 				decision: {
 					kind: "ask",
-					reasonCodes: [
-						"network_operation_requires_approval",
-						"network_credentials_require_approval",
-					],
+					reasonCodes: ["network_credentials_require_approval"],
 					requiredApprovals: ["network_access", "user_confirmation"],
 				},
 				approvalSummary: expect.objectContaining({
@@ -1493,10 +1819,72 @@ describe("ToolRouter", () => {
 					origin: "agent",
 					kind: "ask",
 					requiredApprovals: ["network_access", "user_confirmation"],
-					reasonCodes: [
-						"network_operation_requires_approval",
-						"network_credentials_require_approval",
-					],
+					reasonCodes: ["network_credentials_require_approval"],
+				}),
+			},
+		});
+	});
+
+	it("将 built-in web_fetch URL userinfo 识别为凭据网络请求", async () => {
+		const fetcher = vi.fn();
+		const sandboxEvaluator = vi.fn<SandboxEvaluator>((request, context) =>
+			defaultSandboxEvaluator(request, context),
+		);
+		const router = new ToolRouter(
+			[
+				createWebFetchTool({
+					fetcher,
+				}),
+			],
+			{ sandboxEvaluator, sandboxOrigin: "agent" },
+		);
+
+		const result = await router.execute({
+			id: "call-web-fetch-userinfo",
+			name: "web_fetch",
+			arguments: {
+				url: "https://user:pass@example.com/data",
+			},
+		});
+
+		expect(fetcher).not.toHaveBeenCalled();
+		expect(sandboxEvaluator).toHaveBeenCalledWith(
+			{
+				operation: "network",
+				origin: "agent",
+				signals: {
+					network: {
+						destination: "example.com",
+						protocol: "https",
+						method: "GET",
+						sendsCredentials: true,
+					},
+				},
+			},
+			expect.objectContaining({
+				toolCallId: "call-web-fetch-userinfo",
+				requestedToolName: "web_fetch",
+				resolvedToolName: "web_fetch",
+				sandboxOperation: "network",
+				origin: "agent",
+			}),
+		);
+		expect(result.error).toEqual({
+			code: "sandbox_approval_required",
+			message: "Tool execution requires sandbox approval.",
+			details: {
+				decision: {
+					kind: "ask",
+					reasonCodes: ["network_credentials_require_approval"],
+					requiredApprovals: ["network_access", "user_confirmation"],
+				},
+				approvalSummary: expect.objectContaining({
+					tool: "web_fetch",
+					call: "call-web-fetch-userinfo",
+					origin: "agent",
+					kind: "ask",
+					requiredApprovals: ["network_access", "user_confirmation"],
+					reasonCodes: ["network_credentials_require_approval"],
 				}),
 			},
 		});

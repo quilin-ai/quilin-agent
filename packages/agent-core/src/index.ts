@@ -9,6 +9,7 @@ import {
 import {
 	bootstrapUserRuntime,
 	buildRuntimeInferenceConfig,
+	buildRuntimeTierRoutingConfig,
 	buildRuntimeToolFilter,
 	resolveRuntimeWriteAuthorityMode,
 } from "./config/runtime.js";
@@ -18,10 +19,16 @@ import {
 	ProviderControlPlaneLLMClient,
 	VercelLLMClient,
 } from "./llm/client.js";
-import { createProvider, getDefaultModel } from "./llm/provider.js";
+import {
+	createProvider,
+	DEFAULT_PROVIDER_CATALOG,
+	getDefaultModel,
+} from "./llm/provider.js";
 import type {
 	InferenceConfig,
+	LLMModelTier,
 	LLMProviderId,
+	LLMTierRoutingConfig,
 	ProviderRunRecord,
 } from "./llm/types.js";
 import { configureLogger, logger } from "./logger.js";
@@ -34,6 +41,7 @@ export {
 	bootstrapUserRuntime,
 	buildRuntimeInferenceConfig,
 	buildRuntimeReloadAuditEvent,
+	buildRuntimeTierRoutingConfig,
 	buildRuntimeToolFilter,
 	diffUserRuntimeStateSnapshots,
 	getDefaultSpanProvider,
@@ -89,14 +97,22 @@ export {
 export * from "./context/index.js";
 export * from "./llm/client.js";
 export * from "./llm/provider.js";
+export * from "./llm/tier-router.js";
+export * from "./llm/types.js";
 export { runAgentLoop } from "./loop.js";
 export type { AgentLoopConfig, LoopHooks } from "./loop-types.js";
 export * from "./memory/index.js";
 export * from "./multi-agent/index.js";
 export * from "./observability/index.js";
 export {
+	buildProductionRouteDelegationHandoffPlan,
+	buildProductionRouteSupervisorHandoffPlan,
 	classifyProductionRouteScoreBatchReadiness,
 	explainProductionRoute,
+	type ProductionRouteDelegationHandoffAcceptedItem,
+	type ProductionRouteDelegationHandoffBlockedItem,
+	type ProductionRouteDelegationHandoffPlan,
+	type ProductionRouteDelegationHandoffPlanInput,
 	type ProductionRouteExplanationBatchSummary,
 	type ProductionRouteHandoffRecommendation,
 	type ProductionRouteScore,
@@ -268,6 +284,7 @@ export * from "./types/index.js";
 
 const HEARTBEAT_INTERVAL_MS = 60_000;
 const DEFAULT_PROVIDER_ID = "deepseek" satisfies LLMProviderId;
+const MODEL_TIERS = ["flash", "lite", "pro"] as const;
 const STARTUP_VERIFICATION_CONFIG: InferenceConfig = {
 	temperature: 0,
 	maxTokens: 20,
@@ -324,6 +341,10 @@ function providerRunRecordLogPayload(
 		provider: record.route.provider,
 		configured_model: record.route.configuredModel,
 		effective_model: record.route.effectiveModel,
+		selected_tier: record.route.selectedTier,
+		routing_mode: record.route.routingMode,
+		route_reason: record.route.routeReason,
+		route_thinking_mode: record.route.thinkingMode,
 		fallback_used: record.fallbackUsed,
 		outcome: record.outcome,
 		attempt_count: record.attempts.length,
@@ -438,6 +459,59 @@ function selectRuntimeModel(
 	};
 }
 
+function isEnabledDefaultCatalogModel(model: string): boolean {
+	return DEFAULT_PROVIDER_CATALOG.entries.some(
+		(entry) => entry.status === "enabled" && entry.models.includes(model),
+	);
+}
+
+function resolveRuntimeTierRoutingConfig(
+	userConfig: UserConfigLoadResult,
+	modelSelection: RuntimeModelSelection,
+): LLMTierRoutingConfig {
+	const routing = buildRuntimeTierRoutingConfig(userConfig.config);
+	if (modelSelection.userConfigDefaultModelSource !== "default") {
+		if (!isEnabledDefaultCatalogModel(modelSelection.modelId)) {
+			throw new Error(
+				`llm.default_model ${modelSelection.modelId} is providerless and not enabled in DEFAULT_PROVIDER_CATALOG; configure custom model ids under llm.tiers.<flash|lite|pro>.provider/model.`,
+			);
+		}
+	}
+
+	return routing;
+}
+
+function startupVerificationProfile(
+	profile: LLMTierRoutingConfig["tiers"][LLMModelTier],
+): LLMTierRoutingConfig["tiers"][LLMModelTier] {
+	return {
+		provider: profile.provider,
+		model: profile.model,
+		thinkingMode: profile.thinkingMode,
+		temperature: STARTUP_VERIFICATION_CONFIG.temperature,
+		maxTokens: STARTUP_VERIFICATION_CONFIG.maxTokens,
+		...(profile.thinkingMode === "disabled" || profile.thinkingBudget == null
+			? {}
+			: { thinkingBudget: Math.min(profile.thinkingBudget, 512) }),
+	};
+}
+
+function startupVerificationRoutingForTier(
+	routing: LLMTierRoutingConfig,
+	tier: LLMModelTier,
+): LLMTierRoutingConfig {
+	return {
+		...routing,
+		mode: tier,
+		defaultTier: tier,
+		tiers: {
+			flash: startupVerificationProfile(routing.tiers.flash),
+			lite: startupVerificationProfile(routing.tiers.lite),
+			pro: startupVerificationProfile(routing.tiers.pro),
+		},
+	};
+}
+
 async function resolveReplSessionId(
 	argv: readonly string[] = process.argv.slice(2),
 ): Promise<string | undefined> {
@@ -471,40 +545,52 @@ async function verifyLLMConnection(
 	provider: ReturnType<typeof createProvider>,
 	providerId: LLMProviderId,
 	modelId: string,
+	tierRouting: LLMTierRoutingConfig | undefined,
 	onProviderRunRecord: (record: ProviderRunRecord) => void,
 ): Promise<void> {
-	const verificationClient = new ProviderControlPlaneLLMClient(
-		new VercelLLMClient({
-			model: provider(modelId),
-			resolveModel: provider,
-		}),
-		{
-			routeRequest: {
-				provider: providerId,
-				model: modelId,
-			},
-			onRunRecord: onProviderRunRecord,
-		},
-	);
-	const response = await verificationClient.chat(
-		[
-			{
-				role: "user",
-				content: 'Reply with exactly: "Quilin Agent online." Nothing else.',
-			},
-		],
-		[],
-		STARTUP_VERIFICATION_CONFIG,
-	);
+	const routingVariants =
+		tierRouting == null
+			? [undefined]
+			: MODEL_TIERS.map((tier) =>
+					startupVerificationRoutingForTier(tierRouting, tier),
+				);
 
-	logger.info(
-		{
-			response: response.content.trim(),
-			inputTokens: response.usage.inputTokens,
-			outputTokens: response.usage.outputTokens,
-		},
-		"LLM connection verified",
-	);
+	for (const routingVariant of routingVariants) {
+		const verificationClient = new ProviderControlPlaneLLMClient(
+			new VercelLLMClient({
+				model: provider(modelId),
+				resolveModel: provider,
+			}),
+			{
+				routeRequest: {
+					provider: providerId,
+					model: modelId,
+				},
+				...(routingVariant == null ? {} : { tierRouting: routingVariant }),
+				onRunRecord: onProviderRunRecord,
+			},
+		);
+		const response = await verificationClient.chat(
+			[
+				{
+					role: "user",
+					content: 'Reply with exactly: "Quilin Agent online." Nothing else.',
+				},
+			],
+			[],
+			STARTUP_VERIFICATION_CONFIG,
+		);
+
+		logger.info(
+			{
+				tier: routingVariant?.mode ?? "fixed",
+				response: response.content.trim(),
+				inputTokens: response.usage.inputTokens,
+				outputTokens: response.usage.outputTokens,
+			},
+			"LLM connection verified",
+		);
+	}
 }
 
 export async function main(options: MainOptions = {}): Promise<void> {
@@ -538,6 +624,10 @@ export async function main(options: MainOptions = {}): Promise<void> {
 	const runtimeWriteAuthorityMode = resolveRuntimeWriteAuthorityMode(
 		userRuntime.result.config,
 	);
+	const runtimeTierRouting = resolveRuntimeTierRoutingConfig(
+		userRuntime.result,
+		modelSelection,
+	);
 
 	logger.info(
 		{
@@ -552,6 +642,10 @@ export async function main(options: MainOptions = {}): Promise<void> {
 			max_tokens: runtimeInferenceConfig.maxTokens,
 			thinking_mode: runtimeInferenceConfig.thinkingMode,
 			thinking_budget: runtimeInferenceConfig.thinkingBudget,
+			routing_mode: runtimeTierRouting.mode,
+			routing_default_tier: runtimeTierRouting.defaultTier,
+			routing_allow_escalation: runtimeTierRouting.allowEscalation,
+			routing_tiers: runtimeTierRouting.tiers,
 		},
 		"LLM provider initialized",
 	);
@@ -566,6 +660,7 @@ export async function main(options: MainOptions = {}): Promise<void> {
 			provider,
 			DEFAULT_PROVIDER_ID,
 			modelId,
+			runtimeTierRouting,
 			logStartupProviderRunRecord,
 		);
 	} catch (err) {
@@ -606,6 +701,7 @@ export async function main(options: MainOptions = {}): Promise<void> {
 				? {}
 				: { skillsManager: capabilitiesRuntime.skillsManager }),
 			inferenceConfig: runtimeInferenceConfig,
+			tierRouting: runtimeTierRouting,
 			writeAuthorityMode: runtimeWriteAuthorityMode,
 			toolFilter: runtimeToolFilter,
 			onProviderRunRecord: createProviderRunRecordLogger("repl_turn"),

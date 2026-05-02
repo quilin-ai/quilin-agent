@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, test } from "vitest";
 import type { SkillDescriptor } from "../skills/types.js";
+import { createDefaultPromptSections } from "./default-sections.js";
 import { PromptBuilder } from "./prompt-builder.js";
 import { PromptSessionAssembler } from "./prompt-session-assembler.js";
 import {
@@ -141,6 +142,56 @@ describe("PromptSessionAssembler", () => {
 			role: "system",
 			content: expect.stringContaining("You are Quilin Agent."),
 		});
+	});
+
+	test("keeps identity memory guidance in the actual outbound prompt", () => {
+		const builder = new PromptBuilder();
+		for (const section of createDefaultPromptSections()) {
+			builder.register(section);
+		}
+		const assembler = new PromptSessionAssembler({
+			promptBuilder: builder,
+			modelId: "deepseek-chat",
+			sessionStartedAt: "2026-04-21T09:00:00.000Z",
+			now: () => new Date("2026-04-21T10:00:00.000Z"),
+			getAvailableTools: () => [
+				"omnimem/memory_recall",
+				"omnimem/memory_store",
+			],
+			getAvailableToolDescriptors: () => [
+				{
+					name: "omnimem/memory_recall",
+					description: "Recall memory.",
+					category: "programmatic",
+					riskLevel: "read",
+				},
+				{
+					name: "omnimem/memory_store",
+					description: "Store memory.",
+					category: "programmatic",
+					riskLevel: "write",
+				},
+			],
+		});
+
+		const outbound = assembler.buildOutboundRequest({
+			transcript: [{ role: "user", content: "你是小明！我是孟哥！记住" }],
+			turnKind: "user-turn",
+		});
+
+		expect(outbound.messages[0]).toMatchObject({
+			role: "system",
+			content: expect.stringContaining('If the user says "你是小明，我是孟哥"'),
+		});
+		expect(outbound.messages[0]?.content).toContain(
+			'do not store "用户叫小明"',
+		);
+		expect(outbound.messages[0]?.content).toContain(
+			"call omnimem/memory_store immediately",
+		);
+		expect(outbound.messages.at(-1)?.content).toContain(
+			"你是小明！我是孟哥！记住",
+		);
 	});
 
 	test("keeps stable skill prefix hash identical across three turns while hot skills vary", () => {

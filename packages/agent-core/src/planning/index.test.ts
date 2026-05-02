@@ -19,6 +19,7 @@ import type {
 	PlanningStrategy,
 	PlanReviewRecord,
 	PlanReviewWriteResult,
+	ProductionRouteDelegationHandoffPlan,
 	ProductionRouteExplanationBatchSummary,
 	ProductionRouteScoreBatch,
 	ProductionRouteScoreBatchReadiness,
@@ -32,6 +33,7 @@ import {
 	applyGlobalReplan,
 	applyLocalRearrange,
 	buildPlanContext,
+	buildProductionRouteDelegationHandoffPlan,
 	classifyIntent,
 	classifyProductionRouteScoreBatchReadiness,
 	computeAuditAgreement,
@@ -461,6 +463,68 @@ describe("planning barrel contract", () => {
 				handoff_required: 1,
 			},
 			highestRequiredReadiness: "handoff_required",
+		});
+	});
+
+	it("exports production route delegation handoff bridge helpers", () => {
+		const localStep = makeStep("local-step", {
+			writeScope: "working",
+			arguments: { path: "local.md" },
+			risk: "low",
+		});
+		const delegatedStep = makeStep("delegated-step", {
+			action: "research",
+			writeScope: "episodic",
+			arguments: { path: "delegated.md" },
+			risk: "medium",
+		});
+		const bridgePlan: ProductionRouteDelegationHandoffPlan =
+			buildProductionRouteDelegationHandoffPlan({
+				parentRunId: "run-planning-barrel-route",
+				plan: {
+					kind: "dag",
+					subtasks: [localStep, delegatedStep],
+					edges: [],
+				},
+				batch: scoreProductionRoutes([
+					{
+						taskRisk: "low",
+						complexity: 0.1,
+						cost: 0.1,
+						capabilityFit: 1,
+					},
+					{
+						taskRisk: "medium",
+						nonBlockingSupervisorRequired: true,
+					},
+				]),
+				subAgentForStep: (step) => ({
+					role: "planning-worker",
+					goal: `Complete ${step.name}`,
+				}),
+			});
+
+		expect(bridgePlan).toMatchObject({
+			kind: "production_route_delegation_handoff_plan",
+			handoffReadyCount: 1,
+			blockedCount: 0,
+			acceptedAssignments: [
+				{
+					index: 1,
+					taskId: "delegated-step",
+					assignment: {
+						childRunId: "run-planning-barrel-route:delegated:delegated-step",
+						handoff: {
+							kind: "delegation_handoff",
+							writeScope: ["episodic:delegated.md"],
+							resume: {
+								checkpointRequired: true,
+								heartbeatRequired: true,
+							},
+						},
+					},
+				},
+			],
 		});
 	});
 

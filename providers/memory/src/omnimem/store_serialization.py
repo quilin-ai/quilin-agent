@@ -8,6 +8,11 @@ from datetime import datetime
 from .store_schema import DEFAULT_MEMORY_METADATA
 from .types import VALID_MEMORY_TIERS, MemoryRecord, MemoryTier
 
+LEGACY_MEMORY_TIER_ALIASES: dict[str, MemoryTier] = {
+    "short": "working",
+    "long": "semantic",
+}
+
 
 def validate_memory_tier(tier: str) -> MemoryTier:
     if tier not in VALID_MEMORY_TIERS:
@@ -15,6 +20,14 @@ def validate_memory_tier(tier: str) -> MemoryTier:
         raise ValueError(f"Invalid memory tier: {tier}. Expected one of: {valid_tiers}")
 
     return tier
+
+
+def deserialize_memory_tier(tier: str) -> MemoryTier:
+    legacy_tier = LEGACY_MEMORY_TIER_ALIASES.get(tier)
+    if legacy_tier is not None:
+        return legacy_tier
+
+    return validate_memory_tier(tier)
 
 
 def serialize_metadata(metadata: dict[str, object]) -> str:
@@ -65,7 +78,7 @@ def row_to_record(row: sqlite3.Row, *, now: Callable[[], datetime]) -> MemoryRec
         id=row["id"],
         content=row["content"],
         content_type=row["content_type"],
-        layer=validate_memory_tier(row["tier"]),
+        layer=deserialize_memory_tier(row["tier"]),
         metadata=deserialize_metadata(row["metadata_json"]),
         embedding=deserialize_embedding(row["embedding_json"]),
         created_at=parse_datetime(row["created_at"], now=now),
