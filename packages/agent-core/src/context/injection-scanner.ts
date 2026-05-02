@@ -82,23 +82,16 @@ export function scanExternalContext(
 	source: string,
 	options: ScanExternalContextOptions = {},
 ): ScanResult {
-	if (options.trustedSource) {
-		return {
-			safe: true,
-			threats: [],
-			sanitizedContent: content,
-		};
-	}
-
 	const threats: ThreatMatch[] = [];
 	let sanitized = content;
+	const location = options.trustedSource ? `${source} (trusted)` : source;
 
 	for (const pattern of THREAT_PATTERNS) {
 		const matches = content.matchAll(pattern.regex);
 		for (const match of matches) {
 			threats.push({
 				pattern: pattern.name,
-				location: source,
+				location,
 				severity: pattern.severity,
 				matchedText: match[0].slice(0, 100),
 			});

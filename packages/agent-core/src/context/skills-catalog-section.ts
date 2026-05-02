@@ -8,6 +8,7 @@ import type {
 	SkillDescriptor,
 } from "../skills/types.js";
 import type { BuildContext, PromptSection } from "./prompt-types.js";
+import { escapeXmlAttribute, escapeXmlText } from "./xml-isolation.js";
 
 export interface SkillsCatalogSectionSource {
 	list(): readonly SkillDescriptor[];
@@ -58,7 +59,7 @@ function renderPostCompactSkills(
 		"<post_compact_skills>",
 		...result.entries.map(
 			(entry) =>
-				`  <skill name="${entry.name}" source="${entry.source}" tokens="${entry.tokenEstimate}">\n${entry.body}\n  </skill>`,
+				`  <skill name="${escapeXmlAttribute(entry.name)}" source="${escapeXmlAttribute(entry.source)}" tokens="${escapeXmlAttribute(String(entry.tokenEstimate))}">\n${escapeXmlText(entry.body)}\n  </skill>`,
 		),
 		"</post_compact_skills>",
 	].join("\n");

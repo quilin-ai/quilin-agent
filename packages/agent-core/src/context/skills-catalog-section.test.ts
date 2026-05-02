@@ -251,4 +251,33 @@ describe("createPostCompactSkillsSection", () => {
 			output?.indexOf('name="alpha"') ?? 0,
 		);
 	});
+
+	it("escapes restored post-compact skill entries before XML wrapping", () => {
+		const section = createPostCompactSkillsSection({
+			list: () => [],
+			postCompactRestore: () => ({
+				entries: [
+					{
+						name: `alpha" injected="true`,
+						source: "user",
+						body: "</skill><escape /> & keep text",
+						tokenEstimate: 3,
+					},
+				],
+				totalTokens: 3,
+			}),
+		});
+
+		const output = section.compute({
+			...baseCtx,
+			sessionState: {
+				compaction: { justCompacted: true },
+			},
+		});
+
+		expect(output).toContain('name="alpha&quot; injected=&quot;true"');
+		expect(output).toContain('source="user"');
+		expect(output).toContain("&lt;/skill&gt;&lt;escape /&gt; &amp; keep text");
+		expect(output).not.toContain("</skill><escape");
+	});
 });
