@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+	ContextCachePlan,
 	ContextTraceDelta,
 	ContextTraceSummary,
 } from "./context/index.js";
@@ -85,6 +86,25 @@ describe("runAgentLoop", () => {
 			},
 			hasChanges: true,
 			determinismKey: "delta-key",
+		};
+	}
+
+	function makeCachePlan(): ContextCachePlan {
+		return {
+			cachePlanId: "cache-plan:test",
+			promptBuildId: "prompt:test",
+			providerPath: "anthropic",
+			modelFamily: "claude",
+			cacheStrategy: "stable-system-prefix",
+			stablePrefixHash: "hash:test",
+			eligiblePrefixTokens: 5,
+			dynamicSuffixTokens: 2,
+			cacheBoundarySourceIds: [],
+			excludedVolatileSourceIds: ["source-a"],
+			retentionPolicy: "session",
+			providerOptions: {},
+			expectedUsageFields: ["cache_read_tokens", "cache_write_tokens"],
+			determinismKey: "cache-key",
 		};
 	}
 
@@ -348,7 +368,7 @@ describe("runAgentLoop", () => {
 		});
 	});
 
-	it("records context trace summary and delta from outbound requests without changing model messages", async () => {
+	it("records context cache plan, trace summary, and delta from outbound requests without changing model messages", async () => {
 		vi.mocked(getLoggerRuntimeMode).mockReturnValue("repl");
 		const records: Array<{ phase: string; payload?: Record<string, unknown> }> =
 			[];
@@ -357,6 +377,7 @@ describe("runAgentLoop", () => {
 				records.push(input);
 			}),
 		};
+		const cachePlan = makeCachePlan();
 		const contextTraceSummary = makeTraceSummary();
 		const contextTraceDelta = makeTraceDelta();
 		const sessionAssembler = {
@@ -380,6 +401,7 @@ describe("runAgentLoop", () => {
 						sessionStartTime: new Date("2026-05-02T00:00:00.000Z"),
 						lastSessionEndTime: null,
 					},
+					cachePlan,
 					contextTraceSummary,
 					contextTraceDelta,
 				}),
@@ -419,12 +441,25 @@ describe("runAgentLoop", () => {
 			expect.any(Object),
 			expect.objectContaining({ totalTokens: 5 }),
 		);
-		expect(records.map((record) => record.phase)).toContain(
+		expect(records.map((record) => record.phase)).toEqual([
+			"loop.turn_started",
+			"checkpoint.saved",
+			"context.outbound_request_built",
+			"context.cache_plan",
 			"context.trace_summary",
-		);
-		expect(records.map((record) => record.phase)).toContain(
 			"context.trace_delta",
-		);
+			"llm.request_prepared",
+			"llm.response_received",
+			"assistant.response_final",
+			"checkpoint.saved",
+			"turn.completed",
+		]);
+		expect(
+			records.find((record) => record.phase === "context.cache_plan")?.payload,
+		).toEqual({
+			turnKind: "user-turn",
+			cachePlan,
+		});
 		expect(
 			records.find((record) => record.phase === "context.trace_summary")
 				?.payload,

@@ -3,7 +3,10 @@ import {
 	type RuntimeReloadAuditEvent,
 	type RuntimeReloadAuditEventInput,
 } from "../config/runtime.js";
-import type { ContextTraceSummary } from "../context/draft/source-types.js";
+import type {
+	ContextCachePlan,
+	ContextTraceSummary,
+} from "../context/draft/source-types.js";
 import type { ContextTraceDelta } from "../context/draft/trace-delta.js";
 import { redactJsonLikeValue } from "../safety/redaction.js";
 import type {
@@ -68,6 +71,9 @@ export const CONTEXT_TRACE_SUMMARY_EVENT_KIND =
 	"context_trace_summary" as const;
 export const CONTEXT_TRACE_SUMMARY_EVENT_SOURCE =
 	"agent-core.context.draft.context-assembler" as const;
+export const CONTEXT_CACHE_PLAN_EVENT_KIND = "context_cache_plan" as const;
+export const CONTEXT_CACHE_PLAN_EVENT_SOURCE =
+	"agent-core.context.draft.cache-plan" as const;
 export const CONTEXT_TRACE_DELTA_EVENT_KIND = "context_trace_delta" as const;
 export const CONTEXT_TRACE_DELTA_EVENT_SOURCE =
 	"agent-core.context.draft.trace-delta" as const;
@@ -245,6 +251,18 @@ export function buildContextTraceSummaryEventRecord(
 	return buildObservabilityEventRecord({
 		kind: CONTEXT_TRACE_SUMMARY_EVENT_KIND,
 		source: CONTEXT_TRACE_SUMMARY_EVENT_SOURCE,
+		timestamp: options.timestamp,
+		payload,
+	});
+}
+
+export function buildContextCachePlanEventRecord(
+	payload: ContextCachePlan,
+	options: ObservabilityEventAdapterOptions,
+): ObservabilityEventRecord<typeof CONTEXT_CACHE_PLAN_EVENT_KIND> {
+	return buildObservabilityEventRecord({
+		kind: CONTEXT_CACHE_PLAN_EVENT_KIND,
+		source: CONTEXT_CACHE_PLAN_EVENT_SOURCE,
 		timestamp: options.timestamp,
 		payload,
 	});

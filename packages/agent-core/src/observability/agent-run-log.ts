@@ -27,6 +27,7 @@ export type AgentRunLogPhase =
 	| "loop.turn_started"
 	| "context.rebuild_skipped"
 	| "context.outbound_request_built"
+	| "context.cache_plan"
 	| "context.trace_summary"
 	| "context.trace_delta"
 	| "checkpoint.saved"

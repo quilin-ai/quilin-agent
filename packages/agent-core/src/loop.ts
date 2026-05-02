@@ -173,6 +173,17 @@ export async function runAgentLoop(
 				},
 				runLogContext,
 			);
+			if ("cachePlan" in outboundRequest && outboundRequest.cachePlan != null) {
+				await recordAgentRunEvent(
+					runLogger,
+					"context.cache_plan",
+					{
+						turnKind,
+						cachePlan: outboundRequest.cachePlan,
+					},
+					runLogContext,
+				);
+			}
 			if (
 				"contextTraceSummary" in outboundRequest &&
 				outboundRequest.contextTraceSummary != null

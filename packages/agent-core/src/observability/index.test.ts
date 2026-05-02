@@ -7,7 +7,10 @@ import {
 	adaptSupervisorProgressEventToDashboardRecord,
 	aggregateSpanMetrics,
 	buildComponentHealthEventRecord,
+	buildContextCachePlanEventRecord,
 	buildToolResultAuditReportHealthBatchEventRecord,
+	CONTEXT_CACHE_PLAN_EVENT_KIND,
+	CONTEXT_CACHE_PLAN_EVENT_SOURCE,
 	CompositeSpanExporter,
 	createMCPRequestMetadata,
 	deserializeSpan,
@@ -73,6 +76,25 @@ describe("observability barrel exports", () => {
 			TOOL_RESULT_AUDIT_REPORT_HEALTH_BATCH_SUMMARY,
 			{ timestamp: TEST_TIMESTAMP },
 		);
+		const cachePlan = buildContextCachePlanEventRecord(
+			{
+				cachePlanId: "cache-plan:index",
+				promptBuildId: "prompt:index",
+				providerPath: "anthropic",
+				modelFamily: "claude",
+				cacheStrategy: "stable-system-prefix",
+				stablePrefixHash: "hash:index",
+				eligiblePrefixTokens: 10,
+				dynamicSuffixTokens: 2,
+				cacheBoundarySourceIds: [],
+				excludedVolatileSourceIds: ["volatile-source"],
+				retentionPolicy: "session",
+				providerOptions: {},
+				expectedUsageFields: ["cache_read_tokens", "cache_write_tokens"],
+				determinismKey: "cache-index-key",
+			},
+			{ timestamp: TEST_TIMESTAMP },
+		);
 
 		expect(componentHealth).toEqual({
 			kind: "component_health",
@@ -89,6 +111,14 @@ describe("observability barrel exports", () => {
 			timestamp: TEST_TIMESTAMP,
 			source: "agent-core.tools.router.result-audit.report-health-batch",
 			payload: TOOL_RESULT_AUDIT_REPORT_HEALTH_BATCH_SUMMARY,
+		});
+		expect(cachePlan).toMatchObject({
+			kind: CONTEXT_CACHE_PLAN_EVENT_KIND,
+			timestamp: TEST_TIMESTAMP,
+			source: CONTEXT_CACHE_PLAN_EVENT_SOURCE,
+			payload: {
+				cachePlanId: "cache-plan:index",
+			},
 		});
 	});
 

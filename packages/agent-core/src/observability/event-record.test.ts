@@ -14,6 +14,7 @@ import type {
 } from "../tools/types.js";
 import {
 	buildComponentHealthEventRecord,
+	buildContextCachePlanEventRecord,
 	buildContextTraceDeltaEventRecord,
 	buildContextTraceSummaryEventRecord,
 	buildObservabilityEventRecord,
@@ -28,6 +29,8 @@ import {
 	buildToolResultAuditReportHealthEventRecord,
 	COMPONENT_HEALTH_EVENT_KIND,
 	COMPONENT_HEALTH_EVENT_SOURCE,
+	CONTEXT_CACHE_PLAN_EVENT_KIND,
+	CONTEXT_CACHE_PLAN_EVENT_SOURCE,
 	CONTEXT_TRACE_DELTA_EVENT_KIND,
 	CONTEXT_TRACE_DELTA_EVENT_SOURCE,
 	CONTEXT_TRACE_SUMMARY_EVENT_KIND,
@@ -393,6 +396,62 @@ describe("observability event records", () => {
 			source: CONTEXT_TRACE_SUMMARY_EVENT_SOURCE,
 			payload: result.traceSummary,
 		});
+		expect(serializeRoundTrip(firstRecord)).toEqual(firstRecord);
+	});
+
+	it("wraps context cache plans with stable record fields and serializable payload", () => {
+		const rawApiKey = "sk-abcdefghijklmnopqrstuvwxyz012345";
+		const assembler = createDefaultContextAssembler({
+			modelWindow: 12,
+			providerPath: "anthropic",
+			modelFamily: "claude",
+			cacheProviderOptions: {
+				apiKey: rawApiKey,
+				safeName: "visible",
+			},
+			cacheExpectedUsageFields: ["cache_read_tokens", "cache_write_tokens"],
+		});
+		const result = assembler.assembleContext(
+			"test",
+			{},
+			[],
+			[
+				makeSource("high relevance source", {
+					sourceId: "high",
+					tokenCount: 6,
+					relevanceScore: 0.95,
+				}),
+			],
+		);
+		if (result.cachePlan == null) {
+			throw new Error("expected cache plan");
+		}
+
+		const firstRecord = buildContextCachePlanEventRecord(result.cachePlan, {
+			timestamp: TEST_TIMESTAMP,
+		});
+		const secondRecord = buildContextCachePlanEventRecord(result.cachePlan, {
+			timestamp: TEST_TIMESTAMP,
+		});
+
+		expect(firstRecord).toEqual(secondRecord);
+		expect(firstRecord).toEqual({
+			kind: CONTEXT_CACHE_PLAN_EVENT_KIND,
+			timestamp: TEST_TIMESTAMP,
+			source: CONTEXT_CACHE_PLAN_EVENT_SOURCE,
+			payload: {
+				...result.cachePlan,
+				providerOptions: {
+					apiKey: "[REDACTED]",
+					safeName: "visible",
+				},
+			},
+		});
+		expect(result.cachePlan.providerOptions).toEqual({
+			apiKey: rawApiKey,
+			safeName: "visible",
+		});
+		expect(JSON.stringify(firstRecord)).not.toContain(rawApiKey);
 		expect(serializeRoundTrip(firstRecord)).toEqual(firstRecord);
 	});
 
