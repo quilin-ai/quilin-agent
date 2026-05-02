@@ -22,6 +22,7 @@ export * from "./mcp-client.js";
 export * from "./registry.js";
 export * from "./router.js";
 export * from "./sandbox.js";
+export * from "./sandbox-router.js";
 export type {
 	JsonSchema,
 	JsonSchemaArray,

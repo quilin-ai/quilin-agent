@@ -247,6 +247,7 @@ export {
 	type SandboxRiskSignals,
 	type SandboxToolContext,
 } from "./tools/sandbox.js";
+export * from "./tools/sandbox-router.js";
 export {
 	type JsonSchema,
 	type JsonSchemaArray,
