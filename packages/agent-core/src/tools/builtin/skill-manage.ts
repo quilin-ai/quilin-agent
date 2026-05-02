@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { z } from "zod";
 import type { WriteAuthority } from "../../safety/write-authority.js";
 import { SkillManager } from "../../skills/manage.js";
@@ -9,6 +9,7 @@ import type {
 	SkillFrontmatter,
 	SkillManageAction,
 } from "../../skills/types.js";
+import type { SandboxPolicy, SandboxRequest } from "../sandbox.js";
 import type { ToolWithMetadata } from "../tool-metadata.js";
 import type { ToolResult } from "../types.js";
 
@@ -129,6 +130,63 @@ function toSkillManageAction(
 	}
 }
 
+function createSkillManageSandboxRequest(
+	args: unknown,
+	origin: SandboxRequest["origin"],
+	options: {
+		readonly skillsManager: SkillsManager;
+		readonly userRoot: string;
+		readonly projectRoot?: string;
+	},
+): SandboxRequest {
+	const input = args as z.infer<typeof skillManageSchema>;
+	const operation = input.action === "delete" ? "delete" : "write";
+	const requestedPath = (() => {
+		switch (input.action) {
+			case "create": {
+				const root =
+					input.target === "project" ? options.projectRoot : options.userRoot;
+				return root == null
+					? undefined
+					: join(root, input.descriptor.name, "SKILL.md");
+			}
+			case "update":
+			case "delete":
+				return options.skillsManager.findByName(input.name)?.path;
+		}
+	})();
+
+	return {
+		operation,
+		...(origin == null ? {} : { origin }),
+		...(requestedPath == null
+			? {}
+			: {
+					signals: {
+						paths: [
+							{
+								path: requestedPath,
+								access: operation,
+							},
+						],
+					},
+				}),
+	};
+}
+
+function createSkillManageSandboxPolicy(options: {
+	readonly skillsManager: SkillsManager;
+	readonly userRoot: string;
+	readonly projectRoot?: string;
+}): SandboxPolicy {
+	return (context) =>
+		createSkillManageSandboxRequest(
+			context.parsedArguments,
+			context.origin,
+			options,
+		);
+}
+
 export interface SkillManageToolOptions {
 	readonly skillsManager: SkillsManager;
 	readonly writeAuthority: WriteAuthority;
@@ -139,12 +197,14 @@ export interface SkillManageToolOptions {
 export function createSkillManageTool(
 	options: SkillManageToolOptions,
 ): ToolWithMetadata {
+	const userRoot = options.userRoot ?? resolve(homedir(), ".quilin/skills");
+	const projectRoot =
+		options.projectRoot == null ? undefined : resolve(options.projectRoot);
 	const manager = new SkillManager({
 		skillsManager: options.skillsManager,
 		writeAuthority: options.writeAuthority,
-		userRoot: options.userRoot ?? resolve(homedir(), ".quilin/skills"),
-		projectRoot:
-			options.projectRoot == null ? undefined : resolve(options.projectRoot),
+		userRoot,
+		projectRoot,
 	});
 
 	return {
@@ -154,6 +214,11 @@ export function createSkillManageTool(
 		category: "programmatic",
 		riskLevel: "high-risk",
 		sandboxOperation: "write",
+		sandboxPolicy: createSkillManageSandboxPolicy({
+			skillsManager: options.skillsManager,
+			userRoot,
+			projectRoot,
+		}),
 		parameters: skillManageSchema,
 		async execute(args: unknown): Promise<ToolResult> {
 			try {

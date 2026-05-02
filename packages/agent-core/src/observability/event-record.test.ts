@@ -706,6 +706,37 @@ describe("observability event records", () => {
 		expect(serializeRoundTrip(firstRecord)).toEqual(firstRecord);
 	});
 
+	it("redacts secret-like strings in observability event payloads", () => {
+		const record = buildObservabilityEventRecord({
+			kind: "custom_probe",
+			source: "agent-core.test",
+			timestamp: TEST_TIMESTAMP,
+			payload: {
+				summary:
+					"email alpha@example.com token AKIAIOSFODNN7EXAMPLE path /Users/alice/.config/gcloud/application_default_credentials.json",
+				nested: {
+					authorization: "Bearer abcdefghijklmnopqrstuvwxyz012345",
+					currentStep:
+						"JWT eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijklmnop",
+				},
+			},
+		});
+		const serialized = JSON.stringify(record);
+
+		expect(record.payload).toEqual({
+			summary:
+				"email [REDACTED:email] token [REDACTED:aws_access_key] path [REDACTED:sensitive_path]",
+			nested: {
+				authorization: "[REDACTED]",
+				currentStep: "JWT [REDACTED:jwt]",
+			},
+		});
+		expect(serialized).not.toContain("alpha@example.com");
+		expect(serialized).not.toContain("AKIAIOSFODNN7EXAMPLE");
+		expect(serialized).not.toContain("application_default_credentials");
+		expect(serialized).not.toContain("abcdefghijklmnop");
+	});
+
 	it("clones nested objects and arrays instead of exposing raw payload references", () => {
 		const payload = {
 			nested: {

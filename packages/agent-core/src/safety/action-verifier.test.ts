@@ -21,6 +21,9 @@ describe("verifyAction", () => {
 		for (const path of [
 			".env",
 			".env.local",
+			"~/.gcloud/application_default_credentials.json",
+			"~/.azure/accessTokens.json",
+			"~/.config/gcloud/application_default_credentials.json",
 			"~/.ssh/id_rsa",
 			"secrets.pem",
 			"private.key",
@@ -58,6 +61,9 @@ describe("verifyAction", () => {
 	it("blocks shell reads of sensitive credential files", () => {
 		for (const command of [
 			"cat ~/.ssh/id_rsa",
+			"cat ~/.gcloud/application_default_credentials.json",
+			"cat ~/.azure/accessTokens.json",
+			"cat ~/.config/gcloud/application_default_credentials.json",
 			"cat /etc/shadow",
 			"cat /etc/sudoers",
 			"cat secrets.pem",
@@ -103,9 +109,15 @@ describe("verifyAction", () => {
 		for (const command of [
 			"cat ~/.ssh/*",
 			"cat ~/.aws/*",
+			"cat ~/.gcloud/*",
+			"cat ~/.azure/*",
+			"cat ~/.config/gcloud/*",
 			"cat ~/.kube/*",
 			"cat /etc/ssh/*",
 			"grep token ~/.aws/*",
+			"grep token ~/.gcloud/*",
+			"grep token ~/.azure/*",
+			"grep token ~/.config/gcloud/*",
 			"grep token ~/.kube/*",
 			"grep token /etc/ssh/*",
 		]) {

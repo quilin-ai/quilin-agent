@@ -1,5 +1,6 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { redactJsonLikeValue } from "../safety/redaction.js";
 import type { SerializedSpan } from "./exporters/json-file.js";
 import type { SpanSnapshot } from "./span.js";
 
@@ -132,6 +133,23 @@ function parseLine(line: string): SerializedSpan | undefined {
 	return isSerializedSpan(parsed) ? parsed : undefined;
 }
 
+function sanitizeAttributes(
+	attributes: SerializedSpan["attributes"],
+): SerializedSpan["attributes"] {
+	return redactJsonLikeValue(attributes) as SerializedSpan["attributes"];
+}
+
+function sanitizeSpan(span: SerializedSpan): SerializedSpan {
+	return {
+		...span,
+		attributes: sanitizeAttributes(span.attributes),
+		events: span.events.map((event) => ({
+			...event,
+			attributes: sanitizeAttributes(event.attributes),
+		})),
+	};
+}
+
 async function readTraceFile(filePath: string): Promise<{
 	readonly spans: readonly SerializedSpan[];
 	readonly skippedLines: number;
@@ -215,10 +233,7 @@ export class TraceStore {
 					if (!matchesTraceQuery(span, query)) {
 						continue;
 					}
-					spans.push(span);
-					if (limit != null && spans.length >= limit) {
-						return { spans, skippedLines, files };
-					}
+					spans.push(sanitizeSpan(span));
 				}
 			} catch (error) {
 				if ((error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -228,7 +243,15 @@ export class TraceStore {
 			}
 		}
 
-		return { spans, skippedLines, files };
+		const sortedSpans = [...spans].sort(
+			(left, right) => right.start_time_unix_ms - left.start_time_unix_ms,
+		);
+
+		return {
+			spans: limit == null ? sortedSpans : sortedSpans.slice(0, limit),
+			skippedLines,
+			files,
+		};
 	}
 
 	async querySpanSnapshots(query: TraceQuery = {}): Promise<{
@@ -252,7 +275,10 @@ export class TraceStore {
 	private async listTraceFiles(): Promise<readonly string[]> {
 		try {
 			const entries = await readdir(this.logsDir);
-			return entries.filter((entry) => TRACE_FILE_PATTERN.test(entry)).sort();
+			return entries
+				.filter((entry) => TRACE_FILE_PATTERN.test(entry))
+				.sort()
+				.reverse();
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code === "ENOENT") {
 				return [];

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { WriteAuthority } from "../../safety/write-authority.js";
-import { resolveSandboxPolicy } from "../sandbox.js";
+import { defaultSandboxEvaluator, resolveSandboxPolicy } from "../sandbox.js";
 import { createShellExecTool } from "./shell-exec.js";
 
 function createPermissiveAuthority(): WriteAuthority {
@@ -69,6 +69,48 @@ describe("builtin shell_exec tool", () => {
 					writesFilesystem: true,
 				},
 			},
+		});
+	});
+
+	it("marks destructive commands so sandbox preflight denies them", async () => {
+		const tool = createShellExecTool();
+		if (tool.sandboxPolicy == null) {
+			throw new Error("shell_exec sandbox policy is not configured");
+		}
+
+		const request = await resolveSandboxPolicy(tool.sandboxPolicy, {
+			toolCallId: "call-shell-exec-rm",
+			requestedToolName: "shell_exec",
+			resolvedToolName: "shell_exec",
+			parsedArguments: {
+				command: "rm -rf /tmp/demo",
+			},
+			origin: "agent",
+			category: "programmatic",
+			riskLevel: "exec",
+			sandboxOperation: "process",
+		});
+		if (request == null) {
+			throw new Error("missing shell_exec sandbox request");
+		}
+
+		expect(request).toEqual({
+			operation: "process",
+			origin: "agent",
+			signals: {
+				process: {
+					commandLine: "rm -rf /tmp/demo",
+					executable: "rm",
+					args: ["-rf", "/tmp/demo"],
+					shell: false,
+					destructive: true,
+					writesFilesystem: true,
+				},
+			},
+		});
+		expect(defaultSandboxEvaluator(request, {} as never)).toMatchObject({
+			kind: "deny",
+			reasonCodes: expect.arrayContaining(["destructive_process_denied"]),
 		});
 	});
 

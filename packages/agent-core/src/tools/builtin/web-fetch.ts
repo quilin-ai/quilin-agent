@@ -13,9 +13,15 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_REDIRECTS = 3;
 const ALLOWED_DNS_HOSTNAME = /^[a-z][a-z0-9.-]*$/i;
 const SENSITIVE_HEADER_NAMES = new Set([
+	"api-key",
+	"apikey",
 	"authorization",
 	"cookie",
 	"proxy-authorization",
+	"x-api-key",
+	"x-auth-token",
+	"x-goog-api-key",
+	"x-amz-security-token",
 ]);
 
 const require = createRequire(import.meta.url);

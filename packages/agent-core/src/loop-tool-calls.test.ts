@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { executeToolCalls } from "./loop-tool-calls.js";
+import { createAgentLoopTelemetry } from "./observability/loop.js";
+import { OTelSpanProvider } from "./observability/span.js";
 import type { ToolRouter } from "./tools/router.js";
 import type { ToolCall, ToolResult } from "./tools/types.js";
 
@@ -170,5 +172,46 @@ describe("executeToolCalls safety integration", () => {
 			content: "owner [REDACTED:email]",
 			authorization: "[REDACTED]",
 		});
+	});
+
+	it("keeps raw tool output secrets out of telemetry span snapshots", async () => {
+		const spans = new OTelSpanProvider();
+		const telemetry = createAgentLoopTelemetry({ spans }, [
+			{ role: "user", content: "run tool" },
+		]).startTurn({
+			turnIndex: 0,
+			messages: [{ role: "user", content: "run tool" }],
+		});
+		const router = createRouter({
+			toolCallId: "call-1",
+			content: JSON.stringify({
+				error: "failed with AKIAIOSFODNN7EXAMPLE for alpha@example.com",
+			}),
+			isError: true,
+		});
+		const messages: Parameters<typeof executeToolCalls>[0]["workingMessages"] =
+			[];
+
+		await executeToolCalls({
+			router,
+			toolCalls: [
+				{
+					id: "call-1",
+					name: "web_fetch",
+					arguments: { url: "https://example.test" },
+				},
+			],
+			turnCount: 1,
+			workingMessages: messages,
+			telemetry,
+			consecutiveBlockedToolOutputs: 0,
+		});
+		telemetry.end(false);
+
+		const snapshots = JSON.stringify(spans.snapshot());
+		expect(messages[0]?.content).toContain("[REDACTED:aws_access_key]");
+		expect(messages[0]?.content).toContain("[REDACTED:email]");
+		expect(snapshots).not.toContain("AKIAIOSFODNN7EXAMPLE");
+		expect(snapshots).not.toContain("alpha@example.com");
 	});
 });

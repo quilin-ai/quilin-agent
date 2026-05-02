@@ -15,7 +15,7 @@ import {
 	startObservabilityDashboard,
 } from "./dashboard.js";
 import type { SerializedSpan } from "./exporters/json-file.js";
-import type { TraceStore } from "./trace-store.js";
+import type { TraceQuery, TraceStore } from "./trace-store.js";
 
 const servers: ReturnType<typeof createServer>[] = [];
 const traceId = "a".repeat(32);
@@ -128,7 +128,8 @@ describe("observability dashboard", () => {
 					runId: "run-stale",
 					taskId: "task-stale",
 					status: "active",
-					summary: "still working",
+					summary:
+						"still working for alpha@example.com at /Users/alice/.ssh/id_rsa",
 					currentStep: "checking progress",
 					lastHeartbeatAt: "2026-05-02T07:57:00.000Z",
 					nextCheckpointAt: "2026-05-02T07:59:30.000Z",
@@ -183,7 +184,8 @@ describe("observability dashboard", () => {
 			eventType: "child_heartbeat",
 			severity: "info",
 			title: "Child heartbeat: active",
-			summary: "still working",
+			summary:
+				"still working for [REDACTED:email] at [REDACTED:sensitive_path]",
 			childRunId: "run-stale",
 			taskId: "task-stale",
 			timestamp: "2026-05-02T07:57:00.000Z",
@@ -254,6 +256,32 @@ describe("observability dashboard", () => {
 			error: "bad_request",
 			message: "Invalid numeric query parameter: oops",
 		});
+	});
+
+	it("does not apply the list default limit to trace detail routes", async () => {
+		const observedQueries: TraceQuery[] = [];
+		const traceStore = {
+			querySpanSnapshots: async () => ({
+				spans: [],
+				skippedLines: 0,
+				files: [],
+			}),
+			querySpans: async (query: TraceQuery) => {
+				observedQueries.push(query);
+				return { spans: [], skippedLines: 0, files: [] };
+			},
+		} as unknown as TraceStore;
+		const baseUrl = await startDashboardWithTraceStore(traceStore);
+
+		await fetch(`${baseUrl}/traces?trace_id=${traceId}`);
+		await fetch(`${baseUrl}/traces/${traceId}`);
+		await fetch(`${baseUrl}/traces/${traceId}?limit=1`);
+
+		expect(observedQueries).toEqual([
+			{ traceId, limit: 100 },
+			{ traceId, limit: undefined },
+			{ traceId, limit: 1 },
+		]);
 	});
 
 	it("returns non-leaky internal errors for trace storage failures", async () => {

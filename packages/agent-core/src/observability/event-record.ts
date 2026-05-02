@@ -4,6 +4,7 @@ import {
 	type RuntimeReloadAuditEventInput,
 } from "../config/runtime.js";
 import type { ContextTraceSummary } from "../context/draft/source-types.js";
+import { redactJsonLikeValue } from "../safety/redaction.js";
 import type {
 	ToolInvocationAuditBatchSummary,
 	ToolInvocationAuditSummary,
@@ -175,10 +176,11 @@ function toJsonValue(value: unknown, path: string): ObservabilityJsonValue {
 
 function toJsonPayload(payload: unknown): ObservabilityEventPayload {
 	const jsonValue = toJsonValue(payload, "payload");
-	if (!isPlainObject(jsonValue)) {
+	const redactedJsonValue = redactJsonLikeValue(jsonValue);
+	if (!isPlainObject(redactedJsonValue)) {
 		throw new Error("Observability event payload must be an object");
 	}
-	return jsonValue as ObservabilityEventPayload;
+	return redactedJsonValue as ObservabilityEventPayload;
 }
 
 function isRuntimeReloadAuditEvent(

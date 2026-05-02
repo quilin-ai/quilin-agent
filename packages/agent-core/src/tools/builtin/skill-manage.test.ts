@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -7,6 +7,7 @@ import { renderSkillsCatalog } from "../../skills/catalog-renderer.js";
 import { parseSkillMarkdown } from "../../skills/frontmatter.js";
 import { SkillsManager } from "../../skills/manager.js";
 import { ToolRouter } from "../router.js";
+import { resolveSandboxPolicy } from "../sandbox.js";
 import { createBuiltinTools } from "./index.js";
 
 const createdDirs: string[] = [];
@@ -15,6 +16,18 @@ async function createTempDir(): Promise<string> {
 	const dir = await mkdtemp(join(tmpdir(), "quilin-skill-manage-tool-"));
 	createdDirs.push(dir);
 	return dir;
+}
+
+function createSandboxAllowingRouter(
+	tools: ReturnType<typeof createBuiltinTools>,
+): ToolRouter {
+	return new ToolRouter(tools, {
+		sandboxEvaluator: () => ({
+			kind: "allow",
+			reasonCodes: [],
+			requiredApprovals: [],
+		}),
+	});
 }
 
 afterEach(async () => {
@@ -38,6 +51,137 @@ describe("builtin skill_manage tool", () => {
 		expect(tools.map((tool) => tool.name)).toContain("skill_manage");
 	});
 
+	it("uses actual skill target paths in sandbox requests", async () => {
+		const userRoot = await createTempDir();
+		const skillsManager = new SkillsManager({ userRoots: [userRoot] });
+		const existingPath = join(userRoot, "existing-skill", "SKILL.md");
+		await mkdir(join(userRoot, "existing-skill"), { recursive: true });
+		await writeFile(
+			existingPath,
+			[
+				"---",
+				"name: existing-skill",
+				"description: Existing skill description",
+				"userInvocable: true",
+				"disableModelInvocation: false",
+				"trust: community",
+				"---",
+				"# Existing Skill",
+			].join("\n"),
+		);
+		await skillsManager.discover();
+		const [tool] = createBuiltinTools({
+			skillsManager,
+			writeAuthority: new WriteAuthority({
+				mode: "ask",
+				confirm: async () => true,
+			}),
+			skillManage: {
+				userRoot,
+			},
+		}).filter((candidate) => candidate.name === "skill_manage");
+
+		if (tool?.sandboxPolicy == null) {
+			throw new Error("skill_manage sandbox policy is not configured");
+		}
+
+		const createRequest = await resolveSandboxPolicy(tool.sandboxPolicy, {
+			toolCallId: "call-skill-create",
+			requestedToolName: "skill_manage",
+			resolvedToolName: "skill_manage",
+			parsedArguments: {
+				action: "create",
+				descriptor: {
+					name: "sandboxed-skill",
+					description: "Sandboxed skill description",
+					path: "/tmp/not-the-managed-target/SKILL.md",
+					source: "user",
+					frontmatter: {
+						name: "sandboxed-skill",
+						description: "Sandboxed skill description",
+						userInvocable: true,
+						disableModelInvocation: false,
+					},
+				},
+				body: "# Sandboxed Skill",
+			},
+			origin: "agent",
+			category: "programmatic",
+			riskLevel: "high-risk",
+			sandboxOperation: "write",
+		});
+		const updateRequest = await resolveSandboxPolicy(tool.sandboxPolicy, {
+			toolCallId: "call-skill-update",
+			requestedToolName: "skill_manage",
+			resolvedToolName: "skill_manage",
+			parsedArguments: {
+				action: "update",
+				name: "existing-skill",
+				patch: {
+					path: "/tmp/not-the-managed-target/SKILL.md",
+					frontmatter: {
+						description: "Updated existing skill description",
+					},
+				},
+			},
+			origin: "agent",
+			category: "programmatic",
+			riskLevel: "high-risk",
+			sandboxOperation: "write",
+		});
+		const deleteRequest = await resolveSandboxPolicy(tool.sandboxPolicy, {
+			toolCallId: "call-skill-delete",
+			requestedToolName: "skill_manage",
+			resolvedToolName: "skill_manage",
+			parsedArguments: {
+				action: "delete",
+				name: "existing-skill",
+				reason: "cleanup",
+			},
+			origin: "agent",
+			category: "programmatic",
+			riskLevel: "high-risk",
+			sandboxOperation: "write",
+		});
+
+		expect(createRequest).toEqual({
+			operation: "write",
+			origin: "agent",
+			signals: {
+				paths: [
+					{
+						path: join(userRoot, "sandboxed-skill", "SKILL.md"),
+						access: "write",
+					},
+				],
+			},
+		});
+		expect(updateRequest).toEqual({
+			operation: "write",
+			origin: "agent",
+			signals: {
+				paths: [
+					{
+						path: existingPath,
+						access: "write",
+					},
+				],
+			},
+		});
+		expect(deleteRequest).toEqual({
+			operation: "delete",
+			origin: "agent",
+			signals: {
+				paths: [
+					{
+						path: existingPath,
+						access: "delete",
+					},
+				],
+			},
+		});
+	});
+
 	it("creates a skill through ToolRouter and exposes it to the catalog in the same session", async () => {
 		const userRoot = await createTempDir();
 		const skillsManager = new SkillsManager({ userRoots: [userRoot] });
@@ -52,7 +196,7 @@ describe("builtin skill_manage tool", () => {
 				userRoot,
 			},
 		});
-		const router = new ToolRouter(tools);
+		const router = createSandboxAllowingRouter(tools);
 
 		const result = await router.execute({
 			id: "call-1",
@@ -103,7 +247,7 @@ describe("builtin skill_manage tool", () => {
 				userRoot,
 			},
 		});
-		const router = new ToolRouter(tools);
+		const router = createSandboxAllowingRouter(tools);
 
 		const createResult = await router.execute({
 			id: "call-self-promote-create",
@@ -181,7 +325,7 @@ describe("builtin skill_manage tool", () => {
 				userRoot,
 			},
 		});
-		const router = new ToolRouter(tools);
+		const router = createSandboxAllowingRouter(tools);
 		const initialDependencies = {
 			skills: ["planner"],
 			tools: ["file_read"],
@@ -268,7 +412,7 @@ describe("builtin skill_manage tool", () => {
 				projectRoot,
 			},
 		});
-		const router = new ToolRouter(tools);
+		const router = createSandboxAllowingRouter(tools);
 
 		const result = await router.execute({
 			id: "call-project-create",
@@ -312,7 +456,7 @@ describe("builtin skill_manage tool", () => {
 				userRoot,
 			},
 		});
-		const router = new ToolRouter(tools);
+		const router = createSandboxAllowingRouter(tools);
 
 		const result = await router.execute({
 			id: "call-2",
@@ -352,7 +496,7 @@ describe("builtin skill_manage tool", () => {
 				userRoot,
 			},
 		});
-		const router = new ToolRouter(tools);
+		const router = createSandboxAllowingRouter(tools);
 		const descriptor = {
 			name: "mutable-skill",
 			description: "Mutable skill description",
@@ -430,7 +574,7 @@ describe("builtin skill_manage tool", () => {
 				userRoot,
 			},
 		});
-		const router = new ToolRouter(tools);
+		const router = createSandboxAllowingRouter(tools);
 
 		const result = await router.execute({
 			id: "call-manager-error",

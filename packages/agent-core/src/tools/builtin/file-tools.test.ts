@@ -466,7 +466,7 @@ describe("builtin file tools", () => {
 		expect(await readFile(filePath, "utf8")).toBe("confirmed");
 	});
 
-	it("blocks root-prefixed system paths and ssh private key names", async () => {
+	it("blocks root-prefixed system paths and cloud credential directories", async () => {
 		const systemTool = createFileReadTool({ allowedRoots: ["/"] });
 		const systemResult = await systemTool.execute({ path: "/root/.npmrc" });
 		expect(systemResult.isError).toBe(true);
@@ -476,16 +476,21 @@ describe("builtin file tools", () => {
 
 		const fakeHome = join(tempDir, "home");
 		const sshDir = join(fakeHome, ".ssh");
+		const gcloudDir = join(fakeHome, ".config", "gcloud");
 		const keyPath = join(sshDir, "id_ed25519");
 		const publicKeyPath = join(sshDir, "deploy_key.pub");
+		const gcloudPath = join(gcloudDir, "application_default_credentials.json");
 		vi.stubEnv("HOME", fakeHome);
 		await mkdir(sshDir, { recursive: true });
+		await mkdir(gcloudDir, { recursive: true });
 		await writeFile(keyPath, "PRIVATE KEY", "utf8");
 		await writeFile(publicKeyPath, "ssh-ed25519 AAAATEST user@example", "utf8");
+		await writeFile(gcloudPath, "{}", "utf8");
 
 		const keyTool = createFileReadTool({ allowedRoots: [fakeHome] });
 		const keyResult = await keyTool.execute({ path: keyPath });
 		const publicKeyResult = await keyTool.execute({ path: publicKeyPath });
+		const gcloudResult = await keyTool.execute({ path: gcloudPath });
 
 		expect(keyResult.isError).toBe(true);
 		expect(JSON.parse(keyResult.content)).toEqual({
@@ -494,6 +499,10 @@ describe("builtin file tools", () => {
 		expect(publicKeyResult.isError).toBe(true);
 		expect(JSON.parse(publicKeyResult.content)).toEqual({
 			error: expect.stringContaining("deploy_key.pub"),
+		});
+		expect(gcloudResult.isError).toBe(true);
+		expect(JSON.parse(gcloudResult.content)).toEqual({
+			error: expect.stringContaining("application_default_credentials.json"),
 		});
 	});
 });

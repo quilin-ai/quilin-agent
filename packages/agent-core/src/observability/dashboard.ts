@@ -9,6 +9,7 @@ import type {
 	SupervisorProgressEventSeverity,
 	SupervisorProgressEventType,
 } from "../multi-agent/supervisor-progress.js";
+import { redactString } from "../safety/redaction.js";
 import { renderPrometheusMetrics } from "./exporters/prometheus.js";
 import { aggregateSpanMetrics } from "./metrics.js";
 import { type TraceQuery, TraceStore } from "./trace-store.js";
@@ -82,10 +83,11 @@ function eventTitleAndSummary(
 		case "child_heartbeat":
 			return {
 				title: `Child heartbeat: ${event.payload.status}`,
-				summary:
+				summary: redactString(
 					event.payload.summary ||
-					event.payload.currentStep ||
-					`${event.runId} reported ${event.payload.status}.`,
+						event.payload.currentStep ||
+						`${event.runId} reported ${event.payload.status}.`,
+				),
 			};
 		case "child_checkpoint":
 			return {
@@ -310,7 +312,7 @@ export function createObservabilityDashboardHandler(
 			const traceId = traceIdFromPath(url.pathname);
 			if (traceId != null) {
 				const result = await traceStore.querySpans({
-					...parseTraceQuery(url, defaultTraceLimit),
+					...parseTraceQuery(url, undefined),
 					traceId,
 				});
 				write(

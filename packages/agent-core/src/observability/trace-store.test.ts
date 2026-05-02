@@ -150,14 +150,20 @@ describe("TraceStore", () => {
 		});
 	});
 
-	it("applies zero and positive record limits without reading extra files", async () => {
+	it("applies zero and positive record limits to latest spans first", async () => {
 		const logsDir = await tempLogsDir();
 		await writeTraceFile(logsDir, "2026-04-25", [
-			JSON.stringify(serializedSpan({ span_id: "1".repeat(16) })),
-			JSON.stringify(serializedSpan({ span_id: "2".repeat(16) })),
+			JSON.stringify(
+				serializedSpan({ span_id: "1".repeat(16), start_time_unix_ms: 100 }),
+			),
+			JSON.stringify(
+				serializedSpan({ span_id: "2".repeat(16), start_time_unix_ms: 200 }),
+			),
 		]);
 		await writeTraceFile(logsDir, "2026-04-26", [
-			JSON.stringify(serializedSpan({ span_id: "3".repeat(16) })),
+			JSON.stringify(
+				serializedSpan({ span_id: "3".repeat(16), start_time_unix_ms: 300 }),
+			),
 		]);
 
 		const zeroLimit = await new TraceStore({ logsDir }).querySpans({
@@ -167,10 +173,52 @@ describe("TraceStore", () => {
 
 		expect(zeroLimit).toEqual({ spans: [], skippedLines: 0, files: [] });
 		expect(twoSpans.spans.map((span) => span.span_id)).toEqual([
-			"1".repeat(16),
+			"3".repeat(16),
 			"2".repeat(16),
 		]);
-		expect(twoSpans.files).toEqual(["traces-2026-04-25.jsonl"]);
+		expect(twoSpans.files).toEqual([
+			"traces-2026-04-26.jsonl",
+			"traces-2026-04-25.jsonl",
+		]);
+	});
+
+	it("redacts string attributes and event attributes when reading traces", async () => {
+		const logsDir = await tempLogsDir();
+		await writeTraceFile(logsDir, "2026-04-25", [
+			JSON.stringify(
+				serializedSpan({
+					span_id: "1".repeat(16),
+					attributes: {
+						"turn.index": 1,
+						"turn.user_input_redacted":
+							"email alpha@example.com token AKIAIOSFODNN7EXAMPLE path /Users/alice/.config/gcloud/application_default_credentials.json",
+					},
+					events: [
+						{
+							name: "heartbeat",
+							timestamp_unix_ms: 105,
+							attributes: {
+								"event.summary":
+									"JWT eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijklmnop",
+							},
+						},
+					],
+				}),
+			),
+		]);
+
+		const result = await new TraceStore({ logsDir }).querySpans({
+			date: "2026-04-25",
+		});
+		const serialized = JSON.stringify(result.spans);
+
+		expect(serialized).toContain("[REDACTED:email]");
+		expect(serialized).toContain("[REDACTED:aws_access_key]");
+		expect(serialized).toContain("[REDACTED:sensitive_path]");
+		expect(serialized).toContain("[REDACTED:jwt]");
+		expect(serialized).not.toContain("alpha@example.com");
+		expect(serialized).not.toContain("AKIAIOSFODNN7EXAMPLE");
+		expect(serialized).not.toContain("application_default_credentials");
 	});
 
 	it("only reads the requested trace date", async () => {

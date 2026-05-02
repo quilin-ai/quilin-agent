@@ -16,6 +16,11 @@ describe("redaction", () => {
 			"sk-abcdefghijklmnopqrstuvwxyz012345",
 			"ghp_abcdefghijklmnopqrstuvwxyz0123456789",
 			"xoxb-1234567890-ABCDEFGHIJ-secretvalue",
+			"AKIAIOSFODNN7EXAMPLE",
+			"AIzaSyDabcdefghijklmnopqrstuvwxyz123456",
+			"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijklmnop",
+			"-----BEGIN OPENSSH PRIVATE KEY-----\nsecret-body\n-----END OPENSSH PRIVATE KEY-----",
+			"/Users/alice/.config/gcloud/application_default_credentials.json",
 		].join("\n");
 
 		const output = redactString(input);
@@ -25,6 +30,11 @@ describe("redaction", () => {
 		expect(output).toContain("[REDACTED:openai_key]");
 		expect(output).toContain("[REDACTED:github_token]");
 		expect(output).toContain("[REDACTED:slack_token]");
+		expect(output).toContain("[REDACTED:aws_access_key]");
+		expect(output).toContain("[REDACTED:google_api_key]");
+		expect(output).toContain("[REDACTED:jwt]");
+		expect(output).toContain("[REDACTED:pem_private_key]");
+		expect(output).toContain("[REDACTED:sensitive_path]");
 		expect(output).toBe(redactString(input));
 		expect(hasSecretPattern(output)).toBe(false);
 	});

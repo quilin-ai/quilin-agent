@@ -17,8 +17,29 @@ const REDACTED_ENV_SECRET = "[REDACTED:env_secret]";
 const SECRET_PATTERNS: ReadonlyArray<{
 	readonly kind: string;
 	readonly regex: RegExp;
-	readonly replacement: string | ((match: string) => string);
+	readonly replacement: string | ((...args: string[]) => string);
 }> = [
+	{
+		kind: "pem_private_key",
+		regex:
+			/-----BEGIN (?:[A-Z0-9]+ )?PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z0-9]+ )?PRIVATE KEY-----/g,
+		replacement: "[REDACTED:pem_private_key]",
+	},
+	{
+		kind: "aws_access_key",
+		regex: /\b(?:A3T[A-Z0-9]|AKIA|ASIA|AGPA|AIDA|AROA)[A-Z0-9]{16}\b/g,
+		replacement: "[REDACTED:aws_access_key]",
+	},
+	{
+		kind: "google_api_key",
+		regex: /\bAIza[A-Za-z0-9_-]{35}\b/g,
+		replacement: "[REDACTED:google_api_key]",
+	},
+	{
+		kind: "jwt",
+		regex: /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g,
+		replacement: "[REDACTED:jwt]",
+	},
 	{
 		kind: "bearer_token",
 		regex: /\bBearer\s+[A-Za-z0-9._~+/=-]{12,}/gi,
@@ -49,6 +70,12 @@ const SECRET_PATTERNS: ReadonlyArray<{
 		kind: "email",
 		regex: /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi,
 		replacement: "[REDACTED:email]",
+	},
+	{
+		kind: "sensitive_path",
+		regex:
+			/(^|[\s"'=:(])((?:~|\/Users\/[^/\s"'<>]+|\/home\/[^/\s"'<>]+)\/(?:\.aws|\.azure|\.config\/gcloud|\.gcloud|\.kube|\.ssh)(?:\/[^\s"'<>]*)?)/gi,
+		replacement: "$1[REDACTED:sensitive_path]",
 	},
 ];
 

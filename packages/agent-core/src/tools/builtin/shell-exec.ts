@@ -279,6 +279,39 @@ function findBlockedCommandReason(
 	return undefined;
 }
 
+function isDestructiveCommand(
+	command: string,
+	executable: string | undefined,
+	args: readonly string[],
+): boolean {
+	if (FORK_BOMB_PATTERN.test(command) || DISK_WIPE_PATTERN.test(command)) {
+		return true;
+	}
+
+	if (executable == null || !/^rm$/i.test(executableBaseName(executable))) {
+		return false;
+	}
+
+	const hasRecursiveForceFlag = args.some(
+		(arg) =>
+			/^-[^-]*r[^-]*f[^-]*$/i.test(arg) || /^-[^-]*f[^-]*r[^-]*$/i.test(arg),
+	);
+	const targetsDangerousLocation = args.some((arg) => {
+		return (
+			arg === "/" ||
+			arg === "~" ||
+			arg === "$HOME" ||
+			arg.startsWith("~/") ||
+			arg.startsWith("$HOME/") ||
+			arg.startsWith("/Users") ||
+			arg.startsWith("/home") ||
+			arg.startsWith("/")
+		);
+	});
+
+	return hasRecursiveForceFlag && targetsDangerousLocation;
+}
+
 function createSandboxRequestFromArgs(
 	args: unknown,
 	origin: SandboxRequest["origin"],
@@ -305,6 +338,9 @@ function createSandboxRequestFromArgs(
 				...(executable == null ? {} : { executable }),
 				args: commandArgs,
 				shell: isShellWrapperInvocation(executable, commandArgs),
+				...(isDestructiveCommand(commandLine, executable, commandArgs)
+					? { destructive: true }
+					: {}),
 				writesFilesystem: mayWriteFilesystem(
 					commandLine,
 					executable,

@@ -112,6 +112,7 @@ async function isSensitivePath(filePath: string): Promise<boolean> {
 	const exactSensitivePaths = [
 		join(homePath, ".aws", "credentials"),
 		join(homePath, ".aws", "config"),
+		join(homePath, ".config", "gcloud", "application_default_credentials.json"),
 		join(homePath, ".kube", "config"),
 		join(homePath, ".npmrc"),
 		join(homePath, ".pypirc"),
@@ -126,6 +127,7 @@ async function isSensitivePath(filePath: string): Promise<boolean> {
 	const sensitiveDirectoryPrefixes = [
 		join(homePath, ".gcloud"),
 		join(homePath, ".azure"),
+		join(homePath, ".config", "gcloud"),
 	].map(normalizePath);
 	if (
 		sensitiveDirectoryPrefixes.some(

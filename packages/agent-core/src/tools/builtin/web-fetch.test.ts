@@ -37,6 +37,7 @@ describe("builtin web_fetch tool", () => {
 				method: "POST",
 				headers: {
 					Authorization: "Bearer token",
+					"X-API-Key": "api-key",
 					"x-test": "1",
 				},
 			},
@@ -437,6 +438,9 @@ describe("builtin web_fetch tool", () => {
 				Authorization: "Bearer top-secret",
 				Cookie: "session=abc",
 				"Proxy-Authorization": "Basic dGVzdA==",
+				"X-API-Key": "api-secret",
+				"X-Auth-Token": "auth-secret",
+				"Api-Key": "legacy-secret",
 				"x-test": "1",
 			},
 		});
@@ -474,6 +478,7 @@ describe("builtin web_fetch tool", () => {
 			headers: {
 				Authorization: "Bearer top-secret",
 				Cookie: "session=abc",
+				"X-API-Key": "api-secret",
 				"x-test": "1",
 			},
 		});
@@ -485,6 +490,7 @@ describe("builtin web_fetch tool", () => {
 				headers: {
 					Authorization: "Bearer top-secret",
 					Cookie: "session=abc",
+					"X-API-Key": "api-secret",
 					"x-test": "1",
 				},
 			}),
