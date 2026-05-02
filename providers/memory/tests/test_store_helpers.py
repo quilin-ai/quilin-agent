@@ -63,33 +63,45 @@ def test_row_to_record_uses_safe_defaults_for_nullable_legacy_rows() -> None:
     assert record.last_accessed == now
 
 
-def test_row_to_record_maps_legacy_short_tier_without_accepting_new_short_writes() -> None:
+@pytest.mark.parametrize(
+    ("legacy_tier", "canonical_tier"),
+    [("short", "working"), ("long", "semantic")],
+)
+def test_row_to_record_maps_legacy_tier_aliases_without_accepting_new_writes(
+    legacy_tier: str,
+    canonical_tier: str,
+) -> None:
     now = datetime(2026, 4, 25, tzinfo=UTC)
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     row = conn.execute(
         """
         SELECT
-            'memory-legacy-short' AS id,
-            'legacy short memory' AS content,
+            ? AS id,
+            ? AS content,
             'text' AS content_type,
-            'short' AS tier,
+            ? AS tier,
             NULL AS metadata_json,
             NULL AS embedding_json,
             NULL AS created_at,
             NULL AS last_accessed,
             0 AS access_count,
             0.5 AS importance_score
-        """
+        """,
+        (
+            f"memory-legacy-{legacy_tier}",
+            f"legacy {legacy_tier} memory",
+            legacy_tier,
+        ),
     ).fetchone()
 
     record = row_to_record(row, now=lambda: now)
     conn.close()
 
-    assert record.layer == "working"
-    assert deserialize_memory_tier("short") == "working"
+    assert record.layer == canonical_tier
+    assert deserialize_memory_tier(legacy_tier) == canonical_tier
     with pytest.raises(ValueError, match="Invalid memory tier"):
-        validate_memory_tier("short")
+        validate_memory_tier(legacy_tier)
 
 
 def test_store_filters_cover_aliases_dates_and_invalid_values() -> None:

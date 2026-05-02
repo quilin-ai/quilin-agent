@@ -45,6 +45,13 @@ interface IdentityGuardResult {
 	readonly assignment?: IdentityAssignment;
 }
 
+interface LegacyMemoryTierNormalizationResult {
+	readonly toolCall: ToolCall;
+	readonly rewritten: boolean;
+	readonly legacyTier?: string;
+	readonly canonicalTier?: "working" | "semantic";
+}
+
 export interface IdentityMemoryCorrectionSummary {
 	readonly toolCallId: string;
 	readonly toolName: string;
@@ -52,10 +59,29 @@ export interface IdentityMemoryCorrectionSummary {
 	readonly userNameChars: number;
 }
 
+export interface LegacyMemoryTierCorrectionSummary {
+	readonly toolCallId: string;
+	readonly toolName: string;
+	readonly legacyTier: string;
+	readonly canonicalTier: "working" | "semantic";
+}
+
 export interface CorrectIdentityMemoryToolCallsResult {
 	readonly toolCalls: readonly ToolCall[];
 	readonly corrections: readonly IdentityMemoryCorrectionSummary[];
 }
+
+export interface NormalizeLegacyMemoryTierToolCallsResult {
+	readonly toolCalls: readonly ToolCall[];
+	readonly corrections: readonly LegacyMemoryTierCorrectionSummary[];
+}
+
+const LEGACY_MEMORY_TIER_ALIASES: Readonly<
+	Record<string, "working" | "semantic">
+> = {
+	short: "working",
+	long: "semantic",
+};
 
 function shortToolName(name: string): string {
 	const slashIndex = name.lastIndexOf("/");
@@ -174,6 +200,37 @@ function correctInvertedIdentityMemoryCall(
 	};
 }
 
+function normalizeLegacyMemoryTierCall(
+	toolCall: ToolCall,
+): LegacyMemoryTierNormalizationResult {
+	if (shortToolName(toolCall.name) !== "memory_store") {
+		return { toolCall, rewritten: false };
+	}
+
+	const tier = toolCall.arguments.tier;
+	if (typeof tier !== "string") {
+		return { toolCall, rewritten: false };
+	}
+
+	const canonicalTier = LEGACY_MEMORY_TIER_ALIASES[tier];
+	if (canonicalTier == null) {
+		return { toolCall, rewritten: false };
+	}
+
+	return {
+		toolCall: {
+			...toolCall,
+			arguments: {
+				...toolCall.arguments,
+				tier: canonicalTier,
+			},
+		},
+		rewritten: true,
+		legacyTier: tier,
+		canonicalTier,
+	};
+}
+
 function replaceAssistantToolCall(
 	messages: Message[],
 	updatedToolCall: ToolCall,
@@ -240,6 +297,37 @@ export function correctInvertedIdentityMemoryToolCalls(
 	};
 }
 
+export function normalizeLegacyMemoryTierToolCalls(
+	toolCalls: readonly ToolCall[],
+): NormalizeLegacyMemoryTierToolCallsResult {
+	const corrections: LegacyMemoryTierCorrectionSummary[] = [];
+	let changed = false;
+	const normalizedToolCalls = toolCalls.map((toolCall) => {
+		const tierNormalization = normalizeLegacyMemoryTierCall(toolCall);
+		if (
+			!tierNormalization.rewritten ||
+			tierNormalization.legacyTier == null ||
+			tierNormalization.canonicalTier == null
+		) {
+			return toolCall;
+		}
+
+		changed = true;
+		corrections.push({
+			toolCallId: toolCall.id,
+			toolName: toolCall.name,
+			legacyTier: tierNormalization.legacyTier,
+			canonicalTier: tierNormalization.canonicalTier,
+		});
+		return tierNormalization.toolCall;
+	});
+
+	return {
+		toolCalls: changed ? normalizedToolCalls : toolCalls,
+		corrections,
+	};
+}
+
 function summarizeThreat(threat: ThreatMatch): Record<string, unknown> {
 	return {
 		pattern: threat.pattern,
@@ -253,8 +341,25 @@ export async function executeToolCalls(
 	options: ExecuteToolCallsOptions,
 ): Promise<number> {
 	let consecutiveBlockedToolOutputs = options.consecutiveBlockedToolOutputs;
-	const identityGuard = correctInvertedIdentityMemoryToolCalls(
+	const tierNormalization = normalizeLegacyMemoryTierToolCalls(
 		options.toolCalls,
+	);
+	for (const correction of tierNormalization.corrections) {
+		const toolCall = tierNormalization.toolCalls.find(
+			(candidate) => candidate.id === correction.toolCallId,
+		);
+		if (toolCall != null) {
+			replaceAssistantToolCall(options.workingMessages, toolCall);
+		}
+		await recordAgentRunEvent(
+			options.runLogger,
+			"tool.memory_tier_alias_normalized",
+			{ ...correction },
+			{ turnId: options.turnId },
+		);
+	}
+	const identityGuard = correctInvertedIdentityMemoryToolCalls(
+		tierNormalization.toolCalls,
 		options.workingMessages,
 	);
 	for (const correction of identityGuard.corrections) {

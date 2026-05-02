@@ -801,7 +801,7 @@ describe("runAgentLoop", () => {
 		const execute = vi.fn().mockResolvedValue({
 			toolCallId: "ignored-by-router",
 			content: JSON.stringify({
-				records: [{ id: "mem-1", content: "用户叫小明", tier: "short" }],
+				records: [{ id: "mem-1", content: "用户叫小明", tier: "working" }],
 			}),
 			isError: false,
 		});
@@ -853,7 +853,7 @@ describe("runAgentLoop", () => {
 					toolCallId: "call-1",
 					name: "memory_recall",
 					content: JSON.stringify({
-						records: [{ id: "mem-1", content: "用户叫小明", tier: "short" }],
+						records: [{ id: "mem-1", content: "用户叫小明", tier: "working" }],
 					}),
 				},
 			],
@@ -1086,7 +1086,7 @@ describe("runAgentLoop", () => {
 		const execute = vi.fn().mockResolvedValue({
 			toolCallId: "ignored-by-router",
 			content: JSON.stringify({
-				records: [{ id: "mem-1", content: "用户叫小明", tier: "short" }],
+				records: [{ id: "mem-1", content: "用户叫小明", tier: "working" }],
 			}),
 			isError: false,
 		});
@@ -1167,7 +1167,7 @@ describe("runAgentLoop", () => {
 					toolCallId: "call-1",
 					name: "memory_recall",
 					content: JSON.stringify({
-						records: [{ id: "mem-1", content: "用户叫小明", tier: "short" }],
+						records: [{ id: "mem-1", content: "用户叫小明", tier: "working" }],
 					}),
 				},
 			],
@@ -2127,10 +2127,10 @@ describe("runAgentLoop", () => {
 						name: "memory_store",
 						description: "Store memory",
 						parameters: {
-							safeParse: vi.fn().mockReturnValue({
+							safeParse: vi.fn().mockImplementation((input) => ({
 								success: true,
-								data: { content: "用户叫小明", tier: "short" },
-							}),
+								data: input,
+							})),
 						} as never,
 						execute: storeExecute,
 					},
@@ -2149,6 +2149,10 @@ describe("runAgentLoop", () => {
 		expect(chat).toHaveBeenCalledTimes(3);
 		expect(recallExecute).toHaveBeenCalledTimes(1);
 		expect(storeExecute).toHaveBeenCalledTimes(1);
+		expect(storeExecute).toHaveBeenCalledWith({
+			content: "用户叫小明",
+			tier: "working",
+		});
 		expect(chat.mock.calls[2]?.[0]).toEqual([
 			{ role: "user", content: "记住我叫小明，然后告诉我你记住了" },
 			{
@@ -2175,7 +2179,7 @@ describe("runAgentLoop", () => {
 					{
 						id: "call-2",
 						name: "memory_store",
-						arguments: { content: "用户叫小明", tier: "short" },
+						arguments: { content: "用户叫小明", tier: "working" },
 					},
 				],
 			},
@@ -2193,7 +2197,7 @@ describe("runAgentLoop", () => {
 		const rawToolCall = {
 			id: "call-memory",
 			name: "memory_store",
-			arguments: { content: "用户叫小明，称呼用户为孟哥", tier: "working" },
+			arguments: { content: "用户叫小明，称呼用户为孟哥", tier: "short" },
 		};
 		const correctedContent =
 			"助手身份：用户指定 Quilin Agent 为小明。用户称呼偏好：用户希望被称呼为孟哥。";
@@ -2233,6 +2237,12 @@ describe("runAgentLoop", () => {
 			load: vi.fn(),
 			list: vi.fn(),
 		};
+		const runRecords: unknown[] = [];
+		const runLogger = {
+			record: vi.fn(async (record) => {
+				runRecords.push(record);
+			}),
+		};
 
 		await expect(
 			runAgentLoop(
@@ -2260,6 +2270,9 @@ describe("runAgentLoop", () => {
 							});
 						}),
 					},
+					observability: {
+						runLogger,
+					},
 					maxTurns: 2,
 					inferenceConfig: {
 						temperature: 0.7,
@@ -2284,6 +2297,9 @@ describe("runAgentLoop", () => {
 		expect(JSON.stringify(assistantToolCallUpdate?.messages)).not.toContain(
 			"用户叫小明",
 		);
+		expect(JSON.stringify(assistantToolCallUpdate?.messages)).not.toContain(
+			'"short"',
+		);
 		const assistantCheckpoint = savedStates.find(
 			(state) => state.messages.length === 2,
 		);
@@ -2293,6 +2309,28 @@ describe("runAgentLoop", () => {
 		expect(JSON.stringify(assistantCheckpoint?.messages)).not.toContain(
 			"用户叫小明",
 		);
+		expect(JSON.stringify(assistantCheckpoint?.messages)).not.toContain(
+			'"short"',
+		);
+		expect(runRecords).toContainEqual(
+			expect.objectContaining({
+				phase: "tool.memory_tier_alias_normalized",
+				payload: {
+					toolCallId: "call-memory",
+					toolName: "memory_store",
+					legacyTier: "short",
+					canonicalTier: "working",
+				},
+			}),
+		);
+		const selectedToolCallsRecord = runRecords.find(
+			(record) =>
+				typeof record === "object" &&
+				record != null &&
+				"phase" in record &&
+				record.phase === "planning.tool_calls_selected",
+		);
+		expect(JSON.stringify(selectedToolCallsRecord)).not.toContain('"short"');
 		expect(chat.mock.calls[1]?.[0]).toEqual([
 			{ role: "user", content: "你是小明！我是孟哥！记住" },
 			{

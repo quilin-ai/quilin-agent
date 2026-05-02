@@ -777,7 +777,7 @@ describe("VercelLLMClient", () => {
 					toolCallId: "call-1",
 					name: "memory_recall",
 					content: JSON.stringify({
-						records: [{ id: "mem-1", content: "用户叫小明", tier: "short" }],
+						records: [{ id: "mem-1", content: "用户叫小明", tier: "working" }],
 					}),
 				},
 			],
@@ -815,7 +815,7 @@ describe("VercelLLMClient", () => {
 								type: "json",
 								value: {
 									records: [
-										{ id: "mem-1", content: "用户叫小明", tier: "short" },
+										{ id: "mem-1", content: "用户叫小明", tier: "working" },
 									],
 								},
 							},
@@ -2244,7 +2244,7 @@ describe("StreamingLLMClient", () => {
 					{
 						toolCallId: "call-2",
 						toolName: "memory_store",
-						input: { content: "我叫小明", tier: "short" },
+						input: { content: "我叫小明", tier: "working" },
 					},
 				]),
 			}),
@@ -2268,7 +2268,7 @@ describe("StreamingLLMClient", () => {
 				{
 					id: "call-2",
 					name: "memory_store",
-					arguments: { content: "我叫小明", tier: "short" },
+					arguments: { content: "我叫小明", tier: "working" },
 				},
 			],
 			usage: {

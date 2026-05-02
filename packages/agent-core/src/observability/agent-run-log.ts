@@ -40,6 +40,7 @@ export type AgentRunLogPhase =
 	| "tool.call_completed"
 	| "tool.output_scanned"
 	| "tool.memory_identity_corrected"
+	| "tool.memory_tier_alias_normalized"
 	| "tool.result_appended"
 	| "tool.provenance_recorded"
 	| "assistant.response_final"
