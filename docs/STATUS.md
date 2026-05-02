@@ -1,10 +1,10 @@
-# Quilin Agent 当前状态
+# 当前状态 / Quilin Agent Status
 
-> 最后更新：2026-05-02。
->
-> 本文件是 `docs/` 下唯一的全局进度入口。组件级当前事实写在各
-> `docs/<component>/README.md`。历史快照通过 git history 追溯。
-> 任务管理与 backlog 统一迁移到 Linear；本文件只保留当前状态快照。
+This status snapshot was updated on 2026-05-02 / 本状态快照更新于 2026-05-02。
+
+This file is the only global progress entry point under `docs/`. Component-level current facts live in each `docs/<component>/README.md`. Historical snapshots are traced through git history. Task management and backlog tracking live in Linear; this file keeps only current-state snapshots.
+
+本文件是 `docs/` 下唯一的全局进度入口。组件级当前事实写在各 `docs/<component>/README.md`。历史快照通过 git history 追溯。任务管理与 backlog 统一迁移到 Linear；本文件只保留当前状态快照。
 
 ## 当前焦点 / Current Focus
 
@@ -16,9 +16,24 @@ Existing Benchmark code remains part of the current repository state. It is not 
 
 已有 Benchmark 代码仍是当前仓库状态的一部分，但不再是活跃路线图范围：`benchmarks/` 在 `src/` 和 `scripts/` 下有 62 个 TS/Python 源码与测试文件，`providers/memory/benchmarks/` 下有既有离线 memory benchmark harness 文件。这些文件可以作为历史/当前实现证据读取，但不能作为继续推进 Benchmark 实现的许可。
 
-Current local evidence: code-review-graph reports 298 indexed files, 3,764 nodes, and 39,093 edges. `packages/agent-core/src/loop.ts` is 199 LOC, so the custom TS core loop still satisfies the `<200 LOC` contract. Local file counts show 226 TypeScript files under `packages/agent-core/src`, 55 Python files under `providers/memory/src` and `providers/memory/tests`, and 3 Rust files/config entries under `crates/mesh-sdk`.
+Current local evidence from 2026-05-02 commands:
 
-当前本地实证：code-review-graph 报告已索引 298 个文件、3,764 个节点、39,093 条边。`packages/agent-core/src/loop.ts` 为 199 LOC，因此自研 TS core loop 仍满足 `<200 LOC` 契约。本地文件数显示 `packages/agent-core/src` 下有 226 个 TypeScript 文件，`providers/memory/src` 与 `providers/memory/tests` 下有 55 个 Python 文件，`crates/mesh-sdk` 下有 3 个 Rust 文件/配置项。
+2026-05-02 命令实证如下：
+
+- `list_graph_stats_tool` reports 298 indexed files, 3,764 nodes, and 39,093 edges.
+- `list_graph_stats_tool` 报告已索引 298 个文件、3,764 个节点、39,093 条边。
+- `wc -l packages/agent-core/src/loop.ts` reports 199 LOC, so the custom TS core loop still satisfies the `<200 LOC` contract.
+- `wc -l packages/agent-core/src/loop.ts` 报告 199 LOC，因此自研 TS core loop 仍满足 `<200 LOC` 契约。
+- `rg --files packages/agent-core/src -g '*.ts' | wc -l` reports 226 TypeScript files.
+- `rg --files packages/agent-core/src -g '*.ts' | wc -l` 报告 226 个 TypeScript 文件。
+- `rg --files providers/memory/src providers/memory/tests -g '*.py' | wc -l` reports 55 Python files.
+- `rg --files providers/memory/src providers/memory/tests -g '*.py' | wc -l` 报告 55 个 Python 文件。
+- `rg --files crates/mesh-sdk | wc -l` reports 3 Rust files/config entries.
+- `rg --files crates/mesh-sdk | wc -l` 报告 3 个 Rust 文件/配置项。
+- `rg --files benchmarks/src benchmarks/scripts -g '*.ts' -g '*.py' | wc -l` reports 62 Benchmark TS/Python source and test files.
+- `rg --files benchmarks/src benchmarks/scripts -g '*.ts' -g '*.py' | wc -l` 报告 62 个 Benchmark TS/Python 源码与测试文件。
+- `rg --files providers/memory/benchmarks | wc -l` reports 4 memory benchmark harness files.
+- `rg --files providers/memory/benchmarks | wc -l` 报告 4 个 memory benchmark harness 文件。
 
 Linear has been updated to match this freeze: the `Iter E 基准冲刺 / Benchmark Ascent` project is `Canceled` and `Low`; unfinished Benchmark issues `QUI-6`, `QUI-7`, `QUI-8`, `QUI-43`, `QUI-47`, and `QUI-70` are `Canceled` and `Low`. The available Linear MCP exposes cancel/update rather than hard-delete, so cancellation is the active-queue removal mechanism used for this session.
 
@@ -26,45 +41,45 @@ Linear 已同步这次冻结：`Iter E 基准冲刺 / Benchmark Ascent` project 
 
 ## 迭代状态 / Iteration State
 
-| Iter | 状态 | 当前含义 |
-|---|---:|---|
-| Phase 0 PoC | closed | Agent Loop + OmniMem MCP + REPL baseline，v0.0.3。 |
-| Iter A Grounded Context | closed | Context assembly、prompt builder、temporal awareness、memory bridge，v0.1.0-iter-a。 |
-| Iter B Tools + Skills + Safety | closed | Tool substrate、READ-ONLY default safety policy、Skills M0/M1 activation。 |
-| Iter C Planning Core | closed | Planning + inference strategy，与 memory 抽离并行完成。 |
-| Iter M Memory | closed | OmniMem 主体切片完成；L3a observer 仍 blocked/deferred。 |
-| Iter D Operability | closed | Observability、config、scratchpad、Rust `mesh-sdk` stub、CI 和 coverage gate。 |
-| Iter E Benchmark Ascent | frozen / canceled | Existing code remains in-tree; all unfinished Benchmark planning and implementation work is canceled in Linear. |
-| Iter F Scale-Out | governed by local runtime evidence | Supervisor、Agent Mesh、memory depth、self-evolution、Conversation Engineering must use local component gates first; no Benchmark code without explicit user request. |
+| Iter | 状态 | 当前含义 | 证据 |
+|---|---:|---|---|
+| Phase 0 PoC | closed | Agent Loop + OmniMem MCP + REPL baseline，v0.0.3。 | `packages/agent-core/src/loop.ts` + `providers/memory/src/omnimem/server.py` |
+| Iter A Grounded Context | closed | Context assembly、prompt builder、temporal awareness、memory bridge，v0.1.0-iter-a。 | `docs/02-context/README.md` |
+| Iter B Tools + Skills + Safety | closed | Tool substrate、READ-ONLY default safety policy、Skills M0/M1 activation。 | `docs/05-tool/README.md` + `docs/13-skills/README.md` + `docs/07-safety-guardrails/README.md` |
+| Iter C Planning Core | closed | Planning + inference strategy，与 memory 抽离并行完成。 | `docs/04-planning/README.md` |
+| Iter M Memory | closed | OmniMem 主体切片完成；L3a observer 仍 blocked/deferred。 | `docs/03-memory/README.md` |
+| Iter D Operability | closed | Observability、config、scratchpad、Rust `mesh-sdk` stub、CI 和 coverage gate。 | `docs/08-observability/README.md` + `crates/mesh-sdk/Cargo.toml` |
+| Iter E Benchmark Ascent | frozen / canceled | Existing code remains in-tree; all unfinished Benchmark planning and implementation work is canceled in Linear. | `docs/14-benchmark-harness/README.md` + `QUI-6` / `QUI-7` / `QUI-8` / `QUI-43` / `QUI-47` / `QUI-70` |
+| Iter F Scale-Out | governed by local runtime evidence | Supervisor、Agent Mesh、memory depth、self-evolution、Conversation Engineering must use local component gates first; no Benchmark code without explicit user request. | `docs/06-multi-agent/README.md` + `docs/11-agent-mesh/README.md` |
 
-| Iter | Status | Current Meaning |
-|---|---:|---|
-| Phase 0 PoC | closed | Agent Loop + OmniMem MCP + REPL baseline, v0.0.3. |
-| Iter A Grounded Context | closed | Context assembly, prompt builder, temporal awareness, memory bridge, v0.1.0-iter-a. |
-| Iter B Tools + Skills + Safety | closed | Tool substrate, READ-ONLY default safety policy, Skills M0/M1 activation. |
-| Iter C Planning Core | closed | Planning + inference strategy, completed alongside memory decoupling. |
-| Iter M Memory | closed | Main OmniMem slices completed; L3a observer remains blocked/deferred. |
-| Iter D Operability | closed | Observability, config, scratchpad, Rust `mesh-sdk` stub, CI, and coverage gate. |
-| Iter E Benchmark Ascent | frozen / canceled | Existing code remains in-tree; all unfinished Benchmark planning and implementation work is canceled in Linear. |
-| Iter F Scale-Out | governed by local runtime evidence | Supervisor, Agent Mesh, memory depth, self-evolution, and Conversation Engineering must use local component gates first; no Benchmark code without explicit user request. |
+| Iter | Status | Current Meaning | Evidence |
+|---|---:|---|---|
+| Phase 0 PoC | closed | Agent Loop + OmniMem MCP + REPL baseline, v0.0.3. | `packages/agent-core/src/loop.ts` + `providers/memory/src/omnimem/server.py` |
+| Iter A Grounded Context | closed | Context assembly, prompt builder, temporal awareness, memory bridge, v0.1.0-iter-a. | `docs/02-context/README.md` |
+| Iter B Tools + Skills + Safety | closed | Tool substrate, READ-ONLY default safety policy, Skills M0/M1 activation. | `docs/05-tool/README.md` + `docs/13-skills/README.md` + `docs/07-safety-guardrails/README.md` |
+| Iter C Planning Core | closed | Planning + inference strategy, completed alongside memory decoupling. | `docs/04-planning/README.md` |
+| Iter M Memory | closed | Main OmniMem slices completed; L3a observer remains blocked/deferred. | `docs/03-memory/README.md` |
+| Iter D Operability | closed | Observability, config, scratchpad, Rust `mesh-sdk` stub, CI, and coverage gate. | `docs/08-observability/README.md` + `crates/mesh-sdk/Cargo.toml` |
+| Iter E Benchmark Ascent | frozen / canceled | Existing code remains in-tree; all unfinished Benchmark planning and implementation work is canceled in Linear. | `docs/14-benchmark-harness/README.md` + `QUI-6` / `QUI-7` / `QUI-8` / `QUI-43` / `QUI-47` / `QUI-70` |
+| Iter F Scale-Out | governed by local runtime evidence | Supervisor, Agent Mesh, memory depth, self-evolution, and Conversation Engineering must use local component gates first; no Benchmark code without explicit user request. | `docs/06-multi-agent/README.md` + `docs/11-agent-mesh/README.md` |
 
-## Benchmark 冻结 / Benchmark Freeze
+## 基准冻结 / Benchmark Freeze
 
 The frozen Benchmark implementation surface is: dataset loading, runner/scorer/submission wiring, DockerSandbox slices, GAIA/BFCL/SWE-bench loaders, and memory-provider offline benchmark scripts. These are preserved as current code facts, not active work items.
 
 已冻结的 Benchmark 实现面包括：数据集加载、runner/scorer/submission wiring、DockerSandbox 切片、GAIA/BFCL/SWE-bench loader，以及 memory provider 的离线 benchmark scripts。它们保留为当前代码事实，不再是活跃工作项。
 
-| Unit | 状态 | 当前处理 |
-|---|---:|---|
-| E1 Harness Infra | historical closed | Existing code remains; no new work. |
-| E2 SWE-bench Verified + DockerSandbox | historical closed | Existing code remains; no new work. |
-| E3a GAIA validation loader/scorer | historical closed | Existing code remains; no new work. |
-| E3b BFCL AST slice | historical closed | Existing code remains; no new work. |
-| E3c1a BFCL multi-turn fixture | historical closed | Existing code remains; no new work. |
-| E3c1b1 BFCL stateful worker | `QUI-5` done; `QUI-6` canceled | No R2 or follow-up unless user asks. |
-| E3c1b2 BFCL runner adapter | `QUI-7` canceled | Do not implement unless user asks. |
-| Coding benchmark target | `QUI-47` / `QUI-70` canceled | Do not choose or implement replacement unless user asks. |
-| E4 aspirational benchmarks | `QUI-8` canceled | Do not reassess unless user asks. |
+| Unit | 状态 | 当前处理 | 证据 |
+|---|---:|---|---|
+| E1 Harness Infra | historical closed | Existing code remains; no new work. | `docs/14-benchmark-harness/README.md` |
+| E2 SWE-bench Verified + DockerSandbox | historical closed | Existing code remains; no new work. | `docs/14-benchmark-harness/README.md` |
+| E3a GAIA validation loader/scorer | historical closed | Existing code remains; no new work. | `docs/14-benchmark-harness/README.md` |
+| E3b BFCL AST slice | historical closed | Existing code remains; no new work. | `docs/14-benchmark-harness/README.md` |
+| E3c1a BFCL multi-turn fixture | historical closed | Existing code remains; no new work. | `docs/14-benchmark-harness/README.md` |
+| E3c1b1 BFCL stateful worker | `QUI-5` done; `QUI-6` canceled | No R2 or follow-up unless user asks. | `QUI-5` / `QUI-6` |
+| E3c1b2 BFCL runner adapter | `QUI-7` canceled | Do not implement unless user asks. | `QUI-7` |
+| Coding benchmark target | `QUI-47` / `QUI-70` canceled | Do not choose or implement replacement unless user asks. | `QUI-47` / `QUI-70` |
+| E4 aspirational benchmarks | `QUI-8` canceled | Do not reassess unless user asks. | `QUI-8` |
 
 ## 2026-05-02 组件规划快照 / 2026-05-02 Component Planning Snapshot
 

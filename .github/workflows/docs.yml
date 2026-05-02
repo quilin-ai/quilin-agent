@@ -56,7 +56,7 @@ jobs:
           if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
             base="HEAD"
           fi
-          mapfile -t changed_docs < <(git diff --name-only --diff-filter=ACMR "$base" HEAD -- 'docs/*.md' 'docs/**/*.md' '*.md')
+          mapfile -t changed_docs < <(git -c core.quotePath=false diff --name-only --diff-filter=ACMR "$base" HEAD -- 'docs/*.md' 'docs/**/*.md' '*.md')
           python3 scripts/lint-docs-process.py --strict-warnings "${changed_docs[@]}"
 
   links:

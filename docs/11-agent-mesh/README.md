@@ -1,264 +1,132 @@
-# Agent Mesh 工程（Agent Mesh Engineering）
+# 智能体网格工程 / Agent Mesh Engineering
 
-> **实现状态（2026-05-02 校准） / Implementation Status (2026-05-02)**
-> - ✅ **已实现 / Implemented**：`crates/mesh-sdk` now contains a local-only runtime contract: `MeshClient`（Mesh 运行时客户端接口）、`AgentCard`（Agent 能力卡片）、`LocalTransport`（本机传输抽象）和 `AuditFields`（身份/审计字段）。This is a contract surface only; it does not start network listeners or connect to `meshd`.
-> - ✅ **已实现 / Implemented**：`crates/mesh-sdk` 现在包含本机限定的运行时契约：`MeshClient`（Mesh 运行时客户端接口）、`AgentCard`（Agent 能力卡片）、`LocalTransport`（本机传输抽象）和 `AuditFields`（身份/审计字段）。这只是契约表面，不会启动网络监听器，也不会连接 `meshd`。
-> - 🚧 **延期 / Deferred**：Quilin runtime integration（Quilin 运行时接入）、`meshd` SDK connection（`meshd` SDK 连接）、mDNS/LAN discovery（局域网发现）、remote routing（远程路由）、gRPC/HTTP SSE bridge（gRPC/HTTP SSE 桥接）仍未接入。
-> - 🚧 **延期 / Deferred**：Quilin runtime integration（Quilin 运行时接入）、`meshd` SDK connection（`meshd` SDK 连接）、mDNS/LAN discovery（局域网发现）、remote routing（远程路由）、gRPC/HTTP SSE bridge（gRPC/HTTP SSE 桥接）仍未接入。
-> - Linear 后续项 / Linear follow-up：[QUI-10](https://linear.app/quilin-agent/issue/QUI-10/iter-f-land-agent-mesh-runtime-path)。当前仍禁止在 Quilin core 中直接落跨进程或跨网络通信行为。
-> - Linear follow-up / Linear 后续项：[QUI-10](https://linear.app/quilin-agent/issue/QUI-10/iter-f-land-agent-mesh-runtime-path). Cross-process or networked communication must stay out of Quilin core until that runtime work is explicitly implemented and reviewed.
+## 当前状态 / Current Status
 
----
+As of 2026-05-02, Agent Mesh is an Iter D stub and contract area. The Rust `crates/mesh-sdk` crate keeps local validation types such as `AgentCard`, `MeshRequest`, capability discovery, and `AuditFields`; it does not expose a runtime `MeshClient`, local transport, dispatch loop, network listener, or `meshd` connection behavior.
 
-## 一、问题定义
+截至 2026-05-02，Agent Mesh 仍是第 D 轮（Iter D）的占位契约区域。Rust `crates/mesh-sdk` crate 只保留 `AgentCard`（Agent 能力卡片）、`MeshRequest`（Mesh 请求信封）、能力发现预检查和 `AuditFields`（身份/审计字段）等本地校验类型；它不暴露运行时 `MeshClient`、本机传输、派发循环、网络监听器或 `meshd` 连接行为。
 
-### 1.1 为什么需要 mesh 能力？
+The runtime integration path remains deferred to Linear [QUI-10](https://linear.app/quilin-agent/issue/QUI-10/iter-f-land-agent-mesh-runtime-path). Until that work is explicitly reopened, Quilin core must not add cross-process or cross-network mesh behavior.
 
-Agent 生态正在碎片化。Claude Code、Codex、Gemini CLI、Hermes、OpenClaw 等 Agent 各自为战，互不知道对方存在。真实场景中：
+运行时接入路径仍延期到 Linear [QUI-10](https://linear.app/quilin-agent/issue/QUI-10/iter-f-land-agent-mesh-runtime-path)。在该任务被明确重启前，Quilin core 不得新增跨进程或跨网络的 Mesh 行为。
 
-- 同时开着 3 个 Claude Code 实例做不同模块，它们之间没法直接交流
-- 和同事各自的 Agent 都在改同一个项目，需要协调
-- 有一个专门做翻译的小 agent，希望任何在跑的 Agent 都能调它
-- 远程团队成员的 Agent 想接进来一起干活
+## 问题定义 / Problem Definition
 
-English: Target state: Quilin should eventually have mesh communication capability, including discovery, inbound messages, and outbound messages. Current state: this repo only has the local Rust contract; it does not join a network at startup and cannot yet discover or message other agents.
+Agent ecosystems are fragmented: Claude Code, Codex, Gemini CLI, Hermes, OpenClaw, and other agents can run side by side without a shared discovery or messaging layer.
 
-中文：目标状态是 Quilin 最终应具备 mesh 通信能力，包括发现其他 agent、接收入站消息和发送出站消息。当前状态是本仓库只有本机 Rust 契约；它启动时不会加入网络，也还不能发现其他 agent 或发送 mesh 消息。
+Agent 生态是碎片化的：Claude Code、Codex、Gemini CLI、Hermes、OpenClaw 等 Agent 可以并行运行，但没有共享的发现和消息层。
 
-### 1.2 与第 6 篇（多 Agent 工程）的区别
+The long-term target is for Quilin to communicate with other independent agents through a mesh network while keeping orchestration strategy under user control.
 
-| 维度 | 06-多 Agent（同构内部） | 11-Agent Mesh（异构外部） |
-|------|------------------------|--------------------------|
-| Agent 来源 | 同一框架内 spawn | 独立进程 / 独立机器 |
-| Agent 类型 | 同一模型家族 | Claude Code、Codex、Gemini CLI 等混合 |
-| 状态共享 | 共享内存、共享上下文 | 消息传递，状态隔离 |
-| 生命周期 | 随父 Agent 启动/销毁 | 独立生命周期，可长期运行 |
-| 部署边界 | 单进程内 | 跨进程、跨局域网、跨互联网 |
+长期目标是让 Quilin 能通过 Mesh 网络与其他独立 Agent 通信，同时把编排策略保留给用户决定。
 
----
+## 与 06 多 Agent 的边界 / Boundary With 06 Multi-Agent
 
-## 二、定位：内置能力模块
+| 维度 / Dimension | 06 多 Agent / 06 Multi-Agent | 11 Agent Mesh / 11 Agent Mesh |
+| --- | --- | --- |
+| Agent 来源 / Agent source | 同一框架内 spawn / Spawned inside the same framework | 独立进程或机器 / Independent processes or machines |
+| Agent 类型 / Agent type | 同构为主 / Mostly homogeneous | 异构为主 / Mostly heterogeneous |
+| 状态模型 / State model | 可共享 runtime state / Can share runtime state | 消息传递且状态隔离 / Message passing with state isolation |
+| 生命周期 / Lifecycle | 随父 Agent 管理 / Managed by parent agent | 独立生命周期 / Independent lifecycle |
+| 当前实现 / Current implementation | TS supervisor contracts exist / TS supervisor contracts exist | Rust stub contracts only / Rust stub contracts only |
 
-Mesh 是 Quilin 的**内置能力模块之一**，与记忆、工具、规划、上下文等并列。
+## 与 AgentMesh 的关系 / Relationship With AgentMesh
 
-**Quilin 提供的是能力，不是策略：**
+AgentMesh is treated as a separate communication project. Its future `meshd` daemon is responsible for discovery, routing, delivery, push adapters, envelope validation, and network topology.
 
-- **目标提供**：启动接入 mesh、发现、通信、被发现、被调用。当前实现只提供本机 runtime contract（运行时契约），不提供真实网络接入。
-- **不做**：不设计用户应该怎么利用这个网络。编排、分工、协作模式——这些由用户自己决定
+AgentMesh 被视为独立通信项目。未来的 `meshd` daemon 负责发现、路由、投递、推送适配器、信封校验和网络拓扑。
 
-类比：Quilin 给你装了网卡和网线，你上网干什么是你的事。
+Quilin should eventually join the mesh as an ordinary agent, not become the mesh control plane.
 
----
+Quilin 未来应作为普通 Agent 接入 Mesh，而不是成为 Mesh 控制面。
 
-## 三、与 AgentMesh 项目的关系
+| 职责 / Responsibility | 归属 / Owner |
+| --- | --- |
+| 消息路由与投递 / Message routing and delivery | AgentMesh `meshd` |
+| Agent 发现 / Agent discovery | AgentMesh `meshd` |
+| 入站推送 / Inbound push | AgentMesh adapters |
+| 出站 Mesh MCP tools / Outbound Mesh MCP tools | AgentMesh `meshd` |
+| 连接 `meshd` / Connect to `meshd` | Deferred Quilin runtime work |
+| 处理收到的消息 / Handle received messages | Deferred Quilin runtime work |
+| 编排和分工策略 / Orchestration strategy | User policy |
 
-> AgentMesh 项目总设计文档：[`docs/11-agent-mesh/AgentMesh-项目总设计.md`](./AgentMesh-项目总设计.md)
+## 当前 Rust 契约 / Current Rust Contract
 
-### 3.1 AgentMesh 是什么
+The Rust crate may validate local contract shapes and preflight capability support. It must stay side-effect free: no network access, no background task, no runtime dispatch, and no direct WriteAuthority bypass.
 
-AgentMesh 是一个独立项目，做的是 **Agent 间的去中心化通信网络**。核心组件是 `meshd` daemon（Go 语言），每台机器跑一个，负责：
+Rust crate 可以校验本地契约形状并预检查能力支持。它必须保持无副作用：不访问网络、不启动后台任务、不执行运行时派发，也不绕过 WriteAuthority（写权限闸门）。
 
-- 发现本机 agent，维护到它们的推送通道
-- daemon 之间互联形成 mesh 网络
-- 提供 MCP 工具供 agent 出站通信（`mesh.send`、`mesh.discover`、`mesh.request` 等）
-- 通过 per-runtime adapter 实现入站推送（push, not poll）
+The current accepted surface is:
 
-AgentMesh 明确**不做 agent 编排框架**——不告诉你怎么写 agent、怎么做 plan-execute、怎么管 memory。
+当前允许的表面包括：
 
-### 3.2 Quilin 在 mesh 中的角色
+- `AgentCard`（Agent 能力卡片 / agent capability card）
+- `MeshRequest`（Mesh 请求信封 / mesh request envelope）
+- `MeshDispatchPreflightReport`（派发前检查报告 / dispatch preflight report）
+- `AuditFields`（身份与审计字段 / identity and audit fields）
+- Local capability discovery and validation helpers（本地能力发现与校验 helper）
 
-English: Target state: Quilin should be an ordinary agent in the mesh network and should not become the mesh control plane. Current state: Quilin has not connected to `meshd` yet; this section describes the intended boundary for future runtime work.
+The current forbidden surface is:
 
-中文：目标状态是 Quilin 作为 mesh 网络中的普通 agent 存在，而不是 mesh 控制面。当前状态是 Quilin 尚未接入 `meshd`；本节描述的是未来 runtime 工作的预期边界。
+当前禁止的表面包括：
 
-区别在于 Quilin 本身的能力很强（记忆、上下文工程、工具使用、自进化等），用户可以选择让 Quilin 去协调其他 agent，但这是用户的决策，不是 mesh 模块的设计。
+- Runtime `MeshClient`（运行时 Mesh 客户端）
+- `LocalTransport` or dispatch transport（本机传输或派发传输）
+- Network listeners or `meshd` connections（网络监听器或 `meshd` 连接）
+- Cross-process routing from Quilin core（Quilin core 内的跨进程路由）
 
-### 3.3 分工边界
+## 未来启动流程 / Future Startup Flow
 
-| 职责 | 谁负责 |
-|------|-------|
-| 消息路由与投递 | AgentMesh (meshd) |
-| Agent 发现（本机扫描、mDNS、federation） | AgentMesh (meshd) |
-| 入站推送（per-runtime adapter） | AgentMesh (meshd) |
-| 出站 MCP 工具（mesh.send/discover/request 等） | AgentMesh (meshd) |
-| Envelope 协议、签名、去重 | AgentMesh (meshd) |
-| 网络拓扑（L1 本机 / L2 内网 / L3 跨网） | AgentMesh (meshd) |
-| 连接 meshd、注册 Agent Card | **Quilin mesh 模块** |
-| 处理收到的消息 | **Quilin mesh 模块** |
-| 决定怎么利用 mesh（编排、分工、协作） | **用户** |
+The following flow is target behavior for a later runtime slice, not evidence that the current repository already supports mesh networking.
 
----
+以下流程是后续 runtime 切片的目标行为，不代表当前仓库已经支持 Mesh 网络。
 
-## 四、Quilin 的 mesh 接入方式
-
-### 4.1 目标启动流程（尚未实现）
-
-English: The following startup flow is the target behavior for a later `QUI-10` runtime slice. It is not implemented in the current Quilin runtime.
-
-中文：以下启动流程是后续 `QUI-10` runtime 切片的目标行为。当前 Quilin runtime 尚未实现这条流程。
-
-```
-Quilin 进程启动
-    │
-    ▼
-检测本机 meshd 是否运行
-    │
-    ├── meshd 运行中 → 通过 SDK 建立连接
-    │
-    └── meshd 未运行 → 提示用户安装/启动 meshd
-                        （mesh 功能不可用，不影响 Quilin 其他能力）
-    │
-    ▼
-注册 Agent Card（声明自己的能力和状态）
-    │
-    ▼
-建立入站推送通道（meshd adapter 向 Quilin 推送消息）
-    │
-    ▼
-mesh 就绪，Quilin 可被发现、可收发消息
+```text
+Quilin starts
+  -> detects local meshd
+  -> connects through an approved SDK adapter
+  -> registers an Agent Card
+  -> opens an inbound push channel
+  -> exposes mesh tools through the normal tool registry
 ```
 
-### 4.2 目标接入方式：SDK Adapter（尚未实现）
-
-English: Target state: Quilin can use an AgentMesh SDK adapter to connect to local `meshd`. Current state: the Rust crate only defines local contract types; no TypeScript runtime connection, WebSocket, callback bridge, or inbound adapter is wired.
-
-中文：目标状态是 Quilin 可以通过 AgentMesh SDK adapter 接入本机 `meshd`。当前状态是 Rust crate 只定义本机契约类型；TypeScript runtime connection、WebSocket、callback bridge 和 inbound adapter 都尚未接线。
-
-这是 AgentMesh 设计中最干净的接入路径：无需 hack 进程、无需特殊协议，直接用官方 SDK。
-
-### 4.3 meshd 不可用时的降级
-
-Mesh 是可选能力。如果本机没有 meshd：
-
-- Quilin 正常启动，所有非 mesh 功能正常工作
-- mesh 相关操作返回明确的错误信息（"meshd 未运行"）
-- 不会因为 meshd 不可用而影响 Quilin 的其他能力（记忆、工具、规划等）
-
----
-
-## 五、Quilin 的 Agent Card
-
-Quilin 注册到 mesh 时声明的 Agent Card，遵循 AgentMesh 的 Card 格式（基于 Google A2A 协议）：
-
-```yaml
-agent:
-  id: "{hostname}/quilin-{project}"    # 如 rayson-laptop/quilin-agora
-  name: "Quilin Agent ({project})"
-  runtime: quilin
-  runtime_version: "0.1.0"
-
-  description: |
-    Quilin Agent，运行在 {project} 项目目录下。
-    具备完整的记忆系统、上下文工程、工具使用、自进化能力。
-  skills:                               # 根据实际加载的能力动态生成
-    - code_generation
-    - code_review
-    - file_editing
-    - bash_execution
-    - memory_management
-    - context_engineering
-    - self_evolution
-
-  capabilities: []                      # 可暴露的结构化能力，后续扩展
-
-  visibility: local                     # 默认 local，用户可配置
-
-  pubkey: ed25519:...                   # meshd 分配
-
-  host: "{hostname}"
-  pid: "{process_id}"
-  cwd: "{working_directory}"
-  created_at: "{timestamp}"
+```text
+Quilin 启动
+  -> 检测本机 meshd
+  -> 通过已批准的 SDK adapter 连接
+  -> 注册 Agent Card
+  -> 建立入站推送通道
+  -> 通过正常工具注册表暴露 mesh 工具
 ```
 
-关键点：
-- `skills` 字段根据 Quilin 实际加载的模块动态生成，不是硬编码
-- `visibility` 默认 `local`（仅本机可见），用户可配置为 `lan` / `federated`
-- Agent Card 在 Quilin 能力变化时（如加载新插件）自动更新
+## 降级原则 / Degradation Principles
 
----
+Mesh must remain optional. If `meshd` is unavailable in a future runtime implementation, Quilin should start normally and only mesh-specific actions should return explicit unavailable errors.
 
-## 六、消息处理
+Mesh 必须保持可选。未来 runtime 实现中，如果 `meshd` 不可用，Quilin 应正常启动，只有 Mesh 专属操作返回明确的不可用错误。
 
-### 6.1 出站
+No mesh failure should block memory, planning, context assembly, local tools, or the main agent loop.
 
-English: The outbound tools below are target capabilities owned by the future `meshd` integration. They are not available from the current local-only `crates/mesh-sdk` contract.
+任何 Mesh 故障都不应阻塞记忆、规划、上下文组装、本地工具或主 Agent Loop。
 
-中文：下面的出站工具是未来 `meshd` 集成所拥有的目标能力。当前本机限定的 `crates/mesh-sdk` 契约还不能提供这些工具。
+## 验收标准 / Acceptance Criteria
 
-- `mesh.discover()` — 查看网络中有哪些 agent
-- `mesh.send()` / `mesh.request()` — 点对点通信
-- `mesh.broadcast()` — 房间广播
-- `mesh.whoami()` — 查看自己的身份和状态
+Runtime mesh work is not accepted until it proves permission, audit, trace, and fallback behavior with local tests.
 
-这些工具由 meshd 实现和提供，Quilin 作为调用方使用它们。完整工具列表见 AgentMesh 设计文档第 6 节。
+运行时 Mesh 工作必须用本地测试证明权限、审计、trace 和降级行为后才能验收。
 
-### 6.2 入站
+| 场景 / Scenario | 验收点 / Acceptance point |
+| --- | --- |
+| `meshd` running | Connects and registers without blocking startup |
+| `meshd` unavailable | Degrades clearly and keeps non-mesh features working |
+| Outbound request | Emits trace and audit events before dispatch |
+| Inbound message | Preserves sender, timestamp, and envelope metadata |
+| Write-capable request | Consults WriteAuthority before any write effect |
+| Capability change | Updates Agent Card without restarting Quilin |
 
-English: Inbound delivery through `meshd` and SDK adapter push is future runtime behavior. The current implementation has no inbound push channel.
+## 相关文档 / Related Documents
 
-中文：通过 `meshd` 和 SDK adapter push 完成入站投递是未来 runtime 行为。当前实现没有入站推送通道。
-
-1. 将消息内容注入当前上下文（如果有活跃会话）
-2. 如果没有活跃会话，缓存消息等待下次交互时呈现
-3. 消息来源、时间戳等 metadata 一并保留
-
-消息的具体处理逻辑（是否回复、如何回复、是否委托给其他 agent）由用户决定或由用户配置的策略决定，不是 mesh 模块的职责。
-
----
-
-## 七、与其他工程领域的关系
-
-| 工程领域 | 与 mesh 的交叉点 |
-|---------|----------------|
-| 01-LLM 接入 | mesh 消息作为 LLM 输入上下文的一部分 |
-| 02-上下文工程 | 收到的 mesh 消息需要纳入 context budget 管理 |
-| 03-记忆 | 可以选择将 mesh 交互记录存入记忆系统 |
-| 05-工具 | meshd 的 MCP 工具作为 Quilin 可用工具的一部分 |
-| 06-多 Agent | 同构 agent 在进程内协作；异构 agent 通过 mesh 协作 |
-| 08-可观测性 | mesh 消息的收发应纳入全链路追踪 |
-| 09-部署运行时 | Quilin 部署时需确保 meshd 可达（或优雅降级） |
-
----
-
-## 八、未来验证标准
-
-English: The checks below are future acceptance criteria for the runtime integration, not evidence that the current repository already supports `meshd`, LAN, remote routing, or message delivery.
-
-中文：下面的检查是未来 runtime 集成的验收标准，不是当前仓库已经支持 `meshd`、LAN、远程路由或消息投递的证据。
-
-### 8.1 连通性验证
-
-| 场景 | 验证点 |
-|------|-------|
-| Quilin 启动，meshd 运行中 | 自动连接成功，Agent Card 注册成功 |
-| Quilin 启动，meshd 未运行 | 优雅降级，其他功能正常 |
-| meshd 运行中途崩溃 | Quilin 检测到断连，mesh 功能不可用，其他功能不受影响 |
-| meshd 重启 | Quilin 自动重连，重新注册 Agent Card |
-
-### 8.2 通信验证
-
-| 场景 | 验证点 |
-|------|-------|
-| Quilin 调用 mesh.discover() | 正确返回网络中的 agent 列表 |
-| Quilin 调用 mesh.send() | 消息正确投递到目标 agent |
-| 其他 agent 向 Quilin 发消息 | Quilin 通过推送通道正确收到消息 |
-| Quilin 调用 mesh.request() | 正确收到响应或超时错误 |
-
-### 8.3 Agent Card 验证
-
-| 场景 | 验证点 |
-|------|-------|
-| 初次注册 | Card 格式合法，skills 反映实际加载的模块 |
-| 能力变化 | Card 自动更新（如加载新插件后 skills 列表变化） |
-| 多实例 | 同一机器多个 Quilin 实例的 agent_id 不冲突 |
-
-### 8.4 性能指标
-
-| 指标 | 目标值 |
-|------|-------|
-| Quilin 启动到 mesh 就绪 | < 2 秒（meshd 已运行时） |
-| 出站消息延迟（本机 agent 间） | < 50ms |
-| 入站消息从 meshd 到 Quilin 回调触发 | < 20ms |
-| meshd 断连检测 | < 5 秒 |
-| meshd 重连（meshd 重启后） | < 3 秒 |
+- [AgentMesh 项目总设计 / AgentMesh project design](./AgentMesh-项目总设计.md)
+- [本机 MeshClient 实现计划 / Local MeshClient implementation plan](./local-meshclient-implementation-plan.md)
+- [多 Agent 工程 / Multi-Agent engineering](../06-multi-agent/README.md)
+- [安全护栏 / Safety guardrails](../07-safety-guardrails/README.md)

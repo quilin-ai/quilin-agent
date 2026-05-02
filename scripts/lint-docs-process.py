@@ -710,7 +710,7 @@ def is_disposable_path(path_rel: str) -> bool:
 def git_list(root: Path, args: Sequence[str]) -> list[str]:
     try:
         result = subprocess.run(
-            ["git", *args],
+            ["git", "-c", "core.quotePath=false", *args],
             cwd=root,
             text=True,
             stdout=subprocess.PIPE,

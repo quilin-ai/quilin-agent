@@ -1,25 +1,31 @@
-# Core Loop
+# 核心循环 / Core Loop
 
 > Quilin 全局架构、运行时切分和 docs 规则的当前真相源。全局进度见
 > [STATUS.md](../STATUS.md)。
 
-## Current State
+## 当前状态 / Current State
 
-Quilin 使用自研极简 TypeScript Agent Loop，不使用 LangGraph 或其他外部
-Agent 框架。Iter D observability 接线后，loop 仍守住 <200 LOC 契约。
+Quilin uses a custom minimal TypeScript Agent Loop instead of LangGraph or another external Agent framework. After the Iter D observability wiring, the loop still stays within the `<200 LOC` contract.
 
-当前运行时切分：
+Quilin 使用自研极简 TypeScript Agent Loop，不使用 LangGraph 或其他外部 Agent 框架。Iter D observability（可观测性）接线后，loop 仍守住 `<200 LOC` 契约。
+
+The current runtime split is:
+
+当前运行时切分是：
 
 - **TypeScript**：agent core、loop、context、tools、planning、skills、safety；existing benchmark adapters are frozen code facts, not active roadmap scope.
 - **Python**：ML-heavy providers，例如 OmniMem MCP；existing benchmark worker scripts are frozen code facts, not active roadmap scope.
 - **Rust**：仅 Iter D `crates/mesh-sdk` stub；mesh/WASM runtime 延期到 Iter F。
 
-## Architecture
+## 架构 / Architecture
 
-Core loop 负责 message state、LLM streaming、tool dispatch 和 checkpoint。
-Memory、tools、planning、safety、observability、skills、mesh 都作为 loop 周边能力暴露，而不是固定 LangGraph 节点。
+The core loop owns message state, LLM streaming, tool dispatch, and checkpoints. Memory, tools, planning, safety, observability, skills, and mesh are exposed as surrounding loop capabilities rather than fixed LangGraph nodes.
 
-当前组件 README：
+Core loop 负责 message state（消息状态）、LLM streaming（模型流式输出）、tool dispatch（工具派发）和 checkpoint（检查点）。Memory、tools、planning、safety、observability、skills、mesh 都作为 loop 周边能力暴露，而不是固定 LangGraph 节点。
+
+Current component README files:
+
+当前组件 README 文件：
 
 - [01 LLM Integration](../01-llm-integration/README.md)
 - [02 Context](../02-context/README.md)
@@ -35,7 +41,7 @@ Memory、tools、planning、safety、observability、skills、mesh 都作为 loo
 - [13 Skills](../13-skills/README.md)
 - [14 Benchmark Harness](../14-benchmark-harness/README.md)
 
-## Decisions
+## 决策 / Decisions
 
 - 不用 LangGraph；核心循环保持自研、小而可审计。
 - AI SDK v6 是 TypeScript LLM 抽象层。
@@ -46,7 +52,7 @@ Memory、tools、planning、safety、observability、skills、mesh 都作为 loo
 - Linear 是任务 / backlog / phase tracking 源；docs 只保留当前状态快照与架构事实。
 - Benchmark 是全项目最低优先级；Iter E 已冻结/取消，除非用户明确要求，任何 Iter 都不得新增或修改 Benchmark 代码。
 
-## Documentation Rules
+## 文档规则 / Documentation Rules
 
 - 本 README 只保留当前架构，不写 phase 叙事。
 - 未来跨组件决策先落到 owning component README；不新增档案目录。
