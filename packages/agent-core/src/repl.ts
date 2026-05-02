@@ -1,5 +1,9 @@
 import { stderr, stdin } from "node:process";
 import * as readline from "node:readline/promises";
+import {
+	isRuntimeToolEnabled,
+	type RuntimeToolFilter,
+} from "./config/runtime.js";
 import { createDefaultPromptSections } from "./context/default-sections.js";
 import { BasicContextManager } from "./context/manager.js";
 import { PromptBuilder } from "./context/prompt-builder.js";
@@ -26,7 +30,10 @@ import { logger } from "./logger.js";
 import { runAgentLoop } from "./loop.js";
 import type { SpanExporter } from "./observability/exporters/composite.js";
 import type { AgentLoopObservability } from "./observability/loop.js";
-import { WriteAuthority } from "./safety/write-authority.js";
+import {
+	type AuthorityMode,
+	WriteAuthority,
+} from "./safety/write-authority.js";
 import type { SkillsCatalogChange, SkillsManager } from "./skills/manager.js";
 import { SQLiteCheckpoint } from "./state/checkpoint.js";
 import type { AgentState, Message } from "./state/types.js";
@@ -51,6 +58,9 @@ interface ReplOptions {
 	tools?: readonly Tool[];
 	mcpServers?: readonly MCPServerEntry[];
 	skillsManager?: SkillsManager;
+	inferenceConfig?: InferenceConfig;
+	writeAuthorityMode?: AuthorityMode;
+	toolFilter?: RuntimeToolFilter;
 	onProviderRunRecord?: (record: ProviderRunRecord) => void;
 }
 
@@ -76,6 +86,7 @@ function createPromptSessionAssembler(
 	sessionStartedAt: string,
 	lastSessionEndTime?: string,
 	skillsManager?: SkillsManager,
+	toolFilter?: RuntimeToolFilter,
 ): PromptSessionAssembler {
 	const promptBuilder = new PromptBuilder();
 	for (const section of createDefaultPromptSections()) {
@@ -95,11 +106,11 @@ function createPromptSessionAssembler(
 		lastSessionEndedAt: lastSessionEndTime,
 		now: () => new Date(),
 		getAvailableTools: () =>
-			registry
-				.getAllTools()
+			filterToolsByRuntimeConfig(registry.getAllTools(), toolFilter)
 				.map((tool) => tool.name)
 				.filter((name): name is string => name != null),
-		getAvailableToolDescriptors: () => registry.getToolDescriptors(),
+		getAvailableToolDescriptors: () =>
+			filterToolsByRuntimeConfig(registry.getToolDescriptors(), toolFilter),
 		getSessionState: () => ({
 			skills: {
 				recentSkillNames: skillsManager?.getRecentSkillNames() ?? [],
@@ -123,6 +134,19 @@ function withDefaultMetadata(tools: readonly Tool[]): ToolWithMetadata[] {
 		category: "programmatic",
 		riskLevel: "read",
 	}));
+}
+
+function filterToolsByRuntimeConfig<T extends { readonly name?: string }>(
+	tools: readonly T[],
+	filter: RuntimeToolFilter | undefined,
+): T[] {
+	if (filter == null) {
+		return [...tools];
+	}
+
+	return tools.filter(
+		(tool) => tool.name != null && isRuntimeToolEnabled(tool.name, filter),
+	);
 }
 
 function providerErrorLogFields(error: unknown): Record<string, string> {
@@ -318,6 +342,9 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 		tools = [],
 		mcpServers = [],
 		skillsManager,
+		inferenceConfig: initialInferenceConfig,
+		writeAuthorityMode = "ask",
+		toolFilter,
 		onProviderRunRecord,
 	} = options;
 	const context = new BasicContextManager();
@@ -332,6 +359,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 	const queuedCommands: string[] = [];
 	const writeAuthority = new WriteAuthority({
 		actor: resolvedSessionId,
+		mode: writeAuthorityMode,
 		confirm: async (request) => {
 			if (rl == null) {
 				return false;
@@ -369,16 +397,24 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 
 	try {
 		registry.registerBuiltin(
-			createBuiltinTools({ writeAuthority, skillsManager }),
+			filterToolsByRuntimeConfig(
+				createBuiltinTools({ writeAuthority, skillsManager }),
+				toolFilter,
+			),
 		);
 		for (const entry of mcpServers) {
 			await registry.register(entry);
 		}
 		if (tools.length > 0) {
-			registry.registerBuiltin(withDefaultMetadata(tools));
+			registry.registerBuiltin(
+				filterToolsByRuntimeConfig(withDefaultMetadata(tools), toolFilter),
+			);
 		}
 
-		const allTools = registry.getAllTools();
+		const allTools = filterToolsByRuntimeConfig(
+			registry.getAllTools(),
+			toolFilter,
+		);
 		const restoredState =
 			sessionId == null ? null : await checkpoint.load(resolvedSessionId);
 		const restoredMessages =
@@ -417,6 +453,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 			state.createdAt,
 			restoredState?.lastActiveAt,
 			skillsManager,
+			toolFilter,
 		);
 		skillsManager?.onCatalogChange((change) => {
 			const hint = renderSkillsCatalogHint(change);
@@ -426,6 +463,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 		});
 		let inferenceConfig: InferenceConfig = {
 			...DEFAULT_INFERENCE_CONFIG,
+			...initialInferenceConfig,
 		};
 		let reasoningDisplay: ReasoningDisplayMode = "collapsed";
 		let streamRenderState = createStreamRenderState();

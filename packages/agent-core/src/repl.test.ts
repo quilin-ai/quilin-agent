@@ -830,6 +830,166 @@ describe("startRepl", () => {
 		expect(stderrWriteSpy).toHaveBeenCalledWith("Thinking mode: auto.\n");
 	});
 
+	it("seeds inference config from runtime config before slash command overrides", async () => {
+		mockQuestion
+			.mockResolvedValueOnce("runtime turn")
+			.mockResolvedValueOnce("/exit");
+		mockRunAgentLoop.mockResolvedValue("ok");
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: createMockProvider(() => createMockLanguageModel()),
+			modelId: "deepseek-chat",
+			inferenceConfig: {
+				temperature: 0.2,
+				maxTokens: 1234,
+				thinkingMode: "enabled",
+				thinkingBudget: 4321,
+			},
+		});
+
+		expect(mockRunAgentLoop).toHaveBeenCalledWith(
+			expect.objectContaining({
+				inferenceConfig: {
+					temperature: 0.2,
+					maxTokens: 1234,
+					thinkingMode: "enabled",
+					thinkingBudget: 4321,
+				},
+			}),
+			expect.any(Array),
+		);
+	});
+
+	it("initializes WriteAuthority from runtime trust mode", async () => {
+		mockQuestion
+			.mockResolvedValueOnce("trigger write")
+			.mockResolvedValueOnce("/exit");
+		mockRunAgentLoop.mockImplementationOnce(async () => {
+			const writeAuthority = mockCreateBuiltinTools.mock.calls[0]?.[0]
+				?.writeAuthority as
+				| {
+						getMode: () => string;
+						authorize: (request: {
+							tool: string;
+							riskLevel: "medium";
+							summary: string;
+							origin: "agent";
+						}) => Promise<unknown>;
+				  }
+				| undefined;
+			expect(writeAuthority?.getMode()).toBe("auto-medium");
+			await expect(
+				writeAuthority?.authorize({
+					tool: "file_write",
+					riskLevel: "medium",
+					summary: "write file",
+					origin: "agent",
+				}),
+			).resolves.toEqual({ kind: "allow" });
+			return "ok";
+		});
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: createMockProvider(() => createMockLanguageModel()),
+			modelId: "deepseek-chat",
+			writeAuthorityMode: "auto-medium",
+		});
+
+		expect(mockRunAgentLoop).toHaveBeenCalledTimes(1);
+	});
+
+	it("filters builtin and injected tools by runtime tool config", async () => {
+		mockQuestion
+			.mockResolvedValueOnce("use allowed tools")
+			.mockResolvedValueOnce("/exit");
+		mockRunAgentLoop.mockResolvedValue("ok");
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: createMockProvider(() => createMockLanguageModel()),
+			modelId: "deepseek-chat",
+			tools: [
+				{ name: "memory_recall", description: "Recall memory" },
+				{ name: "memory_store", description: "Store memory" },
+			] as never,
+			toolFilter: {
+				enabled: ["file_read", "memory_recall"],
+				disabled: ["shell_exec"],
+			},
+		});
+
+		expect(mockRegistryRegisterBuiltin).toHaveBeenNthCalledWith(1, [
+			expect.objectContaining({ name: "file_read" }),
+		]);
+		expect(mockRegistryRegisterBuiltin).toHaveBeenNthCalledWith(2, [
+			expect.objectContaining({
+				name: "memory_recall",
+				category: "programmatic",
+				riskLevel: "read",
+			}),
+		]);
+		expect(mockRunAgentLoop).toHaveBeenCalledWith(
+			expect.objectContaining({
+				tools: [
+					expect.objectContaining({ name: "file_read" }),
+					expect.objectContaining({ name: "memory_recall" }),
+				],
+			}),
+			expect.any(Array),
+		);
+	});
+
+	it("filters MCP tools by runtime tool config before exposing them to the loop", async () => {
+		mockQuestion
+			.mockResolvedValueOnce("use mcp tools")
+			.mockResolvedValueOnce("/exit");
+		mockRunAgentLoop.mockResolvedValue("ok");
+		mockRegistryRegisterImplementation.mockResolvedValueOnce([
+			createToolWithMetadata("omnimem/memory_recall", "Recall memory"),
+			createToolWithMetadata("omnimem/memory_store", "Store memory"),
+		]);
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: createMockProvider(() => createMockLanguageModel()),
+			modelId: "deepseek-chat",
+			mcpServers: [
+				{
+					id: "omnimem",
+					namespace: "omnimem",
+					config: { command: "memory", args: [] },
+				},
+			],
+			toolFilter: {
+				enabled: ["file_read", "memory_recall"],
+				disabled: ["shell_exec", "memory_store"],
+			},
+		});
+
+		expect(mockRegistryRegister).toHaveBeenCalledTimes(1);
+		expect(mockRunAgentLoop).toHaveBeenCalledWith(
+			expect.objectContaining({
+				tools: [
+					expect.objectContaining({ name: "file_read" }),
+					expect.objectContaining({ name: "omnimem/memory_recall" }),
+				],
+			}),
+			expect.any(Array),
+		);
+		expect(mockRunAgentLoop.mock.calls[0]?.[0]?.tools).not.toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ name: "omnimem/memory_store" }),
+				expect.objectContaining({ name: "shell_exec" }),
+			]),
+		);
+	});
+
 	it("shows base and effective model in /status", async () => {
 		mockQuestion
 			.mockResolvedValueOnce("/think on")

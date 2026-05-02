@@ -14,11 +14,13 @@ import type {
 	InferenceConfig,
 	LLMClient,
 	LLMResponse,
+	LLMRouteBudget,
 	LLMRouteDecision,
 	LLMRouteRequest,
 	LLMStreamEvent,
 	NormalizedProviderError,
 	ProviderCatalog,
+	ProviderCatalogEntry,
 	ProviderRunRecord,
 	ThinkingMode,
 } from "./types.js";
@@ -91,6 +93,7 @@ interface LanguageModelMetadata {
 
 interface ProviderControlPlaneOptions {
 	readonly catalog?: ProviderCatalog;
+	readonly env?: Readonly<Record<string, string | undefined>>;
 	readonly routeRequest: Omit<LLMRouteRequest, "thinkingMode">;
 	readonly onRunRecord?: (record: ProviderRunRecord) => void;
 	readonly now?: () => Date;
@@ -363,7 +366,11 @@ function getSafeErrorName(error: unknown): string {
 				? error.name
 				: undefined;
 
-	return name != null && SAFE_ERROR_NAME_PATTERN.test(name) ? name : "Error";
+	return name != null &&
+		SAFE_ERROR_NAME_PATTERN.test(name) &&
+		!UNSAFE_ERROR_FIELD_PATTERN.test(name)
+		? name
+		: "Error";
 }
 
 function getString(value: unknown): string | undefined {
@@ -683,6 +690,85 @@ function routeDecisionFromRequest(request: LLMRouteRequest): LLMRouteDecision {
 	};
 }
 
+function buildRouteBudget(config: InferenceConfig): LLMRouteBudget {
+	return {
+		maxTokens: config.maxTokens,
+		...(config.thinkingBudget == null
+			? {}
+			: { thinkingBudget: config.thinkingBudget }),
+	};
+}
+
+function attachRouteBudget(
+	route: LLMRouteDecision,
+	config: InferenceConfig,
+): LLMRouteDecision {
+	return {
+		...route,
+		budget: buildRouteBudget(config),
+	};
+}
+
+function validateInferenceBudget(config: InferenceConfig): void {
+	if (!Number.isInteger(config.maxTokens) || config.maxTokens <= 0) {
+		throw new Error("LLM maxTokens must be a positive integer.");
+	}
+
+	if (
+		config.thinkingBudget != null &&
+		(!Number.isInteger(config.thinkingBudget) || config.thinkingBudget <= 0)
+	) {
+		throw new Error("LLM thinkingBudget must be a positive integer when set.");
+	}
+}
+
+function findRouteCatalogEntry(
+	catalog: ProviderCatalog,
+	route: LLMRouteDecision,
+): ProviderCatalogEntry {
+	const entry = catalog.entries.find(
+		(candidate) => candidate.provider === route.provider,
+	);
+	if (entry == null) {
+		throw new Error(
+			`Provider ${route.provider} is not in the provider catalog.`,
+		);
+	}
+
+	return entry;
+}
+
+function validateSelectedProviderCatalogEntry(
+	catalog: ProviderCatalog,
+	route: LLMRouteDecision,
+	env: Readonly<Record<string, string | undefined>>,
+): void {
+	const entry = findRouteCatalogEntry(catalog, route);
+	const missingEnv = (entry.requiredEnv ?? []).filter(
+		(name) => env[name] == null,
+	);
+	if (missingEnv.length > 0) {
+		throw new Error(
+			`Enabled provider ${entry.provider} is missing required env: ${missingEnv.join(", ")}`,
+		);
+	}
+
+	if (entry.liveEvidence !== "verified") {
+		throw new Error(
+			`Enabled provider ${entry.provider} requires verified live evidence.`,
+		);
+	}
+
+	if (
+		entry.defaultModel == null ||
+		!entry.models.includes(entry.defaultModel)
+	) {
+		throw new Error(
+			`Enabled provider ${entry.provider} requires a default model in its model list.`,
+		);
+	}
+}
+
 function isModelRoutableLLMClient(
 	delegate: LLMClient,
 ): delegate is ModelRoutableLLMClient {
@@ -708,6 +794,7 @@ function delegateForRoute(
 
 export class ProviderControlPlaneLLMClient implements LLMClient {
 	private readonly catalog: ProviderCatalog;
+	private readonly env: Readonly<Record<string, string | undefined>>;
 	private readonly now: () => Date;
 	private readonly records: ProviderRunRecord[] = [];
 
@@ -716,6 +803,7 @@ export class ProviderControlPlaneLLMClient implements LLMClient {
 		private readonly options: ProviderControlPlaneOptions,
 	) {
 		this.catalog = options.catalog ?? DEFAULT_PROVIDER_CATALOG;
+		this.env = options.env ?? process.env;
 		this.now = options.now ?? (() => new Date());
 	}
 
@@ -735,10 +823,18 @@ export class ProviderControlPlaneLLMClient implements LLMClient {
 		};
 		let route: LLMRouteDecision;
 		try {
-			route = decideLLMRoute(routeRequest, this.catalog);
+			validateInferenceBudget(config);
+			route = attachRouteBudget(
+				decideLLMRoute(routeRequest, this.catalog),
+				config,
+			);
+			validateSelectedProviderCatalogEntry(this.catalog, route, this.env);
 		} catch (error) {
 			const record: ProviderRunRecord = {
-				route: routeDecisionFromRequest(routeRequest),
+				route: attachRouteBudget(
+					routeDecisionFromRequest(routeRequest),
+					config,
+				),
 				attempts: [],
 				outcome: "error",
 				fallbackUsed: false,

@@ -6,7 +6,12 @@ import {
 	buildCapabilitiesRuntime,
 	loadCapabilitiesConfig,
 } from "./config/loader.js";
-import { bootstrapUserRuntime } from "./config/runtime.js";
+import {
+	bootstrapUserRuntime,
+	buildRuntimeInferenceConfig,
+	buildRuntimeToolFilter,
+	resolveRuntimeWriteAuthorityMode,
+} from "./config/runtime.js";
 import type { UserConfigLoadResult } from "./config/user-config.js";
 import {
 	normalizeProviderError,
@@ -24,6 +29,63 @@ import { JsonFileSpanExporter } from "./observability/exporters/json-file.js";
 import { startRepl } from "./repl.js";
 import { SQLiteCheckpoint } from "./state/checkpoint.js";
 
+export {
+	type BootstrapOptions,
+	bootstrapUserRuntime,
+	buildRuntimeInferenceConfig,
+	buildRuntimeReloadAuditEvent,
+	buildRuntimeToolFilter,
+	diffUserRuntimeStateSnapshots,
+	getDefaultSpanProvider,
+	getDefaultStructuredLogger,
+	getUserConfig,
+	getUserConfigSources,
+	getUserRuntime,
+	getUserRuntimeStateSnapshot,
+	isRuntimeToolEnabled,
+	isUserRuntimeReady,
+	type ReloadUserRuntimeOptions,
+	type RuntimeReloadAuditEvent,
+	type RuntimeReloadAuditEventInput,
+	type RuntimeReloadFailureSnapshot,
+	type RuntimeReloadOutcome,
+	type RuntimeReloadOutcomeState,
+	type RuntimeReloadOutcomeTransition,
+	type RuntimeReloadOutcomeTransitionKind,
+	type RuntimeReloadSuccessOperation,
+	type RuntimeReloadSuccessSnapshot,
+	type RuntimeToolFilter,
+	reloadUserRuntime,
+	resetUserRuntime,
+	resolveRuntimeWriteAuthorityMode,
+	type UserRuntimeInFlightDelta,
+	UserRuntimeNotBootedError,
+	type UserRuntimeStateSnapshot,
+	type UserRuntimeStateSnapshotDiff,
+	type UserRuntimeStateSnapshotField,
+} from "./config/runtime.js";
+export {
+	type ConfigSource,
+	loadUserConfig,
+	UserConfigError,
+	type UserConfigLoadOptions,
+	type UserConfigLoadResult,
+} from "./config/user-config.js";
+export {
+	FORBIDDEN_FIELD_FRAGMENTS,
+	idleEvolutionConfigSchema,
+	llmConfigSchema,
+	memoryConfigSchema,
+	observabilityConfigSchema,
+	safetyConfigSchema,
+	sessionConfigSchema,
+	toolsConfigSchema,
+	USER_CONFIG_SCHEMA_VERSION,
+	type UserConfig,
+	type UserConfigInput,
+	type UserConfigSchemaVersion,
+	userConfigSchema,
+} from "./config/user-config-schema.js";
 export * from "./context/index.js";
 export * from "./llm/client.js";
 export * from "./llm/provider.js";
@@ -263,6 +325,8 @@ function providerRunRecordLogPayload(
 		outcome: record.outcome,
 		attempt_count: record.attempts.length,
 		reasoning_state_adapter: record.route.reasoningStateAdapter,
+		request_max_tokens: record.route.budget?.maxTokens,
+		request_thinking_budget: record.route.budget?.thinkingBudget,
 		...(firstAttempt == null
 			? {}
 			: {
@@ -464,6 +528,13 @@ export async function main(options: MainOptions = {}): Promise<void> {
 		getDefaultModel(),
 	);
 	const modelId = modelSelection.modelId;
+	const runtimeInferenceConfig = buildRuntimeInferenceConfig(
+		userRuntime.result.config,
+	);
+	const runtimeToolFilter = buildRuntimeToolFilter(userRuntime.result.config);
+	const runtimeWriteAuthorityMode = resolveRuntimeWriteAuthorityMode(
+		userRuntime.result.config,
+	);
 
 	logger.info(
 		{
@@ -474,6 +545,10 @@ export async function main(options: MainOptions = {}): Promise<void> {
 			user_config_default_model: modelSelection.userConfigDefaultModel,
 			user_config_default_model_source:
 				modelSelection.userConfigDefaultModelSource,
+			temperature: runtimeInferenceConfig.temperature,
+			max_tokens: runtimeInferenceConfig.maxTokens,
+			thinking_mode: runtimeInferenceConfig.thinkingMode,
+			thinking_budget: runtimeInferenceConfig.thinkingBudget,
 		},
 		"LLM provider initialized",
 	);
@@ -527,6 +602,9 @@ export async function main(options: MainOptions = {}): Promise<void> {
 			...(capabilitiesRuntime.skillsManager == null
 				? {}
 				: { skillsManager: capabilitiesRuntime.skillsManager }),
+			inferenceConfig: runtimeInferenceConfig,
+			writeAuthorityMode: runtimeWriteAuthorityMode,
+			toolFilter: runtimeToolFilter,
 			onProviderRunRecord: createProviderRunRecordLogger("repl_turn"),
 		});
 		shouldExit = true;

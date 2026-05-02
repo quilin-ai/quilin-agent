@@ -26,6 +26,7 @@ describe("VercelLLMClient", () => {
 
 	beforeEach(() => {
 		vi.clearAllMocks();
+		vi.stubEnv("DEEPSEEK_API_KEY", "test-key");
 	});
 
 	it("maps messages and usage through generateText", async () => {
@@ -930,10 +931,15 @@ describe("VercelLLMClient", () => {
 });
 
 describe("ProviderControlPlaneLLMClient", () => {
+	beforeEach(() => {
+		vi.stubEnv("DEEPSEEK_API_KEY", "test-key");
+	});
+
 	const config = {
 		temperature: 0.1,
 		maxTokens: 128,
 		thinkingMode: "enabled" as const,
+		thinkingBudget: 2048,
 	};
 
 	it("records one successful provider attempt with selected provider, model, usage, and cache", async () => {
@@ -988,6 +994,10 @@ describe("ProviderControlPlaneLLMClient", () => {
 				effectiveModel: "deepseek-reasoner",
 				fallbackUsed: false,
 				reasoningStateAdapter: "captured_not_replayed",
+				budget: {
+					maxTokens: 128,
+					thinkingBudget: 2048,
+				},
 			},
 			attempts: [
 				{
@@ -1089,6 +1099,10 @@ describe("ProviderControlPlaneLLMClient", () => {
 					effectiveModel: "deepseek-chat",
 					fallbackUsed: false,
 					reasoningStateAdapter: "none",
+					budget: {
+						maxTokens: 128,
+						thinkingBudget: 2048,
+					},
 				},
 				attempts: [
 					{
@@ -1124,6 +1138,57 @@ describe("ProviderControlPlaneLLMClient", () => {
 			expect(serialized).not.toContain("providerSecretFrame");
 			expect(serialized).not.toContain("stack");
 		}
+	});
+
+	it("redacts unsafe provider error names", () => {
+		expect(
+			clientTestHelpers.normalizeProviderError({
+				name: "sk-abcdefghijklmnopqrstuvwxyz012345",
+				code: "AUTH_FAILED",
+			}),
+		).toEqual({
+			name: "Error",
+			message: "Provider error details redacted.",
+			code: "AUTH_FAILED",
+		});
+	});
+
+	it("preflights provider catalog env requirements before calling the delegate", async () => {
+		const delegate = {
+			chat: vi.fn(),
+		} satisfies LLMClient;
+		const client = new ProviderControlPlaneLLMClient(delegate, {
+			env: {},
+			routeRequest: {
+				provider: "deepseek",
+				model: "deepseek-chat",
+			},
+		});
+
+		await expect(
+			client.chat([{ role: "user", content: "hi" }], [], config),
+		).rejects.toThrow(/missing required env: DEEPSEEK_API_KEY/);
+
+		expect(delegate.chat).not.toHaveBeenCalled();
+		expect(client.runRecords[0]).toMatchObject({
+			route: {
+				provider: "deepseek",
+				configuredModel: "deepseek-chat",
+				effectiveModel: "deepseek-chat",
+				fallbackUsed: false,
+				reasoningStateAdapter: "captured_not_replayed",
+				budget: {
+					maxTokens: 128,
+					thinkingBudget: 2048,
+				},
+			},
+			attempts: [],
+			outcome: "error",
+			error: {
+				name: "Error",
+				message: "Provider error details redacted.",
+			},
+		});
 	});
 
 	it.each([
@@ -1202,6 +1267,26 @@ describe("ProviderControlPlaneLLMClient", () => {
 				message: "Provider error details redacted.",
 			},
 		});
+	});
+
+	it("does not let unrelated enabled provider env checks mask route failures", async () => {
+		const delegate = {
+			chat: vi.fn(),
+		} satisfies LLMClient;
+		const client = new ProviderControlPlaneLLMClient(delegate, {
+			env: {},
+			routeRequest: {
+				provider: "openai",
+				model: "gpt-4.1",
+			},
+		});
+
+		await expect(
+			client.chat([{ role: "user", content: "hi" }], [], config),
+		).rejects.toThrow(
+			/Provider openai is blocked; no provider fallback is configured/,
+		);
+		expect(delegate.chat).not.toHaveBeenCalled();
 	});
 
 	it("records a no-attempt error instead of calling an unroutable delegate", async () => {

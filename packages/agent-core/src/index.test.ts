@@ -26,6 +26,7 @@ import type {
 	ProductionRouteScoreBatchReadinessSummary,
 	ProductionRouteScoreInput,
 	ProductionRouteScoreOptions,
+	RuntimeToolFilter,
 	SandboxApprovalSummary,
 	SandboxDecision,
 	SandboxOperationType,
@@ -57,6 +58,7 @@ import type {
 	ToolResult,
 	ToolRiskLevel,
 	ToolWithMetadata,
+	UserConfigLoadResult,
 	WebFetchToolOptions,
 } from "./index.js";
 import { createProvider, getDefaultModel } from "./llm/provider.js";
@@ -158,6 +160,14 @@ describe("main", () => {
 		mockCheckpointList.mockReset();
 		mockValidateMcpServerConfig.mockReset();
 		delete process.env.OMNI_LLM_DEFAULT_MODEL;
+		delete process.env.OMNI_LLM_MAX_TOKENS;
+		delete process.env.OMNI_LLM_TEMPERATURE;
+		delete process.env.OMNI_LLM_THINKING_ENABLED;
+		delete process.env.OMNI_LLM_THINKING_BUDGET_TOKENS;
+		delete process.env.OMNI_SAFETY_TRUST_MODE;
+		delete process.env.OMNI_TOOLS_ENABLED;
+		delete process.env.OMNI_TOOLS_DISABLED;
+		process.env.DEEPSEEK_API_KEY = "test-key";
 		delete process.env.QUILIN_DEFAULT_MODEL;
 		delete process.env.QUILIN_RUNTIME_MODE;
 		process.argv = ["bun", "packages/agent-core/src/index.ts"];
@@ -268,6 +278,17 @@ describe("main", () => {
 				}),
 				spanExporter: expect.any(Object),
 				mcpServers: expectedBuiltinMcpServers(),
+				inferenceConfig: {
+					temperature: 0.7,
+					maxTokens: 8192,
+					thinkingMode: "enabled",
+					thinkingBudget: 10_000,
+				},
+				writeAuthorityMode: "ask",
+				toolFilter: {
+					enabled: [],
+					disabled: [],
+				},
 				onProviderRunRecord: expect.any(Function),
 			}),
 		);
@@ -735,6 +756,48 @@ describe("main", () => {
 		expect(startRepl).toHaveBeenCalledWith(
 			expect.not.objectContaining({ sessionId: expect.any(String) }),
 		);
+	});
+});
+
+describe("package entrypoint runtime config public boundary exports", () => {
+	it("exposes user config loaders and runtime adapter helpers", async () => {
+		const {
+			USER_CONFIG_SCHEMA_VERSION,
+			buildRuntimeInferenceConfig,
+			buildRuntimeToolFilter,
+			isRuntimeToolEnabled,
+			loadUserConfig,
+			resolveRuntimeWriteAuthorityMode,
+			userConfigSchema,
+		} = await import("./index.js");
+
+		const loaded: UserConfigLoadResult = await loadUserConfig({
+			env: {
+				OMNI_LLM_TEMPERATURE: "0.4",
+				OMNI_LLM_MAX_TOKENS: "2048",
+				OMNI_LLM_THINKING_ENABLED: "true",
+				OMNI_LLM_THINKING_BUDGET_TOKENS: "512",
+				OMNI_SAFETY_TRUST_MODE: "auto",
+				OMNI_TOOLS_ENABLED: "file_read,memory_recall",
+				OMNI_TOOLS_DISABLED: "shell_exec",
+			},
+			configPath: join(tmpdir(), "quilin-missing-public-api.toml"),
+		});
+		const parsed = userConfigSchema.parse({
+			schema_version: USER_CONFIG_SCHEMA_VERSION,
+		});
+		const toolFilter: RuntimeToolFilter = buildRuntimeToolFilter(loaded.config);
+
+		expect(parsed.schema_version).toBe(1);
+		expect(buildRuntimeInferenceConfig(loaded.config)).toEqual({
+			temperature: 0.4,
+			maxTokens: 2048,
+			thinkingMode: "enabled",
+			thinkingBudget: 512,
+		});
+		expect(resolveRuntimeWriteAuthorityMode(loaded.config)).toBe("auto-medium");
+		expect(isRuntimeToolEnabled("file_read", toolFilter)).toBe(true);
+		expect(isRuntimeToolEnabled("shell_exec", toolFilter)).toBe(false);
 	});
 });
 

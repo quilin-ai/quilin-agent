@@ -105,12 +105,18 @@ export interface LLMRouteRequest {
 	readonly thinkingMode?: ThinkingMode;
 }
 
+export interface LLMRouteBudget {
+	readonly maxTokens: number;
+	readonly thinkingBudget?: number;
+}
+
 export interface LLMRouteDecision {
 	readonly provider: LLMProviderId;
 	readonly configuredModel: string;
 	readonly effectiveModel: string;
 	readonly fallbackUsed: false;
 	readonly reasoningStateAdapter: ReasoningStateAdapter;
+	readonly budget?: LLMRouteBudget;
 }
 
 export interface NormalizedProviderError {

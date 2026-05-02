@@ -2,13 +2,16 @@
 // observability primitives. Module-level singletons populated by
 // bootstrapUserRuntime(); pure accessors throw if accessed before boot.
 
+import type { InferenceConfig } from "../llm/types.js";
 import { StructuredLogger } from "../observability/log.js";
 import { OTelSpanProvider } from "../observability/span.js";
+import type { AuthorityMode } from "../safety/write-authority.js";
 import {
 	loadUserConfig,
 	type UserConfigLoadOptions,
 	type UserConfigLoadResult,
 } from "./user-config.js";
+import type { UserConfig } from "./user-config-schema.js";
 
 interface UserRuntime {
 	readonly result: UserConfigLoadResult;
@@ -136,6 +139,11 @@ export interface RuntimeReloadAuditDiffInput {
 export type RuntimeReloadAuditEventInput =
 	| RuntimeReloadAuditSnapshotsInput
 	| RuntimeReloadAuditDiffInput;
+
+export interface RuntimeToolFilter {
+	readonly enabled: readonly string[];
+	readonly disabled: readonly string[];
+}
 
 interface RuntimeDependencyOverrides {
 	readonly spanProvider?: OTelSpanProvider;
@@ -440,6 +448,62 @@ export function buildRuntimeReloadAuditEvent(
 		},
 		...presence,
 	};
+}
+
+export function buildRuntimeInferenceConfig(
+	config: Pick<UserConfig, "llm">,
+): InferenceConfig {
+	return {
+		temperature: config.llm.temperature,
+		maxTokens: config.llm.max_tokens,
+		thinkingMode: config.llm.thinking.enabled ? "enabled" : "disabled",
+		thinkingBudget: config.llm.thinking.budget_tokens,
+	};
+}
+
+export function resolveRuntimeWriteAuthorityMode(
+	config: Pick<UserConfig, "safety">,
+): AuthorityMode {
+	switch (config.safety.trust_mode) {
+		case "auto":
+			return "auto-medium";
+		case "ask":
+		case "read_only":
+			return "ask";
+	}
+}
+
+export function buildRuntimeToolFilter(
+	config: Pick<UserConfig, "tools">,
+): RuntimeToolFilter {
+	return {
+		enabled: [...config.tools.enabled],
+		disabled: [...config.tools.disabled],
+	};
+}
+
+function runtimeToolNameAliases(toolName: string): readonly string[] {
+	const slashIndex = toolName.indexOf("/");
+	if (slashIndex === -1) {
+		return [toolName];
+	}
+
+	return [toolName, toolName.slice(slashIndex + 1)];
+}
+
+export function isRuntimeToolEnabled(
+	toolName: string,
+	filter: RuntimeToolFilter,
+): boolean {
+	const aliases = runtimeToolNameAliases(toolName);
+	if (aliases.some((alias) => filter.disabled.includes(alias))) {
+		return false;
+	}
+
+	return (
+		filter.enabled.length === 0 ||
+		aliases.some((alias) => filter.enabled.includes(alias))
+	);
 }
 
 export function getUserRuntimeStateSnapshot(): UserRuntimeStateSnapshot {

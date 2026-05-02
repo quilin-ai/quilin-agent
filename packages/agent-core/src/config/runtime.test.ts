@@ -10,7 +10,9 @@ import type {
 } from "./runtime.js";
 import {
 	bootstrapUserRuntime,
+	buildRuntimeInferenceConfig,
 	buildRuntimeReloadAuditEvent,
+	buildRuntimeToolFilter,
 	diffUserRuntimeStateSnapshots,
 	getDefaultSpanProvider,
 	getDefaultStructuredLogger,
@@ -18,9 +20,11 @@ import {
 	getUserConfigSources,
 	getUserRuntime,
 	getUserRuntimeStateSnapshot,
+	isRuntimeToolEnabled,
 	isUserRuntimeReady,
 	reloadUserRuntime,
 	resetUserRuntime,
+	resolveRuntimeWriteAuthorityMode,
 	UserRuntimeNotBootedError,
 } from "./runtime.js";
 
@@ -987,5 +991,46 @@ describe("user runtime bootstrap", () => {
 			UserRuntimeNotBootedError,
 		);
 		expect(isUserRuntimeReady()).toBe(false);
+	});
+});
+
+describe("runtime config adapters", () => {
+	it("maps user config into inference, trust, and tool runtime inputs", async () => {
+		await bootstrapUserRuntime({
+			configPath: path.join(tmpDir, "missing.toml"),
+			env: {
+				OMNI_LLM_TEMPERATURE: "0.25",
+				OMNI_LLM_MAX_TOKENS: "1234",
+				OMNI_LLM_THINKING_ENABLED: "false",
+				OMNI_LLM_THINKING_BUDGET_TOKENS: "4321",
+				OMNI_SAFETY_TRUST_MODE: "auto",
+				OMNI_TOOLS_ENABLED: "file_read,memory_recall",
+				OMNI_TOOLS_DISABLED: "shell_exec",
+			},
+		});
+
+		const config = getUserConfig();
+		expect(buildRuntimeInferenceConfig(config)).toEqual({
+			temperature: 0.25,
+			maxTokens: 1234,
+			thinkingMode: "disabled",
+			thinkingBudget: 4321,
+		});
+		expect(resolveRuntimeWriteAuthorityMode(config)).toBe("auto-medium");
+
+		const toolFilter = buildRuntimeToolFilter(config);
+		expect(toolFilter).toEqual({
+			enabled: ["file_read", "memory_recall"],
+			disabled: ["shell_exec"],
+		});
+		expect(isRuntimeToolEnabled("file_read", toolFilter)).toBe(true);
+		expect(isRuntimeToolEnabled("omnimem/memory_recall", toolFilter)).toBe(
+			true,
+		);
+		expect(isRuntimeToolEnabled("memory_store", toolFilter)).toBe(false);
+		expect(isRuntimeToolEnabled("omnimem/memory_store", toolFilter)).toBe(
+			false,
+		);
+		expect(isRuntimeToolEnabled("shell_exec", toolFilter)).toBe(false);
 	});
 });
