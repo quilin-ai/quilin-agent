@@ -3,6 +3,7 @@ import { logger } from "../../logger.js";
 import {
 	type ContextSelectionCompressionTraceLink,
 	createDefaultContextAssembler as createDefaultContextAssemblerFromIndex,
+	type ContextCachePlan as PublicContextCachePlan,
 	type ContextCompressionTrace as PublicContextCompressionTrace,
 	type ContextTraceDelta as PublicContextTraceDelta,
 	type ContextTraceSummary as PublicContextTraceSummary,
@@ -32,6 +33,7 @@ function makeSource(
 		timestamp: overrides.timestamp ?? 1,
 		metadata: overrides.metadata ?? {},
 		isExternal: overrides.isExternal ?? false,
+		cacheVolatility: overrides.cacheVolatility,
 		poisoningStatus: overrides.poisoningStatus,
 	};
 }
@@ -565,5 +567,74 @@ describe("ContextAssembler", () => {
 		});
 		expect(delta.traceId).toBe(`trace-delta:${delta.determinismKey}`);
 		expect(delta.determinismKey).toContain("added=new");
+	});
+
+	it("emits a provider-neutral cache plan with stable and dynamic source boundaries", () => {
+		const assembler = createDefaultContextAssemblerFromIndex({
+			modelWindow: 64,
+			modelId: "deepseek-chat",
+			providerPath: "deepseek",
+			modelFamily: "deepseek",
+			cacheExpectedUsageFields: ["cache_read_tokens", "cache_write_tokens"],
+		});
+		const first = assembler.assembleContext(
+			"test",
+			{},
+			[],
+			[
+				makeSource("durable project context", {
+					sourceId: "stable",
+					tokenCount: 5,
+					relevanceScore: 0.95,
+					cacheVolatility: "stable",
+				}),
+				makeSource("fresh tool result", {
+					sourceId: "volatile",
+					tokenCount: 5,
+					relevanceScore: 0.9,
+					cacheVolatility: "volatile",
+				}),
+			],
+		);
+		const second = assembler.assembleContext(
+			"test",
+			{},
+			[],
+			[
+				makeSource("durable project context", {
+					sourceId: "stable",
+					tokenCount: 5,
+					relevanceScore: 0.95,
+					cacheVolatility: "stable",
+				}),
+				makeSource("fresh tool result changed", {
+					sourceId: "volatile",
+					tokenCount: 8,
+					relevanceScore: 0.9,
+					cacheVolatility: "volatile",
+				}),
+			],
+		);
+		if (first.cachePlan == null || second.cachePlan == null) {
+			throw new Error("expected cache plan");
+		}
+		const cachePlan: PublicContextCachePlan = first.cachePlan;
+
+		expect(cachePlan).toMatchObject({
+			promptBuildId: first.selectionTrace.promptBuildId,
+			providerPath: "deepseek",
+			modelFamily: "deepseek",
+			cacheStrategy: "stable-system-prefix",
+			cacheBoundarySourceIds: [],
+			excludedVolatileSourceIds: ["stable", "volatile"],
+			expectedUsageFields: ["cache_read_tokens", "cache_write_tokens"],
+		});
+		expect(cachePlan.cachePlanId).toMatch(/^cache-plan:[a-f0-9]{16}$/);
+		expect(first.cachePlan.stablePrefixHash).toBe(
+			second.cachePlan.stablePrefixHash,
+		);
+		expect(first.cachePlan.dynamicSuffixTokens).toBeLessThan(
+			second.cachePlan.dynamicSuffixTokens,
+		);
 	});
 });

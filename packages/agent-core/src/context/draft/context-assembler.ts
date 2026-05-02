@@ -3,10 +3,14 @@ import { TokenBudgetAllocator } from "../budget.js";
 import { scanExternalContext } from "../injection-scanner.js";
 import { PromptBuilder } from "../prompt-builder.js";
 import type { AssembledPrompt, BuildContext } from "../prompt-types.js";
+import { buildContextCachePlan } from "./cache-plan.js";
 import { compressContextSources } from "./compression.js";
 import { selectContextSources } from "./selection.js";
 import type {
 	BudgetPolicy,
+	ContextCachePlan,
+	ContextCacheRetentionPolicy,
+	ContextCacheStrategy,
 	ContextCompressionTrace,
 	ContextSelectionCompressionTraceLink,
 	ContextSelectionTrace,
@@ -27,6 +31,7 @@ export interface AssembledContext {
 	readonly selectionTrace: ContextSelectionTrace;
 	readonly selectionCompressionTraceLink: ContextSelectionCompressionTraceLink;
 	readonly traceSummary: ContextTraceSummary;
+	readonly cachePlan?: ContextCachePlan;
 	readonly traceDelta?: ContextTraceDelta;
 	readonly totalTokens: number;
 }
@@ -37,6 +42,12 @@ export interface ContextAssemblerOptions {
 	readonly availableTools?: readonly string[];
 	readonly profile?: BuildContext["profile"];
 	readonly now?: () => Date;
+	readonly providerPath?: string;
+	readonly modelFamily?: string;
+	readonly cacheStrategy?: ContextCacheStrategy;
+	readonly cacheRetentionPolicy?: ContextCacheRetentionPolicy;
+	readonly cacheProviderOptions?: Readonly<Record<string, unknown>>;
+	readonly cacheExpectedUsageFields?: readonly string[];
 }
 
 export interface ContextAssemblyRunOptions {
@@ -261,6 +272,7 @@ export class ContextAssembler {
 		runOptions: ContextAssemblyRunOptions = {},
 	): AssembledContext {
 		const taskType = inferTaskType(userInput);
+		const modelId = this.options.modelId ?? "deepseek-chat";
 		const policy = this.budgetAllocator.allocate(
 			taskType,
 			this.options.modelWindow ?? 131_072,
@@ -268,7 +280,7 @@ export class ContextAssembler {
 		const prompt = this.promptBuilder.build({
 			userInput,
 			sessionState,
-			modelId: this.options.modelId ?? "deepseek-chat",
+			modelId,
 			availableTools: this.options.availableTools ?? [],
 			profile: this.options.profile ?? "full",
 		});
@@ -315,6 +327,18 @@ export class ContextAssembler {
 			selection.trace,
 			compression.trace,
 		);
+		const cachePlan = buildContextCachePlan({
+			prompt,
+			contextSources: compression.sources,
+			promptBuildId: selection.trace.promptBuildId,
+			modelId,
+			providerPath: this.options.providerPath,
+			modelFamily: this.options.modelFamily,
+			cacheStrategy: this.options.cacheStrategy,
+			retentionPolicy: this.options.cacheRetentionPolicy,
+			providerOptions: this.options.cacheProviderOptions,
+			expectedUsageFields: this.options.cacheExpectedUsageFields,
+		});
 		const traceSummary = summarizeTraceOutcome(
 			selection.trace,
 			compression.trace,
@@ -336,6 +360,7 @@ export class ContextAssembler {
 			selectionTrace: selection.trace,
 			selectionCompressionTraceLink,
 			traceSummary,
+			cachePlan,
 			...(traceDelta == null ? {} : { traceDelta }),
 			totalTokens: prompt.totalTokens + sumTokens(compression.sources),
 		};

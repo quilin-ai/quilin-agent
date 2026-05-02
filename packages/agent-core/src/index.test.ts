@@ -7,9 +7,11 @@ import { z } from "zod";
 import type {
 	BuiltinToolOptions,
 	ChildRunStatusRecord,
+	ContextCachePlan,
 	CreateToolErrorOptions,
 	CreateToolErrorResultOptions,
 	DagPlan,
+	DraftContextSource,
 	FileListToolOptions,
 	FileReadToolOptions,
 	FileWriteToolOptions,
@@ -1573,6 +1575,45 @@ describe("package entrypoint multi-agent exports", () => {
 		expect(snapshot.counts.active).toBe(1);
 		expect(snapshot.activeRunIds).toEqual(["run-1"]);
 		expect(snapshot.reviewedArtifactCount).toBe(1);
+	});
+});
+
+describe("package entrypoint context cache plan exports", () => {
+	it("exposes cache plan helper and type for package consumers", async () => {
+		const { buildContextCachePlan } = await import("./index.js");
+		const source: DraftContextSource = {
+			sourceId: "stable-source",
+			sourceType: "memory",
+			content: "stable rendered source",
+			tokenCount: 4,
+			relevanceScore: 1,
+			timestamp: 1,
+			metadata: {},
+			isExternal: false,
+			cacheVolatility: "stable",
+		};
+		const plan: ContextCachePlan = buildContextCachePlan({
+			prompt: {
+				segments: [],
+				recommendedBreakpoints: [],
+				staticPrefix: "stable prefix",
+				dynamicSuffix: "dynamic suffix",
+				sectionTokens: {},
+				totalTokens: 0,
+			},
+			contextSources: [source],
+			promptBuildId: "prompt-package-root",
+			modelId: "deepseek-chat",
+			renderedCacheBoundarySourceIds: ["stable-source"],
+		});
+
+		expect(plan).toMatchObject({
+			promptBuildId: "prompt-package-root",
+			cacheStrategy: "stable-system-prefix",
+			cacheBoundarySourceIds: ["stable-source"],
+			excludedVolatileSourceIds: [],
+		});
+		expect(plan.cachePlanId).toMatch(/^cache-plan:[a-f0-9]{16}$/);
 	});
 });
 
