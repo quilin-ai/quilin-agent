@@ -18,7 +18,7 @@ def test_user_profile_exports_stable_markdown_without_sensitive_fields(tmp_path:
     profile.export_markdown(path)
 
     exported = path.read_text(encoding="utf-8")
-    assert exported.startswith("---\nschema_version: 1\nprofile_id: \"profile-1\"\n")
+    assert exported.startswith('---\nschema_version: 1\nprofile_id: "profile-1"\n')
     assert "sensitive_export: false" in exported
     assert "communication_style" in exported
     assert "real_name" not in exported
@@ -37,7 +37,7 @@ def test_user_profile_sensitive_export_is_explicit_single_call(tmp_path: Path) -
 
     exported = path.read_text(encoding="utf-8")
     assert "sensitive_export: true" in exported
-    assert "- real_name: \"Ada\"" in exported
+    assert '- real_name: "Ada"' in exported
 
 
 def test_sync_from_markdown_routes_through_profile_updater(tmp_path: Path) -> None:

@@ -19,6 +19,7 @@ def configure_once() -> None:
         logger_factory=structlog.PrintLoggerFactory(file=sys.stderr),
     )
 
+
 logger = structlog.get_logger(
     service="omnimem",
     env=os.environ.get("QUILIN_ENV", "dev"),

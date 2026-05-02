@@ -25,9 +25,7 @@ def _decode_call_tool_result(result: object) -> dict[str, object]:
     if hasattr(result, "root"):
         content_items = getattr(result.root, "content", [])  # type: ignore[attr-defined]
         text = "\n".join(
-            item.text
-            for item in content_items
-            if getattr(item, "type", None) == "text"
+            item.text for item in content_items if getattr(item, "type", None) == "text"
         )
         return json.loads(text)
 
@@ -87,7 +85,7 @@ async def _call_tool_request(
             params=CallToolRequestParams(
                 name=name,
                 arguments=arguments,
-                **({ "_meta": metadata } if metadata is not None else {}),
+                **({"_meta": metadata} if metadata is not None else {}),
             ),
         )
     )

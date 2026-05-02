@@ -27,7 +27,7 @@ def test_store_serialization_handles_defaults_and_legacy_shapes() -> None:
     }
     assert serialize_embedding([1.0, 2.5]) == "[1.0, 2.5]"
     assert deserialize_embedding('{"bad": true}') is None
-    assert deserialize_embedding("[1, \"2.5\"]") == [1.0, 2.5]
+    assert deserialize_embedding('[1, "2.5"]') == [1.0, 2.5]
     assert parse_datetime(None, now=lambda: now) == now
 
 

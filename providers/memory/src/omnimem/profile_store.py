@@ -11,9 +11,7 @@ from typing import Any, Literal, Self
 
 PROFILE_SCHEMA_VERSION = 1
 PROFILE_AUDIT_SOURCE_MARKDOWN = "user.md"
-SENSITIVE_PROFILE_FIELDS = frozenset(
-    {"real_name", "contact", "location", "tokens", "birthday"}
-)
+SENSITIVE_PROFILE_FIELDS = frozenset({"real_name", "contact", "location", "tokens", "birthday"})
 
 ProfileScope = Literal["project", "global_projection"]
 
@@ -393,9 +391,7 @@ def _profile_diff(before: UserProfile, after: UserProfile) -> dict[str, Any]:
             if before.sensitive.get(key) != value
         },
         "scope": (
-            {"before": before.scope, "after": after.scope}
-            if before.scope != after.scope
-            else None
+            {"before": before.scope, "after": after.scope} if before.scope != after.scope else None
         ),
     }
 

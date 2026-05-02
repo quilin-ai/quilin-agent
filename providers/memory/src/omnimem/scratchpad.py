@@ -164,9 +164,7 @@ class ScratchpadStore:
             "ttl_sec",
         )
         resolved_capacity = _validate_positive_int(
-            capacity_per_task
-            if capacity_per_task is not None
-            else self._capacity_per_task,
+            capacity_per_task if capacity_per_task is not None else self._capacity_per_task,
             "capacity_per_task",
         )
         now = self._now()

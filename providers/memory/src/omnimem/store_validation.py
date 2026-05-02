@@ -104,9 +104,7 @@ def _require_semantic_stability_metadata(metadata: dict[str, object]) -> None:
 
     stability_reason = metadata.get("stability_reason")
     if not isinstance(stability_reason, str) or not stability_reason.strip():
-        raise ValueError(
-            "semantic memory metadata.stability_reason must be a non-empty string"
-        )
+        raise ValueError("semantic memory metadata.stability_reason must be a non-empty string")
 
 
 def _contains_forbidden_runtime_keys(payload: object) -> bool:

@@ -114,16 +114,12 @@ def _validate_tool_metadata(metadata: dict[str, object] | None) -> dict[str, obj
     normalized = dict(metadata)
     unexpected_keys = sorted(key for key in normalized if key not in ALLOWED_TOOL_METADATA_KEYS)
     if unexpected_keys:
-        raise ValueError(
-            "memory_store metadata keys not allowed: " + ", ".join(unexpected_keys)
-        )
+        raise ValueError("memory_store metadata keys not allowed: " + ", ".join(unexpected_keys))
 
     _validate_metadata_value(normalized, depth=1)
     encoded = json.dumps(normalized, ensure_ascii=False).encode("utf-8")
     if len(encoded) > MAX_TOOL_METADATA_BYTES:
-        raise ValueError(
-            f"memory_store metadata must be at most {MAX_TOOL_METADATA_BYTES} bytes"
-        )
+        raise ValueError(f"memory_store metadata must be at most {MAX_TOOL_METADATA_BYTES} bytes")
 
     return normalized
 
@@ -165,11 +161,7 @@ def _request_meta_to_dict(ctx: Context[object, Any, object] | None) -> dict[str,
         return {}
 
     if hasattr(meta, "model_dump"):
-        return {
-            key: value
-            for key, value in meta.model_dump().items()
-            if value is not None
-        }
+        return {key: value for key, value in meta.model_dump().items() if value is not None}
 
     if isinstance(meta, dict):
         return dict(meta)

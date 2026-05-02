@@ -57,9 +57,7 @@ def hash_query(query: str) -> str:
     return hashlib.sha256(normalized).hexdigest()
 
 
-TRACEPARENT_RE = re.compile(
-    r"^00-([a-f0-9]{32})-([a-f0-9]{16})-([a-f0-9]{2})$"
-)
+TRACEPARENT_RE = re.compile(r"^00-([a-f0-9]{32})-([a-f0-9]{16})-([a-f0-9]{2})$")
 
 
 @dataclass(slots=True, frozen=True)
@@ -539,6 +537,7 @@ class RetrievalEventLog:
             return "kg"
 
         return str(item.layer)
+
 
 __all__ = [
     "CitationStats",

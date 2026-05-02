@@ -96,20 +96,14 @@ async def test_scratchpad_capacity_and_clear_are_isolated_by_task() -> None:
         value="value-b",
     )
 
-    assert await store.read(task_id="task-a", session_id="session-1", key="shared") == (
-        "value-a"
-    )
-    assert await store.read(task_id="task-b", session_id="session-1", key="shared") == (
-        "value-b"
-    )
+    assert await store.read(task_id="task-a", session_id="session-1", key="shared") == ("value-a")
+    assert await store.read(task_id="task-b", session_id="session-1", key="shared") == ("value-b")
 
     cleared = await store.clear(task_id="task-a", session_id="session-1")
 
     assert cleared == 1
     assert await store.read(task_id="task-a", session_id="session-1", key="shared") is None
-    assert await store.read(task_id="task-b", session_id="session-1", key="shared") == (
-        "value-b"
-    )
+    assert await store.read(task_id="task-b", session_id="session-1", key="shared") == ("value-b")
 
 
 async def test_scratchpad_uses_independent_sqlite_table(tmp_path) -> None:
@@ -131,10 +125,7 @@ async def test_scratchpad_uses_independent_sqlite_table(tmp_path) -> None:
             "SELECT name FROM sqlite_master WHERE type = 'table'",
         ).fetchall()
     }
-    columns = {
-        row[1]
-        for row in conn.execute("PRAGMA table_info(scratchpad_entries)").fetchall()
-    }
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(scratchpad_entries)").fetchall()}
     conn.close()
 
     assert "scratchpad_entries" in tables
