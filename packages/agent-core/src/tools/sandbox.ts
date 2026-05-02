@@ -1,3 +1,5 @@
+import { BlockList, isIP } from "node:net";
+
 export type SandboxOperationType =
 	| "read"
 	| "write"
@@ -116,6 +118,30 @@ export interface SandboxApprovalSummary {
 	readonly detail: string;
 }
 
+export interface SandboxDecisionPlanInput {
+	readonly request: SandboxRequest;
+	readonly context: SandboxToolContext;
+}
+
+export type SandboxDecisionKindCounts = Record<SandboxDecisionKind, number>;
+
+export interface SandboxDecisionPlanItem extends SandboxApprovalSummary {
+	readonly index: number;
+	readonly operation: SandboxOperationType;
+}
+
+export interface SandboxDecisionPlan {
+	readonly kind: "sandbox_decision_plan";
+	readonly schemaVersion: 1;
+	readonly total: number;
+	readonly byKind: SandboxDecisionKindCounts;
+	readonly approvalRequired: boolean;
+	readonly denied: boolean;
+	readonly items: ReadonlyArray<SandboxDecisionPlanItem>;
+	readonly approvalRequiredCallIds: ReadonlyArray<string>;
+	readonly deniedCallIds: ReadonlyArray<string>;
+}
+
 export type SandboxEvaluator = (
 	request: SandboxRequest,
 	context: SandboxToolContext,
@@ -142,12 +168,93 @@ const KNOWN_PATH_ACCESSES = new Set<SandboxPathAccess>([
 	"execute",
 ]);
 
+const PRIVATE_NETWORK_BLOCKLIST = new BlockList();
+PRIVATE_NETWORK_BLOCKLIST.addSubnet("0.0.0.0", 8, "ipv4");
+PRIVATE_NETWORK_BLOCKLIST.addSubnet("10.0.0.0", 8, "ipv4");
+PRIVATE_NETWORK_BLOCKLIST.addSubnet("100.64.0.0", 10, "ipv4");
+PRIVATE_NETWORK_BLOCKLIST.addSubnet("127.0.0.0", 8, "ipv4");
+PRIVATE_NETWORK_BLOCKLIST.addSubnet("169.254.0.0", 16, "ipv4");
+PRIVATE_NETWORK_BLOCKLIST.addSubnet("172.16.0.0", 12, "ipv4");
+PRIVATE_NETWORK_BLOCKLIST.addSubnet("192.168.0.0", 16, "ipv4");
+PRIVATE_NETWORK_BLOCKLIST.addAddress("::", "ipv6");
+PRIVATE_NETWORK_BLOCKLIST.addAddress("::1", "ipv6");
+PRIVATE_NETWORK_BLOCKLIST.addSubnet("fc00::", 7, "ipv6");
+PRIVATE_NETWORK_BLOCKLIST.addSubnet("fe80::", 10, "ipv6");
+PRIVATE_NETWORK_BLOCKLIST.addSubnet("::ffff:0.0.0.0", 104, "ipv6");
+PRIVATE_NETWORK_BLOCKLIST.addSubnet("::ffff:10.0.0.0", 104, "ipv6");
+PRIVATE_NETWORK_BLOCKLIST.addSubnet("::ffff:100.64.0.0", 106, "ipv6");
+PRIVATE_NETWORK_BLOCKLIST.addSubnet("::ffff:127.0.0.0", 104, "ipv6");
+PRIVATE_NETWORK_BLOCKLIST.addSubnet("::ffff:169.254.0.0", 112, "ipv6");
+PRIVATE_NETWORK_BLOCKLIST.addSubnet("::ffff:172.16.0.0", 108, "ipv6");
+PRIVATE_NETWORK_BLOCKLIST.addSubnet("::ffff:192.168.0.0", 112, "ipv6");
+
 function unique<T>(values: readonly T[]): readonly T[] {
 	return [...new Set(values)];
 }
 
+function createSandboxDecisionKindCounts(): SandboxDecisionKindCounts {
+	return {
+		allow: 0,
+		ask: 0,
+		deny: 0,
+	};
+}
+
 function formatList(values: readonly string[]): string {
 	return values.length === 0 ? "none" : values.join(",");
+}
+
+function normalizeNetworkHost(hostname: string): string {
+	const trimmed = hostname.trim().toLowerCase();
+	if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+		return trimmed.slice(1, -1);
+	}
+
+	return trimmed.endsWith(".") ? trimmed.slice(0, -1) : trimmed;
+}
+
+function extractNetworkDestinationHost(
+	destination: string | undefined,
+): string | undefined {
+	const trimmed = destination?.trim();
+	if (trimmed == null || trimmed.length === 0) {
+		return undefined;
+	}
+
+	const normalizedLiteral = normalizeNetworkHost(trimmed);
+	if (isIP(normalizedLiteral) !== 0) {
+		return normalizedLiteral;
+	}
+
+	if (/^[a-z][a-z0-9+.-]*:\/\//iu.test(trimmed)) {
+		try {
+			return normalizeNetworkHost(new URL(trimmed).hostname);
+		} catch {
+			return undefined;
+		}
+	}
+
+	try {
+		return normalizeNetworkHost(new URL(`http://${trimmed}`).hostname);
+	} catch {
+		return undefined;
+	}
+}
+
+function isPrivateNetworkHost(hostname: string): boolean {
+	if (hostname === "localhost" || hostname.endsWith(".localhost")) {
+		return true;
+	}
+
+	const family = isIP(hostname);
+	if (family === 0) {
+		return false;
+	}
+
+	return PRIVATE_NETWORK_BLOCKLIST.check(
+		hostname,
+		family === 6 ? "ipv6" : "ipv4",
+	);
 }
 
 function approvalSummaryText(
@@ -201,10 +308,12 @@ function evaluateOperation(
 			]);
 			return;
 		case "network":
-			escalate(evaluation, "ask", "network_operation_requires_approval", [
-				"network_access",
-				"user_confirmation",
-			]);
+			if (request.signals?.network == null) {
+				escalate(evaluation, "ask", "network_operation_requires_approval", [
+					"network_access",
+					"user_confirmation",
+				]);
+			}
 			return;
 		case "process":
 			escalate(evaluation, "ask", "process_operation_requires_approval", [
@@ -263,12 +372,17 @@ function evaluateNetworkSignal(
 	signal: SandboxNetworkSignal,
 	evaluation: MutableEvaluation,
 ): void {
-	escalate(evaluation, "ask", "network_operation_requires_approval", [
-		"network_access",
-		"user_confirmation",
-	]);
-
-	if (signal.privateAddress === true || signal.loopback === true) {
+	const destinationHost = extractNetworkDestinationHost(signal.destination);
+	if (destinationHost == null) {
+		escalate(evaluation, "ask", "network_operation_requires_approval", [
+			"network_access",
+			"user_confirmation",
+		]);
+	} else if (
+		signal.privateAddress === true ||
+		signal.loopback === true ||
+		isPrivateNetworkHost(destinationHost)
+	) {
 		escalate(evaluation, "deny", "private_network_denied");
 		return;
 	}
@@ -450,4 +564,44 @@ export function evaluateSandboxRequest(
 	}
 
 	return finalizeEvaluation(evaluation);
+}
+
+export function buildSandboxDecisionPlan(
+	inputs: Iterable<SandboxDecisionPlanInput>,
+): SandboxDecisionPlan {
+	const byKind = createSandboxDecisionKindCounts();
+	const items: SandboxDecisionPlanItem[] = [];
+	const approvalRequiredCallIds: string[] = [];
+	const deniedCallIds: string[] = [];
+
+	for (const [index, input] of [...inputs].entries()) {
+		const decision = evaluateSandboxRequest(input.request);
+		const summary = createSandboxApprovalSummary(decision, input.context);
+		byKind[decision.kind] += 1;
+
+		if (decision.kind === "ask") {
+			approvalRequiredCallIds.push(input.context.toolCallId);
+		}
+		if (decision.kind === "deny") {
+			deniedCallIds.push(input.context.toolCallId);
+		}
+
+		items.push({
+			index,
+			operation: input.request.operation,
+			...summary,
+		});
+	}
+
+	return {
+		kind: "sandbox_decision_plan",
+		schemaVersion: 1,
+		total: items.length,
+		byKind,
+		approvalRequired: approvalRequiredCallIds.length > 0,
+		denied: deniedCallIds.length > 0,
+		items,
+		approvalRequiredCallIds,
+		deniedCallIds,
+	};
 }

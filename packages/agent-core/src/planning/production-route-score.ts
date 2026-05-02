@@ -138,6 +138,25 @@ export interface ProductionRouteScoreBatchReadinessSummary {
 	readonly highestRequiredReadiness: ProductionRouteScoreBatchReadiness;
 }
 
+export interface ProductionRouteSupervisorHandoffItem {
+	readonly index: number;
+	readonly score: number;
+	readonly scoreBand: ProductionRouteScoreBand;
+	readonly taskRisk: DelegationRiskLevel;
+	readonly reasonCodes: ReadonlyArray<ProductionRouteScoreReasonCode>;
+}
+
+export interface ProductionRouteSupervisorHandoffPlan {
+	readonly kind: "production_route_supervisor_handoff_plan";
+	readonly schemaVersion: 1;
+	readonly readiness: ProductionRouteScoreBatchReadiness;
+	readonly handoffRequired: boolean;
+	readonly handoffCount: number;
+	readonly keepLocalCount: number;
+	readonly handoffItems: ReadonlyArray<ProductionRouteSupervisorHandoffItem>;
+	readonly keepLocalIndexes: ReadonlyArray<number>;
+}
+
 const DEFAULT_SUPERVISOR_HANDOFF_THRESHOLD = 60;
 const DEFAULT_COMPLEXITY = 0.65;
 const DEFAULT_COST = 0.65;
@@ -652,5 +671,45 @@ export function summarizeProductionRouteScoreBatchReadiness(
 		totalScores,
 		byReadiness,
 		highestRequiredReadiness,
+	};
+}
+
+function supervisorHandoffItemFor(
+	index: number,
+	score: ProductionRouteScore,
+): ProductionRouteSupervisorHandoffItem {
+	return {
+		index,
+		score: score.score,
+		scoreBand: score.explanation.scoreBand,
+		taskRisk: score.explanation.normalizedFactors.taskRisk,
+		reasonCodes: selectedRouteReasonCodes(score.reasonCodes),
+	};
+}
+
+export function buildProductionRouteSupervisorHandoffPlan(
+	batch: ProductionRouteScoreBatch,
+): ProductionRouteSupervisorHandoffPlan {
+	const readiness = classifyProductionRouteScoreBatchReadiness(batch);
+	const handoffItems: ProductionRouteSupervisorHandoffItem[] = [];
+	const keepLocalIndexes: number[] = [];
+
+	for (const [index, score] of batch.scores.entries()) {
+		if (score.handoffRecommendation === "handoff_to_supervisor") {
+			handoffItems.push(supervisorHandoffItemFor(index, score));
+			continue;
+		}
+		keepLocalIndexes.push(index);
+	}
+
+	return {
+		kind: "production_route_supervisor_handoff_plan",
+		schemaVersion: 1,
+		readiness,
+		handoffRequired: handoffItems.length > 0,
+		handoffCount: handoffItems.length,
+		keepLocalCount: keepLocalIndexes.length,
+		handoffItems,
+		keepLocalIndexes,
 	};
 }

@@ -2,7 +2,7 @@
 // observability primitives. Module-level singletons populated by
 // bootstrapUserRuntime(); pure accessors throw if accessed before boot.
 
-import type { InferenceConfig } from "../llm/types.js";
+import type { InferenceConfig, LLMTierRoutingConfig } from "../llm/types.js";
 import { StructuredLogger } from "../observability/log.js";
 import { OTelSpanProvider } from "../observability/span.js";
 import type { AuthorityMode } from "../safety/write-authority.js";
@@ -458,6 +458,75 @@ export function buildRuntimeInferenceConfig(
 		maxTokens: config.llm.max_tokens,
 		thinkingMode: config.llm.thinking.enabled ? "enabled" : "disabled",
 		thinkingBudget: config.llm.thinking.budget_tokens,
+	};
+}
+
+export function buildRuntimeTierRoutingConfig(
+	config: Pick<UserConfig, "llm">,
+): LLMTierRoutingConfig {
+	return {
+		mode: config.llm.routing.mode,
+		defaultTier: config.llm.routing.default_tier,
+		allowEscalation: config.llm.routing.allow_escalation,
+		tiers: {
+			flash: {
+				provider: config.llm.tiers.flash.provider,
+				model: config.llm.tiers.flash.model,
+				thinkingMode: config.llm.tiers.flash.thinking,
+				...(config.llm.tiers.flash.temperature == null
+					? {}
+					: { temperature: config.llm.tiers.flash.temperature }),
+				...(config.llm.tiers.flash.max_tokens == null
+					? {}
+					: { maxTokens: config.llm.tiers.flash.max_tokens }),
+				...(config.llm.tiers.flash.thinking_budget_tokens == null
+					? {}
+					: {
+							thinkingBudget: config.llm.tiers.flash.thinking_budget_tokens,
+						}),
+				...(config.llm.tiers.flash.top_p == null
+					? {}
+					: { topP: config.llm.tiers.flash.top_p }),
+			},
+			lite: {
+				provider: config.llm.tiers.lite.provider,
+				model: config.llm.tiers.lite.model,
+				thinkingMode: config.llm.tiers.lite.thinking,
+				...(config.llm.tiers.lite.temperature == null
+					? {}
+					: { temperature: config.llm.tiers.lite.temperature }),
+				...(config.llm.tiers.lite.max_tokens == null
+					? {}
+					: { maxTokens: config.llm.tiers.lite.max_tokens }),
+				...(config.llm.tiers.lite.thinking_budget_tokens == null
+					? {}
+					: {
+							thinkingBudget: config.llm.tiers.lite.thinking_budget_tokens,
+						}),
+				...(config.llm.tiers.lite.top_p == null
+					? {}
+					: { topP: config.llm.tiers.lite.top_p }),
+			},
+			pro: {
+				provider: config.llm.tiers.pro.provider,
+				model: config.llm.tiers.pro.model,
+				thinkingMode: config.llm.tiers.pro.thinking,
+				...(config.llm.tiers.pro.temperature == null
+					? {}
+					: { temperature: config.llm.tiers.pro.temperature }),
+				...(config.llm.tiers.pro.max_tokens == null
+					? {}
+					: { maxTokens: config.llm.tiers.pro.max_tokens }),
+				...(config.llm.tiers.pro.thinking_budget_tokens == null
+					? {}
+					: {
+							thinkingBudget: config.llm.tiers.pro.thinking_budget_tokens,
+						}),
+				...(config.llm.tiers.pro.top_p == null
+					? {}
+					: { topP: config.llm.tiers.pro.top_p }),
+			},
+		},
 	};
 }
 

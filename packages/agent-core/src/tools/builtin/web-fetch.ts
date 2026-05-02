@@ -34,6 +34,7 @@ BLOCKED_IPS.addSubnet("100.64.0.0", 10, "ipv4");
 BLOCKED_IPS.addSubnet("172.16.0.0", 12, "ipv4");
 BLOCKED_IPS.addSubnet("192.168.0.0", 16, "ipv4");
 BLOCKED_IPS.addSubnet("169.254.0.0", 16, "ipv4");
+BLOCKED_IPS.addAddress("::", "ipv6");
 BLOCKED_IPS.addAddress("::1", "ipv6");
 BLOCKED_IPS.addSubnet("fc00::", 7, "ipv6");
 BLOCKED_IPS.addSubnet("fe80::", 10, "ipv6");
@@ -289,6 +290,10 @@ function hasSensitiveHeaders(
 	);
 }
 
+function hasUrlUserinfo(url: URL): boolean {
+	return url.username !== "" || url.password !== "";
+}
+
 function normalizeProtocol(protocol: string): string {
 	return protocol.endsWith(":") ? protocol.slice(0, -1) : protocol;
 }
@@ -321,6 +326,8 @@ function createSandboxRequestFromArgs(
 				...networkSignal,
 				destination: parsedUrl.host,
 				protocol: normalizeProtocol(parsedUrl.protocol),
+				sendsCredentials:
+					networkSignal.sendsCredentials || hasUrlUserinfo(parsedUrl),
 			};
 		} catch {
 			networkSignal = {
@@ -518,6 +525,13 @@ export function createWebFetchTool(
 				});
 			}
 
+			if (hasUrlUserinfo(parsedUrl)) {
+				return createErrorResult("builtin-web-fetch", {
+					error:
+						"URL userinfo credentials are not supported; pass credentials through approved headers instead.",
+				});
+			}
+
 			const fetcher = options.fetcher ?? fetch;
 			const resolver = options.resolver ?? defaultResolver;
 			const dispatcherFactory =
@@ -576,6 +590,12 @@ export function createWebFetchTool(
 						if (!["http:", "https:"].includes(currentUrl.protocol)) {
 							return createErrorResult("builtin-web-fetch", {
 								error: `Only http and https URLs are allowed: ${currentUrl.toString()}`,
+							});
+						}
+						if (hasUrlUserinfo(currentUrl)) {
+							return createErrorResult("builtin-web-fetch", {
+								error:
+									"URL userinfo credentials are not supported; pass credentials through approved headers instead.",
 							});
 						}
 

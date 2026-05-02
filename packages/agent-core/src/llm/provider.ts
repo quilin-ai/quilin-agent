@@ -91,8 +91,14 @@ export const DEFAULT_PROVIDER_CATALOG: ProviderCatalog = {
 			provider: "deepseek",
 			status: "enabled",
 			transport: "direct",
-			defaultModel: "deepseek-chat",
-			models: ["deepseek-chat", "deepseek-reasoner"],
+			defaultModel: "deepseek-v4-pro",
+			models: [
+				"deepseek-v4-flash",
+				"deepseek-v4-pro",
+				"deepseek-chat",
+				"deepseek-reasoner",
+			],
+			allowCustomModels: true,
 			requiredEnv: ["DEEPSEEK_API_KEY"],
 			liveEvidence: "verified",
 		},
@@ -146,6 +152,13 @@ function getEnabledDefaultCatalogModels(): readonly string[] {
 	);
 }
 
+function isModelEnabledForEntry(
+	entry: ProviderCatalogEntry,
+	model: string,
+): boolean {
+	return entry.allowCustomModels === true || entry.models.includes(model);
+}
+
 function getDeepSeekDefaultCatalogEntry(): ProviderCatalogEntry & {
 	readonly defaultModel: string;
 } {
@@ -189,7 +202,7 @@ export function validateProviderCatalog(
 
 		if (
 			entry.defaultModel == null ||
-			!entry.models.includes(entry.defaultModel)
+			!isModelEnabledForEntry(entry, entry.defaultModel)
 		) {
 			throw new Error(
 				`Enabled provider ${entry.provider} requires a default model in its model list.`,
@@ -217,7 +230,7 @@ export function decideLLMRoute(
 		);
 	}
 
-	if (!entry.models.includes(request.model)) {
+	if (!isModelEnabledForEntry(entry, request.model)) {
 		throw new Error(
 			`Model ${request.model} is not enabled for provider ${request.provider}.`,
 		);
@@ -231,7 +244,7 @@ export function decideLLMRoute(
 			? "deepseek-reasoner"
 			: request.model;
 
-	if (!entry.models.includes(effectiveModel)) {
+	if (!isModelEnabledForEntry(entry, effectiveModel)) {
 		throw new Error(
 			`Effective model ${effectiveModel} is not enabled for provider ${request.provider}.`,
 		);
@@ -245,7 +258,9 @@ export function decideLLMRoute(
 		reasoningStateAdapter:
 			request.thinkingMode == null || request.thinkingMode === "disabled"
 				? "none"
-				: "captured_not_replayed",
+				: request.provider === "deepseek"
+					? "captured_replayed_for_tool_calls"
+					: "captured_not_replayed",
 	};
 }
 
@@ -260,7 +275,7 @@ export function createProvider() {
 
 	return createOpenAICompatible({
 		name: "deepseek",
-		baseURL: "https://api.deepseek.com/v1",
+		baseURL: "https://api.deepseek.com",
 		apiKey,
 		includeUsage: true,
 		metadataExtractor: metadataExtractorRegistry.deepseek,

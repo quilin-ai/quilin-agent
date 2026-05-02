@@ -9,6 +9,7 @@ import type {
 import { redactString, redactToolOutput } from "../safety/redaction.js";
 import type { Message } from "../state/types.js";
 import type { ToolCall, ToolResult } from "../tools/types.js";
+import type { AgentRunLogSink } from "./agent-run-log.js";
 import { runWithObservabilityContext } from "./context.js";
 import type {
 	LLMThinkingMode,
@@ -21,9 +22,11 @@ import type {
 export interface AgentLoopObservability {
 	readonly spans?: OTelSpanProvider;
 	readonly sessionId?: string;
+	readonly turnId?: string;
 	readonly userId?: string;
 	readonly taskSummary?: string;
 	readonly llmProviderId?: LLMProviderId;
+	readonly runLogger?: AgentRunLogSink;
 }
 
 interface StartTurnInput {
@@ -175,11 +178,12 @@ class AgentTurnTelemetry {
 		private readonly spans: OTelSpanProvider | undefined,
 		private readonly sessionId: string,
 		private readonly llmProviderId: LLMProviderId | undefined,
+		turnId: string | undefined,
 		sessionSpan: OTelSpan | undefined,
 		input: StartTurnInput,
 	) {
 		this.requestId = randomUUID();
-		this.turnId = this.requestId;
+		this.turnId = turnId ?? this.requestId;
 		this.turnSpan = spans?.startSpan(
 			"agent.turn",
 			{
@@ -369,6 +373,7 @@ export class AgentLoopTelemetry {
 			this.observability?.spans,
 			this.sessionId,
 			this.observability?.llmProviderId,
+			this.observability?.turnId,
 			this.sessionSpan,
 			input,
 		);

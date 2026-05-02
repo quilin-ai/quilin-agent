@@ -91,15 +91,54 @@ class MockProviderControlPlaneLLMClient {
 			const routeRequest = (
 				options as {
 					routeRequest?: { provider?: string; model?: string };
+					tierRouting?: {
+						mode?: "auto" | "flash" | "lite" | "pro";
+						defaultTier?: "flash" | "lite" | "pro";
+						tiers?: Record<
+							"flash" | "lite" | "pro",
+							{
+								provider: string;
+								model: string;
+								thinkingMode: string;
+							}
+						>;
+					};
 					onRunRecord?: (record: unknown) => void;
 				}
 			).routeRequest;
-			const provider = routeRequest?.provider ?? "deepseek";
-			const configuredModel = routeRequest?.model ?? "deepseek-chat";
+			const tierRouting = (
+				options as {
+					tierRouting?: {
+						mode?: "auto" | "flash" | "lite" | "pro";
+						defaultTier?: "flash" | "lite" | "pro";
+						tiers?: Record<
+							"flash" | "lite" | "pro",
+							{
+								provider: string;
+								model: string;
+								thinkingMode: string;
+							}
+						>;
+					};
+				}
+			).tierRouting;
+			const selectedTier =
+				tierRouting?.mode == null || tierRouting.mode === "auto"
+					? tierRouting?.defaultTier
+					: tierRouting.mode;
+			const selectedProfile =
+				selectedTier == null ? undefined : tierRouting?.tiers?.[selectedTier];
+			const provider =
+				selectedProfile?.provider ?? routeRequest?.provider ?? "deepseek";
+			const configuredModel =
+				selectedProfile?.model ?? routeRequest?.model ?? "deepseek-chat";
+			const thinkingMode =
+				selectedProfile?.thinkingMode ??
+				(config as { thinkingMode?: string }).thinkingMode;
 			const effectiveModel =
 				provider === "deepseek" &&
 				configuredModel === "deepseek-chat" &&
-				(config as { thinkingMode?: string }).thinkingMode !== "disabled"
+				thinkingMode !== "disabled"
 					? "deepseek-reasoner"
 					: configuredModel;
 			const record = {
@@ -108,10 +147,20 @@ class MockProviderControlPlaneLLMClient {
 					configuredModel,
 					effectiveModel,
 					fallbackUsed: false,
+					...(selectedTier == null ? {} : { selectedTier }),
+					...(tierRouting?.mode == null
+						? {}
+						: { routingMode: tierRouting.mode }),
+					...(selectedTier == null
+						? {}
+						: { routeReason: `forced_${selectedTier}` }),
+					...(selectedTier == null ? {} : { thinkingMode }),
 					reasoningStateAdapter:
-						(config as { thinkingMode?: string }).thinkingMode === "disabled"
+						thinkingMode === "disabled"
 							? "none"
-							: "captured_not_replayed",
+							: provider === "deepseek"
+								? "captured_replayed_for_tool_calls"
+								: "captured_not_replayed",
 				},
 				attempts: [
 					{
@@ -393,7 +442,7 @@ describe("startRepl", () => {
 					configuredModel: "deepseek-chat",
 					effectiveModel: "deepseek-reasoner",
 					fallbackUsed: false,
-					reasoningStateAdapter: "captured_not_replayed",
+					reasoningStateAdapter: "captured_replayed_for_tool_calls",
 				},
 				attempts: [
 					expect.objectContaining({
@@ -496,6 +545,104 @@ describe("startRepl", () => {
 			{ role: "user", content: "after clear" },
 		]);
 		expect(stderrWriteSpy).toHaveBeenCalledWith("Conversation cleared.\n\n");
+	});
+
+	it("keeps tool-call and tool-result transcript messages for follow-up turns", async () => {
+		mockQuestion
+			.mockResolvedValueOnce("search codex")
+			.mockResolvedValueOnce("which sites?")
+			.mockResolvedValueOnce("/exit");
+		const firstToolCall = {
+			id: "call-web",
+			name: "web_fetch",
+			arguments: { url: "https://example.com/codex" },
+		};
+		const firstToolResult = {
+			toolCallId: "call-web",
+			isError: false,
+			content: JSON.stringify({
+				url: "https://example.com/codex",
+				status: 200,
+				contentType: "text/html",
+				body: "Codex news",
+			}),
+		};
+		mockRunAgentLoop.mockImplementation(async (config, messages) => {
+			capturedMessages.push(structuredClone(messages));
+			if (capturedMessages.length === 1) {
+				const fullTranscript = [
+					...messages,
+					{
+						role: "assistant",
+						content: "",
+						toolCalls: [firstToolCall],
+					},
+					{
+						role: "tool",
+						toolCallId: "call-web",
+						name: "web_fetch",
+						content: firstToolResult.content,
+					},
+					{ role: "assistant", content: "I checked example.com." },
+				];
+				await config.hooks?.onToolResult?.({
+					toolCall: firstToolCall,
+					toolResult: firstToolResult,
+					actionVerification: {
+						layer: 2,
+						decision: "allow",
+						code: "allowed",
+						reason: "test",
+					},
+					scanResult: {
+						safe: true,
+						threats: [],
+						sanitizedContent: firstToolResult.content,
+					},
+					sanitizedContent: firstToolResult.content,
+					trustedToolOutput: false,
+					hasBlockedThreat: false,
+				});
+				await config.hooks?.onMessagesUpdated?.(fullTranscript, {
+					phase: "assistant_response",
+					turnCount: 1,
+				});
+				return "I checked example.com.";
+			}
+
+			const outbound = config.sessionAssembler?.buildOutboundRequest({
+				transcript: messages,
+				turnKind: "user-turn",
+			});
+			expect(outbound?.messages[0]?.content).toContain(
+				"https://example.com/codex",
+			);
+			return "I used example.com.";
+		});
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: createMockProvider(() => createMockLanguageModel()),
+			modelId: "deepseek-chat",
+		});
+
+		expect(capturedMessages[1]).toEqual([
+			{ role: "user", content: "search codex" },
+			{
+				role: "assistant",
+				content: "",
+				toolCalls: [firstToolCall],
+			},
+			{
+				role: "tool",
+				toolCallId: "call-web",
+				name: "web_fetch",
+				content: firstToolResult.content,
+			},
+			{ role: "assistant", content: "I checked example.com." },
+			{ role: "user", content: "which sites?" },
+		]);
 	});
 
 	it("passes observability into runAgentLoop and flushes spans after a turn", async () => {
@@ -1010,7 +1157,7 @@ describe("startRepl", () => {
 		});
 
 		expect(stderrWriteSpy).toHaveBeenCalledWith(
-			"Status: model=deepseek-chat | effective=deepseek-reasoner | thinking=enabled | reasoning=verbose\n",
+			"Status: model=deepseek-chat | effective=deepseek-reasoner | thinking=enabled | routing=fixed | reasoning=verbose\n",
 		);
 	});
 
@@ -1033,7 +1180,66 @@ describe("startRepl", () => {
 		});
 
 		expect(stderrWriteSpy).toHaveBeenCalledWith(
-			"Status: model=gpt-test | effective=gpt-test | thinking=enabled | reasoning=collapsed\n",
+			"Status: model=gpt-test | effective=gpt-test | thinking=enabled | routing=fixed | reasoning=collapsed\n",
+		);
+	});
+
+	it("shows configured tiers and the last routed tier in /status", async () => {
+		mockQuestion
+			.mockResolvedValueOnce("hello")
+			.mockResolvedValueOnce("/status")
+			.mockResolvedValueOnce("/exit");
+		mockRunAgentLoop.mockImplementation(async (config) => {
+			await config.llm.chat([], [], {
+				temperature: 0.7,
+				maxTokens: 4096,
+				thinkingMode: "enabled",
+			});
+			return "ok";
+		});
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: createMockProvider((requestedModelId: string) =>
+				createMockLanguageModel({
+					provider: "deepseek",
+					modelId: requestedModelId,
+				}),
+			),
+			modelId: "deepseek-v4-pro",
+			tierRouting: {
+				mode: "pro",
+				defaultTier: "lite",
+				allowEscalation: true,
+				tiers: {
+					flash: {
+						provider: "deepseek",
+						model: "deepseek-v4-flash",
+						thinkingMode: "disabled",
+					},
+					lite: {
+						provider: "deepseek",
+						model: "deepseek-v4-flash",
+						thinkingMode: "auto",
+					},
+					pro: {
+						provider: "deepseek",
+						model: "deepseek-v4-pro",
+						thinkingMode: "enabled",
+					},
+				},
+			},
+		});
+
+		expect(stderrWriteSpy).toHaveBeenCalledWith(
+			"Status: base_model=deepseek-v4-pro | base_effective=deepseek-v4-pro | base_thinking=disabled | routing=pro | reasoning=collapsed\n",
+		);
+		expect(stderrWriteSpy).toHaveBeenCalledWith(
+			"Tiers: flash=deepseek/deepseek-v4-flash thinking=disabled | lite=deepseek/deepseek-v4-flash thinking=auto | pro=deepseek/deepseek-v4-pro thinking=enabled\n",
+		);
+		expect(stderrWriteSpy).toHaveBeenCalledWith(
+			"Last route: tier=pro | provider=deepseek | configured=deepseek-v4-pro | effective=deepseek-v4-pro | thinking=enabled | reason=forced_pro\n",
 		);
 	});
 
@@ -1066,6 +1272,172 @@ describe("startRepl", () => {
 				});
 				return "first reply";
 			})
+			.mockImplementationOnce(async () => "second reply");
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: createMockProvider((requestedModelId: string) =>
+				createMockLanguageModel({
+					provider: "deepseek",
+					modelId: requestedModelId,
+				}),
+			),
+			modelId: "deepseek-chat",
+		});
+
+		expect(stderrWriteSpy).toHaveBeenCalledWith(
+			"Command queued for next turn: /think on\n",
+		);
+		expect(mockRunAgentLoop).toHaveBeenNthCalledWith(
+			2,
+			expect.objectContaining({
+				inferenceConfig: expect.objectContaining({
+					thinkingMode: "enabled",
+				}),
+			}),
+			expect.any(Array),
+		);
+	});
+
+	it("prompts for sandbox approvals inside the REPL and resumes the same tool call", async () => {
+		mockQuestion
+			.mockResolvedValueOnce("trigger sandbox")
+			.mockResolvedValueOnce("y")
+			.mockResolvedValueOnce("/exit");
+		mockRunAgentLoop.mockImplementationOnce(
+			async (config: {
+				toolRouterOptions?: {
+					sandboxApproval?: (request: {
+						decision: {
+							kind: "ask";
+							reasonCodes: readonly string[];
+							requiredApprovals: readonly string[];
+						};
+						summary: {
+							tool: string;
+							call: string;
+							origin: string;
+							kind: "ask";
+							requiredApprovals: readonly string[];
+							reasonCodes: readonly string[];
+							summary: string;
+							detail: string;
+						};
+						context: Record<string, unknown>;
+					}) => Promise<boolean>;
+				};
+			}) => {
+				const approved = await config.toolRouterOptions?.sandboxApproval?.({
+					decision: {
+						kind: "ask",
+						reasonCodes: ["network_credentials_require_approval"],
+						requiredApprovals: ["network_access", "user_confirmation"],
+					},
+					context: {
+						toolCallId: "call-web-fetch-auth",
+						requestedToolName: "web_fetch",
+						resolvedToolName: "web_fetch",
+						parsedArguments: {},
+					},
+					summary: {
+						tool: "web_fetch",
+						call: "call-web-fetch-auth",
+						origin: "agent",
+						kind: "ask",
+						requiredApprovals: ["network_access", "user_confirmation"],
+						reasonCodes: ["network_credentials_require_approval"],
+						summary: "Sandbox approval required for web_fetch.",
+						detail:
+							"call=call-web-fetch-auth; origin=agent; kind=ask; requiredApprovals=network_access,user_confirmation; reasonCodes=network_credentials_require_approval",
+					},
+				});
+				expect(approved).toBe(true);
+				return "ok";
+			},
+		);
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: createMockProvider(() => createMockLanguageModel()),
+			modelId: "deepseek-chat",
+		});
+
+		expect(mockRunAgentLoop).toHaveBeenCalledWith(
+			expect.objectContaining({
+				toolRouterOptions: expect.objectContaining({
+					sandboxOrigin: "agent",
+					sandboxApproval: expect.any(Function),
+				}),
+			}),
+			expect.any(Array),
+		);
+		expect(mockQuestion).toHaveBeenNthCalledWith(
+			2,
+			"[Sandbox] web_fetch: Sandbox approval required for web_fetch.\nReasons: network_credentials_require_approval | Required: network_access,user_confirmation\nAllow once? [y/N]: ",
+		);
+	});
+
+	it("queues slash commands entered during sandbox approval", async () => {
+		mockQuestion
+			.mockResolvedValueOnce("trigger sandbox")
+			.mockResolvedValueOnce("/think on")
+			.mockResolvedValueOnce("y")
+			.mockResolvedValueOnce("follow up")
+			.mockResolvedValueOnce("/exit");
+		mockRunAgentLoop
+			.mockImplementationOnce(
+				async (config: {
+					toolRouterOptions?: {
+						sandboxApproval?: (request: {
+							decision: {
+								kind: "ask";
+								reasonCodes: readonly string[];
+								requiredApprovals: readonly string[];
+							};
+							summary: {
+								tool: string;
+								call: string;
+								origin: string;
+								kind: "ask";
+								requiredApprovals: readonly string[];
+								reasonCodes: readonly string[];
+								summary: string;
+								detail: string;
+							};
+							context: Record<string, unknown>;
+						}) => Promise<boolean>;
+					};
+				}) => {
+					const approved = await config.toolRouterOptions?.sandboxApproval?.({
+						decision: {
+							kind: "ask",
+							reasonCodes: ["network_credentials_require_approval"],
+							requiredApprovals: ["network_access", "user_confirmation"],
+						},
+						context: {
+							toolCallId: "call-web-fetch-auth",
+							requestedToolName: "web_fetch",
+							resolvedToolName: "web_fetch",
+							parsedArguments: {},
+						},
+						summary: {
+							tool: "web_fetch",
+							call: "call-web-fetch-auth",
+							origin: "agent",
+							kind: "ask",
+							requiredApprovals: ["network_access", "user_confirmation"],
+							reasonCodes: ["network_credentials_require_approval"],
+							summary: "Sandbox approval required for web_fetch.",
+							detail:
+								"call=call-web-fetch-auth; origin=agent; kind=ask; requiredApprovals=network_access,user_confirmation; reasonCodes=network_credentials_require_approval",
+						},
+					});
+					expect(approved).toBe(true);
+					return "first reply";
+				},
+			)
 			.mockImplementationOnce(async () => "second reply");
 
 		const { startRepl } = await import("./repl.js");

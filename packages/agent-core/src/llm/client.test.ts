@@ -13,7 +13,7 @@ import {
 	StreamingLLMClient,
 	VercelLLMClient,
 } from "./client.js";
-import type { LLMClient } from "./types.js";
+import type { LLMClient, LLMTierRoutingConfig } from "./types.js";
 
 vi.mock("ai", () => ({
 	generateText: vi.fn(),
@@ -259,6 +259,48 @@ describe("VercelLLMClient", () => {
 		);
 		expect(warnSpy).toHaveBeenCalledWith(
 			expect.stringContaining("deepseek-reasoner"),
+		);
+	});
+
+	it("keeps deepseek-v4-pro as the effective model when thinking is enabled", async () => {
+		const deepseekV4ProModel = createMockLanguageModel({
+			provider: "deepseek",
+			modelId: "deepseek-v4-pro",
+		});
+		const resolveModel = vi.fn(() => deepseekV4ProModel);
+		vi.mocked(generateText).mockResolvedValue(
+			mockGenerateTextResult({
+				text: "reasoned",
+				usage: {
+					promptTokens: 9,
+					completionTokens: 3,
+				},
+				finishReason: "stop",
+			}),
+		);
+
+		const client = new VercelLLMClient({
+			model: deepseekV4ProModel,
+			resolveModel,
+		});
+
+		await client.chat([{ role: "user", content: "solve it" }], [], {
+			temperature: 0.1,
+			maxTokens: 256,
+			thinkingMode: "enabled",
+		});
+
+		expect(resolveModel).not.toHaveBeenCalledWith("deepseek-reasoner");
+		expect(generateText).toHaveBeenCalledWith(
+			expect.objectContaining({
+				model: deepseekV4ProModel,
+				providerOptions: {
+					deepseek: {
+						thinking: { type: "enabled" },
+						reasoningEffort: "high",
+					},
+				},
+			}),
 		);
 	});
 
@@ -646,6 +688,62 @@ describe("VercelLLMClient", () => {
 		});
 	});
 
+	it("sanitizes namespaced MCP tool names before generateText and restores returned calls", async () => {
+		vi.mocked(generateText).mockResolvedValue(
+			mockGenerateTextResult({
+				text: "",
+				usage: {
+					promptTokens: 1,
+					completionTokens: 2,
+				},
+				finishReason: "tool-calls",
+				toolCalls: [
+					{
+						toolCallId: "call-1",
+						toolName: "omnimem_memory_recall",
+						input: { query: "我是谁" },
+					},
+				],
+			}),
+		);
+
+		const client = new VercelLLMClient(model);
+		const namespacedTool = {
+			name: "omnimem/memory_recall",
+			description: "Recall memory",
+			parameters: z.object({ query: z.string() }),
+			execute: vi.fn(),
+		};
+
+		const result = await client.chat(
+			[{ role: "user", content: "我是谁" }],
+			[namespacedTool],
+			{
+				temperature: 0.7,
+				maxTokens: 128,
+				thinkingMode: "disabled",
+			},
+		);
+
+		expect(generateText).toHaveBeenCalledWith(
+			expect.objectContaining({
+				tools: {
+					omnimem_memory_recall: {
+						description: "Recall memory",
+						inputSchema: namespacedTool.parameters,
+					},
+				},
+			}),
+		);
+		expect(result.toolCalls).toEqual([
+			{
+				id: "call-1",
+				name: "omnimem/memory_recall",
+				arguments: { query: "我是谁" },
+			},
+		]);
+	});
+
 	it("maps assistant tool calls and tool results back into AI SDK messages", async () => {
 		vi.mocked(generateText).mockResolvedValue(
 			mockGenerateTextResult({
@@ -730,6 +828,173 @@ describe("VercelLLMClient", () => {
 			topP: undefined,
 			maxRetries: 0,
 		});
+	});
+
+	it("sanitizes namespaced MCP tool names in assistant/tool history", async () => {
+		vi.mocked(generateText).mockResolvedValue(
+			mockGenerateTextResult({
+				text: "我是麒麟。",
+				usage: {
+					promptTokens: 8,
+					completionTokens: 9,
+				},
+				finishReason: "stop",
+			}),
+		);
+
+		const client = new VercelLLMClient(model);
+		const namespacedTool = {
+			name: "omnimem/memory_recall",
+			description: "Recall memory",
+			parameters: z.object({ query: z.string() }),
+			execute: vi.fn(),
+		};
+
+		await client.chat(
+			[
+				{ role: "user", content: "你是谁" },
+				{
+					role: "assistant",
+					content: "",
+					toolCalls: [
+						{
+							id: "call-1",
+							name: "omnimem/memory_recall",
+							arguments: { query: "identity" },
+						},
+					],
+				},
+				{
+					role: "tool",
+					toolCallId: "call-1",
+					name: "omnimem/memory_recall",
+					content: JSON.stringify({
+						records: [{ id: "mem-1", content: "我是麒麟" }],
+					}),
+				},
+			],
+			[namespacedTool],
+			{
+				temperature: 0.7,
+				maxTokens: 128,
+				thinkingMode: "disabled",
+			},
+		);
+
+		expect(generateText).toHaveBeenCalledWith(
+			expect.objectContaining({
+				messages: [
+					{ role: "user", content: "你是谁" },
+					{
+						role: "assistant",
+						content: [
+							{
+								type: "tool-call",
+								toolCallId: "call-1",
+								toolName: "omnimem_memory_recall",
+								input: { query: "identity" },
+							},
+						],
+					},
+					{
+						role: "tool",
+						content: [
+							{
+								type: "tool-result",
+								toolCallId: "call-1",
+								toolName: "omnimem_memory_recall",
+								output: {
+									type: "json",
+									value: {
+										records: [{ id: "mem-1", content: "我是麒麟" }],
+									},
+								},
+							},
+						],
+					},
+				],
+				tools: {
+					omnimem_memory_recall: {
+						description: "Recall memory",
+						inputSchema: namespacedTool.parameters,
+					},
+				},
+			}),
+		);
+	});
+
+	it("sanitizes namespaced MCP tool history without requiring the current tools list", async () => {
+		vi.mocked(generateText).mockResolvedValue(
+			mockGenerateTextResult({
+				text: "工具结果已读取。",
+				usage: {
+					promptTokens: 8,
+					completionTokens: 9,
+				},
+				finishReason: "stop",
+			}),
+		);
+
+		const client = new VercelLLMClient(model);
+
+		await client.chat(
+			[
+				{
+					role: "assistant",
+					content: "",
+					toolCalls: [
+						{
+							id: "call-1",
+							name: "omnimem/memory_recall",
+							arguments: { query: "identity" },
+						},
+					],
+				},
+				{
+					role: "tool",
+					toolCallId: "call-1",
+					name: "omnimem/memory_recall",
+					content: JSON.stringify({ records: [] }),
+				},
+				{ role: "user", content: "继续" },
+			],
+			[],
+			{
+				temperature: 0.7,
+				maxTokens: 128,
+				thinkingMode: "disabled",
+			},
+		);
+
+		expect(generateText).toHaveBeenCalledWith(
+			expect.objectContaining({
+				messages: [
+					{
+						role: "assistant",
+						content: [
+							{
+								type: "tool-call",
+								toolCallId: "call-1",
+								toolName: "omnimem_memory_recall",
+								input: { query: "identity" },
+							},
+						],
+					},
+					{
+						role: "tool",
+						content: [
+							{
+								type: "tool-result",
+								toolCallId: "call-1",
+								toolName: "omnimem_memory_recall",
+								output: { type: "json", value: { records: [] } },
+							},
+						],
+					},
+					{ role: "user", content: "继续" },
+				],
+			}),
+		);
 	});
 
 	it("maps error finishes and non-object tool call inputs", async () => {
@@ -875,7 +1140,7 @@ describe("VercelLLMClient", () => {
 		const callableModel = vi.fn() as unknown as LanguageModel;
 		const deepseekChatModel = createMockLanguageModel({
 			provider: "deepseek",
-			modelId: "deepseek-reasoner",
+			modelId: "deepseek-chat",
 		});
 		const resolveModel = vi.fn(() => deepseekChatModel);
 		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -942,6 +1207,34 @@ describe("ProviderControlPlaneLLMClient", () => {
 		thinkingBudget: 2048,
 	};
 
+	const tierRouting = {
+		mode: "auto",
+		defaultTier: "lite",
+		allowEscalation: true,
+		tiers: {
+			flash: {
+				provider: "deepseek",
+				model: "deepseek-v4-flash",
+				thinkingMode: "disabled",
+				temperature: 0.2,
+				maxTokens: 64,
+			},
+			lite: {
+				provider: "deepseek",
+				model: "deepseek-v4-flash",
+				thinkingMode: "auto",
+				maxTokens: 256,
+			},
+			pro: {
+				provider: "deepseek",
+				model: "deepseek-v4-pro",
+				thinkingMode: "enabled",
+				maxTokens: 1024,
+				thinkingBudget: 6000,
+			},
+		},
+	} satisfies LLMTierRoutingConfig;
+
 	it("records one successful provider attempt with selected provider, model, usage, and cache", async () => {
 		const records: unknown[] = [];
 		const response = {
@@ -993,7 +1286,7 @@ describe("ProviderControlPlaneLLMClient", () => {
 				configuredModel: "deepseek-chat",
 				effectiveModel: "deepseek-reasoner",
 				fallbackUsed: false,
-				reasoningStateAdapter: "captured_not_replayed",
+				reasoningStateAdapter: "captured_replayed_for_tool_calls",
 				budget: {
 					maxTokens: 128,
 					thinkingBudget: 2048,
@@ -1012,6 +1305,151 @@ describe("ProviderControlPlaneLLMClient", () => {
 			],
 			outcome: "success",
 			fallbackUsed: false,
+		});
+	});
+
+	it("routes simple tiered requests to flash and applies the tier profile", async () => {
+		const response = {
+			content: "ok",
+			usage: { inputTokens: 1, outputTokens: 1 },
+			finishReason: "stop" as const,
+		};
+		const routedDelegate = {
+			chat: vi.fn().mockResolvedValue(response),
+		} satisfies LLMClient;
+		const delegate = {
+			chat: vi.fn(),
+			withModel: vi.fn().mockReturnValue(routedDelegate),
+		} satisfies LLMClient & { withModel(modelId: string): LLMClient };
+		const client = new ProviderControlPlaneLLMClient(delegate, {
+			routeRequest: {
+				provider: "deepseek",
+				model: "deepseek-v4-pro",
+			},
+			tierRouting,
+			now: () => new Date("2026-05-01T00:00:00.000Z"),
+		});
+
+		await expect(
+			client.chat([{ role: "user", content: "解释一下这个概念" }], [], config),
+		).resolves.toBe(response);
+
+		expect(delegate.withModel).toHaveBeenCalledWith("deepseek-v4-flash");
+		expect(routedDelegate.chat).toHaveBeenCalledWith(
+			[{ role: "user", content: "解释一下这个概念" }],
+			[],
+			{
+				temperature: 0.2,
+				maxTokens: 64,
+				thinkingMode: "disabled",
+			},
+			undefined,
+		);
+		expect(client.runRecords[0]?.route).toMatchObject({
+			provider: "deepseek",
+			configuredModel: "deepseek-v4-flash",
+			effectiveModel: "deepseek-v4-flash",
+			selectedTier: "flash",
+			routingMode: "auto",
+			routeReason: "short_low_risk_no_tool",
+			thinkingMode: "disabled",
+			budget: {
+				maxTokens: 64,
+			},
+		});
+	});
+
+	it("routes complex tiered requests to pro and applies thinking budget overrides", async () => {
+		const response = {
+			content: "ok",
+			usage: { inputTokens: 5, outputTokens: 3 },
+			finishReason: "stop" as const,
+		};
+		const routedDelegate = {
+			chat: vi.fn().mockResolvedValue(response),
+		} satisfies LLMClient;
+		const delegate = {
+			chat: vi.fn(),
+			withModel: vi.fn().mockReturnValue(routedDelegate),
+		} satisfies LLMClient & { withModel(modelId: string): LLMClient };
+		const client = new ProviderControlPlaneLLMClient(delegate, {
+			routeRequest: {
+				provider: "deepseek",
+				model: "deepseek-v4-flash",
+			},
+			tierRouting,
+		});
+
+		await client.chat(
+			[{ role: "user", content: "实现路由策略并运行测试" }],
+			[],
+			config,
+		);
+
+		expect(delegate.withModel).toHaveBeenCalledWith("deepseek-v4-pro");
+		expect(routedDelegate.chat).toHaveBeenCalledWith(
+			[{ role: "user", content: "实现路由策略并运行测试" }],
+			[],
+			{
+				temperature: 0.1,
+				maxTokens: 1024,
+				thinkingMode: "enabled",
+				thinkingBudget: 6000,
+			},
+			undefined,
+		);
+		expect(client.runRecords[0]?.route).toMatchObject({
+			configuredModel: "deepseek-v4-pro",
+			effectiveModel: "deepseek-v4-pro",
+			selectedTier: "pro",
+			routingMode: "auto",
+			routeReason: "high_complexity_or_risk",
+			thinkingMode: "enabled",
+			budget: {
+				maxTokens: 1024,
+				thinkingBudget: 6000,
+			},
+		});
+	});
+
+	it("rejects tier provider switches when the delegate only routes models", async () => {
+		const delegate = {
+			chat: vi.fn(),
+			withModel: vi.fn(),
+		} satisfies LLMClient & { withModel(modelId: string): LLMClient };
+		const client = new ProviderControlPlaneLLMClient(delegate, {
+			routeRequest: {
+				provider: "deepseek",
+				model: "deepseek-v4-pro",
+			},
+			tierRouting: {
+				...tierRouting,
+				mode: "pro",
+				tiers: {
+					...tierRouting.tiers,
+					pro: {
+						provider: "openai",
+						model: "gpt-4.1",
+						thinkingMode: "enabled",
+					},
+				},
+			},
+		});
+
+		await expect(
+			client.chat([{ role: "user", content: "hi" }], [], config),
+		).rejects.toThrow(/cannot switch runtime provider from deepseek to openai/);
+		expect(delegate.withModel).not.toHaveBeenCalled();
+		expect(delegate.chat).not.toHaveBeenCalled();
+		expect(client.runRecords[0]).toMatchObject({
+			route: {
+				provider: "deepseek",
+				configuredModel: "deepseek-v4-pro",
+				selectedTier: "pro",
+				routingMode: "pro",
+			},
+			attempts: [],
+			outcome: "error",
 		});
 	});
 
@@ -1176,7 +1614,7 @@ describe("ProviderControlPlaneLLMClient", () => {
 				configuredModel: "deepseek-chat",
 				effectiveModel: "deepseek-chat",
 				fallbackUsed: false,
-				reasoningStateAdapter: "captured_not_replayed",
+				reasoningStateAdapter: "captured_replayed_for_tool_calls",
 				budget: {
 					maxTokens: 128,
 					thinkingBudget: 2048,
@@ -1314,7 +1752,7 @@ describe("ProviderControlPlaneLLMClient", () => {
 				configuredModel: "deepseek-chat",
 				effectiveModel: "deepseek-reasoner",
 				fallbackUsed: false,
-				reasoningStateAdapter: "captured_not_replayed",
+				reasoningStateAdapter: "captured_replayed_for_tool_calls",
 			},
 			attempts: [],
 			outcome: "error",
@@ -1435,6 +1873,103 @@ describe("StreamingLLMClient", () => {
 			},
 			finishReason: "stop",
 		});
+	});
+
+	it("restores namespaced MCP tool names from streamText events and returned calls", async () => {
+		const events: unknown[] = [];
+		vi.mocked(streamText).mockReturnValue(
+			mockStreamTextResult({
+				fullStream: (async function* () {
+					yield {
+						type: "tool-input-start",
+						id: "call-1",
+						toolName: "omnimem_memory_recall",
+					};
+					yield {
+						type: "tool-call",
+						toolCallId: "call-1",
+						toolName: "omnimem_memory_recall",
+						input: { query: "我是谁" },
+					};
+					yield {
+						type: "tool-result",
+						toolCallId: "call-1",
+						toolName: "omnimem_memory_recall",
+						output: { records: [] },
+					};
+				})(),
+				usage: Promise.resolve({
+					promptTokens: 3,
+					completionTokens: 4,
+				}),
+				finishReason: Promise.resolve("tool-calls"),
+				toolCalls: Promise.resolve([
+					{
+						toolCallId: "call-1",
+						toolName: "omnimem_memory_recall",
+						input: { query: "我是谁" },
+					},
+				]),
+			}),
+		);
+
+		const namespacedTool = {
+			name: "omnimem/memory_recall",
+			description: "Recall memory",
+			parameters: z.object({ query: z.string() }),
+			execute: vi.fn(),
+		};
+		const client = new StreamingLLMClient(model, (event) => {
+			events.push(event);
+		});
+
+		const result = await client.chat(
+			[{ role: "user", content: "我是谁" }],
+			[namespacedTool],
+			{
+				temperature: 0.2,
+				maxTokens: 64,
+				thinkingMode: "disabled",
+			},
+		);
+
+		expect(streamText).toHaveBeenCalledWith(
+			expect.objectContaining({
+				tools: {
+					omnimem_memory_recall: {
+						description: "Recall memory",
+						inputSchema: namespacedTool.parameters,
+					},
+				},
+			}),
+		);
+		expect(events).toEqual([
+			{
+				type: "tool-call-start",
+				toolCallId: "call-1",
+				toolName: "omnimem/memory_recall",
+			},
+			{
+				type: "tool-call-end",
+				toolCallId: "call-1",
+				toolName: "omnimem/memory_recall",
+				inputText: '{"query":"我是谁"}',
+				input: { query: "我是谁" },
+			},
+			{
+				type: "tool-result",
+				toolCallId: "call-1",
+				toolName: "omnimem/memory_recall",
+				output: { records: [] },
+			},
+		]);
+		expect(result.toolCalls).toEqual([
+			{
+				id: "call-1",
+				name: "omnimem/memory_recall",
+				arguments: { query: "我是谁" },
+			},
+		]);
 	});
 
 	it("buffers tool-input deltas until the tool name is known", async () => {
@@ -1960,6 +2495,21 @@ describe("client test helpers", () => {
 				temperature: 0.1,
 				maxTokens: 128,
 				thinkingMode: "enabled",
+			}),
+		).toEqual({
+			providerOptions: {
+				deepseek: {
+					thinking: { type: "enabled" },
+					reasoningEffort: "high",
+				},
+			},
+			warnings: [],
+		});
+		expect(
+			clientTestHelpers.buildProviderOptions("deepseek", {
+				temperature: 0.1,
+				maxTokens: 128,
+				thinkingMode: "disabled",
 			}),
 		).toEqual({ warnings: [] });
 	});

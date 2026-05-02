@@ -12,6 +12,7 @@ import {
 	bootstrapUserRuntime,
 	buildRuntimeInferenceConfig,
 	buildRuntimeReloadAuditEvent,
+	buildRuntimeTierRoutingConfig,
 	buildRuntimeToolFilter,
 	diffUserRuntimeStateSnapshots,
 	getDefaultSpanProvider,
@@ -1003,6 +1004,16 @@ describe("runtime config adapters", () => {
 				OMNI_LLM_MAX_TOKENS: "1234",
 				OMNI_LLM_THINKING_ENABLED: "false",
 				OMNI_LLM_THINKING_BUDGET_TOKENS: "4321",
+				OMNI_LLM_ROUTING_DEFAULT_TIER: "flash",
+				OMNI_LLM_ROUTING_ALLOW_ESCALATION: "false",
+				OMNI_LLM_TIERS_FLASH_MODEL: "deepseek-flash-local",
+				OMNI_LLM_TIERS_FLASH_THINKING: "disabled",
+				OMNI_LLM_TIERS_LITE_MODEL: "deepseek-lite-local",
+				OMNI_LLM_TIERS_LITE_THINKING: "auto",
+				OMNI_LLM_TIERS_LITE_MAX_TOKENS: "2345",
+				OMNI_LLM_TIERS_PRO_MODEL: "deepseek-pro-local",
+				OMNI_LLM_TIERS_PRO_THINKING: "enabled",
+				OMNI_LLM_TIERS_PRO_THINKING_BUDGET_TOKENS: "12000",
 				OMNI_SAFETY_TRUST_MODE: "auto",
 				OMNI_TOOLS_ENABLED: "file_read,memory_recall",
 				OMNI_TOOLS_DISABLED: "shell_exec",
@@ -1015,6 +1026,30 @@ describe("runtime config adapters", () => {
 			maxTokens: 1234,
 			thinkingMode: "disabled",
 			thinkingBudget: 4321,
+		});
+		expect(buildRuntimeTierRoutingConfig(config)).toEqual({
+			mode: "auto",
+			defaultTier: "flash",
+			allowEscalation: false,
+			tiers: {
+				flash: {
+					provider: "deepseek",
+					model: "deepseek-flash-local",
+					thinkingMode: "disabled",
+				},
+				lite: {
+					provider: "deepseek",
+					model: "deepseek-lite-local",
+					thinkingMode: "auto",
+					maxTokens: 2345,
+				},
+				pro: {
+					provider: "deepseek",
+					model: "deepseek-pro-local",
+					thinkingMode: "enabled",
+					thinkingBudget: 12000,
+				},
+			},
 		});
 		expect(resolveRuntimeWriteAuthorityMode(config)).toBe("auto-medium");
 

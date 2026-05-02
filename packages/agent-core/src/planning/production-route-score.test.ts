@@ -5,6 +5,7 @@ import type {
 	ProductionRouteScoreExplanation,
 } from "./index.js";
 import {
+	buildProductionRouteSupervisorHandoffPlan,
 	classifyProductionRouteScoreBatchReadiness,
 	explainProductionRoute,
 	scoreProductionRoute,
@@ -907,5 +908,111 @@ describe("summarizeProductionRouteScoreBatchReadiness", () => {
 			},
 			highestRequiredReadiness: "handoff_required",
 		});
+	});
+});
+
+describe("buildProductionRouteSupervisorHandoffPlan", () => {
+	it("builds a stable empty handoff plan", () => {
+		expect(
+			buildProductionRouteSupervisorHandoffPlan(scoreProductionRoutes([])),
+		).toEqual({
+			kind: "production_route_supervisor_handoff_plan",
+			schemaVersion: 1,
+			readiness: "empty",
+			handoffRequired: false,
+			handoffCount: 0,
+			keepLocalCount: 0,
+			handoffItems: [],
+			keepLocalIndexes: [],
+		});
+	});
+
+	it("lists handoff items and local indexes in score order", () => {
+		const batch = scoreProductionRoutes([
+			{
+				taskRisk: "safe",
+				complexity: 0,
+				cost: 0,
+				capabilityFit: 1,
+			},
+			{
+				taskRisk: "high",
+				complexity: 0.1,
+				cost: 0.1,
+				capabilityFit: 0.95,
+			},
+			{
+				taskRisk: "low",
+				complexity: 0.2,
+				cost: 0.2,
+				capabilityFit: 0.95,
+			},
+			{
+				taskRisk: "critical",
+				complexity: 0,
+				cost: 0,
+				capabilityFit: 1,
+			},
+		]);
+
+		expect(buildProductionRouteSupervisorHandoffPlan(batch)).toEqual({
+			kind: "production_route_supervisor_handoff_plan",
+			schemaVersion: 1,
+			readiness: "mixed",
+			handoffRequired: true,
+			handoffCount: 2,
+			keepLocalCount: 2,
+			handoffItems: [
+				{
+					index: 1,
+					score: 61,
+					scoreBand: "high",
+					taskRisk: "high",
+					reasonCodes: [
+						"risk_requires_supervisor_handoff",
+						"score_above_threshold",
+						"recommend_handoff_to_supervisor",
+					],
+				},
+				{
+					index: 3,
+					score: 65,
+					scoreBand: "high",
+					taskRisk: "critical",
+					reasonCodes: [
+						"risk_requires_supervisor_handoff",
+						"score_above_threshold",
+						"recommend_handoff_to_supervisor",
+					],
+				},
+			],
+			keepLocalIndexes: [0, 2],
+		});
+	});
+
+	it("derives readiness from scores even when the stored summary is stale", () => {
+		const handoffBatch = scoreProductionRoutes([
+			{
+				taskRisk: "critical",
+				complexity: 0,
+				cost: 0,
+				capabilityFit: 1,
+			},
+		]);
+
+		const staleBatch: ProductionRouteScoreBatch = {
+			scores: handoffBatch.scores,
+			summary: scoreProductionRoutes([]).summary,
+		};
+
+		expect(buildProductionRouteSupervisorHandoffPlan(staleBatch)).toMatchObject(
+			{
+				readiness: "handoff_required",
+				handoffRequired: true,
+				handoffCount: 1,
+				keepLocalCount: 0,
+				keepLocalIndexes: [],
+			},
+		);
 	});
 });

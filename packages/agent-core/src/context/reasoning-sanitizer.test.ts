@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { logger } from "../logger.js";
 import {
 	sanitizeReasoningParts,
+	stripNonReplayableReasoningFromMessages,
 	stripReasoningFromMessage,
 	stripReasoningFromMessages,
 } from "./reasoning-sanitizer.js";
@@ -54,5 +55,29 @@ describe("reasoning sanitizer", () => {
 				content: "done",
 			},
 		]);
+	});
+
+	it("keeps DeepSeek reasoning only for assistant tool-call replay", () => {
+		const toolCallMessage = {
+			role: "assistant" as const,
+			content: "",
+			reasoning: [{ provider: "deepseek" as const, text: "need the tool" }],
+			toolCalls: [
+				{
+					id: "call-1",
+					name: "memory_recall",
+					arguments: { query: "user" },
+				},
+			],
+		};
+		const finalMessage = {
+			role: "assistant" as const,
+			content: "done",
+			reasoning: [{ provider: "deepseek" as const, text: "final thought" }],
+		};
+
+		expect(
+			stripNonReplayableReasoningFromMessages([toolCallMessage, finalMessage]),
+		).toEqual([toolCallMessage, { role: "assistant", content: "done" }]);
 	});
 });

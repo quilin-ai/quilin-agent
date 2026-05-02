@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getLoggerRuntimeMode, logger } from "./logger.js";
 import { runAgentLoop } from "./loop.js";
+import type { Message } from "./state/types.js";
 
 vi.mock("./logger.js", () => ({
 	getLoggerRuntimeMode: vi.fn(() => "service"),
@@ -111,6 +112,57 @@ describe("runAgentLoop", () => {
 		expect(buildContext).not.toHaveBeenCalled();
 		expect(logger.warn).toHaveBeenCalledWith(
 			"ContextManager provided but no system message found — skipping context rebuild",
+		);
+	});
+
+	it("在 session assembler 负责注入 system message 时不误报缺失 warning", async () => {
+		vi.mocked(getLoggerRuntimeMode).mockReturnValue("repl");
+
+		const buildContext = vi.fn();
+		const sessionAssembler = {
+			buildOutboundRequest: vi.fn(
+				({ transcript }: { readonly transcript: readonly Message[] }) => ({
+					messages: [
+						{ role: "system", content: "assembled system prompt" },
+						...transcript,
+					],
+				}),
+			),
+		} as never;
+		const chat = vi.fn().mockResolvedValue({
+			content: "assistant reply",
+			usage: {
+				inputTokens: 10,
+				outputTokens: 20,
+			},
+			finishReason: "stop",
+		});
+
+		const result = await runAgentLoop(
+			{
+				llm: { chat },
+				context: { buildContext },
+				sessionAssembler,
+				inferenceConfig: {
+					temperature: 0.7,
+					maxTokens: 1024,
+					thinkingMode: "disabled",
+				},
+			},
+			[{ role: "user", content: "hello" }],
+		);
+
+		expect(result).toBe("assistant reply");
+		expect(logger.warn).not.toHaveBeenCalled();
+		expect(buildContext).not.toHaveBeenCalled();
+		expect(chat).toHaveBeenCalledWith(
+			[
+				{ role: "system", content: "assembled system prompt" },
+				{ role: "user", content: "hello" },
+			],
+			[],
+			expect.any(Object),
+			undefined,
 		);
 	});
 
@@ -472,6 +524,180 @@ describe("runAgentLoop", () => {
 		expect(logger.debug).toHaveBeenCalledTimes(4);
 	});
 
+	it("将 toolRouterOptions 透传给 ToolRouter", async () => {
+		vi.mocked(getLoggerRuntimeMode).mockReturnValue("service");
+
+		const chat = vi
+			.fn()
+			.mockResolvedValueOnce({
+				content: "",
+				toolCalls: [
+					{
+						id: "call-approve-write",
+						name: "file_write",
+						arguments: { path: "demo.txt", content: "hello" },
+					},
+				],
+				usage: {
+					inputTokens: 10,
+					outputTokens: 20,
+				},
+				finishReason: "tool_calls",
+			})
+			.mockResolvedValueOnce({
+				content: "done",
+				usage: {
+					inputTokens: 30,
+					outputTokens: 40,
+				},
+				finishReason: "stop",
+			});
+		const execute = vi.fn().mockResolvedValue({
+			toolCallId: "ignored-by-router",
+			content: JSON.stringify({ ok: true }),
+			isError: false,
+		});
+		const sandboxApproval = vi.fn(async () => true);
+
+		const result = await runAgentLoop(
+			{
+				llm: { chat },
+				tools: [
+					{
+						name: "file_write",
+						description: "Write a file",
+						parameters: {
+							safeParse: vi.fn().mockImplementation((input) => ({
+								success: true,
+								data: input,
+							})),
+						},
+						execute,
+						category: "programmatic",
+						riskLevel: "write",
+						sandboxPolicy: { operation: "write" },
+					} as never,
+				],
+				toolRouterOptions: {
+					sandboxOrigin: "agent",
+					sandboxApproval,
+				},
+				inferenceConfig: {
+					temperature: 0.7,
+					maxTokens: 1024,
+					thinkingMode: "disabled",
+				},
+			},
+			[{ role: "user", content: "write demo" }],
+		);
+
+		expect(result).toBe("done");
+		expect(sandboxApproval).toHaveBeenCalledWith({
+			decision: {
+				kind: "ask",
+				reasonCodes: ["write_operation_requires_approval"],
+				requiredApprovals: ["write_authority", "user_confirmation"],
+			},
+			context: expect.objectContaining({
+				toolCallId: "call-approve-write",
+				requestedToolName: "file_write",
+				resolvedToolName: "file_write",
+				origin: "agent",
+			}),
+			summary: expect.objectContaining({
+				tool: "file_write",
+				call: "call-approve-write",
+				kind: "ask",
+			}),
+		});
+		expect(execute).toHaveBeenCalledWith({
+			path: "demo.txt",
+			content: "hello",
+		});
+	});
+
+	it("在 DeepSeek thinking tool loop 中保留 reasoning 供下一轮回放", async () => {
+		vi.mocked(getLoggerRuntimeMode).mockReturnValue("service");
+
+		const chat = vi
+			.fn()
+			.mockResolvedValueOnce({
+				content: "",
+				thinking: [{ provider: "deepseek", text: "I need memory." }],
+				toolCalls: [
+					{
+						id: "call-1",
+						name: "memory_recall",
+						arguments: { query: "用户" },
+					},
+				],
+				usage: {
+					inputTokens: 10,
+					outputTokens: 20,
+				},
+				finishReason: "tool_calls",
+			})
+			.mockResolvedValueOnce({
+				content: "我是麒麟。",
+				usage: {
+					inputTokens: 30,
+					outputTokens: 40,
+				},
+				finishReason: "stop",
+			});
+		const execute = vi.fn().mockResolvedValue({
+			toolCallId: "ignored-by-router",
+			content: JSON.stringify({ records: [] }),
+			isError: false,
+		});
+
+		await runAgentLoop(
+			{
+				llm: { chat },
+				tools: [
+					{
+						name: "memory_recall",
+						description: "Recall memory",
+						parameters: {
+							safeParse: vi.fn().mockReturnValue({
+								success: true,
+								data: { query: "用户" },
+							}),
+						} as never,
+						execute,
+					},
+				],
+				inferenceConfig: {
+					temperature: 0.7,
+					maxTokens: 1024,
+					thinkingMode: "enabled",
+				},
+			},
+			[{ role: "user", content: "你是谁？" }],
+		);
+
+		expect(chat).toHaveBeenNthCalledWith(
+			2,
+			expect.arrayContaining([
+				{
+					role: "assistant",
+					content: "",
+					reasoning: [{ provider: "deepseek", text: "I need memory." }],
+					toolCalls: [
+						{
+							id: "call-1",
+							name: "memory_recall",
+							arguments: { query: "用户" },
+						},
+					],
+				},
+			]),
+			expect.any(Array),
+			expect.objectContaining({ thinkingMode: "enabled" }),
+			undefined,
+		);
+	});
+
 	it("在提供 context manager 时每轮调用前重建 system prompt", async () => {
 		vi.mocked(getLoggerRuntimeMode).mockReturnValue("repl");
 
@@ -599,7 +825,7 @@ describe("runAgentLoop", () => {
 		);
 	});
 
-	it("在 tool resume 出站前剥离 reasoning，但保留已清理后的存储副本", async () => {
+	it("在 tool resume 出站前保留 DeepSeek tool-call reasoning 并剥离非回放 reasoning", async () => {
 		vi.mocked(getLoggerRuntimeMode).mockReturnValue("repl");
 
 		const chat = vi
@@ -694,6 +920,12 @@ describe("runAgentLoop", () => {
 				{
 					role: "assistant",
 					content: "",
+					reasoning: [
+						{
+							provider: "deepseek",
+							text: "[REDACTED: instruction_override] and [REDACTED: credential_exfiltration]",
+						},
+					],
 					toolCalls: [
 						{
 							id: "call-1",
@@ -721,6 +953,12 @@ describe("runAgentLoop", () => {
 				{
 					role: "assistant",
 					content: "",
+					reasoning: [
+						{
+							provider: "deepseek",
+							text: "[REDACTED: instruction_override] and [REDACTED: credential_exfiltration]",
+						},
+					],
 					toolCalls: [
 						{
 							id: "call-1",

@@ -24,10 +24,19 @@ import type {
 	InferenceConfig,
 	LLMProviderId,
 	LLMStreamEvent,
+	LLMTierRoutingConfig,
 	ProviderRunRecord,
 } from "./llm/types.js";
 import { logger } from "./logger.js";
 import { runAgentLoop } from "./loop.js";
+import {
+	type AgentRunLogSink,
+	createToolProvenanceEntry,
+	JsonlAgentRunLogger,
+	recordAgentRunEvent,
+	summarizeProviderRunRecord,
+	type ToolProvenanceEntry,
+} from "./observability/agent-run-log.js";
 import type { SpanExporter } from "./observability/exporters/composite.js";
 import type { AgentLoopObservability } from "./observability/loop.js";
 import {
@@ -39,6 +48,7 @@ import { SQLiteCheckpoint } from "./state/checkpoint.js";
 import type { AgentState, Message } from "./state/types.js";
 import { createBuiltinTools } from "./tools/builtin/index.js";
 import { MCPRegistry, type MCPServerEntry } from "./tools/registry.js";
+import type { SandboxApprovalRequest } from "./tools/router.js";
 import type { ToolWithMetadata } from "./tools/tool-metadata.js";
 import type { Tool } from "./tools/types.js";
 
@@ -59,8 +69,10 @@ interface ReplOptions {
 	mcpServers?: readonly MCPServerEntry[];
 	skillsManager?: SkillsManager;
 	inferenceConfig?: InferenceConfig;
+	tierRouting?: LLMTierRoutingConfig;
 	writeAuthorityMode?: AuthorityMode;
 	toolFilter?: RuntimeToolFilter;
+	agentRunLogger?: AgentRunLogSink;
 	onProviderRunRecord?: (record: ProviderRunRecord) => void;
 }
 
@@ -80,6 +92,23 @@ function createState(
 	};
 }
 
+function createDefaultAgentRunLogger(
+	sessionId: string,
+): AgentRunLogSink | undefined {
+	const explicit = process.env.QUILIN_AGENT_RUN_LOG?.toLowerCase();
+	if (explicit === "off" || explicit === "false" || explicit === "0") {
+		return undefined;
+	}
+	if (process.env.NODE_ENV === "test" && explicit == null) {
+		return undefined;
+	}
+	const env = process.env.QUILIN_ENV ?? "dev";
+	if (explicit == null && env === "prod") {
+		return undefined;
+	}
+	return new JsonlAgentRunLogger({ sessionId });
+}
+
 function createPromptSessionAssembler(
 	modelId: string,
 	registry: MCPRegistry,
@@ -87,6 +116,7 @@ function createPromptSessionAssembler(
 	lastSessionEndTime?: string,
 	skillsManager?: SkillsManager,
 	toolFilter?: RuntimeToolFilter,
+	getToolProvenance?: () => readonly ToolProvenanceEntry[],
 ): PromptSessionAssembler {
 	const promptBuilder = new PromptBuilder();
 	for (const section of createDefaultPromptSections()) {
@@ -115,6 +145,9 @@ function createPromptSessionAssembler(
 			skills: {
 				recentSkillNames: skillsManager?.getRecentSkillNames() ?? [],
 			},
+			toolProvenance: {
+				recent: getToolProvenance?.().slice(-12) ?? [],
+			},
 		}),
 	});
 
@@ -134,6 +167,15 @@ function withDefaultMetadata(tools: readonly Tool[]): ToolWithMetadata[] {
 		category: "programmatic",
 		riskLevel: "read",
 	}));
+}
+
+function formatReplList(values: readonly string[]): string {
+	return values.length === 0 ? "none" : values.join(",");
+}
+
+function createSandboxApprovalPrompt(request: SandboxApprovalRequest): string {
+	const { summary } = request;
+	return `[Sandbox] ${summary.tool}: ${summary.summary}\nReasons: ${formatReplList(summary.reasonCodes)} | Required: ${formatReplList(summary.requiredApprovals)}\nAllow once? [y/N]: `;
 }
 
 function filterToolsByRuntimeConfig<T extends { readonly name?: string }>(
@@ -343,8 +385,10 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 		mcpServers = [],
 		skillsManager,
 		inferenceConfig: initialInferenceConfig,
+		tierRouting,
 		writeAuthorityMode = "ask",
 		toolFilter,
+		agentRunLogger,
 		onProviderRunRecord,
 	} = options;
 	const context = new BasicContextManager();
@@ -355,8 +399,12 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 	const registry = new MCPRegistry();
 	const resolvedSessionId = sessionId ?? crypto.randomUUID();
 	const checkpoint = new SQLiteCheckpoint({ sessionId: resolvedSessionId });
+	const runLogger =
+		agentRunLogger ?? createDefaultAgentRunLogger(resolvedSessionId);
 	let rl: readline.Interface | undefined;
 	const queuedCommands: string[] = [];
+	const toolProvenance: ToolProvenanceEntry[] = [];
+	let activeTurnId: string | undefined;
 	const writeAuthority = new WriteAuthority({
 		actor: resolvedSessionId,
 		mode: writeAuthorityMode,
@@ -394,6 +442,28 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 			}
 		},
 	});
+	const confirmSandboxApproval = async (
+		request: SandboxApprovalRequest,
+	): Promise<boolean> => {
+		if (rl == null) {
+			return false;
+		}
+
+		while (true) {
+			const answer = (
+				await rl.question(createSandboxApprovalPrompt(request))
+			).trim();
+
+			if (answer.startsWith("/")) {
+				queuedCommands.push(answer);
+				stderr.write(`Command queued for next turn: ${answer}\n`);
+				continue;
+			}
+
+			const normalizedAnswer = answer.toLowerCase();
+			return normalizedAnswer === "y" || normalizedAnswer === "yes";
+		}
+	};
 
 	try {
 		registry.registerBuiltin(
@@ -432,6 +502,14 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 			);
 		}
 		stderr.write("Type your message, or /exit to quit.\n\n");
+		await recordAgentRunEvent(runLogger, "repl.session_started", {
+			sessionId: resolvedSessionId,
+			restored: restoredState != null,
+			messageCount: restoredMessages.length,
+			modelId,
+			providerId,
+			hasTierRouting: tierRouting != null,
+		});
 
 		rl = readline.createInterface({ input: stdin, output: stderr });
 
@@ -454,6 +532,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 			restoredState?.lastActiveAt,
 			skillsManager,
 			toolFilter,
+			() => toolProvenance,
 		);
 		skillsManager?.onCatalogChange((change) => {
 			const hint = renderSkillsCatalogHint(change);
@@ -476,14 +555,24 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 				renderStreamEvent(event, reasoningDisplay, streamRenderState);
 			},
 		);
+		let lastProviderRunRecord: ProviderRunRecord | undefined;
+		const recordProviderRun = (record: ProviderRunRecord): void => {
+			lastProviderRunRecord = record;
+			onProviderRunRecord?.(record);
+			void recordAgentRunEvent(
+				runLogger,
+				"llm.provider_run",
+				summarizeProviderRunRecord(record),
+				{ turnId: activeTurnId },
+			);
+		};
 		const llm = new ProviderControlPlaneLLMClient(streamingLlm, {
 			routeRequest: {
 				provider: providerId,
 				model: modelId,
 			},
-			...(onProviderRunRecord == null
-				? {}
-				: { onRunRecord: onProviderRunRecord }),
+			...(tierRouting == null ? {} : { tierRouting }),
+			onRunRecord: recordProviderRun,
 		});
 
 		while (true) {
@@ -520,9 +609,27 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 			}
 
 			if (trimmed === "/status") {
-				stderr.write(
-					`Status: model=${modelId} | effective=${getEffectiveModelId(providerId, modelId, inferenceConfig.thinkingMode)} | thinking=${inferenceConfig.thinkingMode} | reasoning=${reasoningDisplay}\n`,
+				const effectiveModel = getEffectiveModelId(
+					providerId,
+					modelId,
+					inferenceConfig.thinkingMode,
 				);
+				stderr.write(
+					tierRouting == null
+						? `Status: model=${modelId} | effective=${effectiveModel} | thinking=${inferenceConfig.thinkingMode} | routing=fixed | reasoning=${reasoningDisplay}\n`
+						: `Status: base_model=${modelId} | base_effective=${effectiveModel} | base_thinking=${inferenceConfig.thinkingMode} | routing=${tierRouting.mode} | reasoning=${reasoningDisplay}\n`,
+				);
+				if (tierRouting != null) {
+					stderr.write(
+						`Tiers: flash=${tierRouting.tiers.flash.provider}/${tierRouting.tiers.flash.model} thinking=${tierRouting.tiers.flash.thinkingMode} | lite=${tierRouting.tiers.lite.provider}/${tierRouting.tiers.lite.model} thinking=${tierRouting.tiers.lite.thinkingMode} | pro=${tierRouting.tiers.pro.provider}/${tierRouting.tiers.pro.model} thinking=${tierRouting.tiers.pro.thinkingMode}\n`,
+					);
+					if (lastProviderRunRecord != null) {
+						const route = lastProviderRunRecord.route;
+						stderr.write(
+							`Last route: tier=${route.selectedTier ?? "none"} | provider=${route.provider} | configured=${route.configuredModel} | effective=${route.effectiveModel} | thinking=${route.thinkingMode ?? inferenceConfig.thinkingMode} | reason=${route.routeReason ?? "n/a"}\n`,
+						);
+					}
+				}
 				continue;
 			}
 
@@ -570,6 +677,19 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 			}
 
 			const previousLastActiveAt = state.lastActiveAt;
+			const currentTurnId = crypto.randomUUID();
+			activeTurnId = currentTurnId;
+			await recordAgentRunEvent(
+				runLogger,
+				"turn.input_received",
+				{
+					input: trimmed,
+					inputChars: trimmed.length,
+					historyMessageCount: messages.length,
+					stateTurnCount: state.turnCount,
+				},
+				{ turnId: currentTurnId },
+			);
 			messages.push({ role: "user", content: trimmed });
 			state = createState([...messages], {
 				...state,
@@ -581,6 +701,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 			try {
 				streamRenderState = createStreamRenderState();
 				let latestAssistantMessage: Message | undefined;
+				let latestLoopMessages: readonly Message[] | undefined;
 				const response = await runAgentLoop(
 					{
 						llm,
@@ -591,23 +712,57 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 						modelId,
 						lastMessageTime: previousLastActiveAt,
 						tools: allTools,
+						toolRouterOptions: {
+							sandboxOrigin: "agent",
+							sandboxApproval: confirmSandboxApproval,
+						},
 						inferenceConfig,
 						observability: {
 							...options.observability,
+							runLogger: runLogger ?? options.observability?.runLogger,
+							turnId: currentTurnId,
 							llmProviderId: providerId,
 						},
 						hooks: {
 							onAssistantMessage: (message) => {
 								latestAssistantMessage = message;
 							},
+							onMessagesUpdated: (loopMessages) => {
+								latestLoopMessages = [...loopMessages];
+							},
+							onToolResult: async (event) => {
+								const provenance = createToolProvenanceEntry({
+									toolCall: event.toolCall,
+									toolResult: event.toolResult,
+									sanitizedContent: event.sanitizedContent,
+									at: new Date().toISOString(),
+								});
+								if (provenance == null) {
+									return;
+								}
+								toolProvenance.push(provenance);
+								if (toolProvenance.length > 50) {
+									toolProvenance.splice(0, toolProvenance.length - 50);
+								}
+								await recordAgentRunEvent(
+									runLogger,
+									"tool.provenance_recorded",
+									{ provenance },
+									{ turnId: currentTurnId },
+								);
+							},
 						},
 					},
 					messages,
 				);
 
-				messages.push(
-					latestAssistantMessage ?? { role: "assistant", content: response },
-				);
+				if (latestLoopMessages == null) {
+					messages.push(
+						latestAssistantMessage ?? { role: "assistant", content: response },
+					);
+				} else {
+					messages.splice(0, messages.length, ...latestLoopMessages);
+				}
 				state = createState([...messages], {
 					...state,
 					messages: [...messages],
@@ -635,6 +790,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 					options.observability,
 					options.spanExporter,
 				);
+				activeTurnId = undefined;
 			}
 		}
 	} finally {

@@ -4,6 +4,7 @@ import {
 	type ContextSelectionCompressionTraceLink,
 	createDefaultContextAssembler as createDefaultContextAssemblerFromIndex,
 	type ContextCompressionTrace as PublicContextCompressionTrace,
+	type ContextTraceDelta as PublicContextTraceDelta,
 	type ContextTraceSummary as PublicContextTraceSummary,
 } from "../index.js";
 import {
@@ -493,5 +494,76 @@ describe("ContextAssembler", () => {
 			},
 		]);
 		expect(link.missingCompressionDecisionSourceIds).toEqual([]);
+	});
+
+	it("emits a runtime trace delta when a previous trace summary is supplied", () => {
+		const assembler = createDefaultContextAssemblerFromIndex({
+			modelWindow: 12,
+		});
+		const previous = assembler.assembleContext(
+			"test",
+			{},
+			[],
+			[
+				makeSource("high relevance source", {
+					sourceId: "high",
+					tokenCount: 6,
+					relevanceScore: 0.95,
+				}),
+			],
+		);
+		const current = assembler.assembleContext(
+			"test",
+			{},
+			[],
+			[
+				makeSource("high relevance source", {
+					sourceId: "high",
+					tokenCount: 6,
+					relevanceScore: 0.95,
+				}),
+				makeSource("new source under pressure", {
+					sourceId: "new",
+					tokenCount: 6,
+					relevanceScore: 0.9,
+				}),
+			],
+			{ previousTraceSummary: previous.traceSummary },
+		);
+		const delta: PublicContextTraceDelta | undefined = current.traceDelta;
+
+		expect(previous.traceDelta).toBeUndefined();
+		expect(delta).toBeDefined();
+		if (delta == null) {
+			throw new Error("expected trace delta");
+		}
+		expect(delta).toMatchObject({
+			sourceIds: {
+				added: ["new"],
+				removed: [],
+				changed: [],
+			},
+			hasChanges: true,
+			tokenChanges: {
+				usedTokens: { previous: 6, current: 6, delta: 0 },
+				budgetTokens: { previous: 8, current: 8, delta: 0 },
+			},
+			countChanges: {
+				candidateCount: { previous: 1, current: 2, delta: 1 },
+				selectedCount: { previous: 1, current: 2, delta: 1 },
+				rejectedCount: { previous: 0, current: 0, delta: 0 },
+				compressedCount: { previous: 1, current: 1, delta: 0 },
+				truncatedCount: { previous: 0, current: 0, delta: 0 },
+				droppedCount: { previous: 0, current: 1, delta: 1 },
+				sectionCount: { previous: 0, current: 0, delta: 0 },
+			},
+		});
+		expect(delta.decisionCountChanges.drop).toEqual({
+			previous: 0,
+			current: 1,
+			delta: 1,
+		});
+		expect(delta.traceId).toBe(`trace-delta:${delta.determinismKey}`);
+		expect(delta.determinismKey).toContain("added=new");
 	});
 });

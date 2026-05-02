@@ -164,6 +164,8 @@ describe("main", () => {
 		delete process.env.OMNI_LLM_TEMPERATURE;
 		delete process.env.OMNI_LLM_THINKING_ENABLED;
 		delete process.env.OMNI_LLM_THINKING_BUDGET_TOKENS;
+		delete process.env.OMNI_LLM_ROUTING_MODE;
+		delete process.env.OMNI_LLM_TIERS_PRO_MODEL;
 		delete process.env.OMNI_SAFETY_TRUST_MODE;
 		delete process.env.OMNI_TOOLS_ENABLED;
 		delete process.env.OMNI_TOOLS_DISABLED;
@@ -241,13 +243,17 @@ describe("main", () => {
 			expect.objectContaining({
 				runtime_phase: "startup_verification",
 				provider: "deepseek",
-				configured_model: "deepseek-chat",
-				effective_model: "deepseek-chat",
+				configured_model: "deepseek-v4-flash",
+				effective_model: "deepseek-v4-flash",
+				selected_tier: "flash",
+				routing_mode: "flash",
+				route_reason: "forced_flash",
+				route_thinking_mode: "disabled",
 				fallback_used: false,
 				outcome: "success",
 				attempt_count: 1,
 				attempt_provider: "deepseek",
-				attempt_model: "deepseek-chat",
+				attempt_model: "deepseek-v4-flash",
 				attempt_outcome: "success",
 				input_tokens: 18,
 				output_tokens: 5,
@@ -260,11 +266,12 @@ describe("main", () => {
 				response: "Quilin Agent online.",
 				inputTokens: 18,
 				outputTokens: 5,
+				tier: "flash",
 			},
 			"LLM connection verified",
 		);
 		expect(logger.info).toHaveBeenNthCalledWith(
-			6,
+			10,
 			{ mode: "repl" },
 			"Starting CLI REPL...",
 		);
@@ -284,6 +291,11 @@ describe("main", () => {
 					thinkingMode: "enabled",
 					thinkingBudget: 10_000,
 				},
+				tierRouting: expect.objectContaining({
+					mode: "auto",
+					defaultTier: "lite",
+					allowEscalation: true,
+				}),
 				writeAuthorityMode: "ask",
 				toolFilter: {
 					enabled: [],
@@ -299,7 +311,7 @@ describe("main", () => {
 				configuredModel: "deepseek-chat",
 				effectiveModel: "deepseek-reasoner",
 				fallbackUsed: false,
-				reasoningStateAdapter: "captured_not_replayed",
+				reasoningStateAdapter: "captured_replayed_for_tool_calls",
 			},
 			attempts: [
 				{
@@ -356,7 +368,7 @@ describe("main", () => {
 		expect(exitSpy).toHaveBeenCalledWith(0);
 	});
 
-	it("uses an explicit user config default model for runtime routing", async () => {
+	it("uses an explicit user config default model without rewriting tier profiles", async () => {
 		const requestedModels: string[] = [];
 		const provider = createMockProvider((requestedModelId: string) => {
 			requestedModels.push(requestedModelId);
@@ -382,7 +394,8 @@ describe("main", () => {
 
 		await main({ runtimeMode: "repl" });
 
-		expect(requestedModels).toContain("deepseek-reasoner");
+		expect(requestedModels).toContain("deepseek-v4-flash");
+		expect(requestedModels).toContain("deepseek-v4-pro");
 		expect(logger.info).toHaveBeenNthCalledWith(
 			2,
 			expect.objectContaining({
@@ -400,6 +413,113 @@ describe("main", () => {
 				provider,
 				providerId: "deepseek",
 				modelId: "deepseek-reasoner",
+				tierRouting: expect.objectContaining({
+					tiers: {
+						flash: expect.objectContaining({
+							model: "deepseek-v4-flash",
+							thinkingMode: "disabled",
+						}),
+						lite: expect.objectContaining({
+							model: "deepseek-v4-flash",
+							thinkingMode: "enabled",
+						}),
+						pro: expect.objectContaining({
+							model: "deepseek-v4-pro",
+							thinkingMode: "enabled",
+						}),
+					},
+				}),
+			}),
+		);
+	});
+
+	it("rejects providerless custom llm.default_model without explicit tier profiles", async () => {
+		const provider = createMockProvider(() => createMockLanguageModel());
+		process.env.OMNI_LLM_DEFAULT_MODEL = "gpt-4.1";
+		process.env.OMNI_LLM_ROUTING_MODE = "auto";
+		vi.mocked(createProvider).mockReturnValue(provider);
+		vi.mocked(getDefaultModel).mockReturnValue("deepseek-v4-pro");
+
+		const { main } = await import("./index.js");
+
+		await expect(main({ runtimeMode: "repl" })).rejects.toThrow(
+			/llm\.default_model gpt-4\.1 is providerless/,
+		);
+		expect(startRepl).not.toHaveBeenCalled();
+		expect(vi.mocked(generateText)).not.toHaveBeenCalled();
+	});
+
+	it("allows custom model ids through explicit tier model profiles", async () => {
+		const provider = createMockProvider(() => createMockLanguageModel());
+		process.env.OMNI_LLM_TIERS_PRO_MODEL = "gpt-4.1";
+		vi.mocked(createProvider).mockReturnValue(provider);
+		vi.mocked(getDefaultModel).mockReturnValue("deepseek-v4-pro");
+		vi.mocked(generateText).mockResolvedValue(
+			mockGenerateTextResult({
+				text: "Quilin Agent online.",
+				usage: {
+					promptTokens: 18,
+					completionTokens: 5,
+				},
+				finishReason: "stop",
+			}),
+		);
+
+		const { main } = await import("./index.js");
+
+		await main({ runtimeMode: "repl" });
+
+		expect(startRepl).toHaveBeenCalledWith(
+			expect.objectContaining({
+				tierRouting: expect.objectContaining({
+					tiers: expect.objectContaining({
+						pro: expect.objectContaining({
+							provider: "deepseek",
+							model: "gpt-4.1",
+						}),
+					}),
+				}),
+			}),
+		);
+	});
+
+	it("does not let QUILIN_DEFAULT_MODEL rewrite tier profiles", async () => {
+		const provider = createMockProvider(() => createMockLanguageModel());
+		process.env.QUILIN_DEFAULT_MODEL = "deepseek-v4-pro";
+		vi.mocked(createProvider).mockReturnValue(provider);
+		vi.mocked(getDefaultModel).mockReturnValue("deepseek-v4-pro");
+		vi.mocked(generateText).mockResolvedValue(
+			mockGenerateTextResult({
+				text: "Quilin Agent online.",
+				usage: {
+					promptTokens: 18,
+					completionTokens: 5,
+				},
+				finishReason: "stop",
+			}),
+		);
+
+		const { main } = await import("./index.js");
+
+		await main({ runtimeMode: "repl" });
+
+		expect(startRepl).toHaveBeenCalledWith(
+			expect.objectContaining({
+				modelId: "deepseek-v4-pro",
+				tierRouting: expect.objectContaining({
+					defaultTier: "lite",
+					tiers: {
+						flash: expect.objectContaining({
+							model: "deepseek-v4-flash",
+						}),
+						lite: expect.objectContaining({
+							model: "deepseek-v4-flash",
+						}),
+						pro: expect.objectContaining({
+							model: "deepseek-v4-pro",
+						}),
+					},
+				}),
 			}),
 		);
 	});
@@ -432,11 +552,12 @@ describe("main", () => {
 				response: "Quilin Agent online.",
 				inputTokens: 21,
 				outputTokens: 6,
+				tier: "flash",
 			},
 			"LLM connection verified",
 		);
 		expect(logger.info).toHaveBeenNthCalledWith(
-			6,
+			10,
 			{ mode: "service" },
 			"Starting agent-core service loop...",
 		);
@@ -764,6 +885,7 @@ describe("package entrypoint runtime config public boundary exports", () => {
 		const {
 			USER_CONFIG_SCHEMA_VERSION,
 			buildRuntimeInferenceConfig,
+			buildRuntimeTierRoutingConfig,
 			buildRuntimeToolFilter,
 			isRuntimeToolEnabled,
 			loadUserConfig,
@@ -795,6 +917,9 @@ describe("package entrypoint runtime config public boundary exports", () => {
 			thinkingMode: "enabled",
 			thinkingBudget: 512,
 		});
+		expect(buildRuntimeTierRoutingConfig(loaded.config).defaultTier).toBe(
+			"lite",
+		);
 		expect(resolveRuntimeWriteAuthorityMode(loaded.config)).toBe("auto-medium");
 		expect(isRuntimeToolEnabled("file_read", toolFilter)).toBe(true);
 		expect(isRuntimeToolEnabled("shell_exec", toolFilter)).toBe(false);

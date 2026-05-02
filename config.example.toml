@@ -1,0 +1,43 @@
+# Quilin local user config example.
+# ~/.quilin/config.toml uses the same shape when explicit local routing is needed.
+#
+# Quilin 本地用户配置示例。
+# 需要显式本地路由时，~/.quilin/config.toml 使用同样结构。
+
+schema_version = 1
+
+[llm]
+# Optional legacy/fixed base model. It does not set flash/lite/pro tiers.
+# 可选旧固定 base model；不会设置 flash/lite/pro 三档模型。
+# default_model = "deepseek-v4-pro"
+temperature = 0.7
+max_tokens = 8192
+
+[llm.thinking]
+enabled = true
+budget_tokens = 10000
+
+[llm.routing]
+mode = "auto"           # auto | flash | lite | pro
+default_tier = "lite"   # flash | lite | pro
+allow_escalation = true
+
+[llm.tiers.flash]
+provider = "deepseek"
+model = "deepseek-v4-flash"
+thinking = "disabled"   # disabled | enabled | auto
+max_tokens = 4096
+
+[llm.tiers.lite]
+provider = "deepseek"
+model = "deepseek-v4-flash"
+thinking = "enabled"
+max_tokens = 8192
+thinking_budget_tokens = 6000
+
+[llm.tiers.pro]
+provider = "deepseek"
+model = "deepseek-v4-pro"
+thinking = "enabled"
+max_tokens = 16384
+thinking_budget_tokens = 10000

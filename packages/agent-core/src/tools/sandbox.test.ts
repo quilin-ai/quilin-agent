@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	buildSandboxDecisionPlan,
 	createSandboxApprovalSummary,
 	defaultSandboxEvaluator,
 	evaluateSandboxRequest,
@@ -164,13 +165,10 @@ describe("evaluateSandboxRequest", () => {
 			origin: "unknown",
 			kind: "ask",
 			requiredApprovals: ["network_access", "user_confirmation"],
-			reasonCodes: [
-				"network_operation_requires_approval",
-				"network_credentials_require_approval",
-			],
+			reasonCodes: ["network_credentials_require_approval"],
 			summary: "Sandbox approval required for web_fetch.",
 			detail:
-				"call=call-network-summary; origin=unknown; kind=ask; requiredApprovals=network_access,user_confirmation; reasonCodes=network_operation_requires_approval,network_credentials_require_approval",
+				"call=call-network-summary; origin=unknown; kind=ask; requiredApprovals=network_access,user_confirmation; reasonCodes=network_credentials_require_approval",
 		});
 	});
 
@@ -249,7 +247,7 @@ describe("evaluateSandboxRequest", () => {
 		});
 	});
 
-	it("asks before public network access", () => {
+	it("allows ordinary public network access", () => {
 		const decision = evaluateSandboxRequest({
 			operation: "network",
 			signals: {
@@ -262,6 +260,29 @@ describe("evaluateSandboxRequest", () => {
 		});
 
 		expect(decision).toEqual({
+			kind: "allow",
+			reasonCodes: [],
+			requiredApprovals: [],
+		});
+	});
+
+	it("asks when network operation has no destination signal", () => {
+		expect(
+			evaluateSandboxRequest({
+				operation: "network",
+			}),
+		).toEqual({
+			kind: "ask",
+			reasonCodes: ["network_operation_requires_approval"],
+			requiredApprovals: ["network_access", "user_confirmation"],
+		});
+
+		expect(
+			evaluateSandboxRequest({
+				operation: "network",
+				signals: { network: { method: "GET" } },
+			}),
+		).toEqual({
 			kind: "ask",
 			reasonCodes: ["network_operation_requires_approval"],
 			requiredApprovals: ["network_access", "user_confirmation"],
@@ -283,10 +304,7 @@ describe("evaluateSandboxRequest", () => {
 
 		expect(decision).toEqual({
 			kind: "ask",
-			reasonCodes: [
-				"network_operation_requires_approval",
-				"network_credentials_require_approval",
-			],
+			reasonCodes: ["network_credentials_require_approval"],
 			requiredApprovals: ["network_access", "user_confirmation"],
 		});
 	});
@@ -362,26 +380,30 @@ describe("evaluateSandboxRequest", () => {
 		expect(decision.requiredApprovals).toEqual([]);
 	});
 
-	it("denies private network targets", () => {
-		const decision = evaluateSandboxRequest({
-			operation: "network",
-			signals: {
-				network: {
-					destination: "http://127.0.0.1:8080",
-					protocol: "http",
-					privateAddress: true,
+	it("denies private and loopback network targets from destination hosts", () => {
+		for (const destination of [
+			"http://127.0.0.1:8080",
+			"localhost:3000",
+			"https://10.0.0.5/path",
+			"http://[::]:8080",
+			"http://[::1]:8080",
+		]) {
+			const decision = evaluateSandboxRequest({
+				operation: "network",
+				signals: {
+					network: {
+						destination,
+						protocol: "http",
+					},
 				},
-			},
-		});
+			});
 
-		expect(decision.kind).toBe("deny");
-		expect(decision.reasonCodes).toEqual(
-			expect.arrayContaining([
-				"network_operation_requires_approval",
-				"private_network_denied",
-			]),
-		);
-		expect(decision.requiredApprovals).toEqual([]);
+			expect(decision.kind).toBe("deny");
+			expect(decision.reasonCodes).toEqual(
+				expect.arrayContaining(["private_network_denied"]),
+			);
+			expect(decision.requiredApprovals).toEqual([]);
+		}
 	});
 
 	it("denies destructive process signals", () => {
@@ -446,7 +468,7 @@ describe("evaluateSandboxRequest", () => {
 		expect(decision.requiredApprovals).toEqual([]);
 	});
 
-	it("asks when network or process signals appear on a read operation", () => {
+	it("allows ordinary network signals and asks for process signals on a read operation", () => {
 		const networkDecision = evaluateSandboxRequest({
 			operation: "read",
 			signals: {
@@ -467,12 +489,9 @@ describe("evaluateSandboxRequest", () => {
 		});
 
 		expect(networkDecision).toEqual({
-			kind: "ask",
-			reasonCodes: [
-				"read_operation_allowed",
-				"network_operation_requires_approval",
-			],
-			requiredApprovals: ["network_access", "user_confirmation"],
+			kind: "allow",
+			reasonCodes: ["read_operation_allowed"],
+			requiredApprovals: [],
 		});
 		expect(processDecision).toEqual({
 			kind: "ask",
@@ -517,6 +536,181 @@ describe("evaluateSandboxRequest", () => {
 			kind: "deny",
 			reasonCodes: ["unknown_operation_denied"],
 			requiredApprovals: [],
+		});
+	});
+});
+
+describe("buildSandboxDecisionPlan", () => {
+	it("returns a stable empty sandbox decision plan", () => {
+		expect(buildSandboxDecisionPlan([])).toEqual({
+			kind: "sandbox_decision_plan",
+			schemaVersion: 1,
+			total: 0,
+			byKind: {
+				allow: 0,
+				ask: 0,
+				deny: 0,
+			},
+			approvalRequired: false,
+			denied: false,
+			items: [],
+			approvalRequiredCallIds: [],
+			deniedCallIds: [],
+		});
+	});
+
+	it("summarizes allow, approval, and denial decisions without raw arguments", () => {
+		const plan = buildSandboxDecisionPlan([
+			{
+				request: {
+					operation: "read",
+					origin: "agent",
+					signals: {
+						paths: [{ path: "README.md", access: "read" }],
+					},
+				},
+				context: {
+					toolCallId: "call-read",
+					requestedToolName: "file_read",
+					resolvedToolName: "file_read",
+					parsedArguments: { path: "README.md" },
+					origin: "agent",
+				},
+			},
+			{
+				request: {
+					operation: "write",
+					origin: "agent",
+					signals: {
+						paths: [{ path: "notes.txt", access: "write" }],
+					},
+				},
+				context: {
+					toolCallId: "call-write",
+					requestedToolName: "file_write",
+					resolvedToolName: "file_write",
+					parsedArguments: { path: "notes.txt", content: "top-secret" },
+					origin: "agent",
+				},
+			},
+			{
+				request: {
+					operation: "process",
+					origin: "agent",
+					signals: {
+						process: {
+							executable: "rm",
+							args: ["-rf", "/"],
+							destructive: true,
+						},
+					},
+				},
+				context: {
+					toolCallId: "call-deny",
+					requestedToolName: "shell_exec",
+					resolvedToolName: "shell_exec",
+					parsedArguments: { command: "rm -rf /", note: "top-secret" },
+					origin: "agent",
+				},
+			},
+		]);
+
+		expect(plan).toEqual({
+			kind: "sandbox_decision_plan",
+			schemaVersion: 1,
+			total: 3,
+			byKind: {
+				allow: 1,
+				ask: 1,
+				deny: 1,
+			},
+			approvalRequired: true,
+			denied: true,
+			items: [
+				{
+					index: 0,
+					operation: "read",
+					tool: "file_read",
+					call: "call-read",
+					origin: "agent",
+					kind: "allow",
+					requiredApprovals: [],
+					reasonCodes: ["read_operation_allowed"],
+					summary: "Sandbox allowed tool execution for file_read.",
+					detail:
+						"call=call-read; origin=agent; kind=allow; requiredApprovals=none; reasonCodes=read_operation_allowed",
+				},
+				{
+					index: 1,
+					operation: "write",
+					tool: "file_write",
+					call: "call-write",
+					origin: "agent",
+					kind: "ask",
+					requiredApprovals: ["write_authority", "user_confirmation"],
+					reasonCodes: ["write_operation_requires_approval"],
+					summary: "Sandbox approval required for file_write.",
+					detail:
+						"call=call-write; origin=agent; kind=ask; requiredApprovals=write_authority,user_confirmation; reasonCodes=write_operation_requires_approval",
+				},
+				{
+					index: 2,
+					operation: "process",
+					tool: "shell_exec",
+					call: "call-deny",
+					origin: "agent",
+					kind: "deny",
+					requiredApprovals: [],
+					reasonCodes: [
+						"process_operation_requires_approval",
+						"destructive_process_denied",
+					],
+					summary: "Sandbox denied tool execution for shell_exec.",
+					detail:
+						"call=call-deny; origin=agent; kind=deny; requiredApprovals=none; reasonCodes=process_operation_requires_approval,destructive_process_denied",
+				},
+			],
+			approvalRequiredCallIds: ["call-write"],
+			deniedCallIds: ["call-deny"],
+		});
+		expect(JSON.stringify(plan)).not.toContain("top-secret");
+	});
+
+	it("accepts any iterable while preserving iteration order", () => {
+		function* inputs() {
+			yield {
+				request: { operation: "read" as const },
+				context: {
+					toolCallId: "call-a",
+					requestedToolName: "file_read",
+					resolvedToolName: "file_read",
+					parsedArguments: {},
+				},
+			};
+			yield {
+				request: { operation: "network" as const },
+				context: {
+					toolCallId: "call-b",
+					requestedToolName: "web_fetch",
+					resolvedToolName: "web_fetch",
+					parsedArguments: {},
+				},
+			};
+		}
+
+		expect(buildSandboxDecisionPlan(inputs())).toMatchObject({
+			total: 2,
+			byKind: {
+				allow: 1,
+				ask: 1,
+				deny: 0,
+			},
+			approvalRequiredCallIds: ["call-b"],
+			deniedCallIds: [],
+			items: [
+				{ index: 0, call: "call-a" },
+				{ index: 1, call: "call-b" },
+			],
 		});
 	});
 });

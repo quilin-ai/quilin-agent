@@ -36,11 +36,34 @@ describe("user-config schema defaults", () => {
 		expect(result.config.schema_version).toBe(1);
 		expect(result.config.llm.default_model).toBe("claude-sonnet-4-6");
 		expect(result.config.llm.temperature).toBe(0.7);
+		expect(result.config.llm.routing).toEqual({
+			mode: "auto",
+			default_tier: "lite",
+			allow_escalation: true,
+		});
+		expect(result.config.llm.tiers).toEqual({
+			flash: {
+				provider: "deepseek",
+				model: "deepseek-v4-flash",
+				thinking: "disabled",
+			},
+			lite: {
+				provider: "deepseek",
+				model: "deepseek-v4-flash",
+				thinking: "enabled",
+			},
+			pro: {
+				provider: "deepseek",
+				model: "deepseek-v4-pro",
+				thinking: "enabled",
+			},
+		});
 		expect(result.config.observability.log_level).toBe("INFO");
 		expect(result.config.safety.trust_mode).toBe("read_only");
 		expect(result.config.idle_evolution.enabled).toBe(false);
 		expect(result.filePath).toBeNull();
 		expect(result.sources["llm.default_model"]).toBe("default");
+		expect(result.sources["llm.tiers.flash.model"]).toBe("default");
 	});
 });
 
@@ -60,6 +83,63 @@ log_level = "DEBUG"
 		expect(result.config.observability.log_level).toBe("DEBUG");
 		expect(result.sources["llm.default_model"]).toBe("file");
 		expect(result.sources["llm.temperature"]).toBe("file");
+	});
+
+	it("parses tier routing TOML with arbitrary model ids per tier", async () => {
+		const file = await writeConfig(`
+[llm.routing]
+mode = "auto"
+default_tier = "flash"
+allow_escalation = false
+
+[llm.tiers.flash]
+provider = "deepseek"
+model = "local-small-anything"
+thinking = "enabled"
+max_tokens = 1024
+
+[llm.tiers.lite]
+provider = "deepseek"
+model = "deepseek-v4-flash"
+thinking = "auto"
+temperature = 0.2
+
+[llm.tiers.pro]
+provider = "deepseek"
+model = "vendor-pro-custom-2026-05"
+thinking = "enabled"
+thinking_budget_tokens = 12000
+top_p = 0.8
+`);
+
+		const result = await loadUserConfig({ configPath: file, env: {} });
+
+		expect(result.config.llm.routing).toEqual({
+			mode: "auto",
+			default_tier: "flash",
+			allow_escalation: false,
+		});
+		expect(result.config.llm.tiers.flash).toEqual({
+			provider: "deepseek",
+			model: "local-small-anything",
+			thinking: "enabled",
+			max_tokens: 1024,
+		});
+		expect(result.config.llm.tiers.lite).toEqual({
+			provider: "deepseek",
+			model: "deepseek-v4-flash",
+			thinking: "auto",
+			temperature: 0.2,
+		});
+		expect(result.config.llm.tiers.pro).toEqual({
+			provider: "deepseek",
+			model: "vendor-pro-custom-2026-05",
+			thinking: "enabled",
+			thinking_budget_tokens: 12000,
+			top_p: 0.8,
+		});
+		expect(result.sources["llm.routing.default_tier"]).toBe("file");
+		expect(result.sources["llm.tiers.pro.model"]).toBe("file");
 	});
 
 	it("rejects file with permission > 0600", async () => {
@@ -225,6 +305,35 @@ max_tokens = 4096
 		expect(result.config.llm.max_tokens).toBe(4096);
 		expect(result.sources["llm.default_model"]).toBe("cli");
 		expect(result.sources["llm.temperature"]).toBe("file");
+	});
+
+	it("maps tier routing env vars into nested config", async () => {
+		const result = await loadUserConfig({
+			configPath: path.join(tmpDir, "missing.toml"),
+			env: {
+				OMNI_LLM_ROUTING_MODE: "pro",
+				OMNI_LLM_ROUTING_DEFAULT_TIER: "flash",
+				OMNI_LLM_ROUTING_ALLOW_ESCALATION: "false",
+				OMNI_LLM_TIERS_FLASH_MODEL: "deepseek-flash-local",
+				OMNI_LLM_TIERS_FLASH_THINKING: "auto",
+				OMNI_LLM_TIERS_LITE_MAX_TOKENS: "2048",
+				OMNI_LLM_TIERS_PRO_THINKING_BUDGET_TOKENS: "16000",
+				OMNI_LLM_TIERS_PRO_TOP_P: "0.75",
+			},
+		});
+
+		expect(result.config.llm.routing).toEqual({
+			mode: "pro",
+			default_tier: "flash",
+			allow_escalation: false,
+		});
+		expect(result.config.llm.tiers.flash.model).toBe("deepseek-flash-local");
+		expect(result.config.llm.tiers.flash.thinking).toBe("auto");
+		expect(result.config.llm.tiers.lite.max_tokens).toBe(2048);
+		expect(result.config.llm.tiers.pro.thinking_budget_tokens).toBe(16_000);
+		expect(result.config.llm.tiers.pro.top_p).toBe(0.75);
+		expect(result.sources["llm.routing.mode"]).toBe("env");
+		expect(result.sources["llm.tiers.flash.model"]).toBe("env");
 	});
 
 	it("schema validation rejects unknown top-level namespaces", async () => {

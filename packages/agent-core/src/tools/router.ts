@@ -3,6 +3,7 @@ import {
 	defaultSandboxEvaluator,
 	genericSandboxPolicy,
 	resolveSandboxPolicy,
+	type SandboxApprovalSummary,
 	type SandboxDecision,
 	type SandboxEvaluator,
 	type SandboxOrigin,
@@ -49,6 +50,13 @@ export interface ToolRouterOptions {
 	readonly sandboxEvaluator?: SandboxEvaluator;
 	readonly sandboxPolicy?: SandboxPolicy;
 	readonly sandboxOrigin?: SandboxOrigin;
+	readonly sandboxApproval?: SandboxApprovalHandler;
+}
+
+export interface SandboxApprovalRequest {
+	readonly decision: SandboxDecision;
+	readonly context: SandboxToolContext;
+	readonly summary: SandboxApprovalSummary;
 }
 
 export interface ToolInvocationAuditInput {
@@ -57,6 +65,10 @@ export interface ToolInvocationAuditInput {
 	readonly outcome: ToolInvocationAuditOutcome;
 	readonly errorDetails?: ToolError | Record<string, unknown>;
 }
+
+export type SandboxApprovalHandler = (
+	request: SandboxApprovalRequest,
+) => boolean | Promise<boolean>;
 
 function getShortName(tool: Tool | ToolWithMetadata): string {
 	const slashIndex = tool.name.indexOf("/");
@@ -492,6 +504,10 @@ function sandboxBlockedResult(
 	toolCallId: string,
 	decision: SandboxDecision,
 	context: SandboxToolContext,
+	approvalSummary: SandboxApprovalSummary = createSandboxApprovalSummary(
+		decision,
+		context,
+	),
 ): ToolResult {
 	const approvalRequired = decision.kind === "ask";
 	return createRouterErrorResult({
@@ -503,7 +519,7 @@ function sandboxBlockedResult(
 			: "Tool execution denied by sandbox policy.",
 		details: {
 			decision,
-			approvalSummary: createSandboxApprovalSummary(decision, context),
+			approvalSummary,
 		},
 		outcome: approvalRequired ? "sandbox_ask" : "sandbox_deny",
 	});
@@ -550,9 +566,28 @@ export class ToolRouter {
 		const evaluator = this.options.sandboxEvaluator ?? defaultSandboxEvaluator;
 		const decision = await evaluator(request, context);
 
-		return decision.kind === "allow"
-			? undefined
-			: sandboxBlockedResult(call.id, decision, context);
+		if (decision.kind === "allow") {
+			return undefined;
+		}
+
+		const approvalSummary = createSandboxApprovalSummary(decision, context);
+		if (decision.kind === "ask" && this.options.sandboxApproval != null) {
+			let approved = false;
+			try {
+				approved = await this.options.sandboxApproval({
+					decision,
+					context,
+					summary: approvalSummary,
+				});
+			} catch {
+				approved = false;
+			}
+			if (approved) {
+				return undefined;
+			}
+		}
+
+		return sandboxBlockedResult(call.id, decision, context, approvalSummary);
 	}
 
 	async execute(call: ToolCall): Promise<ToolResult> {

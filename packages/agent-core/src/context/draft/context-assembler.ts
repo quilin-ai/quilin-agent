@@ -14,6 +14,10 @@ import type {
 	ContextTraceSourceSummary,
 	ContextTraceSummary,
 } from "./source-types.js";
+import {
+	type ContextTraceDelta,
+	diffContextTraceSummaries,
+} from "./trace-delta.js";
 
 export interface AssembledContext {
 	readonly prompt: AssembledPrompt;
@@ -23,6 +27,7 @@ export interface AssembledContext {
 	readonly selectionTrace: ContextSelectionTrace;
 	readonly selectionCompressionTraceLink: ContextSelectionCompressionTraceLink;
 	readonly traceSummary: ContextTraceSummary;
+	readonly traceDelta?: ContextTraceDelta;
 	readonly totalTokens: number;
 }
 
@@ -32,6 +37,10 @@ export interface ContextAssemblerOptions {
 	readonly availableTools?: readonly string[];
 	readonly profile?: BuildContext["profile"];
 	readonly now?: () => Date;
+}
+
+export interface ContextAssemblyRunOptions {
+	readonly previousTraceSummary?: ContextTraceSummary;
 }
 
 function inferTaskType(userInput: string): string {
@@ -249,6 +258,7 @@ export class ContextAssembler {
 		sessionState: Record<string, unknown>,
 		memorySources: readonly ContextSource[],
 		externalSources: readonly ContextSource[],
+		runOptions: ContextAssemblyRunOptions = {},
 	): AssembledContext {
 		const taskType = inferTaskType(userInput);
 		const policy = this.budgetAllocator.allocate(
@@ -310,6 +320,13 @@ export class ContextAssembler {
 			compression.trace,
 			prompt,
 		);
+		const traceDelta =
+			runOptions.previousTraceSummary == null
+				? undefined
+				: diffContextTraceSummaries(
+						runOptions.previousTraceSummary,
+						traceSummary,
+					);
 
 		return {
 			prompt,
@@ -319,6 +336,7 @@ export class ContextAssembler {
 			selectionTrace: selection.trace,
 			selectionCompressionTraceLink,
 			traceSummary,
+			...(traceDelta == null ? {} : { traceDelta }),
 			totalTokens: prompt.totalTokens + sumTokens(compression.sources),
 		};
 	}

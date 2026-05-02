@@ -43,8 +43,35 @@ export function stripReasoningFromMessage(message: Message): Message {
 	return messageWithoutReasoning;
 }
 
+export function shouldReplayReasoningForModel(message: Message): boolean {
+	return (
+		message.role === "assistant" &&
+		(message.toolCalls?.length ?? 0) > 0 &&
+		(message.reasoning?.some(
+			(part) => part.provider === "deepseek" && part.text.length > 0,
+		) ??
+			false)
+	);
+}
+
+export function stripNonReplayableReasoningFromMessage(
+	message: Message,
+): Message {
+	return shouldReplayReasoningForModel(message)
+		? message
+		: stripReasoningFromMessage(message);
+}
+
 export function stripReasoningFromMessages(
 	messages: readonly Message[],
 ): Message[] {
 	return messages.map((message) => stripReasoningFromMessage(message));
+}
+
+export function stripNonReplayableReasoningFromMessages(
+	messages: readonly Message[],
+): Message[] {
+	return messages.map((message) =>
+		stripNonReplayableReasoningFromMessage(message),
+	);
 }
