@@ -5,6 +5,7 @@ export type ChildRunStatus =
 	| "blocked"
 	| "waiting_for_review"
 	| "aggregating"
+	| "cancel_requested"
 	| "completed"
 	| "failed"
 	| "cancelled"
@@ -289,6 +290,7 @@ const CHILD_RUN_STATUSES = [
 	"blocked",
 	"waiting_for_review",
 	"aggregating",
+	"cancel_requested",
 	"completed",
 	"failed",
 	"cancelled",
@@ -319,6 +321,7 @@ const ACTIVE_STATUSES = new Set<ChildRunStatus>([
 	"blocked",
 	"waiting_for_review",
 	"aggregating",
+	"cancel_requested",
 ]);
 
 const DEFAULT_STALE_AFTER_MS = 2 * 60 * 1000;
@@ -358,6 +361,10 @@ const CONFIDENCE_RANK: Readonly<Record<SupervisorConfidence, number>> = {
 	high: 3,
 };
 
+function assertNever(value: never): never {
+	throw new Error(`Unexpected supervisor progress value: ${String(value)}`);
+}
+
 export function childRunStatusToDurableRuntimePlanStatus(
 	status: ChildRunStatus,
 ): DurableRuntimePlanStatus {
@@ -367,6 +374,8 @@ export function childRunStatusToDurableRuntimePlanStatus(
 			return "queued";
 		case "waiting_for_review":
 			return "checkpointed";
+		case "cancel_requested":
+			return "cancel_requested";
 		case "cancelled":
 		case "deferred":
 			return "cancelled";
@@ -377,6 +386,8 @@ export function childRunStatusToDurableRuntimePlanStatus(
 		case "blocked":
 		case "aggregating":
 			return "running";
+		default:
+			return assertNever(status);
 	}
 }
 
@@ -565,7 +576,7 @@ function determineBand(
 		return "reviewing";
 	}
 
-	if (counts.aggregating > 0) {
+	if (counts.aggregating + counts.cancel_requested > 0) {
 		return "wrapping_up";
 	}
 
@@ -825,7 +836,11 @@ function childHeartbeatSeverity(
 	if (record.status === "failed" || record.status === "cancelled") {
 		return "error";
 	}
-	if (record.status === "blocked" || record.blocker != null) {
+	if (
+		record.status === "blocked" ||
+		record.status === "cancel_requested" ||
+		record.blocker != null
+	) {
 		return "warning";
 	}
 	if (record.status === "completed") {

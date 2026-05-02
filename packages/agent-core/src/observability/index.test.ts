@@ -216,6 +216,7 @@ describe("observability barrel exports", () => {
 					blocked: 0,
 					waiting_for_review: 0,
 					aggregating: 0,
+					cancel_requested: 0,
 					completed: 0,
 					failed: 0,
 					cancelled: 0,
