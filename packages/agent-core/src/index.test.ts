@@ -32,10 +32,13 @@ import type {
 	ProductionRouteScoreOptions,
 	RuntimeToolFilter,
 	SandboxApprovalSummary,
+	SandboxCreateRequest,
 	SandboxDecision,
 	SandboxOperationType,
 	SandboxPolicy,
+	SandboxProviderSelection,
 	SandboxRequest,
+	SandboxRouteDecision,
 	SandboxToolContext,
 	SerializedSpan,
 	ShellExecToolOptions,
@@ -1136,11 +1139,15 @@ describe("package entrypoint tools public boundary exports", () => {
 
 	it("exposes sandbox policy, evaluator, and approval summary APIs", async () => {
 		const {
+			createSandboxAuditRef,
 			createSandboxApprovalSummary,
+			createSandboxPolicyDigest,
+			createSandboxRouteDecision,
 			defaultSandboxEvaluator,
 			evaluateSandboxRequest,
 			genericSandboxPolicy,
 			resolveSandboxPolicy,
+			selectSandboxProvider,
 		} = await import("./index.js");
 		const operation: SandboxOperationType = "write";
 		const context: SandboxToolContext = {
@@ -1155,6 +1162,39 @@ describe("package entrypoint tools public boundary exports", () => {
 		};
 		const policy: SandboxPolicy = genericSandboxPolicy;
 		const resolvedRequest = await resolveSandboxPolicy(policy, context);
+		const sandboxCreateRequest: SandboxCreateRequest = {
+			owner: { agentId: "agent-root", runId: "run-root" },
+			purpose: "tool-worker",
+			image: { reference: "python:3.14-slim", allowlisted: true },
+			mounts: [
+				{
+					kind: "task",
+					sandboxPath: "/workspace/task",
+					access: "readwrite",
+					required: true,
+				},
+			],
+			networkPolicy: { mode: "none" },
+			resourcePolicy: { wallClockTimeoutMs: 1000 },
+			outputPolicy: {
+				artifactsPath: "/workspace/artifacts",
+				maxArtifactBytes: 1024,
+				includeHiddenFiles: false,
+				promotePatterns: [],
+				exposePartialOutputOnFailure: true,
+			},
+			permissionManifest: {
+				identity: { role: "worker" },
+				filesystem: {
+					readonly: [],
+					readwrite: ["/workspace/task"],
+					execute: ["/workspace/task"],
+				},
+				sessionSharing: "isolated",
+				allowSecretMounts: false,
+			},
+			ttlMs: 1000,
+		};
 
 		expect(resolvedRequest).toEqual({
 			operation,
@@ -1169,6 +1209,24 @@ describe("package entrypoint tools public boundary exports", () => {
 		const directDecision = evaluateSandboxRequest(request);
 		const approvalSummary: SandboxApprovalSummary =
 			createSandboxApprovalSummary(decision, context);
+		const auditRef = createSandboxAuditRef({
+			traceId: "trace-root",
+			phase: "create",
+		});
+		const routeDecision: SandboxRouteDecision = createSandboxRouteDecision({
+			request: sandboxCreateRequest,
+			provider: "docker",
+			traceId: "trace-root",
+			auditRef,
+		});
+		const providerSelection: SandboxProviderSelection = selectSandboxProvider(
+			sandboxCreateRequest,
+			{
+				availableProviders: ["docker"],
+				traceId: "trace-root",
+				auditRef,
+			},
+		);
 
 		expect(decision).toEqual(directDecision);
 		expect(approvalSummary).toEqual(
@@ -1184,6 +1242,22 @@ describe("package entrypoint tools public boundary exports", () => {
 				reasonCodes: expect.arrayContaining([
 					"write_operation_requires_approval",
 				]),
+			}),
+		);
+		expect(createSandboxPolicyDigest(sandboxCreateRequest).value).toMatch(
+			/^[a-f0-9]{64}$/u,
+		);
+		expect(routeDecision).toEqual(
+			expect.objectContaining({
+				provider: "docker",
+				reason: "default_docker",
+				isIsolationBoundary: true,
+			}),
+		);
+		expect(providerSelection).toEqual(
+			expect.objectContaining({
+				kind: "selected",
+				decision: expect.objectContaining({ provider: "docker" }),
 			}),
 		);
 	});

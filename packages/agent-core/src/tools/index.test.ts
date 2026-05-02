@@ -8,8 +8,11 @@ import type {
 	FileWriteToolOptions,
 	JsonSchema,
 	MCPServerConfig,
+	SandboxCreateRequest,
 	SandboxDecision,
+	SandboxProviderSelection,
 	SandboxRequest,
+	SandboxRouteDecision,
 	ShellExecToolOptions,
 	SkillManageToolOptions,
 	SkillViewToolOptions,
@@ -29,6 +32,9 @@ import {
 	createBuiltinTools,
 	createFileReadTool,
 	createSandboxApprovalSummary,
+	createSandboxAuditRef,
+	createSandboxPolicyDigest,
+	createSandboxRouteDecision,
 	createToolError,
 	createToolErrorResult,
 	defaultSandboxEvaluator,
@@ -42,6 +48,7 @@ import {
 	resolveSandboxPolicy,
 	sanitizeMCPToolDescription,
 	sanitizeMCPToolName,
+	selectSandboxProvider,
 	ToolRouter,
 	toolExceptionMessage,
 	validateMCPServerConfig,
@@ -147,6 +154,39 @@ describe("tools barrel", () => {
 			riskLevel: "read",
 		};
 		const sandboxRequest: SandboxRequest = { operation: "read" };
+		const sandboxCreateRequest: SandboxCreateRequest = {
+			owner: { agentId: "agent-barrel", runId: "run-barrel" },
+			purpose: "tool-worker",
+			image: { reference: "python:3.14-slim", allowlisted: true },
+			mounts: [
+				{
+					kind: "task",
+					sandboxPath: "/workspace/task",
+					access: "readwrite",
+					required: true,
+				},
+			],
+			networkPolicy: { mode: "none" },
+			resourcePolicy: { wallClockTimeoutMs: 1000 },
+			outputPolicy: {
+				artifactsPath: "/workspace/artifacts",
+				maxArtifactBytes: 1024,
+				includeHiddenFiles: false,
+				promotePatterns: [],
+				exposePartialOutputOnFailure: true,
+			},
+			permissionManifest: {
+				identity: { role: "worker" },
+				filesystem: {
+					readonly: [],
+					readwrite: ["/workspace/task"],
+					execute: ["/workspace/task"],
+				},
+				sessionSharing: "isolated",
+				allowSecretMounts: false,
+			},
+			ttlMs: 1000,
+		};
 
 		const resolvedPolicy = await resolveSandboxPolicy(
 			genericSandboxPolicy,
@@ -159,6 +199,25 @@ describe("tools barrel", () => {
 		const approvalSummary = createSandboxApprovalSummary(
 			decision,
 			sandboxContext,
+		);
+		const sandboxAuditRef = createSandboxAuditRef({
+			traceId: "trace-barrel",
+			phase: "create",
+		});
+		const sandboxDigest = createSandboxPolicyDigest(sandboxCreateRequest);
+		const sandboxRoute: SandboxRouteDecision = createSandboxRouteDecision({
+			request: sandboxCreateRequest,
+			provider: "docker",
+			traceId: "trace-barrel",
+			auditRef: sandboxAuditRef,
+		});
+		const sandboxSelection: SandboxProviderSelection = selectSandboxProvider(
+			sandboxCreateRequest,
+			{
+				availableProviders: ["docker"],
+				traceId: "trace-barrel",
+				auditRef: sandboxAuditRef,
+			},
 		);
 		const readTool = createFileReadTool({ allowedRoots: [process.cwd()] });
 
@@ -201,6 +260,20 @@ describe("tools barrel", () => {
 			tool: "file_read",
 			call: "call-barrel",
 			kind: "allow",
+		});
+		expect(sandboxAuditRef).toBe("sandbox:trace-barrel:create:new");
+		expect(sandboxDigest.value).toMatch(/^[a-f0-9]{64}$/u);
+		expect(sandboxRoute).toMatchObject({
+			provider: "docker",
+			reason: "default_docker",
+			isIsolationBoundary: true,
+			risk: "production",
+		});
+		expect(sandboxSelection).toMatchObject({
+			kind: "selected",
+			decision: {
+				provider: "docker",
+			},
 		});
 		expect(builtinTools.map((tool) => tool.name)).toEqual(
 			expect.arrayContaining([
