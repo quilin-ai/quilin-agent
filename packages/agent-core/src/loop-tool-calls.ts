@@ -34,6 +34,212 @@ export interface ExecuteToolCallsOptions {
 	readonly consecutiveBlockedToolOutputs: number;
 }
 
+interface IdentityAssignment {
+	readonly assistantName: string;
+	readonly userName: string;
+}
+
+interface IdentityGuardResult {
+	readonly toolCall: ToolCall;
+	readonly rewritten: boolean;
+	readonly assignment?: IdentityAssignment;
+}
+
+export interface IdentityMemoryCorrectionSummary {
+	readonly toolCallId: string;
+	readonly toolName: string;
+	readonly assistantNameChars: number;
+	readonly userNameChars: number;
+}
+
+export interface CorrectIdentityMemoryToolCallsResult {
+	readonly toolCalls: readonly ToolCall[];
+	readonly corrections: readonly IdentityMemoryCorrectionSummary[];
+}
+
+function shortToolName(name: string): string {
+	const slashIndex = name.lastIndexOf("/");
+	return slashIndex === -1 ? name : name.slice(slashIndex + 1);
+}
+
+function sanitizeIdentityName(value: string): string {
+	return value
+		.trim()
+		.replace(/^[\s"'“”‘’「」《》]+|[\s"'“”‘’「」《》]+$/gu, "")
+		.trim();
+}
+
+function extractIdentityAssignment(content: string): IdentityAssignment | null {
+	const assistantThenUser =
+		/[你妳]\s*(?:叫|是)\s*([^，,。！？!；;：:\n\r]{1,32})\s*[，,。！？!；;、\s]+我\s*(?:叫|是)\s*([^，,。！？!；;：:\n\r]{1,32})/u.exec(
+			content,
+		);
+	const userThenAssistant =
+		/我\s*(?:叫|是)\s*([^，,。！？!；;：:\n\r]{1,32})\s*[，,。！？!；;、\s]+[你妳]\s*(?:叫|是)\s*([^，,。！？!；;：:\n\r]{1,32})/u.exec(
+			content,
+		);
+	const assistantName =
+		assistantThenUser?.[1] == null
+			? userThenAssistant?.[2]
+			: assistantThenUser[1];
+	const userName =
+		assistantThenUser?.[2] == null
+			? userThenAssistant?.[1]
+			: assistantThenUser[2];
+
+	if (assistantName == null || userName == null) {
+		return null;
+	}
+
+	const normalizedAssistantName = sanitizeIdentityName(assistantName);
+	const normalizedUserName = sanitizeIdentityName(userName);
+	if (normalizedAssistantName.length === 0 || normalizedUserName.length === 0) {
+		return null;
+	}
+
+	return {
+		assistantName: normalizedAssistantName,
+		userName: normalizedUserName,
+	};
+}
+
+function escapeRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function attributesAssistantNameToUser(
+	content: string,
+	assistantName: string,
+): boolean {
+	const escapedName = escapeRegExp(assistantName);
+	return [
+		new RegExp(
+			`用户(?:的)?(?:名字|姓名|名称|称呼)?\\s*(?:叫|是|为|:|：)\\s*${escapedName}`,
+			"u",
+		),
+		new RegExp(
+			`${escapedName}\\s*(?:是|为)\\s*用户(?:的)?(?:名字|姓名|名称|称呼)?`,
+			"u",
+		),
+	].some((pattern) => pattern.test(content));
+}
+
+function latestUserContent(messages: readonly Message[]): string | null {
+	for (let index = messages.length - 1; index >= 0; index -= 1) {
+		const message = messages[index];
+		if (message?.role === "user") {
+			return message.content;
+		}
+	}
+
+	return null;
+}
+
+function correctInvertedIdentityMemoryCall(
+	toolCall: ToolCall,
+	messages: readonly Message[],
+): IdentityGuardResult {
+	if (shortToolName(toolCall.name) !== "memory_store") {
+		return { toolCall, rewritten: false };
+	}
+
+	const content = toolCall.arguments.content;
+	if (typeof content !== "string") {
+		return { toolCall, rewritten: false };
+	}
+
+	const userContent = latestUserContent(messages);
+	if (userContent == null) {
+		return { toolCall, rewritten: false };
+	}
+
+	const assignment = extractIdentityAssignment(userContent);
+	if (
+		assignment == null ||
+		!attributesAssistantNameToUser(content, assignment.assistantName)
+	) {
+		return { toolCall, rewritten: false };
+	}
+
+	return {
+		toolCall: {
+			...toolCall,
+			arguments: {
+				...toolCall.arguments,
+				content: `助手身份：用户指定 Quilin Agent 为${assignment.assistantName}。用户称呼偏好：用户希望被称呼为${assignment.userName}。`,
+			},
+		},
+		rewritten: true,
+		assignment,
+	};
+}
+
+function replaceAssistantToolCall(
+	messages: Message[],
+	updatedToolCall: ToolCall,
+): void {
+	for (let index = messages.length - 1; index >= 0; index -= 1) {
+		const message = messages[index];
+		if (message?.role !== "assistant" || message.toolCalls == null) {
+			continue;
+		}
+
+		if (
+			!message.toolCalls.some((toolCall) => toolCall.id === updatedToolCall.id)
+		) {
+			continue;
+		}
+
+		messages[index] = {
+			...message,
+			toolCalls: message.toolCalls.map((toolCall) =>
+				toolCall.id === updatedToolCall.id ? updatedToolCall : toolCall,
+			),
+		};
+		return;
+	}
+}
+
+function summarizeIdentityCorrection(
+	toolCall: ToolCall,
+	assignment: IdentityAssignment,
+): IdentityMemoryCorrectionSummary {
+	return {
+		toolCallId: toolCall.id,
+		toolName: toolCall.name,
+		assistantNameChars: assignment.assistantName.length,
+		userNameChars: assignment.userName.length,
+	};
+}
+
+export function correctInvertedIdentityMemoryToolCalls(
+	toolCalls: readonly ToolCall[],
+	messages: readonly Message[],
+): CorrectIdentityMemoryToolCallsResult {
+	const corrections: IdentityMemoryCorrectionSummary[] = [];
+	let changed = false;
+	const correctedToolCalls = toolCalls.map((toolCall) => {
+		const identityGuard = correctInvertedIdentityMemoryCall(toolCall, messages);
+		if (!identityGuard.rewritten || identityGuard.assignment == null) {
+			return toolCall;
+		}
+
+		changed = true;
+		corrections.push(
+			summarizeIdentityCorrection(
+				identityGuard.toolCall,
+				identityGuard.assignment,
+			),
+		);
+		return identityGuard.toolCall;
+	});
+
+	return {
+		toolCalls: changed ? correctedToolCalls : toolCalls,
+		corrections,
+	};
+}
+
 function summarizeThreat(threat: ThreatMatch): Record<string, unknown> {
 	return {
 		pattern: threat.pattern,
@@ -47,8 +253,26 @@ export async function executeToolCalls(
 	options: ExecuteToolCallsOptions,
 ): Promise<number> {
 	let consecutiveBlockedToolOutputs = options.consecutiveBlockedToolOutputs;
+	const identityGuard = correctInvertedIdentityMemoryToolCalls(
+		options.toolCalls,
+		options.workingMessages,
+	);
+	for (const correction of identityGuard.corrections) {
+		const toolCall = identityGuard.toolCalls.find(
+			(candidate) => candidate.id === correction.toolCallId,
+		);
+		if (toolCall != null) {
+			replaceAssistantToolCall(options.workingMessages, toolCall);
+		}
+		await recordAgentRunEvent(
+			options.runLogger,
+			"tool.memory_identity_corrected",
+			{ ...correction },
+			{ turnId: options.turnId },
+		);
+	}
 
-	for (const toolCall of options.toolCalls) {
+	for (const toolCall of identityGuard.toolCalls) {
 		await recordAgentRunEvent(
 			options.runLogger,
 			"tool.call_started",

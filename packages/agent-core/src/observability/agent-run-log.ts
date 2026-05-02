@@ -36,6 +36,7 @@ export type AgentRunLogPhase =
 	| "tool.safety_action_verified"
 	| "tool.call_completed"
 	| "tool.output_scanned"
+	| "tool.memory_identity_corrected"
 	| "tool.result_appended"
 	| "tool.provenance_recorded"
 	| "assistant.response_final"

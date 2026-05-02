@@ -7,7 +7,10 @@ import {
 	stripNonReplayableReasoningFromMessages,
 } from "./context/reasoning-sanitizer.js";
 import { getLoggerRuntimeMode, logger } from "./logger.js";
-import { executeToolCalls } from "./loop-tool-calls.js";
+import {
+	correctInvertedIdentityMemoryToolCalls,
+	executeToolCalls,
+} from "./loop-tool-calls.js";
 import {
 	type AgentLoopConfig,
 	AgentLoopError,
@@ -303,9 +306,21 @@ export async function runAgentLoop(
 					"LLM returned finishReason=tool_calls without toolCalls",
 				);
 			}
+			const identityGuard = correctInvertedIdentityMemoryToolCalls(
+				response.toolCalls,
+				workingMessages,
+			);
+			for (const correction of identityGuard.corrections) {
+				await recordAgentRunEvent(
+					runLogger,
+					"tool.memory_identity_corrected",
+					{ ...correction },
+					runLogContext,
+				);
+			}
 			const assistantToolCallMessage = createAssistantMessage({
 				content: response.content,
-				toolCalls: response.toolCalls,
+				toolCalls: identityGuard.toolCalls,
 				reasoning: storedThinking,
 			});
 			await config.hooks?.onAssistantMessage?.(assistantToolCallMessage);
@@ -315,7 +330,7 @@ export async function runAgentLoop(
 				"planning.tool_calls_selected",
 				{
 					turnCount,
-					toolCalls: response.toolCalls.map(summarizeToolCall),
+					toolCalls: identityGuard.toolCalls.map(summarizeToolCall),
 					assistantMessage: summarizeMessage(assistantToolCallMessage),
 				},
 				runLogContext,
@@ -344,7 +359,7 @@ export async function runAgentLoop(
 			);
 			consecutiveBlockedToolOutputs = await executeToolCalls({
 				router,
-				toolCalls: response.toolCalls,
+				toolCalls: identityGuard.toolCalls,
 				turnCount,
 				workingMessages,
 				checkpoint: config.checkpoint,

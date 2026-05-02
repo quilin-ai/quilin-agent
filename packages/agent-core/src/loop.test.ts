@@ -1995,6 +1995,132 @@ describe("runAgentLoop", () => {
 		]);
 	});
 
+	it("publishes corrected identity memory calls before assistant_tool_calls hooks and checkpoint", async () => {
+		vi.mocked(getLoggerRuntimeMode).mockReturnValue("repl");
+		const rawToolCall = {
+			id: "call-memory",
+			name: "memory_store",
+			arguments: { content: "用户叫小明，称呼用户为孟哥", tier: "working" },
+		};
+		const correctedContent =
+			"助手身份：用户指定 Quilin Agent 为小明。用户称呼偏好：用户希望被称呼为孟哥。";
+		const chat = vi
+			.fn()
+			.mockResolvedValueOnce({
+				content: "",
+				toolCalls: [rawToolCall],
+				usage: {
+					inputTokens: 10,
+					outputTokens: 20,
+				},
+				finishReason: "tool_calls",
+			})
+			.mockResolvedValueOnce({
+				content: "记住了。",
+				usage: {
+					inputTokens: 30,
+					outputTokens: 40,
+				},
+				finishReason: "stop",
+			});
+		const storeExecute = vi.fn().mockResolvedValue({
+			toolCallId: "call-memory",
+			content: JSON.stringify({ id: "mem-1" }),
+			isError: false,
+		});
+		const updatedMessages: Array<{
+			phase: string;
+			messages: readonly Message[];
+		}> = [];
+		const savedStates: Array<{ messages: readonly Message[] }> = [];
+		const checkpoint = {
+			save: vi.fn(async (state) => {
+				savedStates.push(state);
+			}),
+			load: vi.fn(),
+			list: vi.fn(),
+		};
+
+		await expect(
+			runAgentLoop(
+				{
+					llm: { chat },
+					tools: [
+						{
+							name: "memory_store",
+							description: "Store memory",
+							parameters: {
+								safeParse: vi.fn().mockImplementation((input) => ({
+									success: true,
+									data: input,
+								})),
+							} as never,
+							execute: storeExecute,
+						},
+					],
+					checkpoint,
+					hooks: {
+						onMessagesUpdated: vi.fn(async (messages, info) => {
+							updatedMessages.push({
+								phase: info.phase,
+								messages: structuredClone(messages),
+							});
+						}),
+					},
+					maxTurns: 2,
+					inferenceConfig: {
+						temperature: 0.7,
+						maxTokens: 1024,
+						thinkingMode: "disabled",
+					},
+				},
+				[{ role: "user", content: "你是小明！我是孟哥！记住" }],
+			),
+		).resolves.toBe("记住了。");
+
+		expect(storeExecute).toHaveBeenCalledWith({
+			content: correctedContent,
+			tier: "working",
+		});
+		const assistantToolCallUpdate = updatedMessages.find(
+			(update) => update.phase === "assistant_tool_calls",
+		);
+		expect(JSON.stringify(assistantToolCallUpdate?.messages)).toContain(
+			correctedContent,
+		);
+		expect(JSON.stringify(assistantToolCallUpdate?.messages)).not.toContain(
+			"用户叫小明",
+		);
+		const assistantCheckpoint = savedStates.find(
+			(state) => state.messages.length === 2,
+		);
+		expect(JSON.stringify(assistantCheckpoint?.messages)).toContain(
+			correctedContent,
+		);
+		expect(JSON.stringify(assistantCheckpoint?.messages)).not.toContain(
+			"用户叫小明",
+		);
+		expect(chat.mock.calls[1]?.[0]).toEqual([
+			{ role: "user", content: "你是小明！我是孟哥！记住" },
+			{
+				role: "assistant",
+				content: "",
+				toolCalls: [
+					{
+						...rawToolCall,
+						arguments: { content: correctedContent, tier: "working" },
+					},
+				],
+			},
+			{
+				role: "tool",
+				toolCallId: "call-memory",
+				name: "memory_store",
+				content: JSON.stringify({ id: "mem-1" }),
+			},
+		]);
+	});
+
 	it("在 tool chain 中途崩溃时保存增量 checkpoint 并允许从中间状态恢复", async () => {
 		vi.mocked(getLoggerRuntimeMode).mockReturnValue("repl");
 
