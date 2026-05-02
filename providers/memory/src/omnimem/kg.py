@@ -5,6 +5,7 @@ import sqlite3
 import threading
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from .kg_query import subgraph_search_sync
@@ -153,6 +154,7 @@ class TemporalKnowledgeGraph:
         max_hops: int = 2,
         limit: int = 10,
         as_of: datetime | str | None = None,
+        filters: dict[str, Any] | None = None,
     ) -> list[KGSearchResult]:
         entities = extract_entity_terms(query)
         if not entities:
@@ -163,6 +165,7 @@ class TemporalKnowledgeGraph:
             max_hops=max_hops,
             limit=limit,
             as_of=as_of,
+            filters=filters,
         )
 
     async def subgraph_search(
@@ -172,6 +175,7 @@ class TemporalKnowledgeGraph:
         max_hops: int = 2,
         limit: int = 10,
         as_of: datetime | str | None = None,
+        filters: dict[str, Any] | None = None,
     ) -> list[KGSearchResult]:
         return await asyncio.to_thread(
             self._subgraph_search_sync,
@@ -179,6 +183,7 @@ class TemporalKnowledgeGraph:
             max_hops,
             limit,
             as_of,
+            filters,
         )
 
     def _subgraph_search_sync(
@@ -187,8 +192,17 @@ class TemporalKnowledgeGraph:
         max_hops: int,
         limit: int,
         as_of: datetime | str | None,
+        filters: dict[str, Any] | None,
     ) -> list[KGSearchResult]:
-        return subgraph_search_sync(self._conn, self._lock, entities, max_hops, limit, as_of)
+        return subgraph_search_sync(
+            self._conn,
+            self._lock,
+            entities,
+            max_hops,
+            limit,
+            as_of,
+            filters=filters,
+        )
 
     def _ensure_schema(self) -> None:
         ensure_schema(self._conn)

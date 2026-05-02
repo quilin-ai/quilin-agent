@@ -10,6 +10,7 @@ from mcp.server.fastmcp import Context, FastMCP
 
 from .event_log import TraceContext, parse_traceparent
 from .logging import configure_once, logger
+from .retrieval_profile import RetrievalProfileStore
 from .retriever import MemoryRetriever
 from .scratchpad import ScratchpadStore
 from .store import OmniMemStore
@@ -40,13 +41,22 @@ ALLOWED_TOOL_METADATA_KEYS = frozenset(
         "score",
         "session_id",
         "source",
+        "source_excerpt",
         "source_layers",
+        "source_turn_id",
         "stability_reason",
         "staleness",
+        "supporting_turns",
         "task_hash",
+        "trace_id",
+        "turn_id",
         "user_id",
         "valid_from",
         "valid_to",
+        "evidence",
+        "evidence_ids",
+        "evidence_refs",
+        "citations",
     }
 )
 
@@ -128,6 +138,9 @@ async def _memory_recall_with_store(
     store: OmniMemStore,
     query: str,
     *,
+    user_id: str | None = None,
+    session_id: str | None = None,
+    retrieval_profile_store: RetrievalProfileStore | None = None,
     trace_context: TraceContext | None = None,
 ) -> str:
     """Recall memory records matching a query string (substring, case-insensitive).
@@ -140,11 +153,39 @@ async def _memory_recall_with_store(
     except Exception as exc:
         _raise_memory_operation_error("memory_recall", exc)
 
-    results = MemoryRetriever(store).annotate_recall_results(
+    task_context: dict[str, object] = {}
+    if user_id is not None and user_id.strip():
+        task_context["user_id"] = user_id.strip()
+    if session_id is not None and session_id.strip():
+        task_context["session_id"] = session_id.strip()
+    task_context_or_none = task_context or None
+    context_filters = MemoryRetriever._filters_from_task_context(task_context_or_none)
+    if context_filters is not None:
+        metadata_filters = context_filters.get("metadata")
+        if isinstance(metadata_filters, dict):
+            raw_results = [
+                item
+                for item in raw_results
+                if all(item.metadata.get(key) == value for key, value in metadata_filters.items())
+            ]
+
+    retriever = MemoryRetriever(
+        store,
+        retrieval_profiles=store.retrieval_profiles,
+    )
+    results = retriever.annotate_recall_results(
         query,
         raw_results,
+        task_context_or_none,
         limit=len(raw_results),
     )
+    if user_id is not None and user_id.strip():
+        try:
+            profile_store = retrieval_profile_store or store.retrieval_profiles
+            results = profile_store.get(user_id.strip()).apply_to(results)
+        except Exception as exc:
+            _raise_memory_operation_error("memory_recall", exc)
+
     payload: dict[str, object] = {"records": [r.to_wire_dict() for r in results]}
     if trace_context is not None:
         payload["traceparent"] = trace_context.traceparent
@@ -337,10 +378,19 @@ def _build_store_lifespan(
     return lifespan
 
 
-async def memory_recall(query: str) -> str:
+async def memory_recall(
+    query: str,
+    user_id: str | None = None,
+    session_id: str | None = None,
+) -> str:
     """Legacy direct helper that opens a store per call."""
     async with OmniMemStore() as store:
-        return await _memory_recall_with_store(store, query)
+        return await _memory_recall_with_store(
+            store,
+            query,
+            user_id=user_id,
+            session_id=session_id,
+        )
 
 
 async def memory_store(
@@ -394,6 +444,8 @@ def create_server(
     @server.tool(name="memory_recall")
     async def memory_recall_tool(
         query: str,
+        user_id: str | None = None,
+        session_id: str | None = None,
         ctx: Context[object, Any, object] | None = None,
     ) -> str:
         """Recall memory records matching a query string (substring, case-insensitive).
@@ -404,6 +456,8 @@ def create_server(
         return await _memory_recall_with_store(
             await resolve_store(ctx),
             query,
+            user_id=user_id,
+            session_id=session_id,
             trace_context=_child_trace_context(parent_trace),
         )
 

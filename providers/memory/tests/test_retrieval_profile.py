@@ -644,6 +644,27 @@ def test_weight_updates_change_ranking_deterministically() -> None:
     assert [item.id for item in profile.apply_to(items)] == ["vector", "bm25"]
 
 
+def test_weight_application_supports_logical_axis_aliases() -> None:
+    profile = RetrievalWeightProfile(
+        user_id="user-1",
+        weights={"bm25": 0.1, "vector": 3.0, "kg": 1.0},
+    )
+    items = [
+        MemoryItem(
+            id="bm25",
+            content="bm25",
+            metadata={"schema_version": 1, "source": "bm25_fts", "score": 0.9},
+        ),
+        MemoryItem(
+            id="vector",
+            content="vector",
+            metadata={"schema_version": 1, "source": "vector_semantic", "score": 0.4},
+        ),
+    ]
+
+    assert [item.id for item in profile.apply_to(items)] == ["vector", "bm25"]
+
+
 def test_retrieval_profile_health_is_healthy_for_complete_source_config() -> None:
     profile = RetrievalWeightProfile(
         user_id="user-1",

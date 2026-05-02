@@ -80,6 +80,29 @@ def _optional_string(
     return value
 
 
+def _optional_datetime(
+    payload: Mapping[str, object],
+    key: str,
+    *,
+    field_prefix: str,
+) -> datetime | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if not isinstance(value, str):
+        raise TypeError(f"{field_prefix}.{key} must be an ISO datetime string when provided")
+
+    raw_value = value.strip()
+    if not raw_value:
+        raise ValueError(f"{field_prefix}.{key} must be a non-empty ISO datetime string")
+    try:
+        return datetime.fromisoformat(raw_value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"{field_prefix}.{key} must be a valid ISO datetime string") from exc
+
+
 def _normalize_metadata(
     metadata: object,
     *,
@@ -147,6 +170,12 @@ class ObservationTurn:
             session_id=_optional_string(payload, "session_id"),
             user_id=_optional_string(payload, "user_id"),
             metadata=_normalize_metadata(payload.get("metadata")),
+            observed_at=_optional_datetime(
+                payload,
+                "observed_at",
+                field_prefix="turn",
+            )
+            or _utcnow(),
         )
 
 
@@ -201,6 +230,12 @@ class ObservationCandidate:
                 payload.get("metadata"),
                 field_name="candidate.metadata",
             ),
+            created_at=_optional_datetime(
+                payload,
+                "created_at",
+                field_prefix="candidate",
+            )
+            or _utcnow(),
         )
 
 

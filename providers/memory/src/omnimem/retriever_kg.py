@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Protocol
+from typing import Any, Protocol
 
 from .kg_validation import KGSearchResult
 from .types import MemoryItem
@@ -18,6 +18,7 @@ class KnowledgeGraphStore(Protocol):
         max_hops: int = 2,
         limit: int = 10,
         as_of: datetime | str | None = None,
+        filters: dict[str, Any] | None = None,
     ) -> list[KGSearchResult]: ...
 
 
@@ -48,28 +49,36 @@ class KGRetrieverMixin:
             max_hops=max_hops,
             limit=max(effective_limit, self._kg_limit),
             as_of=as_of,
+            filters=self._filters_from_task_context(task_context),
         )
         return [self._kg_result_to_memory_item(result) for result in candidates[:effective_limit]]
 
     @staticmethod
     def _kg_result_to_memory_item(result: KGSearchResult) -> MemoryItem:
         is_stale = result.valid_to is not None and result.valid_to < datetime.now(UTC)
-        return MemoryItem(
-            id=f"kg:{result.edge_id}:{result.seed_entity}:{result.depth}",
-            content=f"{result.subject} {result.predicate} {result.object}",
-            content_type="text",
-            layer="semantic",
-            metadata={
-                "schema_version": 1,
+        metadata = dict(result.metadata)
+        schema_version = metadata.get("schema_version", 1)
+        metadata.update(
+            {
+                "schema_version": schema_version if isinstance(schema_version, int) else 1,
                 "source": "kg_subgraph",
                 "graph_distance": result.depth,
                 "seed_entity": result.seed_entity,
                 "memory_id": result.memory_id,
                 "valid_from": result.valid_from.isoformat(),
-                "valid_to": (result.valid_to.isoformat() if result.valid_to is not None else None),
+                "valid_to": (
+                    result.valid_to.isoformat() if result.valid_to is not None else None
+                ),
                 "staleness": "stale" if is_stale else "fresh",
                 "source_layers": ["kg"],
-            },
+            }
+        )
+        return MemoryItem(
+            id=f"kg:{result.edge_id}:{result.seed_entity}:{result.depth}",
+            content=f"{result.subject} {result.predicate} {result.object}",
+            content_type="text",
+            layer="semantic",
+            metadata=metadata,
             created_at=result.valid_from,
             last_accessed=result.valid_from,
             importance_score=result.weight,

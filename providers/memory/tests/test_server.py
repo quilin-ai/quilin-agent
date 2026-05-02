@@ -431,9 +431,16 @@ async def test_memory_recall_tool_no_match(server: object) -> None:
 
 
 def test_memory_store_metadata_validation_boundaries() -> None:
-    assert server_module._validate_tool_metadata({"source_layers": ["episodic"]}) == {
-        "source_layers": ["episodic"]
+    observer_metadata = {
+        "source_turn_id": "turn-1",
+        "trace_id": "a" * 32,
+        "evidence": ["turn-1"],
+        "source_excerpt": "User asked for direct updates.",
+        "supporting_turns": ["turn-1", "turn-2"],
     }
+    assert server_module._validate_tool_metadata(
+        {"source_layers": ["episodic"], **observer_metadata}
+    ) == {"source_layers": ["episodic"], **observer_metadata}
 
     with pytest.raises(ValueError, match="string values"):
         server_module._validate_tool_metadata({"source": "x" * 513})
@@ -590,6 +597,99 @@ async def test_memory_recall_tool_adds_retrieval_envelope_and_preserves_memory_s
         recall_source="direct_recall",
         memory_source="checkpoint_writer",
     )
+
+
+async def test_memory_recall_applies_user_retrieval_profile(
+    store: OmniMemStore,
+) -> None:
+    await server_module._memory_store_with_store(
+        store,
+        "lower bm25 result",
+        metadata={"schema_version": 1, "user_id": "user-1"},
+    )
+    await server_module._memory_store_with_store(
+        store,
+        "higher bm25 result",
+        metadata={"schema_version": 1, "user_id": "user-1"},
+    )
+    store.retrieval_profiles.update_weights("user-1", {"direct_recall": 0.25})
+
+    result = json.loads(
+        await server_module._memory_recall_with_store(
+            store,
+            "bm25 result",
+            user_id="user-1",
+        )
+    )
+
+    records = result["records"]
+    assert len(records) == 2
+    assert all(record["metadata"]["weighted_score"] < 1 for record in records)
+
+
+async def test_memory_recall_filters_user_records_before_profile_weighting(
+    store: OmniMemStore,
+) -> None:
+    await server_module._memory_store_with_store(
+        store,
+        "shared deployment note for alpha",
+        metadata={"schema_version": 1, "user_id": "user-1"},
+    )
+    await server_module._memory_store_with_store(
+        store,
+        "shared deployment note for beta",
+        metadata={"schema_version": 1, "user_id": "user-2"},
+    )
+    store.retrieval_profiles.update_weights("user-1", {"direct_recall": 0.25})
+
+    result = json.loads(
+        await server_module._memory_recall_with_store(
+            store,
+            "shared deployment note",
+            user_id="user-1",
+        )
+    )
+
+    records = result["records"]
+    assert [record["content"] for record in records] == ["shared deployment note for alpha"]
+    assert records[0]["metadata"]["user_id"] == "user-1"
+    assert records[0]["metadata"]["weighted_score"] < 1
+
+
+async def test_memory_recall_filters_user_and_session_records_before_profile_weighting(
+    store: OmniMemStore,
+) -> None:
+    await server_module._memory_store_with_store(
+        store,
+        "shared session note for alpha",
+        metadata={"schema_version": 1, "user_id": "user-1", "session_id": "session-1"},
+    )
+    await server_module._memory_store_with_store(
+        store,
+        "shared session note for beta",
+        metadata={"schema_version": 1, "user_id": "user-1", "session_id": "session-2"},
+    )
+    await server_module._memory_store_with_store(
+        store,
+        "shared session note for gamma",
+        metadata={"schema_version": 1, "user_id": "user-2", "session_id": "session-2"},
+    )
+    store.retrieval_profiles.update_weights("user-1", {"direct_recall": 0.25})
+
+    result = json.loads(
+        await server_module._memory_recall_with_store(
+            store,
+            "shared session note",
+            user_id="user-1",
+            session_id="session-2",
+        )
+    )
+
+    records = result["records"]
+    assert [record["content"] for record in records] == ["shared session note for beta"]
+    assert records[0]["metadata"]["user_id"] == "user-1"
+    assert records[0]["metadata"]["session_id"] == "session-2"
+    assert records[0]["metadata"]["weighted_score"] < 1
 
 
 async def test_memory_recall_error_path(

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 from datetime import datetime
+from typing import Any
 
 from .kg_validation import (
     KGSearchResult,
@@ -19,6 +21,7 @@ def subgraph_search_sync(
     max_hops: int,
     limit: int,
     as_of: datetime | str | None,
+    filters: dict[str, Any] | None = None,
 ) -> list[KGSearchResult]:
     if max_hops < 1:
         raise ValueError("max_hops must be at least 1")
@@ -33,6 +36,7 @@ def subgraph_search_sync(
         return []
 
     temporal_condition, temporal_params = _temporal_filter(as_of)
+    metadata_condition, metadata_params = _metadata_filter(filters)
     placeholders = ", ".join(["(?)"] * len(seeds))
     subject_key_expr = "LOWER(TRIM(REPLACE(e.subject, '|', '')))"
     object_key_expr = "LOWER(TRIM(REPLACE(e.object, '|', '')))"
@@ -89,6 +93,7 @@ def subgraph_search_sync(
               ON {subject_key_expr} = seed.seed_entity
               OR {object_key_expr} = seed.seed_entity
             WHERE {temporal_condition}
+              AND {metadata_condition}
 
             UNION ALL
 
@@ -120,6 +125,7 @@ def subgraph_search_sync(
               OR {object_key_expr} = graph.current_entity_key
             WHERE graph.depth < ?
               AND {temporal_condition}
+              AND {metadata_condition}
               AND NOT EXISTS (
                   SELECT 1
                   FROM json_each(graph.visited)
@@ -145,7 +151,15 @@ def subgraph_search_sync(
         LIMIT ?
     """
 
-    params: list[object] = [*seeds, *temporal_params, max_hops, *temporal_params, query_limit]
+    params: list[object] = [
+        *seeds,
+        *temporal_params,
+        *metadata_params,
+        max_hops,
+        *temporal_params,
+        *metadata_params,
+        query_limit,
+    ]
     with lock:
         rows = conn.execute(sql, params).fetchall()
 
@@ -162,6 +176,37 @@ def _temporal_filter(as_of: datetime | str | None) -> tuple[str, list[object]]:
         temporal_value,
         temporal_value,
     ]
+
+
+def _metadata_filter(filters: dict[str, Any] | None) -> tuple[str, list[object]]:
+    if not filters:
+        return "1 = 1", []
+
+    metadata_filters = filters.get("metadata")
+    if not isinstance(metadata_filters, dict) or not metadata_filters:
+        return "1 = 1", []
+
+    predicates: list[str] = []
+    params: list[object] = []
+    for key, value in sorted(metadata_filters.items()):
+        predicates.append("json_extract(e.metadata_json, ?) = ?")
+        params.extend((_metadata_json_path(str(key)), _metadata_value(value)))
+
+    return " AND ".join(predicates), params
+
+
+def _metadata_json_path(key: str) -> str:
+    escaped_key = key.replace("\\", "\\\\").replace('"', '\\"')
+    return f'$."{escaped_key}"'
+
+
+def _metadata_value(value: object) -> object:
+    if isinstance(value, bool):
+        return int(value)
+    if value is None or isinstance(value, int | float | str):
+        return value
+
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
 
 def _dedupe_results(rows: list[sqlite3.Row], effective_limit: int) -> list[KGSearchResult]:

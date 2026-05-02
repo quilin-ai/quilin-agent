@@ -4,6 +4,7 @@ import time
 from datetime import UTC, datetime
 
 from omnimem.kg import TemporalKnowledgeGraph
+from omnimem.kg_validation import KGSearchResult
 from omnimem.retriever import MemoryRetriever
 from omnimem.store import OmniMemStore
 from omnimem.types import MemoryItem
@@ -175,6 +176,37 @@ async def test_fused_retrieval_applies_task_context_filters_to_episodic() -> Non
     assert results[0].metadata["source_layers"] == ["episodic"]
 
 
+async def test_fused_retrieval_applies_user_filters_to_working_memory() -> None:
+    store = OmniMemStore(db_path=":memory:")
+    working = WorkingMemory(k=3)
+    await working.push(
+        MemoryItem(
+            id="working-user-1",
+            content="older working privacy note for alpha",
+            layer="working",
+            metadata={"schema_version": 1, "user_id": "user-1"},
+        )
+    )
+    await working.push(
+        MemoryItem(
+            id="working-user-2",
+            content="newer working privacy note for beta",
+            layer="working",
+            metadata={"schema_version": 1, "user_id": "user-2"},
+        )
+    )
+
+    results = await MemoryRetriever(store, working=working).retrieve(
+        "working privacy note",
+        {"user_id": "user-1"},
+        limit=1,
+    )
+
+    assert [item.id for item in results] == ["working-user-1"]
+    assert results[0].metadata["source"] == "working_direct"
+    assert results[0].metadata["user_id"] == "user-1"
+
+
 class StubVectorStore:
     def __init__(self, results: list[MemoryItem]) -> None:
         self._results = results
@@ -208,9 +240,27 @@ class FailingKnowledgeGraph:
         max_hops: int = 2,
         limit: int = 10,
         as_of: datetime | str | None = None,
+        filters: dict[str, object] | None = None,
     ) -> list:
-        del query, max_hops, limit, as_of
+        del query, max_hops, limit, as_of, filters
         raise RuntimeError("kg unavailable")
+
+
+class StubKnowledgeGraph:
+    def __init__(self, results: list[KGSearchResult]) -> None:
+        self._results = results
+
+    async def search(
+        self,
+        query: str,
+        *,
+        max_hops: int = 2,
+        limit: int = 10,
+        as_of: datetime | str | None = None,
+        filters: dict[str, object] | None = None,
+    ) -> list[KGSearchResult]:
+        del query, max_hops, as_of, filters
+        return self._results[:limit]
 
 
 class FailingReranker:
@@ -223,6 +273,30 @@ class FailingReranker:
     ) -> list[MemoryItem]:
         del query, task_context
         raise RuntimeError(f"reranker unavailable for {len(items)} items")
+
+
+class InjectingReranker:
+    async def rerank(
+        self,
+        query: str,
+        items: list[MemoryItem],
+        *,
+        task_context: dict[str, object] | None = None,
+    ) -> list[MemoryItem]:
+        del query, task_context
+        return [
+            MemoryItem(
+                id="reranker-user-2",
+                content="target injected by reranker for beta",
+                layer="semantic",
+                metadata={
+                    "schema_version": 1,
+                    "source": "reranker_fixture",
+                    "user_id": "user-2",
+                },
+            ),
+            *items,
+        ]
 
 
 async def test_hybrid_retrieval_fuses_bm25_vector_and_kg_results() -> None:
@@ -293,6 +367,188 @@ async def test_hybrid_retrieval_fuses_bm25_vector_and_kg_results() -> None:
     assert kg_item.content == "migration depends_on approval"
     assert kg_item.metadata["source_layers"] == ["kg"]
     assert kg_item.metadata["graph_distance"] == 1
+
+
+async def test_hybrid_retrieval_applies_user_retrieval_profile() -> None:
+    store = OmniMemStore(db_path=":memory:")
+    await store.add(
+        MemoryItem(
+            id="bm25",
+            content="target from bm25",
+            layer="episodic",
+            metadata={"schema_version": 1, "user_id": "user-1"},
+        )
+    )
+    semantic = MemoryItem(
+        id="vector",
+        content="semantic vector candidate",
+        layer="semantic",
+        metadata={
+            "schema_version": 1,
+            "source": "reflection",
+            "user_id": "user-1",
+            "stability_reason": "Stable semantic fixture.",
+        },
+    )
+    store.retrieval_profiles.update_weights(
+        "user-1",
+        {"bm25_fts": 0.1, "vector_semantic": 10.0},
+    )
+
+    results = await MemoryRetriever(
+        store,
+        vector=StubVectorStore([semantic]),
+        retrieval_profiles=store.retrieval_profiles,
+    ).retrieve("target", {"user_id": "user-1"}, limit=2)
+
+    assert [item.id for item in results] == ["vector", "bm25"]
+    assert results[0].metadata["weighted_score"] > results[1].metadata["weighted_score"]
+
+
+async def test_hybrid_retrieval_filters_vector_items_by_user_context() -> None:
+    store = OmniMemStore(db_path=":memory:")
+    vector = StubVectorStore(
+        [
+            MemoryItem(
+                id="vector-user-2",
+                content="target from vector for beta",
+                layer="semantic",
+                metadata={
+                    "schema_version": 1,
+                    "source": "reflection",
+                    "user_id": "user-2",
+                    "stability_reason": "Stable semantic fixture.",
+                },
+            ),
+            MemoryItem(
+                id="vector-user-1",
+                content="target from vector for alpha",
+                layer="semantic",
+                metadata={
+                    "schema_version": 1,
+                    "source": "reflection",
+                    "user_id": "user-1",
+                    "stability_reason": "Stable semantic fixture.",
+                },
+            ),
+        ]
+    )
+
+    results = await MemoryRetriever(store, vector=vector).retrieve(
+        "target",
+        {"user_id": "user-1"},
+        limit=1,
+    )
+
+    assert [item.id for item in results] == ["vector-user-1"]
+    assert results[0].metadata["source"] == "vector_semantic"
+    assert results[0].metadata["user_id"] == "user-1"
+
+
+async def test_hybrid_retrieval_filters_kg_items_by_user_context() -> None:
+    store = OmniMemStore(db_path=":memory:")
+    now = datetime(2026, 4, 24, tzinfo=UTC)
+    kg = StubKnowledgeGraph(
+        [
+            KGSearchResult(
+                edge_id="edge-user-2",
+                seed_entity="target",
+                current_entity="target",
+                subject="target",
+                predicate="belongs_to",
+                object="beta",
+                depth=1,
+                path="target",
+                valid_from=now,
+                valid_to=None,
+                memory_id="memory-user-2",
+                weight=1.0,
+                metadata={"schema_version": 1, "user_id": "user-2"},
+            ),
+            KGSearchResult(
+                edge_id="edge-user-1",
+                seed_entity="target",
+                current_entity="target",
+                subject="target",
+                predicate="belongs_to",
+                object="alpha",
+                depth=1,
+                path="target",
+                valid_from=now,
+                valid_to=None,
+                memory_id="memory-user-1",
+                weight=1.0,
+                metadata={"schema_version": 1, "user_id": "user-1"},
+            ),
+        ]
+    )
+
+    results = await MemoryRetriever(store, kg=kg).retrieve(
+        "target",
+        {"user_id": "user-1"},
+        limit=1,
+    )
+
+    assert [item.metadata["memory_id"] for item in results] == ["memory-user-1"]
+    assert results[0].metadata["source"] == "kg_subgraph"
+    assert results[0].metadata["user_id"] == "user-1"
+
+
+async def test_hybrid_retrieval_filters_kg_source_before_limit() -> None:
+    store = OmniMemStore(db_path=":memory:")
+    now = datetime(2026, 4, 24, tzinfo=UTC)
+    kg = TemporalKnowledgeGraph(db_path=":memory:")
+    for index in range(20):
+        await kg.add_edge(
+            "target",
+            "belongs_to",
+            f"beta-{index}",
+            valid_from=now,
+            memory_id=f"memory-user-2-{index}",
+            weight=100.0 - index,
+            metadata={"schema_version": 1, "user_id": "user-2"},
+        )
+    await kg.add_edge(
+        "target",
+        "belongs_to",
+        "alpha",
+        valid_from=now,
+        memory_id="memory-user-1",
+        weight=1.0,
+        metadata={"schema_version": 1, "user_id": "user-1"},
+    )
+
+    results = await MemoryRetriever(store, kg=kg).retrieve(
+        "target",
+        {"user_id": "user-1"},
+        limit=1,
+    )
+
+    assert [item.metadata["memory_id"] for item in results] == ["memory-user-1"]
+    assert results[0].metadata["source"] == "kg_subgraph"
+    assert results[0].metadata["user_id"] == "user-1"
+
+
+async def test_hybrid_retrieval_filters_reranker_output_by_user_context() -> None:
+    store = OmniMemStore(db_path=":memory:")
+    await store.add(
+        MemoryItem(
+            id="bm25-user-1",
+            content="target from bm25 for alpha",
+            layer="episodic",
+            metadata={"schema_version": 1, "user_id": "user-1"},
+        )
+    )
+
+    results = await MemoryRetriever(store, reranker=InjectingReranker()).retrieve(
+        "target",
+        {"user_id": "user-1"},
+        limit=2,
+    )
+
+    assert [item.id for item in results] == ["bm25-user-1"]
+    assert results[0].metadata["source"] == "bm25_fts"
+    assert results[0].metadata["user_id"] == "user-1"
 
 
 async def test_hybrid_retrieval_degrades_when_vector_kg_and_reranker_fail() -> None:

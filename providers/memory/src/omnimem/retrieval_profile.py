@@ -25,6 +25,15 @@ RETRIEVAL_PROFILE_REQUIRED_SOURCES: dict[str, str] = {
     "vector": "vector_semantic",
     "kg": "kg_subgraph",
 }
+RETRIEVAL_PROFILE_SOURCE_ALIASES: dict[str, str] = {
+    "bm25": "bm25_fts",
+    "bm25_fts": "bm25",
+    "direct_recall": "bm25_fts",
+    "vector": "vector_semantic",
+    "vector_semantic": "vector",
+    "kg": "kg_subgraph",
+    "kg_subgraph": "kg",
+}
 RETRIEVAL_PROFILE_PREVIEW_UNSETTABLE_WEIGHTS: frozenset[str] = frozenset(
     RETRIEVAL_PROFILE_REQUIRED_SOURCES.values()
 )
@@ -201,11 +210,17 @@ class RetrievalWeightProfile:
             source = str(item.metadata.get("source", item.layer))
             layer = str(item.metadata.get("layer", item.layer))
             base_score = float(item.metadata.get("score", 0.0))
-            source_weight = self.weights.get(source, self.weights.get(layer, 1.0))
+            source_weight = self.weight_for(source=source, layer=layer)
             weighted_score = base_score * source_weight
             weighted.append((weighted_score, item.id, _with_weight_metadata(item, weighted_score)))
 
         return [item for _score, _id, item in sorted(weighted, key=lambda row: (-row[0], row[1]))]
+
+    def weight_for(self, *, source: str, layer: str | None = None) -> float:
+        for key in _retrieval_profile_weight_keys(source=source, layer=layer):
+            if key in self.weights:
+                return self.weights[key]
+        return 1.0
 
     def health_summary(self) -> RetrievalProfileHealth:
         return retrieval_profile_health(self)
@@ -281,6 +296,10 @@ class RetrievalProfileStore:
         return preview_retrieval_profile_health_updates(
             (self.get(user_id), weights) for user_id, weights in updates
         )
+
+    def close(self) -> None:
+        with self._lock:
+            self._conn.close()
 
     def _ensure_schema(self) -> None:
         with self._lock:
@@ -532,3 +551,21 @@ def _with_weight_metadata(item: MemoryItem, weighted_score: float) -> MemoryItem
         access_count=item.access_count,
         importance_score=item.importance_score,
     )
+
+
+def _retrieval_profile_weight_keys(*, source: str, layer: str | None = None) -> tuple[str, ...]:
+    keys: list[str] = [source]
+    alias = RETRIEVAL_PROFILE_SOURCE_ALIASES.get(source)
+    if alias is not None:
+        keys.append(alias)
+        reverse_alias = RETRIEVAL_PROFILE_SOURCE_ALIASES.get(alias)
+        if reverse_alias is not None:
+            keys.append(reverse_alias)
+    if layer is not None:
+        keys.append(layer)
+
+    deduped: list[str] = []
+    for key in keys:
+        if key not in deduped:
+            deduped.append(key)
+    return tuple(deduped)

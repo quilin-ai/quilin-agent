@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
+from .retrieval_profile import RetrievalProfileStore
 from .store_filters import coerce_filter_datetime, layer_filter, matches_filters
 from .store_records import insert_memory
 from .store_schema import FTS_SCHEMA_COMPONENT as _FTS_SCHEMA_COMPONENT
@@ -95,7 +96,12 @@ def _candidate_limit(limit: int, filters: dict[str, Any] | None) -> int | None:
 
 
 class OmniMemStore:
-    def __init__(self, db_path: str | None = None) -> None:
+    def __init__(
+        self,
+        db_path: str | None = None,
+        *,
+        retrieval_profile_store: RetrievalProfileStore | None = None,
+    ) -> None:
         if db_path is None:
             if os.environ.get("QUILIN_ENV") == "test":
                 db_path = ":memory:"
@@ -113,6 +119,8 @@ class OmniMemStore:
             check_same_thread=False,
             isolation_level=None,
         )
+        self._db_path = db_path
+        self._retrieval_profiles = retrieval_profile_store
         self._conn.row_factory = sqlite3.Row
         self._lock = threading.Lock()
         self._closed = False
@@ -122,6 +130,12 @@ class OmniMemStore:
             now=_utcnow,
             rebuild_fts_index=self._rebuild_fts_index,
         )
+
+    @property
+    def retrieval_profiles(self) -> RetrievalProfileStore:
+        if self._retrieval_profiles is None:
+            self._retrieval_profiles = RetrievalProfileStore(self._db_path)
+        return self._retrieval_profiles
 
     async def __aenter__(self) -> OmniMemStore:
         return self
@@ -149,6 +163,8 @@ class OmniMemStore:
         with self._lock:
             self._conn.commit()
             self._conn.close()
+            if self._retrieval_profiles is not None:
+                self._retrieval_profiles.close()
             self._closed = True
 
     async def add(self, memory: MemoryItem) -> str:

@@ -1,15 +1,20 @@
 #![forbid(unsafe_code)]
 
-//! Minimal Agent Mesh (agent interconnection network) runtime contract for
-//! Iteration F (the scale-out iteration).
+//! Minimal Agent Mesh (agent interconnection network) stub contract for
+//! Iteration D (the Rust SDK stub iteration).
 //!
-//! 第 F 轮规模化迭代使用的最小 Agent Mesh（Agent 互联网络）运行时契约。
+//! 第 D 轮 Rust SDK stub（占位契约）使用的最小 Agent Mesh（Agent 互联网络）
+//! 契约。
 //!
-//! Iteration F can build local runtime behavior against this crate without
-//! taking on local area network or distributed mesh transport yet.
+//! This crate intentionally does not provide runtime dispatch, transport,
+//! permission execution, or network behavior. Iteration F must add those
+//! runtime pieces behind the project WriteAuthority (central write gate),
+//! permission, trace, and audit contracts.
 //!
-//! 第 F 轮可基于本 crate 承接本机运行时行为，同时暂不引入局域网或分布式
-//! Mesh（Agent 互联网络）传输。
+//! 本 crate 有意不提供 runtime dispatch（运行时派发）、transport（传输）、
+//! permission execution（权限执行）或网络行为。第 F 轮若要加入这些运行时
+//! 能力，必须先接入项目 WriteAuthority（统一写入授权门）、权限、trace
+//!（追踪）和 audit（审计）契约。
 
 use std::error::Error;
 use std::fmt;
@@ -99,9 +104,9 @@ impl AgentCapability {
     }
 }
 
-/// Audit fields carried by cards, requests, and responses.
+/// Audit fields carried by cards and request envelopes.
 ///
-/// 能力卡片、请求和响应共同携带的审计字段。
+/// 能力卡片和请求信封共同携带的审计字段。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AuditFields {
     pub actor: AgentId,
@@ -125,10 +130,10 @@ impl AuditFields {
         Ok(audit)
     }
 
-    /// Validates audit metadata before cards, requests, or responses cross the
-    /// local runtime boundary.
+    /// Validates audit metadata before cards or request envelopes are published
+    /// to a future runtime boundary.
     ///
-    /// 在能力卡片、请求或响应跨越本机运行时边界前校验审计元数据。
+    /// 在能力卡片或请求信封发布到未来运行时边界前校验审计元数据。
     pub fn validate(&self) -> MeshResult<()> {
         require_normalized_text("audit_action", &self.action)?;
 
@@ -196,10 +201,7 @@ impl AgentCard {
         for capability in &self.capabilities {
             capability.validate()?;
 
-            if seen_names
-                .iter()
-                .any(|seen_name| *seen_name == capability.name.as_str())
-            {
+            if seen_names.contains(&capability.name.as_str()) {
                 return Err(MeshError::DuplicateCapability {
                     name: capability.name.clone(),
                 });
@@ -369,9 +371,9 @@ impl<'a> LocalCapabilityDiscovery<'a> {
     }
 }
 
-/// Local request envelope sent through a MeshClient.
+/// Request envelope validated against an AgentCard before future dispatch.
 ///
-/// 通过 MeshClient（Mesh 运行时客户端接口）发送的本机请求信封。
+/// 在未来派发前按 AgentCard（Agent 能力卡片）校验的请求信封。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MeshRequest {
     pub target: AgentId,
@@ -455,170 +457,32 @@ impl MeshRequest {
     }
 }
 
-/// Local response envelope returned by a MeshClient.
+/// Compatibility marker for future mesh implementations.
 ///
-/// MeshClient（Mesh 运行时客户端接口）返回的本机响应信封。
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MeshResponse {
-    pub responder: AgentId,
-    pub payload: Vec<u8>,
-    pub audit: AuditFields,
-}
+/// 未来 Mesh（Agent 互联网络）实现的兼容性标记。
+pub trait Mesh {}
 
-impl MeshResponse {
-    /// Creates a response from a local responder.
-    ///
-    /// 创建来自本机响应方的响应。
-    pub fn new(responder: AgentId, payload: Vec<u8>, audit: AuditFields) -> MeshResult<Self> {
-        let response = Self {
-            responder,
-            payload,
-            audit,
-        };
-
-        response.validate()?;
-
-        Ok(response)
-    }
-
-    /// Validates response fields independent of a target card.
-    ///
-    /// 校验响应自身字段，不依赖目标能力卡片。
-    pub fn validate(&self) -> MeshResult<()> {
-        self.audit.validate()?;
-
-        if self.audit.actor != self.responder {
-            return Err(MeshError::AuditActorMismatch {
-                expected: self.responder.clone(),
-                actual: self.audit.actor.clone(),
-            });
-        }
-
-        Ok(())
-    }
-
-    /// Validates that this response came from the expected local card.
-    ///
-    /// 校验本响应来自预期的本机能力卡片。
-    pub fn validate_for_card(&self, card: &AgentCard) -> MeshResult<()> {
-        self.validate()?;
-        card.validate()?;
-
-        if self.responder != card.identity.id {
-            return Err(MeshError::ResponderMismatch {
-                expected: card.identity.id.clone(),
-                actual: self.responder.clone(),
-            });
-        }
-
-        Ok(())
-    }
-}
-
-/// Runtime client contract for local Agent Mesh behavior.
-///
-/// 本机 Agent Mesh（Agent 互联网络）行为的运行时客户端契约。
-pub trait MeshClient {
-    fn agent_card(&self) -> &AgentCard;
-
-    fn dispatch(&self, request: MeshRequest) -> MeshResult<MeshResponse>;
-}
-
-/// In-process transport boundary for the current runtime path.
-///
-/// 当前运行时路径使用的进程内传输边界。
-pub trait LocalTransport {
-    fn dispatch(&self, request: MeshRequest) -> MeshResult<MeshResponse>;
-}
-
-impl<F> LocalTransport for F
-where
-    F: Fn(MeshRequest) -> MeshResult<MeshResponse>,
-{
-    fn dispatch(&self, request: MeshRequest) -> MeshResult<MeshResponse> {
-        self(request)
-    }
-}
-
-/// MeshClient implementation backed by a local transport.
-///
-/// 由本机传输驱动的 MeshClient（Mesh 运行时客户端接口）实现。
-#[derive(Clone, Debug)]
-pub struct LocalMeshClient<T> {
-    card: AgentCard,
-    transport: T,
-}
-
-impl<T> LocalMeshClient<T>
-where
-    T: LocalTransport,
-{
-    /// Creates a local client without starting network listeners.
-    ///
-    /// 创建本机客户端；不会启动网络监听器。
-    pub fn new(card: AgentCard, transport: T) -> MeshResult<Self> {
-        card.validate()?;
-
-        Ok(Self { card, transport })
-    }
-}
-
-impl<T> MeshClient for LocalMeshClient<T>
-where
-    T: LocalTransport,
-{
-    fn agent_card(&self) -> &AgentCard {
-        &self.card
-    }
-
-    fn dispatch(&self, request: MeshRequest) -> MeshResult<MeshResponse> {
-        let preflight = request.dispatch_preflight_report(&self.card);
-        preflight.ensure_supported()?;
-
-        let response = self.transport.dispatch(request)?;
-        response.validate_for_card(&self.card)?;
-
-        Ok(response)
-    }
-}
-
-/// Compatibility marker for mesh implementations.
-///
-/// Mesh（Agent 互联网络）实现的兼容性标记。
-pub trait Mesh: MeshClient {}
-
-impl<T> Mesh for T where T: MeshClient + ?Sized {}
+impl<T> Mesh for T where T: ?Sized {}
 
 /// Shared result type for the Mesh SDK.
 ///
 /// Mesh SDK（Mesh 开发工具包）的共享结果类型。
 pub type MeshResult<T> = Result<T, MeshError>;
 
-/// Errors surfaced by the local runtime contract.
+/// Errors surfaced by the non-runtime stub contract.
 ///
-/// 本机运行时契约暴露的错误。
+/// 非运行时 stub（占位契约）暴露的错误。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MeshError {
     InvalidField { field: &'static str },
     DuplicateCapability { name: String },
     AuditActorMismatch { expected: AgentId, actual: AgentId },
     TargetMismatch { expected: AgentId, actual: AgentId },
-    ResponderMismatch { expected: AgentId, actual: AgentId },
     UnsupportedCapability { capability: String },
     PreflightRejected { code: String, message: String },
-    Transport { message: String },
 }
 
 impl MeshError {
-    /// Creates a transport error from local runtime code.
-    ///
-    /// 从本机运行时代码创建传输错误。
-    pub fn transport(message: impl Into<String>) -> Self {
-        Self::Transport {
-            message: message.into(),
-        }
-    }
-
     /// Returns a stable machine-readable error code.
     ///
     /// 返回稳定、机器可读的错误代码。
@@ -628,10 +492,8 @@ impl MeshError {
             Self::DuplicateCapability { .. } => "duplicate_capability",
             Self::AuditActorMismatch { .. } => "audit_actor_mismatch",
             Self::TargetMismatch { .. } => "target_mismatch",
-            Self::ResponderMismatch { .. } => "responder_mismatch",
             Self::UnsupportedCapability { .. } => "unsupported_capability",
             Self::PreflightRejected { code, .. } => code.as_str(),
-            Self::Transport { .. } => "transport",
         }
     }
 }
@@ -653,15 +515,10 @@ impl fmt::Display for MeshError {
                     "target mismatch: expected {expected}, got {actual}"
                 )
             }
-            Self::ResponderMismatch { expected, actual } => write!(
-                formatter,
-                "responder mismatch: expected {expected}, got {actual}"
-            ),
             Self::UnsupportedCapability { capability } => {
                 write!(formatter, "unsupported capability: {capability}")
             }
             Self::PreflightRejected { message, .. } => formatter.write_str(message),
-            Self::Transport { message } => write!(formatter, "local transport failed: {message}"),
         }
     }
 }

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
+from .retrieval_profile import RetrievalProfileStore
 from .retriever_bm25 import (
     DEFAULT_BM25_LIMIT,
     DEFAULT_RRF_K,
@@ -45,6 +46,7 @@ class MemoryRetriever(BM25RetrieverMixin, VectorRetrieverMixin, KGRetrieverMixin
         vector: VectorSearchStore | None = None,
         kg: KnowledgeGraphStore | None = None,
         reranker: CandidateReranker | None = None,
+        retrieval_profiles: RetrievalProfileStore | None = None,
         top_k: int = DEFAULT_TOP_K,
         working_limit: int = 5,
         bm25_limit: int = DEFAULT_BM25_LIMIT,
@@ -73,6 +75,7 @@ class MemoryRetriever(BM25RetrieverMixin, VectorRetrieverMixin, KGRetrieverMixin
         self._vector = vector
         self._kg = kg
         self._reranker = reranker
+        self._retrieval_profiles = retrieval_profiles
         self._top_k = top_k
         self._working_limit = working_limit
         self._bm25_limit = bm25_limit
@@ -94,29 +97,43 @@ class MemoryRetriever(BM25RetrieverMixin, VectorRetrieverMixin, KGRetrieverMixin
             return []
 
         cache_key = self._build_cache_key(query, task_context, effective_limit)
+        context_filters = self._filters_from_task_context(task_context)
         working_items = await self._retrieve_working(
             limit=effective_limit,
             cache_key=cache_key,
             block_version=RETRIEVAL_BLOCK_VERSION,
+            context_filters=context_filters,
         )
         remaining = effective_limit - len(working_items)
         if remaining <= 0:
             return working_items
 
-        context_filters = self._filters_from_task_context(task_context)
-        bm25_items = await self.retrieve_bm25(query, limit=remaining, filters=context_filters)
+        bm25_items = await self.retrieve_bm25(
+            query,
+            limit=self._source_limit(remaining, context_filters, self._bm25_limit),
+            filters=context_filters,
+        )
+        bm25_items = self._filter_items_by_context_filters(bm25_items, context_filters)[:remaining]
         vector_items = await self._best_effort(
             "vector",
             self.retrieve_vector(
                 query,
-                limit=remaining,
+                limit=self._source_limit(remaining, context_filters, self._vector_limit),
                 filters=context_filters,
             ),
         )
+        vector_items = self._filter_items_by_context_filters(vector_items, context_filters)[
+            :remaining
+        ]
         kg_items = await self._best_effort(
             "kg",
-            self.retrieve_kg(query, task_context=task_context, limit=remaining),
+            self.retrieve_kg(
+                query,
+                task_context=task_context,
+                limit=self._source_limit(remaining, context_filters, self._kg_limit),
+            ),
         )
+        kg_items = self._filter_items_by_context_filters(kg_items, context_filters)[:remaining]
 
         reranked = self._fuse_candidates(
             bm25_items,
@@ -135,6 +152,8 @@ class MemoryRetriever(BM25RetrieverMixin, VectorRetrieverMixin, KGRetrieverMixin
                 ),
                 fallback=reranked,
             )
+        reranked = self._filter_items_by_context_filters(reranked, context_filters)
+        reranked = self._apply_retrieval_profile(reranked, task_context)
 
         seen_ids = {item.id for item in working_items}
         fused_items = [item for item in reranked if item.id not in seen_ids]
@@ -174,18 +193,39 @@ class MemoryRetriever(BM25RetrieverMixin, VectorRetrieverMixin, KGRetrieverMixin
             for rank, item in enumerate(items[:effective_limit], start=1)
         ]
 
+    def _apply_retrieval_profile(
+        self,
+        items: list[MemoryItem],
+        task_context: dict[str, Any] | None,
+    ) -> list[MemoryItem]:
+        if self._retrieval_profiles is None or not task_context:
+            return items
+
+        user_id = task_context.get("user_id")
+        if not isinstance(user_id, str) or not user_id.strip():
+            return items
+
+        return self._retrieval_profiles.get(user_id.strip()).apply_to(items)
+
     async def _retrieve_working(
         self,
         *,
         limit: int,
         cache_key: str,
         block_version: str,
+        context_filters: dict[str, Any] | None,
     ) -> list[MemoryItem]:
         if self._working is None or self._working_limit == 0:
             return []
 
         effective_limit = min(limit, self._working_limit)
-        items = await self._working.get_recent(limit=effective_limit)
+        fetch_limit = (
+            self._working_limit
+            if self._metadata_filters_from_context_filters(context_filters)
+            else effective_limit
+        )
+        items = await self._working.get_recent(limit=fetch_limit)
+        items = self._filter_items_by_context_filters(items, context_filters)[:effective_limit]
         return [
             self._with_retrieval_metadata(
                 item,
@@ -196,6 +236,50 @@ class MemoryRetriever(BM25RetrieverMixin, VectorRetrieverMixin, KGRetrieverMixin
             )
             for item in items
         ]
+
+    @classmethod
+    def _filter_items_by_context_filters(
+        cls,
+        items: list[MemoryItem],
+        context_filters: dict[str, Any] | None,
+    ) -> list[MemoryItem]:
+        metadata_filters = cls._metadata_filters_from_context_filters(context_filters)
+        if not metadata_filters:
+            return items
+
+        return [
+            item
+            for item in items
+            if all(item.metadata.get(key) == value for key, value in metadata_filters.items())
+        ]
+
+    @staticmethod
+    def _metadata_filters_from_context_filters(
+        context_filters: dict[str, Any] | None,
+    ) -> dict[str, object]:
+        if not context_filters:
+            return {}
+
+        metadata_filters = context_filters.get("metadata")
+        if not isinstance(metadata_filters, dict):
+            return {}
+
+        return {
+            str(key): value
+            for key, value in metadata_filters.items()
+            if isinstance(key, str)
+        }
+
+    def _source_limit(
+        self,
+        limit: int,
+        context_filters: dict[str, Any] | None,
+        configured_limit: int,
+    ) -> int:
+        if self._metadata_filters_from_context_filters(context_filters):
+            return max(limit, configured_limit)
+
+        return limit
 
 
 __all__ = [

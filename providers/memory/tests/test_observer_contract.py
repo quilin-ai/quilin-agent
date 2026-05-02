@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 
 from omnimem.observer import (
@@ -129,6 +131,20 @@ async def test_default_observer_accepts_wire_turn_schema() -> None:
     assert candidates == []
 
 
+def test_observation_turn_preserves_wire_observed_at() -> None:
+    observed_at = "2026-05-02T03:04:05+00:00"
+
+    normalized = normalize_observation_turn(
+        {
+            "content": "用户喜欢中文总结",
+            "role": "user",
+            "observed_at": observed_at,
+        }
+    )
+
+    assert normalized.observed_at == datetime(2026, 5, 2, 3, 4, 5, tzinfo=UTC)
+
+
 def test_turn_schema_rejects_invalid_input() -> None:
     with pytest.raises(TypeError, match="turn.content must be a string"):
         normalize_observation_turn({"role": "user"})
@@ -144,6 +160,9 @@ def test_turn_schema_rejects_invalid_input() -> None:
 
     with pytest.raises(TypeError, match="turn.role"):
         normalize_observation_turn({"content": "hello", "role": 123})
+
+    with pytest.raises(ValueError, match="turn.observed_at"):
+        normalize_observation_turn({"content": "hello", "observed_at": "not-a-time"})
 
 
 def test_observation_candidate_schema_is_frozen() -> None:
@@ -195,6 +214,7 @@ def test_observation_candidate_accepts_wire_schema() -> None:
             "kind": "preference",
             "source_turn_id": "turn-1",
             "metadata": {"source": "observer-fixture"},
+            "created_at": "2026-05-02T03:04:05Z",
         }
     )
 
@@ -203,6 +223,7 @@ def test_observation_candidate_accepts_wire_schema() -> None:
     assert candidate.kind == "preference"
     assert candidate.source_turn_id == "turn-1"
     assert candidate.metadata == {"source": "observer-fixture"}
+    assert candidate.created_at == datetime(2026, 5, 2, 3, 4, 5, tzinfo=UTC)
 
 
 def test_observation_candidate_quality_accepts_full_evidence() -> None:
