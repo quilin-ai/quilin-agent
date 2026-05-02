@@ -205,6 +205,9 @@ export function validateSpanAttributes(attributes: SpanAttributes): void {
 			throw new Error(`Invalid observability attribute value: ${key}`);
 		}
 		if (typeof value === "number") {
+			if (!Number.isFinite(value)) {
+				throw new Error(`Non-finite observability attribute value: ${key}`);
+			}
 			validateNumericAttribute(key);
 		}
 		validateEnumAttribute(key, value);

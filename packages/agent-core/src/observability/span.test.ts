@@ -175,6 +175,14 @@ describe("OTelSpanProvider", () => {
 		expect(() =>
 			validateSpanAttributes({ "llm.model": null as never }),
 		).toThrow(/Invalid observability attribute value/);
+		expect(() =>
+			validateSpanAttributes({ "llm.total_latency_ms": Number.NaN }),
+		).toThrow(/Non-finite observability attribute value/);
+		expect(() =>
+			validateSpanAttributes({
+				"llm.total_latency_ms": Number.POSITIVE_INFINITY,
+			}),
+		).toThrow(/Non-finite observability attribute value/);
 	});
 
 	it("clones snapshots and supports setters, idempotent end, unknown reads, and clear", () => {

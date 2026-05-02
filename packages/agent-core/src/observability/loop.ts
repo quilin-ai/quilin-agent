@@ -2,9 +2,11 @@ import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import type {
 	InferenceConfig,
+	LLMProviderId,
 	LLMResponse,
 	ThinkingMode,
 } from "../llm/types.js";
+import { redactString, redactToolOutput } from "../safety/redaction.js";
 import type { Message } from "../state/types.js";
 import type { ToolCall, ToolResult } from "../tools/types.js";
 import { runWithObservabilityContext } from "./context.js";
@@ -21,6 +23,7 @@ export interface AgentLoopObservability {
 	readonly sessionId?: string;
 	readonly userId?: string;
 	readonly taskSummary?: string;
+	readonly llmProviderId?: LLMProviderId;
 }
 
 interface StartTurnInput {
@@ -33,10 +36,16 @@ interface InvokeLLMInput {
 	readonly inferenceConfig: InferenceConfig;
 }
 
+const DEFAULT_TOOL_ERROR_TYPE = "tool_error";
+const BLOCKED_TOOL_ERROR_TYPE = "blocked";
+const SAFE_ERROR_CODE_CHARS = /^[A-Za-z][A-Za-z0-9_.:-]{0,63}$/;
+const DELIMITED_ERROR_CODE_PATTERN =
+	/^[A-Za-z][A-Za-z0-9]*(?:[_.:-][A-Za-z0-9]+)+$/;
+const ERROR_CLASS_CODE_PATTERN = /^[A-Za-z][A-Za-z0-9]*(?:Error|Exception)$/;
+const UPPERCASE_ERROR_CODE_PATTERN = /^[A-Z][A-Z0-9_.:-]{1,63}$/;
+
 function redactText(value: string, maxLength = 160): string {
-	const redacted = value
-		.replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[redacted_email]")
-		.replace(/(api[_-]?key|token|secret)\s*[:=]\s*\S+/gi, "$1=[redacted]");
+	const redacted = redactString(value);
 	return redacted.length <= maxLength
 		? redacted
 		: `${redacted.slice(0, maxLength)}...`;
@@ -65,14 +74,67 @@ function summarizeParams(args: Record<string, unknown>): string {
 	const entries = Object.entries(args)
 		.sort(([left], [right]) => left.localeCompare(right))
 		.map(([key, value]) => [
-			key,
+			redactString(key),
 			Array.isArray(value) ? "array" : typeof value,
 		]);
-	return JSON.stringify({ keys: entries });
+	return redactString(JSON.stringify({ keys: entries }));
 }
 
 function errorType(error: unknown): string {
 	return error instanceof Error ? error.name : "UNKNOWN_ERROR";
+}
+
+function safeAttributeText(value: string, maxLength = 160): string {
+	const redacted = redactString(value)
+		.replace(/[\r\n\t]+/g, " ")
+		.trim();
+	const truncated =
+		redacted.length <= maxLength
+			? redacted
+			: `${redacted.slice(0, maxLength)}...`;
+	return truncated.length === 0 ? "unknown" : truncated;
+}
+
+function normalizedSafeErrorCode(value: string): string | undefined {
+	const redacted = redactString(value.trim());
+	if (
+		redacted.includes("[REDACTED") ||
+		!SAFE_ERROR_CODE_CHARS.test(redacted) ||
+		!(
+			DELIMITED_ERROR_CODE_PATTERN.test(redacted) ||
+			ERROR_CLASS_CODE_PATTERN.test(redacted) ||
+			UPPERCASE_ERROR_CODE_PATTERN.test(redacted)
+		)
+	) {
+		return undefined;
+	}
+
+	return redacted
+		.replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+		.replace(/[.:-]+/g, "_")
+		.replace(/_{2,}/g, "_")
+		.toLowerCase();
+}
+
+function classifyToolErrorText(value: string): string {
+	const redacted = redactString(value);
+	if (/\bblocked\b/i.test(redacted)) {
+		return BLOCKED_TOOL_ERROR_TYPE;
+	}
+
+	return normalizedSafeErrorCode(redacted) ?? DEFAULT_TOOL_ERROR_TYPE;
+}
+
+function stringProperty(
+	value: unknown,
+	key: "code" | "error" | "name" | "type",
+): string | undefined {
+	return typeof value === "object" &&
+		value !== null &&
+		!Array.isArray(value) &&
+		typeof (value as Record<string, unknown>)[key] === "string"
+		? ((value as Record<string, string>)[key] ?? undefined)
+		: undefined;
 }
 
 function toolErrorType(result: ToolResult): string {
@@ -80,12 +142,28 @@ function toolErrorType(result: ToolResult): string {
 		return "";
 	}
 
+	const content = redactToolOutput(result.content);
 	try {
-		const parsed = JSON.parse(result.content) as { error?: unknown };
-		return typeof parsed.error === "string" ? parsed.error : "TOOL_ERROR";
+		const parsed = JSON.parse(content) as { error?: unknown };
+		if (typeof parsed.error === "string") {
+			return classifyToolErrorText(parsed.error);
+		}
+
+		const safeCode =
+			normalizedSafeErrorCode(stringProperty(parsed.error, "code") ?? "") ??
+			normalizedSafeErrorCode(stringProperty(parsed.error, "type") ?? "") ??
+			normalizedSafeErrorCode(stringProperty(parsed, "code") ?? "") ??
+			normalizedSafeErrorCode(stringProperty(parsed, "type") ?? "");
+		return safeCode ?? DEFAULT_TOOL_ERROR_TYPE;
 	} catch {
-		return "TOOL_ERROR";
+		return /\bblocked\b/i.test(content)
+			? BLOCKED_TOOL_ERROR_TYPE
+			: DEFAULT_TOOL_ERROR_TYPE;
 	}
+}
+
+function toolExceptionType(error: unknown): string {
+	return normalizedSafeErrorCode(errorType(error)) ?? DEFAULT_TOOL_ERROR_TYPE;
 }
 
 class AgentTurnTelemetry {
@@ -96,6 +174,7 @@ class AgentTurnTelemetry {
 	constructor(
 		private readonly spans: OTelSpanProvider | undefined,
 		private readonly sessionId: string,
+		private readonly llmProviderId: LLMProviderId | undefined,
 		sessionSpan: OTelSpan | undefined,
 		input: StartTurnInput,
 	) {
@@ -155,7 +234,7 @@ class AgentTurnTelemetry {
 				"llm.invoke",
 				{
 					"llm.model": input.modelId ?? "unknown",
-					"llm.provider": "unknown",
+					"llm.provider": this.llmProviderId ?? "unknown",
 					"llm.tokens_input": 0,
 					"llm.tokens_output": 0,
 					"llm.tokens_thinking": 0,
@@ -208,7 +287,7 @@ class AgentTurnTelemetry {
 			const toolSpan = this.spans?.startSpan(
 				"tool.invoke",
 				{
-					"tool.name": toolCall.name,
+					"tool.name": safeAttributeText(toolCall.name),
 					"tool.params_summary": summarizeParams(toolCall.arguments),
 					"tool.duration_ms": 0,
 					"tool.success": false,
@@ -247,7 +326,7 @@ class AgentTurnTelemetry {
 							"tool.duration_ms": Date.now() - startedAt,
 							"tool.success": false,
 							"tool.result_size_bytes": 0,
-							"tool.error_type": errorType(error),
+							"tool.error_type": toolExceptionType(error),
 						});
 						toolSpan?.end("error");
 						throw error;
@@ -276,7 +355,9 @@ export class AgentLoopTelemetry {
 			"session.id": this.sessionId,
 			"session.user_id": observability?.userId ?? "unknown",
 			"session.task_summary":
-				observability?.taskSummary ?? summarizeTask(messages),
+				observability?.taskSummary == null
+					? summarizeTask(messages)
+					: redactString(observability.taskSummary),
 			"session.turn_count": 0,
 			"session.total_cost_usd": 0,
 			"session.total_tokens": 0,
@@ -287,6 +368,7 @@ export class AgentLoopTelemetry {
 		return new AgentTurnTelemetry(
 			this.observability?.spans,
 			this.sessionId,
+			this.observability?.llmProviderId,
 			this.sessionSpan,
 			input,
 		);
