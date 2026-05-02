@@ -166,6 +166,156 @@ describe("runAgentLoop", () => {
 		);
 	});
 
+	it("records the run-log phase sequence across LLM planning, tool execution, and final answer", async () => {
+		vi.mocked(getLoggerRuntimeMode).mockReturnValue("repl");
+		const records: Array<{ phase: string; payload?: Record<string, unknown> }> =
+			[];
+		const runLogger = {
+			record: vi.fn(async (input) => {
+				records.push(input);
+			}),
+		};
+		const chat = vi
+			.fn()
+			.mockResolvedValueOnce({
+				content: "",
+				toolCalls: [
+					{
+						id: "call-1",
+						name: "memory_recall",
+						arguments: { query: "status" },
+					},
+				],
+				usage: {
+					inputTokens: 10,
+					outputTokens: 20,
+				},
+				finishReason: "tool_calls",
+			})
+			.mockResolvedValueOnce({
+				content: "done",
+				usage: {
+					inputTokens: 30,
+					outputTokens: 40,
+				},
+				finishReason: "stop",
+			});
+		const execute = vi.fn().mockResolvedValue({
+			toolCallId: "ignored-by-router",
+			content: JSON.stringify({ records: [] }),
+			isError: false,
+		});
+
+		await expect(
+			runAgentLoop(
+				{
+					llm: { chat },
+					tools: [
+						{
+							name: "memory_recall",
+							description: "Recall memory",
+							parameters: {
+								safeParse: vi.fn().mockImplementation((input) => ({
+									success: true,
+									data: input,
+								})),
+							} as never,
+							execute,
+						},
+					],
+					maxTurns: 3,
+					observability: { runLogger },
+					inferenceConfig: {
+						temperature: 0.7,
+						maxTokens: 1024,
+						thinkingMode: "disabled",
+					},
+				},
+				[{ role: "user", content: "look up status" }],
+			),
+		).resolves.toBe("done");
+
+		expect(records.map((record) => record.phase)).toEqual([
+			"loop.turn_started",
+			"checkpoint.saved",
+			"context.outbound_request_built",
+			"llm.request_prepared",
+			"llm.response_received",
+			"planning.tool_calls_selected",
+			"checkpoint.saved",
+			"tool.call_started",
+			"tool.safety_action_verified",
+			"tool.call_completed",
+			"tool.output_scanned",
+			"tool.result_appended",
+			"checkpoint.saved",
+			"checkpoint.saved",
+			"context.outbound_request_built",
+			"llm.request_prepared",
+			"llm.response_received",
+			"assistant.response_final",
+			"checkpoint.saved",
+			"turn.completed",
+		]);
+		const toolStarted = records.find(
+			(record) => record.phase === "tool.call_started",
+		);
+		expect(toolStarted?.payload?.toolCall).toMatchObject({
+			name: "memory_recall",
+			argumentKeyCount: 1,
+			argumentKeys: [expect.objectContaining({ chars: 5 })],
+			argumentSummary: {
+				entries: [
+					{
+						key: expect.objectContaining({ chars: 5 }),
+						value: { type: "string", chars: 6, truncated: false },
+					},
+				],
+				truncatedCount: 0,
+			},
+		});
+	});
+
+	it("redacts raw thrown error messages from turn.failed run logs", async () => {
+		vi.mocked(getLoggerRuntimeMode).mockReturnValue("repl");
+		const records: Array<{ phase: string; payload?: Record<string, unknown> }> =
+			[];
+		const runLogger = {
+			record: vi.fn(async (input) => {
+				records.push(input);
+			}),
+		};
+		const chat = vi
+			.fn()
+			.mockRejectedValueOnce(new Error("custom private provider message"));
+
+		await expect(
+			runAgentLoop(
+				{
+					llm: { chat },
+					observability: { runLogger },
+					inferenceConfig: {
+						temperature: 0.7,
+						maxTokens: 1024,
+						thinkingMode: "disabled",
+					},
+				},
+				[{ role: "user", content: "trigger private provider error" }],
+			),
+		).rejects.toThrow("custom private provider message");
+
+		const failedRecord = records.find(
+			(record) => record.phase === "turn.failed",
+		);
+		expect(failedRecord?.payload?.error).toEqual({
+			name: "Error",
+			messageChars: 31,
+		});
+		expect(JSON.stringify(records)).not.toContain(
+			"custom private provider message",
+		);
+	});
+
 	it("在多轮 tool loop 且缺少 system message 时只记录一次 warning", async () => {
 		vi.mocked(getLoggerRuntimeMode).mockReturnValue("repl");
 

@@ -15,6 +15,7 @@ const mockCreateInterface = vi.fn(() => ({
 }));
 const mockRunAgentLoop = vi.fn();
 const mockLoggerError = vi.fn();
+const mockLoggerWarn = vi.fn();
 const mockStreamingClient = vi.fn();
 const mockProviderControlPlaneClient = vi.fn();
 const mockCheckpointLoad = vi.fn();
@@ -225,6 +226,7 @@ vi.mock("./loop.js", () => ({
 vi.mock("./logger.js", () => ({
 	logger: {
 		error: mockLoggerError,
+		warn: mockLoggerWarn,
 	},
 }));
 
@@ -456,6 +458,147 @@ describe("startRepl", () => {
 				fallbackUsed: false,
 			}),
 		]);
+	});
+
+	it("does not fail a successful turn when the provider run observer throws", async () => {
+		mockQuestion.mockResolvedValueOnce("hello").mockResolvedValueOnce("/exit");
+		mockRunAgentLoop.mockImplementation(async (config) => {
+			await config.llm.chat([], [], {
+				temperature: 0.7,
+				maxTokens: 4096,
+				thinkingMode: "enabled",
+			});
+			return "ok";
+		});
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: createMockProvider((requestedModelId: string) =>
+				createMockLanguageModel({
+					provider: "deepseek",
+					modelId: requestedModelId,
+				}),
+			),
+			modelId: "deepseek-chat",
+			onProviderRunRecord: () => {
+				throw createSecretProviderError("observer failed");
+			},
+		});
+
+		expect(mockLoggerError).not.toHaveBeenCalledWith(
+			expect.anything(),
+			"REPL: LLM call failed",
+		);
+		expect(mockLoggerWarn).toHaveBeenCalledWith(
+			{
+				error: {
+					name: "ProviderAuthError",
+					code: "AUTH_FAILED",
+					category: "auth",
+				},
+			},
+			"REPL: provider run callback failed",
+		);
+		expect(stderrWriteSpy).not.toHaveBeenCalledWith(
+			"\n[Error: LLM call failed. Check logs for details.]\n\n",
+		);
+	});
+
+	it("records REPL input, provider run, source provenance, and flushes run logs", async () => {
+		const runLogRecords: Array<{
+			phase: string;
+			payload?: Record<string, unknown>;
+		}> = [];
+		const agentRunLogger = {
+			record: vi.fn(async (input) => {
+				runLogRecords.push(input);
+			}),
+			flush: vi.fn(async () => undefined),
+		};
+		mockQuestion
+			.mockResolvedValueOnce("search codex")
+			.mockResolvedValueOnce("/exit");
+		mockRunAgentLoop.mockImplementation(async (config, messages) => {
+			await config.llm.chat([], [], {
+				temperature: 0.7,
+				maxTokens: 4096,
+				thinkingMode: "enabled",
+			});
+			const toolCall = {
+				id: "call-web",
+				name: "web_fetch",
+				arguments: { url: "https://example.com/search?q=codex" },
+			};
+			const toolResult = {
+				toolCallId: "call-web",
+				isError: false,
+				content: JSON.stringify({
+					url: "https://example.com/search?q=codex",
+					status: 200,
+					contentType: "text/html",
+					body: "Codex",
+				}),
+			};
+			await config.hooks?.onToolResult?.({
+				toolCall,
+				toolResult,
+				actionVerification: {
+					layer: 2,
+					decision: "allow",
+					code: "allowed",
+					reason: "test",
+				},
+				scanResult: {
+					safe: true,
+					threats: [],
+					sanitizedContent: toolResult.content,
+				},
+				sanitizedContent: toolResult.content,
+				trustedToolOutput: false,
+				hasBlockedThreat: false,
+			});
+			await config.hooks?.onMessagesUpdated?.(
+				[...messages, { role: "assistant", content: "done" }],
+				{ phase: "assistant_response", turnCount: 1 },
+			);
+			return "done";
+		});
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: createMockProvider(() => createMockLanguageModel()),
+			modelId: "deepseek-chat",
+			agentRunLogger,
+		});
+
+		expect(runLogRecords.map((record) => record.phase)).toEqual(
+			expect.arrayContaining([
+				"repl.session_started",
+				"turn.input_received",
+				"llm.provider_run",
+				"tool.provenance_recorded",
+			]),
+		);
+		const inputRecord = runLogRecords.find(
+			(record) => record.phase === "turn.input_received",
+		);
+		expect(inputRecord?.payload?.input).toMatchObject({
+			chars: 12,
+			previewRedacted: true,
+		});
+		const provenanceRecord = runLogRecords.find(
+			(record) => record.phase === "tool.provenance_recorded",
+		);
+		expect(provenanceRecord?.payload?.provenance).toMatchObject({
+			sourceType: "url",
+			url: "https://example.com/[path-redacted]?[redacted]",
+			status: 200,
+			auditOutcome: "usable_evidence",
+			usableEvidence: true,
+		});
+		expect(agentRunLogger.flush).toHaveBeenCalledTimes(1);
 	});
 
 	it("starts and stops the skills watcher and prints catalog hints", async () => {

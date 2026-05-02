@@ -22,6 +22,30 @@ const CATEGORY_TITLES = {
 	gui: "GUI Tools",
 } as const;
 
+function safeProvenanceUrl(value: string): string {
+	try {
+		const parsed = new URL(value);
+		const safePath =
+			parsed.pathname !== "" && parsed.pathname !== "/"
+				? "/[path-redacted]"
+				: parsed.pathname || "/";
+		const query = parsed.search.length > 0 ? "?[redacted]" : "";
+		const fragment = parsed.hash.length > 0 ? "#[redacted]" : "";
+		return `${parsed.protocol}//${parsed.host}${safePath}${query}${fragment}`;
+	} catch {
+		return "[invalid-url:redacted]";
+	}
+}
+
+function provenanceEvidenceLabel(record: Record<string, unknown>): string {
+	const auditOutcome =
+		typeof record.auditOutcome === "string" ? record.auditOutcome : "unknown";
+	if (record.usableEvidence === true) {
+		return "usable";
+	}
+	return `not_evidence:${auditOutcome}`;
+}
+
 function describeToolDescriptors(ctx: BuildContext): string {
 	if (
 		ctx.availableToolDescriptors == null ||
@@ -103,13 +127,21 @@ function renderToolProvenance(ctx: BuildContext): string | null {
 			const record = entry as Record<string, unknown>;
 			const tool =
 				typeof record.tool === "string" ? record.tool : "unknown_tool";
-			const url = typeof record.url === "string" ? record.url : undefined;
+			const url =
+				typeof record.url === "string"
+					? safeProvenanceUrl(record.url)
+					: undefined;
 			const host = typeof record.host === "string" ? record.host : undefined;
 			const status =
 				typeof record.status === "number" ? ` status=${record.status}` : "";
 			const at = typeof record.at === "string" ? ` at=${record.at}` : "";
+			const evidence = provenanceEvidenceLabel(record);
+			const resultReportedUrl =
+				typeof record.resultReportedUrl === "string"
+					? ` result_reported=${safeProvenanceUrl(record.resultReportedUrl)}`
+					: "";
 			const source = url ?? host ?? "non-url tool result";
-			return `- ${tool}: ${source}${status}${at}`;
+			return `- ${tool}: ${source}${resultReportedUrl}${status}${at} [${evidence}]`;
 		})
 		.filter((line): line is string => line != null);
 
@@ -120,7 +152,7 @@ function renderToolProvenance(ctx: BuildContext): string | null {
 	return [
 		"Recent tool/source provenance from actual tool calls in this session:",
 		...lines,
-		"When the user asks which sites, tools, or sources were checked, answer from this list and the transcript. Do not say the information came only from training data if relevant tool provenance is listed here.",
+		"When the user asks which sites, tools, or sources were checked, cite only entries marked usable as factual sources. Use the transcript only for conversation context and for explaining attempted, failed, sanitized, or blocked checks; never treat not_evidence entries as factual sources. Do not say the information came only from training data if relevant usable tool provenance is listed here.",
 	].join("\n");
 }
 

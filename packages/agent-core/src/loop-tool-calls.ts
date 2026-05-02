@@ -1,6 +1,7 @@
 import {
 	scanExternalContext,
 	shouldTrustToolOutput,
+	type ThreatMatch,
 } from "./context/injection-scanner.js";
 import { logger } from "./logger.js";
 import { AgentLoopError, type LoopHooks } from "./loop-types.js";
@@ -31,6 +32,15 @@ export interface ExecuteToolCallsOptions {
 	readonly runLogger?: AgentRunLogSink;
 	readonly turnId?: string;
 	readonly consecutiveBlockedToolOutputs: number;
+}
+
+function summarizeThreat(threat: ThreatMatch): Record<string, unknown> {
+	return {
+		pattern: threat.pattern,
+		severity: threat.severity,
+		location: threat.location,
+		matchedChars: threat.matchedText.length,
+	};
 }
 
 export async function executeToolCalls(
@@ -118,7 +128,10 @@ export async function executeToolCalls(
 		);
 		if (!scanResult.safe) {
 			logger.warn(
-				{ toolName: toolCall.name, threats: scanResult.threats },
+				{
+					toolName: toolCall.name,
+					threats: scanResult.threats.map(summarizeThreat),
+				},
 				"Tool output scan detected threats",
 			);
 		}
@@ -129,12 +142,7 @@ export async function executeToolCalls(
 				toolCallId: toolCall.id,
 				toolName: toolCall.name,
 				safe: scanResult.safe,
-				threats: scanResult.threats.map((threat) => ({
-					pattern: threat.pattern,
-					severity: threat.severity,
-					location: threat.location,
-					matchedText: threat.matchedText,
-				})),
+				threats: scanResult.threats.map(summarizeThreat),
 			},
 			{ turnId: options.turnId },
 		);

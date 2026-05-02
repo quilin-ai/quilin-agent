@@ -109,10 +109,36 @@ describe("createToolProvenanceSection", () => {
 					recent: [
 						{
 							tool: "web_fetch",
-							url: "https://news.example.com/codex",
+							url: "https://news.example.com/codex?token=secret#frag",
 							host: "news.example.com",
 							status: 200,
 							at: "2026-05-02T13:00:00.000Z",
+							auditOutcome: "usable_evidence",
+							usableEvidence: true,
+						},
+						{
+							tool: "web_fetch",
+							url: "https://blocked.example.com/prompt",
+							host: "blocked.example.com",
+							at: "2026-05-02T13:01:00.000Z",
+							auditOutcome: "blocked_output",
+							usableEvidence: false,
+						},
+						{
+							tool: "web_fetch",
+							url: "https://warned.example.com/hidden",
+							host: "warned.example.com",
+							at: "2026-05-02T13:02:00.000Z",
+							auditOutcome: "sanitized_warning",
+							usableEvidence: false,
+						},
+						{
+							tool: "web_fetch",
+							url: "https://failed.example.com/source",
+							host: "failed.example.com",
+							at: "2026-05-02T13:03:00.000Z",
+							auditOutcome: "failed",
+							usableEvidence: false,
 						},
 					],
 				},
@@ -120,8 +146,22 @@ describe("createToolProvenanceSection", () => {
 		});
 
 		expect(content).toContain("Recent tool/source provenance");
-		expect(content).toContain("https://news.example.com/codex");
+		expect(content).toContain(
+			"https://news.example.com/[path-redacted]?[redacted]#[redacted]",
+		);
+		expect(content).not.toContain("/codex");
+		expect(content).not.toContain("/prompt");
+		expect(content).not.toContain("token=secret");
 		expect(content).toContain("status=200");
+		expect(content).toContain("[usable]");
+		expect(content).toContain("[not_evidence:blocked_output]");
+		expect(content).toContain("[not_evidence:sanitized_warning]");
+		expect(content).toContain("[not_evidence:failed]");
+		expect(content).not.toContain("usable_after_sanitization");
+		expect(content).toContain("cite only entries marked usable");
+		expect(content).toContain(
+			"never treat not_evidence entries as factual sources",
+		);
 		expect(content).toContain(
 			"Do not say the information came only from training data",
 		);

@@ -1308,6 +1308,61 @@ describe("ProviderControlPlaneLLMClient", () => {
 		});
 	});
 
+	it("does not let provider run observers change successful or failed model outcomes", async () => {
+		const successResponse = {
+			content: "ok",
+			usage: { inputTokens: 1, outputTokens: 2 },
+			finishReason: "stop" as const,
+		};
+		const successRoutedDelegate = {
+			chat: vi.fn().mockResolvedValue(successResponse),
+		} satisfies LLMClient;
+		const successDelegate = {
+			chat: vi.fn(),
+			withModel: vi.fn().mockReturnValue(successRoutedDelegate),
+		} satisfies LLMClient & { withModel(modelId: string): LLMClient };
+		const observer = vi.fn(() => {
+			throw new Error("observer should not affect model result");
+		});
+		const successClient = new ProviderControlPlaneLLMClient(successDelegate, {
+			routeRequest: {
+				provider: "deepseek",
+				model: "deepseek-chat",
+			},
+			onRunRecord: observer,
+			now: () => new Date("2026-05-01T00:00:00.000Z"),
+		});
+
+		await expect(
+			successClient.chat([{ role: "user", content: "hi" }], [], config),
+		).resolves.toBe(successResponse);
+		expect(observer).toHaveBeenCalledTimes(1);
+		expect(successClient.runRecords).toHaveLength(1);
+
+		const providerError = new Error("provider failed");
+		const failedRoutedDelegate = {
+			chat: vi.fn().mockRejectedValue(providerError),
+		} satisfies LLMClient;
+		const failedDelegate = {
+			chat: vi.fn(),
+			withModel: vi.fn().mockReturnValue(failedRoutedDelegate),
+		} satisfies LLMClient & { withModel(modelId: string): LLMClient };
+		const failedClient = new ProviderControlPlaneLLMClient(failedDelegate, {
+			routeRequest: {
+				provider: "deepseek",
+				model: "deepseek-chat",
+			},
+			onRunRecord: observer,
+			now: () => new Date("2026-05-01T00:00:00.000Z"),
+		});
+
+		await expect(
+			failedClient.chat([{ role: "user", content: "hi" }], [], config),
+		).rejects.toThrow("provider failed");
+		expect(observer).toHaveBeenCalledTimes(2);
+		expect(failedClient.runRecords).toHaveLength(1);
+	});
+
 	it("routes simple tiered requests to flash and applies the tier profile", async () => {
 		const response = {
 			content: "ok",

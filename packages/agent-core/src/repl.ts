@@ -232,6 +232,19 @@ async function flushObservabilitySpans(
 	}
 }
 
+async function flushAgentRunLogger(
+	runLogger: AgentRunLogSink | undefined,
+): Promise<void> {
+	try {
+		await runLogger?.flush?.();
+	} catch (err) {
+		logger.warn(
+			{ error: providerErrorLogFields(err) },
+			"REPL: agent run log flush failed",
+		);
+	}
+}
+
 type ReasoningDisplayMode = "collapsed" | "verbose";
 
 interface ReplStreamRenderState {
@@ -558,7 +571,14 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 		let lastProviderRunRecord: ProviderRunRecord | undefined;
 		const recordProviderRun = (record: ProviderRunRecord): void => {
 			lastProviderRunRecord = record;
-			onProviderRunRecord?.(record);
+			try {
+				onProviderRunRecord?.(record);
+			} catch (err) {
+				logger.warn(
+					{ error: providerErrorLogFields(err) },
+					"REPL: provider run callback failed",
+				);
+			}
 			void recordAgentRunEvent(
 				runLogger,
 				"llm.provider_run",
@@ -683,7 +703,10 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 				runLogger,
 				"turn.input_received",
 				{
-					input: trimmed,
+					input: {
+						chars: trimmed.length,
+						previewRedacted: true,
+					},
 					inputChars: trimmed.length,
 					historyMessageCount: messages.length,
 					stateTurnCount: state.turnCount,
@@ -735,6 +758,11 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 									toolCall: event.toolCall,
 									toolResult: event.toolResult,
 									sanitizedContent: event.sanitizedContent,
+									actionVerification: event.actionVerification,
+									scanResult: event.scanResult,
+									trustedToolOutput: event.trustedToolOutput,
+									hasBlockedThreat: event.hasBlockedThreat,
+									appendedToModelContext: true,
 									at: new Date().toISOString(),
 								});
 								if (provenance == null) {
@@ -794,6 +822,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 			}
 		}
 	} finally {
+		await flushAgentRunLogger(runLogger);
 		rl?.close();
 		skillsManager?.stopWatching();
 		await registry.disconnectAll();

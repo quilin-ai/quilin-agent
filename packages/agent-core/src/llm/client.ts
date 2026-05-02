@@ -996,6 +996,15 @@ export class ProviderControlPlaneLLMClient implements LLMClient {
 		return this.records;
 	}
 
+	private recordRun(record: ProviderRunRecord): void {
+		this.records.push(record);
+		try {
+			this.options.onRunRecord?.(record);
+		} catch {
+			// Provider run observers must not affect model execution.
+		}
+	}
+
 	async chat(
 		messages: readonly Message[],
 		tools: readonly Tool[],
@@ -1046,8 +1055,7 @@ export class ProviderControlPlaneLLMClient implements LLMClient {
 				fallbackUsed: false,
 				error: normalizeProviderError(error),
 			};
-			this.records.push(record);
-			this.options.onRunRecord?.(record);
+			this.recordRun(record);
 			throw error;
 		}
 
@@ -1077,8 +1085,7 @@ export class ProviderControlPlaneLLMClient implements LLMClient {
 				fallbackUsed: false,
 				error: normalizeProviderError(error),
 			};
-			this.records.push(record);
-			this.options.onRunRecord?.(record);
+			this.recordRun(record);
 			throw error;
 		}
 
@@ -1093,8 +1100,7 @@ export class ProviderControlPlaneLLMClient implements LLMClient {
 				fallbackUsed: false,
 				error: normalizeProviderError(error),
 			};
-			this.records.push(record);
-			this.options.onRunRecord?.(record);
+			this.recordRun(record);
 			throw error;
 		}
 
@@ -1123,8 +1129,7 @@ export class ProviderControlPlaneLLMClient implements LLMClient {
 				outcome: "success",
 				fallbackUsed: false,
 			};
-			this.records.push(record);
-			this.options.onRunRecord?.(record);
+			this.recordRun(record);
 			return response;
 		} catch (error) {
 			const completedAt = this.now().toISOString();
@@ -1144,8 +1149,7 @@ export class ProviderControlPlaneLLMClient implements LLMClient {
 				outcome: "error",
 				fallbackUsed: false,
 			};
-			this.records.push(record);
-			this.options.onRunRecord?.(record);
+			this.recordRun(record);
 			throw error;
 		}
 	}
