@@ -182,6 +182,13 @@ describe("multi-agent supervisor progress", () => {
 				lastHeartbeatAt: "2026-05-02T07:58:40.000Z",
 			}),
 			createChildRunStatusRecord({
+				runId: "run-cancel-requested",
+				taskId: "task-cancel-requested",
+				status: "cancel_requested",
+				confidence: "medium",
+				lastHeartbeatAt: "2026-05-02T07:58:35.000Z",
+			}),
+			createChildRunStatusRecord({
 				runId: "run-completed",
 				taskId: "task-completed",
 				status: "completed",
@@ -228,6 +235,7 @@ describe("multi-agent supervisor progress", () => {
 			blocked: 1,
 			waiting_for_review: 1,
 			aggregating: 1,
+			cancel_requested: 1,
 			completed: 1,
 			failed: 1,
 			cancelled: 1,
@@ -238,6 +246,7 @@ describe("multi-agent supervisor progress", () => {
 			"run-active",
 			"run-aggregating",
 			"run-blocked",
+			"run-cancel-requested",
 			"run-review",
 		]);
 		expect(snapshot.queuedRunIds).toEqual(["run-assigned", "run-queued"]);
@@ -437,6 +446,9 @@ describe("multi-agent supervisor progress", () => {
 		expect(childRunStatusToDurableRuntimePlanStatus("active")).toBe("running");
 		expect(childRunStatusToDurableRuntimePlanStatus("waiting_for_review")).toBe(
 			"checkpointed",
+		);
+		expect(childRunStatusToDurableRuntimePlanStatus("cancel_requested")).toBe(
+			"cancel_requested",
 		);
 		expect(childRunStatusToDurableRuntimePlanStatus("deferred")).toBe(
 			"cancelled",
