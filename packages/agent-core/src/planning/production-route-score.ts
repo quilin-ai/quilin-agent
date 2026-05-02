@@ -1,4 +1,12 @@
-import type { DelegationRiskLevel } from "./delegation.js";
+import {
+	type DelegationAgentProfile,
+	type DelegationAssignment,
+	type DelegationDecisionReason,
+	type DelegationRiskLevel,
+	type DelegationTriggerConditions,
+	evaluateDelegation,
+} from "./delegation.js";
+import type { DagPlan, SubTask } from "./types.js";
 
 export type ProductionRouteHandoffRecommendation =
 	| "keep_local"
@@ -155,6 +163,47 @@ export interface ProductionRouteSupervisorHandoffPlan {
 	readonly keepLocalCount: number;
 	readonly handoffItems: ReadonlyArray<ProductionRouteSupervisorHandoffItem>;
 	readonly keepLocalIndexes: ReadonlyArray<number>;
+}
+
+export interface ProductionRouteDelegationHandoffBlockedItem {
+	readonly index: number;
+	readonly taskId: string;
+	readonly reason: Exclude<DelegationDecisionReason, "accepted">;
+	readonly score: number;
+	readonly scoreBand: ProductionRouteScoreBand;
+	readonly taskRisk: DelegationRiskLevel;
+	readonly reasonCodes: ReadonlyArray<ProductionRouteScoreReasonCode>;
+}
+
+export interface ProductionRouteDelegationHandoffAcceptedItem {
+	readonly index: number;
+	readonly taskId: string;
+	readonly score: number;
+	readonly scoreBand: ProductionRouteScoreBand;
+	readonly taskRisk: DelegationRiskLevel;
+	readonly reasonCodes: ReadonlyArray<ProductionRouteScoreReasonCode>;
+	readonly assignment: DelegationAssignment;
+}
+
+export interface ProductionRouteDelegationHandoffPlan {
+	readonly kind: "production_route_delegation_handoff_plan";
+	readonly schemaVersion: 1;
+	readonly supervisorPlan: ProductionRouteSupervisorHandoffPlan;
+	readonly acceptedAssignments: ReadonlyArray<ProductionRouteDelegationHandoffAcceptedItem>;
+	readonly blockedItems: ReadonlyArray<ProductionRouteDelegationHandoffBlockedItem>;
+	readonly handoffReadyCount: number;
+	readonly blockedCount: number;
+}
+
+export interface ProductionRouteDelegationHandoffPlanInput {
+	readonly parentRunId: string;
+	readonly plan: DagPlan;
+	readonly batch: ProductionRouteScoreBatch;
+	readonly subAgentForStep: (
+		step: SubTask,
+		item: ProductionRouteSupervisorHandoffItem,
+	) => DelegationAgentProfile;
+	readonly triggers?: Partial<DelegationTriggerConditions>;
 }
 
 const DEFAULT_SUPERVISOR_HANDOFF_THRESHOLD = 60;
@@ -711,5 +760,111 @@ export function buildProductionRouteSupervisorHandoffPlan(
 		keepLocalCount: keepLocalIndexes.length,
 		handoffItems,
 		keepLocalIndexes,
+	};
+}
+
+function assertRoutePlanScoreShape(
+	plan: DagPlan,
+	batch: ProductionRouteScoreBatch,
+): void {
+	if (plan.subtasks.length !== batch.scores.length) {
+		throw new RangeError(
+			`route_plan_length_mismatch: expected ${plan.subtasks.length} score(s) for ${plan.subtasks.length} subtask(s), got ${batch.scores.length}`,
+		);
+	}
+}
+
+function handoffTriggers(
+	overrides: Partial<DelegationTriggerConditions> = {},
+): DelegationTriggerConditions {
+	return {
+		longRunningTask: true,
+		decomposableSubtask: true,
+		nonBlockingSupervisorRequired: true,
+		subAgentCapabilityAvailable: true,
+		...overrides,
+	};
+}
+
+function blockedHandoffItem(
+	item: ProductionRouteSupervisorHandoffItem,
+	step: SubTask,
+	reason: Exclude<DelegationDecisionReason, "accepted">,
+): ProductionRouteDelegationHandoffBlockedItem {
+	return {
+		index: item.index,
+		taskId: step.id,
+		reason,
+		score: item.score,
+		scoreBand: item.scoreBand,
+		taskRisk: item.taskRisk,
+		reasonCodes: item.reasonCodes,
+	};
+}
+
+function acceptedHandoffItem(
+	item: ProductionRouteSupervisorHandoffItem,
+	step: SubTask,
+	assignment: DelegationAssignment,
+): ProductionRouteDelegationHandoffAcceptedItem {
+	return {
+		index: item.index,
+		taskId: step.id,
+		score: item.score,
+		scoreBand: item.scoreBand,
+		taskRisk: item.taskRisk,
+		reasonCodes: item.reasonCodes,
+		assignment,
+	};
+}
+
+export function buildProductionRouteDelegationHandoffPlan(
+	input: ProductionRouteDelegationHandoffPlanInput,
+): ProductionRouteDelegationHandoffPlan {
+	assertRoutePlanScoreShape(input.plan, input.batch);
+
+	const supervisorPlan = buildProductionRouteSupervisorHandoffPlan(input.batch);
+	const acceptedAssignments: ProductionRouteDelegationHandoffAcceptedItem[] =
+		[];
+	const blockedItems: ProductionRouteDelegationHandoffBlockedItem[] = [];
+
+	for (const item of supervisorPlan.handoffItems) {
+		const step = input.plan.subtasks[item.index];
+		if (step == null) {
+			throw new RangeError(
+				`route_plan_missing_step: no subtask exists for score index ${item.index}`,
+			);
+		}
+
+		const decision = evaluateDelegation({
+			parentRunId: input.parentRunId,
+			candidateStep: step,
+			plan: input.plan,
+			mainAgentSteps: input.plan.subtasks.filter(
+				(_candidate, index) => index !== item.index,
+			),
+			triggers: handoffTriggers(input.triggers),
+			subAgent: input.subAgentForStep(step, item),
+			riskOverride: item.taskRisk,
+		});
+
+		if (decision.delegate) {
+			acceptedAssignments.push(
+				acceptedHandoffItem(item, step, decision.assignment),
+			);
+			continue;
+		}
+
+		blockedItems.push(blockedHandoffItem(item, step, decision.reason));
+	}
+
+	return {
+		kind: "production_route_delegation_handoff_plan",
+		schemaVersion: 1,
+		supervisorPlan,
+		acceptedAssignments,
+		blockedItems,
+		handoffReadyCount: acceptedAssignments.length,
+		blockedCount: blockedItems.length,
 	};
 }

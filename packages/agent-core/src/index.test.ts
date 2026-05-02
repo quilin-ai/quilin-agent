@@ -9,6 +9,7 @@ import type {
 	ChildRunStatusRecord,
 	CreateToolErrorOptions,
 	CreateToolErrorResultOptions,
+	DagPlan,
 	FileListToolOptions,
 	FileReadToolOptions,
 	FileWriteToolOptions,
@@ -17,6 +18,7 @@ import type {
 	JsonSchemaObject,
 	MCPServerEntry,
 	MetricsSnapshot,
+	ProductionRouteDelegationHandoffPlan,
 	ProductionRouteExplanationBatchSummary,
 	ProductionRouteHandoffRecommendation,
 	ProductionRouteScore,
@@ -47,6 +49,7 @@ import type {
 	SpanSnapshot,
 	StoredProposalRecord,
 	StoredTrajectoryRecord,
+	SubTask,
 	SupervisorProgressDashboardRecord,
 	SupervisorProgressSnapshot,
 	Tool,
@@ -1289,16 +1292,37 @@ describe("package entrypoint production route exports", () => {
 
 	it("exposes batch readiness helper and type for package consumers", async () => {
 		const {
+			buildProductionRouteDelegationHandoffPlan,
+			buildProductionRouteSupervisorHandoffPlan,
 			classifyProductionRouteScoreBatchReadiness,
 			scoreProductionRoutes,
 			summarizeProductionRouteScoreBatchReadiness,
 		} = await import("./index.js");
+		const step: SubTask = {
+			id: "delegated-root",
+			action: "research",
+			name: "Delegated root",
+			description: "Test root package handoff export",
+			estimatedTokens: 120,
+			estimatedSteps: 1,
+			preconditions: [],
+			effects: ["root-export-covered"],
+			arguments: { path: "root.md" },
+			writeScope: "episodic",
+			risk: "medium",
+		};
+		const plan: DagPlan = {
+			kind: "dag",
+			subtasks: [step],
+			edges: [],
+		};
 		const batch: ProductionRouteScoreBatch = scoreProductionRoutes([
 			{
-				taskRisk: "critical",
+				taskRisk: "medium",
 				complexity: 0,
 				cost: 0,
 				capabilityFit: 1,
+				nonBlockingSupervisorRequired: true,
 			},
 		]);
 
@@ -1311,6 +1335,17 @@ describe("package entrypoint production route exports", () => {
 			]);
 		const counts: ProductionRouteScoreBatchReadinessCounts =
 			summary.byReadiness;
+		const supervisorPlan = buildProductionRouteSupervisorHandoffPlan(batch);
+		const delegationPlan: ProductionRouteDelegationHandoffPlan =
+			buildProductionRouteDelegationHandoffPlan({
+				parentRunId: "run-package-root",
+				plan,
+				batch,
+				subAgentForStep: () => ({
+					role: "planning-worker",
+					goal: "Cover package root delegation handoff export",
+				}),
+			});
 
 		expect(readiness).toBe("handoff_required");
 		expect(counts).toEqual({
@@ -1324,6 +1359,20 @@ describe("package entrypoint production route exports", () => {
 			totalScores: 1,
 			byReadiness: counts,
 			highestRequiredReadiness: "handoff_required",
+		});
+		expect(supervisorPlan.handoffCount).toBe(1);
+		expect(delegationPlan).toMatchObject({
+			kind: "production_route_delegation_handoff_plan",
+			handoffReadyCount: 1,
+			blockedCount: 0,
+			acceptedAssignments: [
+				{
+					taskId: "delegated-root",
+					assignment: {
+						childRunId: "run-package-root:delegated:delegated-root",
+					},
+				},
+			],
 		});
 	});
 });

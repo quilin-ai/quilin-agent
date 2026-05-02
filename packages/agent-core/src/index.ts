@@ -105,8 +105,14 @@ export * from "./memory/index.js";
 export * from "./multi-agent/index.js";
 export * from "./observability/index.js";
 export {
+	buildProductionRouteDelegationHandoffPlan,
+	buildProductionRouteSupervisorHandoffPlan,
 	classifyProductionRouteScoreBatchReadiness,
 	explainProductionRoute,
+	type ProductionRouteDelegationHandoffAcceptedItem,
+	type ProductionRouteDelegationHandoffBlockedItem,
+	type ProductionRouteDelegationHandoffPlan,
+	type ProductionRouteDelegationHandoffPlanInput,
 	type ProductionRouteExplanationBatchSummary,
 	type ProductionRouteHandoffRecommendation,
 	type ProductionRouteScore,
