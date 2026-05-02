@@ -302,4 +302,74 @@ describe("executeToolCalls safety integration", () => {
 			stored: executedCall?.arguments.content,
 		});
 	});
+
+	it.each([
+		{ legacyTier: "short", canonicalTier: "working" },
+		{ legacyTier: "long", canonicalTier: "semantic" },
+	])("normalizes legacy memory tier alias $legacyTier before executing memory_store", async ({
+		legacyTier,
+		canonicalTier,
+	}) => {
+		const toolCall: ToolCall = {
+			id: `call-memory-tier-${legacyTier}`,
+			name: "omnimem/memory_store",
+			arguments: {
+				content: "用户叫小明",
+				tier: legacyTier,
+			},
+		};
+		const router = {
+			execute: vi.fn(async (call: ToolCall): Promise<ToolResult> => {
+				return {
+					toolCallId: call.id,
+					content: JSON.stringify({ tier: call.arguments.tier }),
+					isError: false,
+				};
+			}),
+		} as unknown as ToolRouter;
+		const runLogger = {
+			record: vi.fn(),
+		};
+		const messages: Message[] = [
+			{ role: "user", content: "记住我叫小明" },
+			{ role: "assistant", content: "", toolCalls: [toolCall] },
+		];
+
+		await executeToolCalls({
+			router,
+			toolCalls: [toolCall],
+			turnCount: 1,
+			workingMessages: messages,
+			runLogger,
+			turnId: "turn-tier",
+			consecutiveBlockedToolOutputs: 0,
+		});
+
+		expect(router.execute).toHaveBeenCalledWith(
+			expect.objectContaining({
+				arguments: expect.objectContaining({ tier: canonicalTier }),
+			}),
+		);
+		expect(messages[1]?.toolCalls?.[0]?.arguments.tier).toBe(canonicalTier);
+		expect(messages[2]).toMatchObject({
+			role: "tool",
+			toolCallId: `call-memory-tier-${legacyTier}`,
+			name: "omnimem/memory_store",
+		});
+		expect(JSON.parse(messages[2]?.content ?? "{}")).toEqual({
+			tier: canonicalTier,
+		});
+		expect(runLogger.record).toHaveBeenCalledWith(
+			expect.objectContaining({
+				phase: "tool.memory_tier_alias_normalized",
+				payload: {
+					toolCallId: `call-memory-tier-${legacyTier}`,
+					toolName: "omnimem/memory_store",
+					legacyTier,
+					canonicalTier,
+				},
+				turnId: "turn-tier",
+			}),
+		);
+	});
 });

@@ -534,6 +534,10 @@ describe.sequential("MCPClientManager", () => {
 					.success,
 			).toBe(false);
 			expect(
+				memoryStore?.parameters.safeParse({ content: "hello", tier: "long" })
+					.success,
+			).toBe(false);
+			expect(
 				scratchpadWrite?.parameters.safeParse({
 					task_id: "task-1",
 					session_id: "session-1",

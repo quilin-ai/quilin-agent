@@ -45,6 +45,12 @@ describe("jsonSchemaToZod", () => {
 				tier: "short",
 			}).success,
 		).toBe(false);
+		expect(
+			schema.safeParse({
+				query: "老孟",
+				tier: "long",
+			}).success,
+		).toBe(false);
 	});
 
 	it("converts number, integer, and boolean fields", () => {

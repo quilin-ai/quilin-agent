@@ -849,13 +849,14 @@ async def test_store_lifespan_initializes_store_off_event_loop(monkeypatch: obje
     assert observed == ["tick", "ready"]
 
 
-async def test_create_server_rejects_invalid_tier_enum() -> None:
+@pytest.mark.parametrize("legacy_tier", ["short", "long"])
+async def test_create_server_rejects_invalid_tier_enum(legacy_tier: str) -> None:
     server = create_server(OmniMemStore(db_path=":memory:"))
 
     with pytest.raises(Exception, match="tier"):
         await server.call_tool(
             "memory_store",
-            {"content": "bad tier", "tier": "short"},
+            {"content": "bad tier", "tier": legacy_tier},
         )
 
 

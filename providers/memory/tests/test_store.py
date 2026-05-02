@@ -498,13 +498,12 @@ async def test_store_defaults_to_quilin_home_db(
     assert (tmp_path / ".quilin" / "memory.db").exists()
 
 
-async def test_store_rejects_invalid_tier() -> None:
-    import pytest
-
+@pytest.mark.parametrize("legacy_tier", ["short", "long"])
+async def test_store_rejects_invalid_tier(legacy_tier: str) -> None:
     store = OmniMemStore(db_path=":memory:")
 
     with pytest.raises(ValueError, match="Invalid memory tier"):
-        await store.store("bad tier", tier="short")  # type: ignore[arg-type]
+        await store.store("bad tier", tier=legacy_tier)  # type: ignore[arg-type]
 
 
 async def test_store_offloads_blocking_db_work_from_event_loop(

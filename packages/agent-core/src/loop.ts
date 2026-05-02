@@ -10,6 +10,7 @@ import { getLoggerRuntimeMode, logger } from "./logger.js";
 import {
 	correctInvertedIdentityMemoryToolCalls,
 	executeToolCalls,
+	normalizeLegacyMemoryTierToolCalls,
 } from "./loop-tool-calls.js";
 import {
 	type AgentLoopConfig,
@@ -354,8 +355,19 @@ export async function runAgentLoop(
 					"LLM returned finishReason=tool_calls without toolCalls",
 				);
 			}
-			const identityGuard = correctInvertedIdentityMemoryToolCalls(
+			const tierNormalization = normalizeLegacyMemoryTierToolCalls(
 				response.toolCalls,
+			);
+			for (const correction of tierNormalization.corrections) {
+				await recordAgentRunEvent(
+					runLogger,
+					"tool.memory_tier_alias_normalized",
+					{ ...correction },
+					runLogContext,
+				);
+			}
+			const identityGuard = correctInvertedIdentityMemoryToolCalls(
+				tierNormalization.toolCalls,
 				workingMessages,
 			);
 			for (const correction of identityGuard.corrections) {

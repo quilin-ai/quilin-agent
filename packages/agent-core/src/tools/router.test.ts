@@ -1006,12 +1006,12 @@ describe("ToolRouter", () => {
 		const result = await router.execute({
 			id: "call-1",
 			name: "memory_store",
-			arguments: { content: "我叫小明", tier: "short" },
+			arguments: { content: "我叫小明", tier: "working" },
 		});
 
 		expect(execute).toHaveBeenCalledWith({
 			content: "我叫小明",
-			tier: "short",
+			tier: "working",
 		});
 		expect(result).toEqual({
 			toolCallId: "call-1",
