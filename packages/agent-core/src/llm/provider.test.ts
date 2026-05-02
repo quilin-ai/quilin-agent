@@ -1,6 +1,12 @@
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createProvider, getDefaultModel } from "./provider.js";
+import {
+	createProvider,
+	DEFAULT_PROVIDER_CATALOG,
+	decideLLMRoute,
+	getDefaultModel,
+	validateProviderCatalog,
+} from "./provider.js";
 
 vi.mock("@ai-sdk/openai-compatible", () => ({
 	createOpenAICompatible: vi.fn(() => vi.fn()),
@@ -162,5 +168,82 @@ describe("getDefaultModel", () => {
 		process.env.QUILIN_DEFAULT_MODEL = "deepseek-reasoner";
 
 		expect(getDefaultModel()).toBe("deepseek-reasoner");
+	});
+
+	it("rejects model overrides outside the enabled default catalog", () => {
+		process.env.QUILIN_DEFAULT_MODEL = "gpt-4.1";
+
+		expect(() => getDefaultModel()).toThrow(
+			/QUILIN_DEFAULT_MODEL gpt-4\.1 is not enabled in DEFAULT_PROVIDER_CATALOG/,
+		);
+	});
+});
+
+describe("provider catalog", () => {
+	it("accepts enabled DeepSeek and blocked providers with missing env", () => {
+		expect(() =>
+			validateProviderCatalog(DEFAULT_PROVIDER_CATALOG, {
+				DEEPSEEK_API_KEY: "test-key",
+			}),
+		).not.toThrow();
+	});
+
+	it("rejects enabled providers without required env or live evidence", () => {
+		expect(() => validateProviderCatalog(DEFAULT_PROVIDER_CATALOG, {})).toThrow(
+			/DEEPSEEK_API_KEY/,
+		);
+
+		expect(() =>
+			validateProviderCatalog(
+				{
+					entries: [
+						{
+							provider: "deepseek",
+							status: "enabled",
+							transport: "direct",
+							defaultModel: "deepseek-chat",
+							models: ["deepseek-chat"],
+							requiredEnv: ["DEEPSEEK_API_KEY"],
+							liveEvidence: "missing",
+						},
+					],
+				},
+				{ DEEPSEEK_API_KEY: "test-key" },
+			),
+		).toThrow(/verified live evidence/);
+	});
+});
+
+describe("decideLLMRoute", () => {
+	it("emits configured and effective DeepSeek models", () => {
+		expect(
+			decideLLMRoute(
+				{
+					provider: "deepseek",
+					model: "deepseek-chat",
+					thinkingMode: "enabled",
+				},
+				DEFAULT_PROVIDER_CATALOG,
+			),
+		).toEqual({
+			provider: "deepseek",
+			configuredModel: "deepseek-chat",
+			effectiveModel: "deepseek-reasoner",
+			fallbackUsed: false,
+			reasoningStateAdapter: "captured_not_replayed",
+		});
+	});
+
+	it("refuses silent provider substitution when a provider is blocked", () => {
+		expect(() =>
+			decideLLMRoute(
+				{
+					provider: "openai",
+					model: "gpt-4.1",
+					thinkingMode: "disabled",
+				},
+				DEFAULT_PROVIDER_CATALOG,
+			),
+		).toThrow(/no provider fallback/);
 	});
 });

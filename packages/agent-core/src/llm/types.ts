@@ -73,6 +73,72 @@ export interface TokenUsage {
 	readonly cache?: CacheUsage;
 }
 
+export type LLMProviderId = "anthropic" | "deepseek" | "gemini" | "openai";
+
+export type LLMProviderStatus = "enabled" | "blocked" | "candidate";
+
+export type ProviderLiveEvidenceStatus =
+	| "verified"
+	| "missing"
+	| "not-required";
+
+export type ReasoningStateAdapter = "none" | "captured_not_replayed";
+
+export interface ProviderCatalogEntry {
+	readonly provider: LLMProviderId;
+	readonly status: LLMProviderStatus;
+	readonly transport: "direct" | "gateway" | "candidate";
+	readonly defaultModel?: string;
+	readonly models: readonly string[];
+	readonly requiredEnv?: readonly string[];
+	readonly liveEvidence: ProviderLiveEvidenceStatus;
+	readonly blockReason?: string;
+}
+
+export interface ProviderCatalog {
+	readonly entries: readonly ProviderCatalogEntry[];
+}
+
+export interface LLMRouteRequest {
+	readonly provider: LLMProviderId;
+	readonly model: string;
+	readonly thinkingMode?: ThinkingMode;
+}
+
+export interface LLMRouteDecision {
+	readonly provider: LLMProviderId;
+	readonly configuredModel: string;
+	readonly effectiveModel: string;
+	readonly fallbackUsed: false;
+	readonly reasoningStateAdapter: ReasoningStateAdapter;
+}
+
+export interface NormalizedProviderError {
+	readonly name: string;
+	readonly message: string;
+	readonly code?: string;
+	readonly category?: string;
+}
+
+export interface ProviderAttempt {
+	readonly attemptNumber: 1;
+	readonly provider: LLMProviderId;
+	readonly model: string;
+	readonly startedAt: string;
+	readonly completedAt: string;
+	readonly outcome: "success" | "error";
+	readonly usage?: TokenUsage;
+	readonly error?: NormalizedProviderError;
+}
+
+export interface ProviderRunRecord {
+	readonly route: LLMRouteDecision;
+	readonly attempts: readonly ProviderAttempt[];
+	readonly outcome: "success" | "error";
+	readonly fallbackUsed: false;
+	readonly error?: NormalizedProviderError;
+}
+
 /** LLMClient 接口 — Agent Loop 唯一的 LLM 交互点 */
 export interface LLMClient {
 	chat(

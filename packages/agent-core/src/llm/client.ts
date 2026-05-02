@@ -8,12 +8,18 @@ import type { AssembledPrompt } from "../context/prompt-types.js";
 import type { Message, ReasoningPart } from "../state/types.js";
 import type { Tool } from "../tools/types.js";
 import { adaptMessagesForModel } from "./cache-adapter.js";
+import { DEFAULT_PROVIDER_CATALOG, decideLLMRoute } from "./provider.js";
 import { normalizeTokenUsage } from "./token-usage.js";
 import type {
 	InferenceConfig,
 	LLMClient,
 	LLMResponse,
+	LLMRouteDecision,
+	LLMRouteRequest,
 	LLMStreamEvent,
+	NormalizedProviderError,
+	ProviderCatalog,
+	ProviderRunRecord,
 	ThinkingMode,
 } from "./types.js";
 
@@ -23,6 +29,10 @@ interface ResolvableModelHandle {
 }
 
 type ModelHandle = LanguageModel | ResolvableModelHandle;
+
+interface ModelRoutableLLMClient extends LLMClient {
+	withModel(modelId: string): LLMClient;
+}
 
 interface PreparedInvocation {
 	readonly model: LanguageModel;
@@ -78,6 +88,18 @@ interface LanguageModelMetadata {
 	readonly provider?: string;
 	readonly modelId?: string;
 }
+
+interface ProviderControlPlaneOptions {
+	readonly catalog?: ProviderCatalog;
+	readonly routeRequest: Omit<LLMRouteRequest, "thinkingMode">;
+	readonly onRunRecord?: (record: ProviderRunRecord) => void;
+	readonly now?: () => Date;
+}
+
+const REDACTED_PROVIDER_ERROR_MESSAGE = "Provider error details redacted.";
+const SAFE_ERROR_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_.:-]{0,119}$/u;
+const SAFE_ERROR_FIELD_PATTERN = /^[A-Za-z0-9_.:-]{1,120}$/u;
+const UNSAFE_ERROR_FIELD_PATTERN = /(?:\bBearer\b|^sk-|token=|secret)/iu;
 
 function toSdkTools(tools: readonly Tool[]) {
 	if (tools.length === 0) {
@@ -154,6 +176,31 @@ function getLanguageModelMetadata(model: LanguageModel): LanguageModelMetadata {
 				? model.modelId
 				: undefined,
 	};
+}
+
+function selectModelHandle(
+	modelHandle: ModelHandle,
+	modelId: string,
+): ModelHandle {
+	if (
+		isResolvableModelHandle(modelHandle) &&
+		modelHandle.resolveModel != null
+	) {
+		return {
+			...modelHandle,
+			model: modelHandle.resolveModel(modelId),
+		};
+	}
+
+	const baseModel = getBaseModel(modelHandle);
+	const metadata = getLanguageModelMetadata(baseModel);
+	if (metadata.modelId === modelId) {
+		return modelHandle;
+	}
+
+	throw new Error(
+		`LLM model handle cannot resolve effective model ${modelId}.`,
+	);
 }
 
 function normalizeProviderName(
@@ -283,6 +330,40 @@ function stringifyJson(value: unknown): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value != null;
+}
+
+function getSafeDiagnosticField(
+	record: Record<string, unknown>,
+	key: string,
+): string | undefined {
+	const value = record[key];
+	const text =
+		typeof value === "string"
+			? value.trim()
+			: typeof value === "number" && Number.isFinite(value)
+				? String(value)
+				: undefined;
+
+	if (
+		text == null ||
+		!SAFE_ERROR_FIELD_PATTERN.test(text) ||
+		UNSAFE_ERROR_FIELD_PATTERN.test(text)
+	) {
+		return undefined;
+	}
+
+	return text;
+}
+
+function getSafeErrorName(error: unknown): string {
+	const name =
+		isRecord(error) && typeof error.name === "string"
+			? error.name.trim()
+			: error instanceof Error
+				? error.name
+				: undefined;
+
+	return name != null && SAFE_ERROR_NAME_PATTERN.test(name) ? name : "Error";
 }
 
 function getString(value: unknown): string | undefined {
@@ -565,6 +646,178 @@ function emitToolCallEnd(
 	});
 }
 
+export function normalizeProviderError(
+	error: unknown,
+): NormalizedProviderError {
+	const record = isRecord(error) ? error : undefined;
+	const code =
+		record == null ? undefined : getSafeDiagnosticField(record, "code");
+	const category =
+		record == null ? undefined : getSafeDiagnosticField(record, "category");
+
+	return {
+		name: getSafeErrorName(error),
+		message: REDACTED_PROVIDER_ERROR_MESSAGE,
+		...(code == null ? {} : { code }),
+		...(category == null ? {} : { category }),
+	};
+}
+
+function reasoningStateAdapterForThinking(
+	thinkingMode: ThinkingMode | undefined,
+): LLMRouteDecision["reasoningStateAdapter"] {
+	return thinkingMode == null || thinkingMode === "disabled"
+		? "none"
+		: "captured_not_replayed";
+}
+
+function routeDecisionFromRequest(request: LLMRouteRequest): LLMRouteDecision {
+	return {
+		provider: request.provider,
+		configuredModel: request.model,
+		effectiveModel: request.model,
+		fallbackUsed: false,
+		reasoningStateAdapter: reasoningStateAdapterForThinking(
+			request.thinkingMode,
+		),
+	};
+}
+
+function isModelRoutableLLMClient(
+	delegate: LLMClient,
+): delegate is ModelRoutableLLMClient {
+	return "withModel" in delegate && typeof delegate.withModel === "function";
+}
+
+function delegateForRoute(
+	delegate: LLMClient,
+	route: LLMRouteDecision,
+): LLMClient {
+	if (isModelRoutableLLMClient(delegate)) {
+		return delegate.withModel(route.effectiveModel);
+	}
+
+	if (route.effectiveModel === route.configuredModel) {
+		return delegate;
+	}
+
+	throw new Error(
+		`LLM delegate cannot route configured model ${route.configuredModel} to effective model ${route.effectiveModel}.`,
+	);
+}
+
+export class ProviderControlPlaneLLMClient implements LLMClient {
+	private readonly catalog: ProviderCatalog;
+	private readonly now: () => Date;
+	private readonly records: ProviderRunRecord[] = [];
+
+	constructor(
+		private readonly delegate: LLMClient,
+		private readonly options: ProviderControlPlaneOptions,
+	) {
+		this.catalog = options.catalog ?? DEFAULT_PROVIDER_CATALOG;
+		this.now = options.now ?? (() => new Date());
+	}
+
+	get runRecords(): readonly ProviderRunRecord[] {
+		return this.records;
+	}
+
+	async chat(
+		messages: readonly Message[],
+		tools: readonly Tool[],
+		config: InferenceConfig,
+		prompt?: AssembledPrompt,
+	): Promise<LLMResponse> {
+		const routeRequest = {
+			...this.options.routeRequest,
+			thinkingMode: config.thinkingMode,
+		};
+		let route: LLMRouteDecision;
+		try {
+			route = decideLLMRoute(routeRequest, this.catalog);
+		} catch (error) {
+			const record: ProviderRunRecord = {
+				route: routeDecisionFromRequest(routeRequest),
+				attempts: [],
+				outcome: "error",
+				fallbackUsed: false,
+				error: normalizeProviderError(error),
+			};
+			this.records.push(record);
+			this.options.onRunRecord?.(record);
+			throw error;
+		}
+
+		let routedDelegate: LLMClient;
+		try {
+			routedDelegate = delegateForRoute(this.delegate, route);
+		} catch (error) {
+			const record: ProviderRunRecord = {
+				route,
+				attempts: [],
+				outcome: "error",
+				fallbackUsed: false,
+				error: normalizeProviderError(error),
+			};
+			this.records.push(record);
+			this.options.onRunRecord?.(record);
+			throw error;
+		}
+
+		const startedAt = this.now().toISOString();
+		try {
+			const response = await routedDelegate.chat(
+				messages,
+				tools,
+				config,
+				prompt,
+			);
+			const completedAt = this.now().toISOString();
+			const record: ProviderRunRecord = {
+				route,
+				attempts: [
+					{
+						attemptNumber: 1,
+						provider: route.provider,
+						model: route.effectiveModel,
+						startedAt,
+						completedAt,
+						outcome: "success",
+						usage: response.usage,
+					},
+				],
+				outcome: "success",
+				fallbackUsed: false,
+			};
+			this.records.push(record);
+			this.options.onRunRecord?.(record);
+			return response;
+		} catch (error) {
+			const completedAt = this.now().toISOString();
+			const record: ProviderRunRecord = {
+				route,
+				attempts: [
+					{
+						attemptNumber: 1,
+						provider: route.provider,
+						model: route.effectiveModel,
+						startedAt,
+						completedAt,
+						outcome: "error",
+						error: normalizeProviderError(error),
+					},
+				],
+				outcome: "error",
+				fallbackUsed: false,
+			};
+			this.records.push(record);
+			this.options.onRunRecord?.(record);
+			throw error;
+		}
+	}
+}
+
 /**
  * 基于 Vercel AI SDK 的 LLMClient 实现（非流式）
  *
@@ -574,6 +827,10 @@ export class VercelLLMClient implements LLMClient {
 	private readonly seenWarnings = new Set<InvocationWarning>();
 
 	constructor(private readonly model: ModelHandle) {}
+
+	withModel(modelId: string): VercelLLMClient {
+		return new VercelLLMClient(selectModelHandle(this.model, modelId));
+	}
 
 	async chat(
 		messages: readonly Message[],
@@ -591,6 +848,7 @@ export class VercelLLMClient implements LLMClient {
 			maxOutputTokens: config.maxTokens,
 			temperature: config.temperature,
 			topP: config.topP,
+			maxRetries: 0,
 			...(prepared.providerOptions == null
 				? {}
 				: { providerOptions: prepared.providerOptions }),
@@ -622,6 +880,13 @@ export class StreamingLLMClient implements LLMClient {
 		private readonly onEvent?: (event: LLMStreamEvent) => void,
 	) {}
 
+	withModel(modelId: string): StreamingLLMClient {
+		return new StreamingLLMClient(
+			selectModelHandle(this.model, modelId),
+			this.onEvent,
+		);
+	}
+
 	async chat(
 		messages: readonly Message[],
 		tools: readonly Tool[],
@@ -638,6 +903,7 @@ export class StreamingLLMClient implements LLMClient {
 			maxOutputTokens: config.maxTokens,
 			temperature: config.temperature,
 			topP: config.topP,
+			maxRetries: 0,
 			...(prepared.providerOptions == null
 				? {}
 				: { providerOptions: prepared.providerOptions }),
@@ -788,4 +1054,5 @@ export const __test__ = {
 	normalizeProviderName,
 	mapOpenAIReasoningEffort,
 	buildProviderOptions,
+	normalizeProviderError,
 };

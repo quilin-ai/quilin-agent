@@ -9,9 +9,11 @@ import {
 } from "../test/ai-fixtures.js";
 import {
 	__test__ as clientTestHelpers,
+	ProviderControlPlaneLLMClient,
 	StreamingLLMClient,
 	VercelLLMClient,
 } from "./client.js";
+import type { LLMClient } from "./types.js";
 
 vi.mock("ai", () => ({
 	generateText: vi.fn(),
@@ -78,6 +80,7 @@ describe("VercelLLMClient", () => {
 			maxOutputTokens: 512,
 			temperature: 0.7,
 			topP: 0.9,
+			maxRetries: 0,
 		});
 		expect(sdkTool).toHaveBeenCalledWith({
 			description: "Recall memory",
@@ -206,6 +209,7 @@ describe("VercelLLMClient", () => {
 			maxOutputTokens: 128,
 			temperature: 0.1,
 			topP: undefined,
+			maxRetries: 0,
 		});
 	});
 
@@ -723,6 +727,7 @@ describe("VercelLLMClient", () => {
 			maxOutputTokens: 128,
 			temperature: 0.7,
 			topP: undefined,
+			maxRetries: 0,
 		});
 	});
 
@@ -924,6 +929,319 @@ describe("VercelLLMClient", () => {
 	});
 });
 
+describe("ProviderControlPlaneLLMClient", () => {
+	const config = {
+		temperature: 0.1,
+		maxTokens: 128,
+		thinkingMode: "enabled" as const,
+	};
+
+	it("records one successful provider attempt with selected provider, model, usage, and cache", async () => {
+		const records: unknown[] = [];
+		const response = {
+			content: "ok",
+			usage: {
+				inputTokens: 10,
+				outputTokens: 5,
+				cache: {
+					readTokens: 3,
+					writeTokens: 7,
+					source: "native" as const,
+				},
+			},
+			finishReason: "stop" as const,
+			thinking: [{ provider: "deepseek" as const, text: "trace" }],
+		};
+		const routedDelegate = {
+			chat: vi.fn().mockResolvedValue(response),
+		} satisfies LLMClient;
+		const delegate = {
+			chat: vi.fn(),
+			withModel: vi.fn().mockReturnValue(routedDelegate),
+		} satisfies LLMClient & { withModel(modelId: string): LLMClient };
+		const dates = [
+			new Date("2026-05-01T00:00:00.000Z"),
+			new Date("2026-05-01T00:00:01.000Z"),
+		];
+		const client = new ProviderControlPlaneLLMClient(delegate, {
+			routeRequest: {
+				provider: "deepseek",
+				model: "deepseek-chat",
+			},
+			onRunRecord: (record) => records.push(record),
+			now: () => dates.shift() ?? new Date("2026-05-01T00:00:02.000Z"),
+		});
+
+		await expect(
+			client.chat([{ role: "user", content: "hi" }], [], config),
+		).resolves.toBe(response);
+
+		expect(delegate.withModel).toHaveBeenCalledWith("deepseek-reasoner");
+		expect(delegate.chat).not.toHaveBeenCalled();
+		expect(routedDelegate.chat).toHaveBeenCalledTimes(1);
+		expect(client.runRecords).toHaveLength(1);
+		expect(records).toHaveLength(1);
+		expect(client.runRecords[0]).toEqual({
+			route: {
+				provider: "deepseek",
+				configuredModel: "deepseek-chat",
+				effectiveModel: "deepseek-reasoner",
+				fallbackUsed: false,
+				reasoningStateAdapter: "captured_not_replayed",
+			},
+			attempts: [
+				{
+					attemptNumber: 1,
+					provider: "deepseek",
+					model: "deepseek-reasoner",
+					startedAt: "2026-05-01T00:00:00.000Z",
+					completedAt: "2026-05-01T00:00:01.000Z",
+					outcome: "success",
+					usage: response.usage,
+				},
+			],
+			outcome: "success",
+			fallbackUsed: false,
+		});
+	});
+
+	it("forces a Vercel delegate to use the effective DeepSeek reasoner model", async () => {
+		vi.mocked(generateText).mockResolvedValue(
+			mockGenerateTextResult({
+				text: "ok",
+				usage: {
+					promptTokens: 3,
+					completionTokens: 4,
+				},
+				finishReason: "stop",
+			}),
+		);
+		const chatModel = createMockLanguageModel({
+			provider: "deepseek",
+			modelId: "deepseek-chat",
+		});
+		const reasonerModel = createMockLanguageModel({
+			provider: "deepseek",
+			modelId: "deepseek-reasoner",
+		});
+		const resolveModel = vi.fn((modelId: string) =>
+			modelId === "deepseek-reasoner" ? reasonerModel : chatModel,
+		);
+		const client = new ProviderControlPlaneLLMClient(
+			new VercelLLMClient({
+				model: chatModel,
+				resolveModel,
+			}),
+			{
+				routeRequest: {
+					provider: "deepseek",
+					model: "deepseek-chat",
+				},
+			},
+		);
+
+		await client.chat([{ role: "user", content: "hi" }], [], config);
+
+		expect(resolveModel).toHaveBeenCalledWith("deepseek-reasoner");
+		expect(generateText).toHaveBeenCalledWith(
+			expect.objectContaining({
+				model: reasonerModel,
+			}),
+		);
+	});
+
+	it("records one normalized error attempt without leaking provider secrets", async () => {
+		const secretMessage =
+			"provider exploded token=secret Authorization: Bearer abcdefghijklmnopqrstuvwxyz012345 sk-abcdefghijklmnopqrstuvwxyz012345";
+		const error = Object.assign(new Error(secretMessage), {
+			name: "ProviderAuthError",
+			code: "AUTH_FAILED",
+			category: "auth",
+		});
+		error.stack = `ProviderAuthError: ${secretMessage}\n    at providerSecretFrame`;
+		const records: unknown[] = [];
+		const delegate = {
+			chat: vi.fn().mockRejectedValue(error),
+		} satisfies LLMClient;
+		const client = new ProviderControlPlaneLLMClient(delegate, {
+			routeRequest: {
+				provider: "deepseek",
+				model: "deepseek-chat",
+			},
+			onRunRecord: (record) => records.push(record),
+			now: () => new Date("2026-05-01T00:00:00.000Z"),
+		});
+
+		await expect(
+			client.chat([{ role: "user", content: "hi" }], [], {
+				...config,
+				thinkingMode: "disabled",
+			}),
+		).rejects.toBe(error);
+
+		expect(delegate.chat).toHaveBeenCalledTimes(1);
+		expect(records).toHaveLength(1);
+		expect(client.runRecords).toEqual([
+			{
+				route: {
+					provider: "deepseek",
+					configuredModel: "deepseek-chat",
+					effectiveModel: "deepseek-chat",
+					fallbackUsed: false,
+					reasoningStateAdapter: "none",
+				},
+				attempts: [
+					{
+						attemptNumber: 1,
+						provider: "deepseek",
+						model: "deepseek-chat",
+						startedAt: "2026-05-01T00:00:00.000Z",
+						completedAt: "2026-05-01T00:00:00.000Z",
+						outcome: "error",
+						error: {
+							name: "ProviderAuthError",
+							message: "Provider error details redacted.",
+							code: "AUTH_FAILED",
+							category: "auth",
+						},
+					},
+				],
+				outcome: "error",
+				fallbackUsed: false,
+			},
+		]);
+		const serializedRunRecords = JSON.stringify(client.runRecords);
+		const serializedCallbackRecords = JSON.stringify(records);
+		for (const serialized of [
+			serializedRunRecords,
+			serializedCallbackRecords,
+		]) {
+			expect(serialized).not.toContain("token=secret");
+			expect(serialized).not.toContain(
+				"Bearer abcdefghijklmnopqrstuvwxyz012345",
+			);
+			expect(serialized).not.toContain("sk-abcdefghijklmnopqrstuvwxyz012345");
+			expect(serialized).not.toContain("providerSecretFrame");
+			expect(serialized).not.toContain("stack");
+		}
+	});
+
+	it.each([
+		{
+			name: "blocked",
+			provider: "openai" as const,
+			model: "gpt-4.1",
+			error: /Provider openai is blocked; no provider fallback is configured/,
+		},
+		{
+			name: "candidate",
+			provider: "gemini" as const,
+			model: "gemini-2.5-pro",
+			error: /Provider gemini is candidate; no provider fallback is configured/,
+		},
+		{
+			name: "unknown",
+			provider: "openai" as const,
+			model: "gpt-4.1",
+			catalog: {
+				entries: [
+					{
+						provider: "deepseek" as const,
+						status: "enabled" as const,
+						transport: "direct" as const,
+						defaultModel: "deepseek-chat",
+						models: ["deepseek-chat", "deepseek-reasoner"],
+						liveEvidence: "verified" as const,
+					},
+				],
+			},
+			error: /Provider openai is not in the provider catalog/,
+		},
+	])("records a no-attempt normalized error for $name route failures", async ({
+		provider,
+		model,
+		catalog,
+		error,
+	}) => {
+		const records: unknown[] = [];
+		const delegate = {
+			chat: vi.fn(),
+		} satisfies LLMClient;
+		const client = new ProviderControlPlaneLLMClient(delegate, {
+			routeRequest: {
+				provider,
+				model,
+			},
+			...(catalog == null ? {} : { catalog }),
+			onRunRecord: (record) => records.push(record),
+		});
+
+		await expect(
+			client.chat([{ role: "user", content: "hi" }], [], {
+				...config,
+				thinkingMode: "disabled",
+			}),
+		).rejects.toThrow(error);
+
+		expect(delegate.chat).not.toHaveBeenCalled();
+		expect(client.runRecords).toHaveLength(1);
+		expect(records).toHaveLength(1);
+		expect(client.runRecords[0]).toMatchObject({
+			route: {
+				provider,
+				configuredModel: model,
+				effectiveModel: model,
+				fallbackUsed: false,
+				reasoningStateAdapter: "none",
+			},
+			attempts: [],
+			outcome: "error",
+			fallbackUsed: false,
+			error: {
+				name: "Error",
+				message: "Provider error details redacted.",
+			},
+		});
+	});
+
+	it("records a no-attempt error instead of calling an unroutable delegate", async () => {
+		const records: unknown[] = [];
+		const delegate = {
+			chat: vi.fn(),
+		} satisfies LLMClient;
+		const client = new ProviderControlPlaneLLMClient(delegate, {
+			routeRequest: {
+				provider: "deepseek",
+				model: "deepseek-chat",
+			},
+			onRunRecord: (record) => records.push(record),
+		});
+
+		await expect(
+			client.chat([{ role: "user", content: "hi" }], [], config),
+		).rejects.toThrow(/cannot route configured model deepseek-chat/);
+
+		expect(delegate.chat).not.toHaveBeenCalled();
+		expect(records).toHaveLength(1);
+		expect(client.runRecords[0]).toMatchObject({
+			route: {
+				provider: "deepseek",
+				configuredModel: "deepseek-chat",
+				effectiveModel: "deepseek-reasoner",
+				fallbackUsed: false,
+				reasoningStateAdapter: "captured_not_replayed",
+			},
+			attempts: [],
+			outcome: "error",
+			fallbackUsed: false,
+			error: {
+				name: "Error",
+				message: "Provider error details redacted.",
+			},
+		});
+	});
+});
+
 describe("StreamingLLMClient", () => {
 	const model = createMockLanguageModel();
 
@@ -989,6 +1307,7 @@ describe("StreamingLLMClient", () => {
 			maxOutputTokens: 64,
 			temperature: 0.2,
 			topP: undefined,
+			maxRetries: 0,
 		});
 		expect(events).toEqual([
 			{ type: "reasoning", delta: "step " },

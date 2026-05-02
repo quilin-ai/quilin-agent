@@ -2,6 +2,13 @@ import {
 	createOpenAICompatible,
 	type MetadataExtractor,
 } from "@ai-sdk/openai-compatible";
+import type {
+	LLMProviderId,
+	LLMRouteDecision,
+	LLMRouteRequest,
+	ProviderCatalog,
+	ProviderCatalogEntry,
+} from "./types.js";
 
 interface DeepSeekUsagePayload {
 	readonly prompt_cache_hit_tokens?: number;
@@ -76,7 +83,174 @@ const metadataExtractorRegistry = {
 	"openai-compatible-default": undefined,
 } as const;
 
+type EnvLookup = Readonly<Record<string, string | undefined>>;
+
+export const DEFAULT_PROVIDER_CATALOG: ProviderCatalog = {
+	entries: [
+		{
+			provider: "deepseek",
+			status: "enabled",
+			transport: "direct",
+			defaultModel: "deepseek-chat",
+			models: ["deepseek-chat", "deepseek-reasoner"],
+			requiredEnv: ["DEEPSEEK_API_KEY"],
+			liveEvidence: "verified",
+		},
+		{
+			provider: "openai",
+			status: "blocked",
+			transport: "candidate",
+			models: [],
+			requiredEnv: ["OPENAI_API_KEY"],
+			liveEvidence: "missing",
+			blockReason: "No current direct production integration evidence.",
+		},
+		{
+			provider: "anthropic",
+			status: "blocked",
+			transport: "candidate",
+			models: [],
+			requiredEnv: ["ANTHROPIC_API_KEY"],
+			liveEvidence: "missing",
+			blockReason: "No current direct production integration evidence.",
+		},
+		{
+			provider: "gemini",
+			status: "candidate",
+			transport: "candidate",
+			models: [],
+			requiredEnv: ["GOOGLE_GENERATIVE_AI_API_KEY"],
+			liveEvidence: "missing",
+			blockReason: "Candidate data only; no production adapter in this slice.",
+		},
+	],
+};
+
+function findProviderEntry(
+	catalog: ProviderCatalog,
+	provider: LLMProviderId,
+): ProviderCatalogEntry | undefined {
+	return catalog.entries.find((entry) => entry.provider === provider);
+}
+
+function missingRequiredEnv(
+	entry: ProviderCatalogEntry,
+	env: EnvLookup,
+): readonly string[] {
+	return (entry.requiredEnv ?? []).filter((name) => env[name] == null);
+}
+
+function getEnabledDefaultCatalogModels(): readonly string[] {
+	return DEFAULT_PROVIDER_CATALOG.entries.flatMap((entry) =>
+		entry.status === "enabled" ? entry.models : [],
+	);
+}
+
+function getDeepSeekDefaultCatalogEntry(): ProviderCatalogEntry & {
+	readonly defaultModel: string;
+} {
+	const entry = DEFAULT_PROVIDER_CATALOG.entries.find(
+		(candidate) => candidate.provider === "deepseek",
+	);
+	if (
+		entry == null ||
+		entry.status !== "enabled" ||
+		entry.defaultModel == null
+	) {
+		throw new Error(
+			"DEFAULT_PROVIDER_CATALOG requires enabled DeepSeek default model.",
+		);
+	}
+
+	return { ...entry, defaultModel: entry.defaultModel };
+}
+
+export function validateProviderCatalog(
+	catalog: ProviderCatalog = DEFAULT_PROVIDER_CATALOG,
+	env: EnvLookup = process.env,
+): ProviderCatalog {
+	for (const entry of catalog.entries) {
+		if (entry.status !== "enabled") {
+			continue;
+		}
+
+		const missing = missingRequiredEnv(entry, env);
+		if (missing.length > 0) {
+			throw new Error(
+				`Enabled provider ${entry.provider} is missing required env: ${missing.join(", ")}`,
+			);
+		}
+
+		if (entry.liveEvidence !== "verified") {
+			throw new Error(
+				`Enabled provider ${entry.provider} requires verified live evidence.`,
+			);
+		}
+
+		if (
+			entry.defaultModel == null ||
+			!entry.models.includes(entry.defaultModel)
+		) {
+			throw new Error(
+				`Enabled provider ${entry.provider} requires a default model in its model list.`,
+			);
+		}
+	}
+
+	return catalog;
+}
+
+export function decideLLMRoute(
+	request: LLMRouteRequest,
+	catalog: ProviderCatalog = DEFAULT_PROVIDER_CATALOG,
+): LLMRouteDecision {
+	const entry = findProviderEntry(catalog, request.provider);
+	if (entry == null) {
+		throw new Error(
+			`Provider ${request.provider} is not in the provider catalog.`,
+		);
+	}
+
+	if (entry.status !== "enabled") {
+		throw new Error(
+			`Provider ${request.provider} is ${entry.status}; no provider fallback is configured.`,
+		);
+	}
+
+	if (!entry.models.includes(request.model)) {
+		throw new Error(
+			`Model ${request.model} is not enabled for provider ${request.provider}.`,
+		);
+	}
+
+	const effectiveModel =
+		request.provider === "deepseek" &&
+		request.model === "deepseek-chat" &&
+		request.thinkingMode != null &&
+		request.thinkingMode !== "disabled"
+			? "deepseek-reasoner"
+			: request.model;
+
+	if (!entry.models.includes(effectiveModel)) {
+		throw new Error(
+			`Effective model ${effectiveModel} is not enabled for provider ${request.provider}.`,
+		);
+	}
+
+	return {
+		provider: request.provider,
+		configuredModel: request.model,
+		effectiveModel,
+		fallbackUsed: false,
+		reasoningStateAdapter:
+			request.thinkingMode == null || request.thinkingMode === "disabled"
+				? "none"
+				: "captured_not_replayed",
+	};
+}
+
 export function createProvider() {
+	validateProviderCatalog();
 	const apiKey = process.env.DEEPSEEK_API_KEY;
 	if (!apiKey) {
 		throw new Error(
@@ -94,5 +268,17 @@ export function createProvider() {
 }
 
 export function getDefaultModel() {
-	return process.env.QUILIN_DEFAULT_MODEL ?? "deepseek-chat";
+	const configuredModel = process.env.QUILIN_DEFAULT_MODEL;
+	if (configuredModel == null || configuredModel.length === 0) {
+		return getDeepSeekDefaultCatalogEntry().defaultModel;
+	}
+
+	const enabledModels = getEnabledDefaultCatalogModels();
+	if (!enabledModels.includes(configuredModel)) {
+		throw new Error(
+			`QUILIN_DEFAULT_MODEL ${configuredModel} is not enabled in DEFAULT_PROVIDER_CATALOG.`,
+		);
+	}
+
+	return configuredModel;
 }
