@@ -111,6 +111,62 @@ _SAFETY_RELEVANT_RE = re.compile(
     r"(密钥|令牌|密码|凭证|权限|审批|批准|隐私|敏感)",
     re.IGNORECASE,
 )
+_SECRET_REDACTION = "[REDACTED_SECRET]"
+_SECRET_VALUE_PATTERN = (
+    r"(?:\"[^\"\n]{4,180}\"|'[^'\n]{4,180}'|`[^`\n]{4,180}`|"
+    r"[^\s,;!?。！？)\]}]{4,180})"
+)
+_SENSITIVE_ASSIGNMENT_KEY_NAMES = frozenset(
+    {
+        "accesstoken",
+        "apikey",
+        "authorization",
+        "authtoken",
+        "bearertoken",
+        "clientsecret",
+        "credential",
+        "credentials",
+        "databaseurl",
+        "deepseekapikey",
+        "githubtoken",
+        "openaiapikey",
+        "password",
+        "privatekey",
+        "secret",
+        "secretkey",
+        "sessiontoken",
+        "slacktoken",
+        "token",
+    }
+)
+_SENSITIVE_ASSIGNMENT_KEY_SUFFIXES = (
+    "apikey",
+    "privatekey",
+    "secretkey",
+    "token",
+    "secret",
+    "password",
+)
+_INLINE_SECRET_ASSIGNMENT_RE = re.compile(
+    rf"(?P<prefix>\b(?P<key>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*)"
+    rf"(?P<secret>{_SECRET_VALUE_PATTERN})",
+    re.IGNORECASE,
+)
+_LABELED_SECRET_RE = re.compile(
+    rf"(?P<label>\b(?:api[-_ ]?key|access[-_ ]?token|auth[-_ ]?token|"
+    rf"bearer[-_ ]?token|password|passwd|pwd|secret|credential)\b"
+    rf"\s*(?:is\s+|[:=]\s*))(?P<secret>{_SECRET_VALUE_PATTERN})",
+    re.IGNORECASE,
+)
+_BEARER_SECRET_RE = re.compile(
+    rf"(?P<prefix>\bBearer\s+)(?P<secret>{_SECRET_VALUE_PATTERN})",
+    re.IGNORECASE,
+)
+_STANDALONE_SECRET_RES: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\b(?:sk|pk|rk|gh[pousr])[-_][A-Za-z0-9][A-Za-z0-9._-]{8,}\b"),
+    re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}\b"),
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -616,8 +672,45 @@ def _source_ref(turn: ObservationTurn) -> str:
     return f"content-sha256:{digest}"
 
 
+def _normalize_assignment_key(key: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", key.lower())
+
+
+def _is_sensitive_assignment_key(key: str) -> bool:
+    normalized = _normalize_assignment_key(key)
+    return normalized in _SENSITIVE_ASSIGNMENT_KEY_NAMES or any(
+        normalized.endswith(suffix) for suffix in _SENSITIVE_ASSIGNMENT_KEY_SUFFIXES
+    )
+
+
+def _redact_inline_secret_assignment(match: re.Match[str]) -> str:
+    key = match.group("key")
+    secret = match.group("secret")
+    if _is_sensitive_assignment_key(key) and not secret.startswith("[REDACTED"):
+        return f"{match.group('prefix')}{_SECRET_REDACTION}"
+    return match.group(0)
+
+
+def _redact_sensitive_text(text: str) -> str:
+    redacted = _LABELED_SECRET_RE.sub(
+        lambda match: f"{match.group('label')}{_SECRET_REDACTION}",
+        text,
+    )
+    redacted = _INLINE_SECRET_ASSIGNMENT_RE.sub(
+        _redact_inline_secret_assignment,
+        redacted,
+    )
+    redacted = _BEARER_SECRET_RE.sub(
+        lambda match: f"{match.group('prefix')}{_SECRET_REDACTION}",
+        redacted,
+    )
+    for secret_re in _STANDALONE_SECRET_RES:
+        redacted = secret_re.sub(_SECRET_REDACTION, redacted)
+    return redacted
+
+
 def _source_excerpt(content: str, *, max_length: int = 240) -> str:
-    collapsed = _WHITESPACE_RE.sub(" ", content).strip()
+    collapsed = _WHITESPACE_RE.sub(" ", _redact_sensitive_text(content)).strip()
     if len(collapsed) <= max_length:
         return collapsed
     return f"{collapsed[: max_length - 1]}..."
@@ -712,7 +805,7 @@ def _observation_candidate(
     escalation_reasons: tuple[ObservationEscalationReason, ...],
 ) -> ObservationCandidate:
     return ObservationCandidate(
-        content=content,
+        content=_redact_sensitive_text(content),
         confidence=confidence,
         kind=kind,
         source_turn_id=turn.turn_id,

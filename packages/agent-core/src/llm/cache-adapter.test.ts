@@ -135,6 +135,94 @@ describe("adaptMessagesForModel", () => {
 		]);
 	});
 
+	it("redacts secret-like DeepSeek reasoning before provider serialization", () => {
+		const result = adaptMessagesForModel({
+			provider: "deepseek.chat",
+			thinkingMode: "enabled",
+			messages: [
+				{
+					role: "assistant",
+					content: "",
+					reasoning: [
+						{
+							provider: "deepseek",
+							text: "Use OPENAI_API_KEY=plain-openai-secret",
+						},
+					],
+					toolCalls: [
+						{
+							id: "call-1",
+							name: "memory_recall",
+							arguments: { query: "hello" },
+						},
+					],
+				},
+			],
+		});
+
+		expect(JSON.stringify(result.messages)).not.toContain(
+			"plain-openai-secret",
+		);
+		expect(result.messages).toEqual([
+			{
+				role: "assistant",
+				content: [
+					{
+						type: "reasoning",
+						text: "Use OPENAI_API_KEY=[REDACTED:env_secret]",
+					},
+					{
+						type: "tool-call",
+						toolCallId: "call-1",
+						toolName: "memory_recall",
+						input: { query: "hello" },
+					},
+				],
+			},
+		]);
+	});
+
+	it("keeps DeepSeek reasoning out of provider serialization when thinking is disabled", () => {
+		const result = adaptMessagesForModel({
+			provider: "deepseek.chat",
+			thinkingMode: "disabled",
+			messages: [
+				{
+					role: "assistant",
+					content: "",
+					reasoning: [
+						{
+							provider: "deepseek",
+							text: "SECRET_REASONING",
+						},
+					],
+					toolCalls: [
+						{
+							id: "call-1",
+							name: "memory_recall",
+							arguments: { query: "hello" },
+						},
+					],
+				},
+			],
+		});
+
+		expect(JSON.stringify(result.messages)).not.toContain("SECRET_REASONING");
+		expect(result.messages).toEqual([
+			{
+				role: "assistant",
+				content: [
+					{
+						type: "tool-call",
+						toolCallId: "call-1",
+						toolName: "memory_recall",
+						input: { query: "hello" },
+					},
+				],
+			},
+		]);
+	});
+
 	it("keeps assistant reasoning out of non-DeepSeek outbound model messages", () => {
 		const result = adaptMessagesForModel({
 			provider: "openai.responses",

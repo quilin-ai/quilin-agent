@@ -449,6 +449,7 @@ function prepareInvocation(
 		messages: mapMessagesToModelToolNames(messages, toolNameMapping),
 		prompt,
 		provider: modelMetadata.provider,
+		thinkingMode: config.thinkingMode,
 	});
 	const providerOptions = buildProviderOptions(modelMetadata.provider, config);
 

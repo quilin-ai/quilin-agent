@@ -92,6 +92,18 @@ describe("redaction", () => {
 		expect(hasSecretPattern(output)).toBe(false);
 	});
 
+	it("redacts inline secret assignments embedded in prose", () => {
+		const output = redactString(
+			"Use OPENAI_API_KEY=plain-openai-secret and keep PUBLIC_URL=https://example.test",
+		);
+
+		expect(output).toBe(
+			"Use OPENAI_API_KEY=[REDACTED:env_secret] and keep PUBLIC_URL=https://example.test",
+		);
+		expect(output).not.toContain("plain-openai-secret");
+		expect(findSecretPatterns(output)).toEqual([]);
+	});
+
 	it("detects .env-style secret assignments for meta verification", () => {
 		const matches = findSecretPatterns(
 			[

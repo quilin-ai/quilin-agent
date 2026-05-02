@@ -138,8 +138,13 @@ export async function runAgentLoop(
 					"Agent loop: calling LLM",
 				);
 			}
-			const outboundTranscript =
-				stripNonReplayableReasoningFromMessages(workingMessages);
+			const outboundTranscript = stripNonReplayableReasoningFromMessages(
+				workingMessages,
+				{
+					providerId: config.observability?.llmProviderId,
+					thinkingMode: inferenceConfig.thinkingMode,
+				},
+			);
 			const outboundRequest =
 				config.sessionAssembler == null
 					? { messages: outboundTranscript }
@@ -151,6 +156,10 @@ export async function runAgentLoop(
 						});
 			const outboundMessages = stripNonReplayableReasoningFromMessages(
 				outboundRequest.messages,
+				{
+					providerId: config.observability?.llmProviderId,
+					thinkingMode: inferenceConfig.thinkingMode,
+				},
 			);
 			await recordAgentRunEvent(
 				runLogger,

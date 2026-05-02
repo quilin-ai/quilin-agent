@@ -110,6 +110,8 @@ const SENSITIVE_KEY_SUFFIXES = [
 ];
 const ENV_ASSIGNMENT_PATTERN =
 	/^([ \t]*(?:\d+:[ \t]*)?(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*=[ \t]*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\r\n]*)/gm;
+const INLINE_ENV_ASSIGNMENT_PATTERN =
+	/\b([A-Za-z_][A-Za-z0-9_]*[ \t]*=[ \t]*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s"'<>),;]+)/g;
 
 function normalizeKey(key: string): string {
 	return key.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -131,6 +133,21 @@ function redactEnvSecretLines(value: string): string {
 	return value.replace(ENV_ASSIGNMENT_PATTERN, (match, prefix, key) =>
 		isSensitiveKeyName(key) ? `${prefix}${REDACTED_ENV_SECRET}` : match,
 	);
+}
+
+function redactInlineEnvSecrets(value: string): string {
+	return value.replace(INLINE_ENV_ASSIGNMENT_PATTERN, (match, prefix) => {
+		const key = prefix.split("=")[0]?.trim() ?? "";
+		const envValue = envValueFromMatch(match, prefix);
+		if (
+			isSensitiveKeyName(key) &&
+			envValue !== "" &&
+			!envValue.startsWith("[REDACTED")
+		) {
+			return `${prefix}${REDACTED_ENV_SECRET}`;
+		}
+		return match;
+	});
 }
 
 function envValueFromMatch(match: string, prefix: string): string {
@@ -161,19 +178,50 @@ function findEnvSecretLines(value: string): readonly SecretPatternMatch[] {
 	return matches;
 }
 
-export function redactString(value: string): string {
-	return SECRET_PATTERNS.reduce((redacted, pattern) => {
-		if (typeof pattern.replacement === "string") {
-			return redacted.replace(pattern.regex, pattern.replacement);
+function findInlineEnvSecrets(value: string): readonly SecretPatternMatch[] {
+	const matches: SecretPatternMatch[] = [];
+	for (const match of value.matchAll(INLINE_ENV_ASSIGNMENT_PATTERN)) {
+		const index = match.index ?? 0;
+		if (index === 0 || value[index - 1] === "\n") {
+			continue;
 		}
-		return redacted.replace(pattern.regex, pattern.replacement);
-	}, redactEnvSecretLines(value));
+
+		const prefix = match[1] ?? "";
+		const key = prefix.split("=")[0]?.trim() ?? "";
+		const envValue = envValueFromMatch(match[0], prefix);
+		if (
+			isSensitiveKeyName(key) &&
+			envValue !== "" &&
+			!envValue.startsWith("[REDACTED")
+		) {
+			matches.push({
+				kind: "env_secret",
+				matchedText: match[0].slice(0, 100),
+			});
+		}
+	}
+	return matches;
+}
+
+export function redactString(value: string): string {
+	return SECRET_PATTERNS.reduce(
+		(redacted, pattern) => {
+			if (typeof pattern.replacement === "string") {
+				return redacted.replace(pattern.regex, pattern.replacement);
+			}
+			return redacted.replace(pattern.regex, pattern.replacement);
+		},
+		redactInlineEnvSecrets(redactEnvSecretLines(value)),
+	);
 }
 
 export function findSecretPatterns(
 	value: string,
 ): readonly SecretPatternMatch[] {
-	const matches: SecretPatternMatch[] = [...findEnvSecretLines(value)];
+	const matches: SecretPatternMatch[] = [
+		...findEnvSecretLines(value),
+		...findInlineEnvSecrets(value),
+	];
 	for (const pattern of SECRET_PATTERNS) {
 		for (const match of value.matchAll(pattern.regex)) {
 			matches.push({

@@ -102,6 +102,18 @@ def _archive_gate_snapshot(
     return {"id": decision_id, **decision.to_dict()}
 
 
+def _assert_secret_absent_from_candidates(
+    candidates: tuple[ObservationCandidate, ...],
+    raw_secret: str,
+) -> None:
+    assert candidates
+    for candidate in candidates:
+        assert raw_secret not in candidate.content
+        source_excerpt = candidate.metadata["source_excerpt"]
+        assert isinstance(source_excerpt, str)
+        assert raw_secret not in source_excerpt
+
+
 async def test_default_observer_is_noop() -> None:
     observer = NoOpMemoryObserver()
     turn = ObservationTurn(content="remember I prefer brief status updates", role="user")
@@ -252,6 +264,118 @@ def test_rule_first_observer_extracts_test_outcome_events() -> None:
     assert candidates[0].metadata["pattern_id"] == "test_outcome"
     assert candidates[0].metadata["escalation_reasons"] == ("non_user_source",)
     assert candidates[0].metadata["needs_policy_review"] is True
+
+
+def test_rule_first_observer_redacts_api_keys_from_candidates() -> None:
+    raw_api_key = "qln-test-api-key-1234567890abcdef"
+
+    candidates = extract_observation_candidates(
+        {
+            "content": f"Remember that my API key is {raw_api_key} for local testing.",
+            "role": "user",
+            "turn_id": "turn-api-key-1",
+        }
+    )
+
+    _assert_secret_absent_from_candidates(candidates, raw_api_key)
+    assert candidates[0].content == (
+        "Remembered fact: my API key is [REDACTED_SECRET] for local testing"
+    )
+    assert "[REDACTED_SECRET]" in candidates[0].metadata["source_excerpt"]
+    assert candidates[0].metadata["escalation_reasons"] == ("safety_relevant",)
+    assert candidates[0].metadata["needs_policy_review"] is True
+
+
+def test_rule_first_observer_redacts_inline_env_secret_assignments() -> None:
+    raw_api_key = "plain-openai-secret"
+
+    candidates = extract_observation_candidates(
+        {
+            "content": f"Remember OPENAI_API_KEY={raw_api_key} for local tests.",
+            "role": "user",
+            "turn_id": "turn-inline-env-secret-1",
+        }
+    )
+
+    _assert_secret_absent_from_candidates(candidates, raw_api_key)
+    assert candidates[0].content == (
+        "Remembered fact: OPENAI_API_KEY=[REDACTED_SECRET] for local tests"
+    )
+    assert candidates[0].metadata["source_excerpt"] == (
+        "Remember OPENAI_API_KEY=[REDACTED_SECRET] for local tests."
+    )
+    assert candidates[0].metadata["escalation_reasons"] == ("safety_relevant",)
+    assert candidates[0].metadata["needs_policy_review"] is True
+
+
+def test_rule_first_observer_redacts_generic_inline_token_assignments() -> None:
+    raw_token = "plain-token-secret"
+
+    candidates = extract_observation_candidates(
+        {
+            "content": f"Please keep token={raw_token} outside summaries.",
+            "role": "user",
+            "turn_id": "turn-inline-token-secret-1",
+        }
+    )
+
+    _assert_secret_absent_from_candidates(candidates, raw_token)
+    assert candidates[0].content == (
+        "User requested: token=[REDACTED_SECRET] outside summaries"
+    )
+    assert candidates[0].metadata["source_excerpt"] == (
+        "Please keep token=[REDACTED_SECRET] outside summaries."
+    )
+    assert candidates[0].metadata["escalation_reasons"] == ("safety_relevant",)
+    assert candidates[0].metadata["needs_policy_review"] is True
+
+
+def test_rule_first_observer_does_not_double_redact_labeled_assignment() -> None:
+    raw_api_key = "plain-api-secret"
+
+    candidates = extract_observation_candidates(
+        {
+            "content": f"Remember api_key={raw_api_key} for local tests.",
+            "role": "user",
+            "turn_id": "turn-labeled-assignment-secret-1",
+        }
+    )
+
+    _assert_secret_absent_from_candidates(candidates, raw_api_key)
+    assert candidates[0].content == (
+        "Remembered fact: api_key=[REDACTED_SECRET] for local tests"
+    )
+    assert "[REDACTED_SECRET]]" not in candidates[0].content
+    assert "[REDACTED_SECRET]]" not in candidates[0].metadata["source_excerpt"]
+
+
+def test_rule_first_observer_redacts_password_like_values_and_preserves_safe_extraction() -> None:
+    raw_password = "qln-test-password-123456"
+
+    candidates = extract_observation_candidates(
+        {
+            "content": (
+                f"Please keep the password: {raw_password} out of logs. "
+                "Please keep status updates concise."
+            ),
+            "role": "user",
+            "turn_id": "turn-password-1",
+        }
+    )
+
+    _assert_secret_absent_from_candidates(candidates, raw_password)
+    assert [candidate.content for candidate in candidates] == [
+        "User requested: the password: [REDACTED_SECRET] out of logs",
+        "User requested: status updates concise",
+    ]
+    assert all(
+        "[REDACTED_SECRET]" in candidate.metadata["source_excerpt"]
+        for candidate in candidates
+    )
+    assert all(
+        candidate.metadata["escalation_reasons"] == ("safety_relevant",)
+        for candidate in candidates
+    )
 
 
 def test_rule_first_report_serializes_candidates_with_content_hash_evidence() -> None:

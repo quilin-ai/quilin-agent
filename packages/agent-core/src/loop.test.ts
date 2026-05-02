@@ -1021,6 +1021,9 @@ describe("runAgentLoop", () => {
 					maxTokens: 1024,
 					thinkingMode: "enabled",
 				},
+				observability: {
+					llmProviderId: "deepseek",
+				},
 			},
 			[{ role: "user", content: "你是谁？" }],
 		);
@@ -1174,7 +1177,7 @@ describe("runAgentLoop", () => {
 		);
 	});
 
-	it("在 tool resume 出站前保留 DeepSeek tool-call reasoning 并剥离非回放 reasoning", async () => {
+	it("在 thinking disabled 时不回放 DeepSeek tool-call reasoning", async () => {
 		vi.mocked(getLoggerRuntimeMode).mockReturnValue("repl");
 
 		const chat = vi
@@ -1259,6 +1262,9 @@ describe("runAgentLoop", () => {
 					maxTokens: 1024,
 					thinkingMode: "disabled",
 				},
+				observability: {
+					llmProviderId: "deepseek",
+				},
 			},
 			[{ role: "user", content: "hello" }],
 		);
@@ -1269,12 +1275,6 @@ describe("runAgentLoop", () => {
 				{
 					role: "assistant",
 					content: "",
-					reasoning: [
-						{
-							provider: "deepseek",
-							text: "[REDACTED: instruction_override] and [REDACTED: credential_exfiltration]",
-						},
-					],
 					toolCalls: [
 						{
 							id: "call-1",
@@ -1302,12 +1302,6 @@ describe("runAgentLoop", () => {
 				{
 					role: "assistant",
 					content: "",
-					reasoning: [
-						{
-							provider: "deepseek",
-							text: "[REDACTED: instruction_override] and [REDACTED: credential_exfiltration]",
-						},
-					],
 					toolCalls: [
 						{
 							id: "call-1",

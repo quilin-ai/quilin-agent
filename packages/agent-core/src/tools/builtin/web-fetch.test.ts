@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { ToolRouter } from "../router.js";
 import { resolveSandboxPolicy } from "../sandbox.js";
 import { createWebFetchTool } from "./web-fetch.js";
 
@@ -91,6 +92,99 @@ describe("builtin web_fetch tool", () => {
 					sendsCredentials: true,
 				},
 			},
+		});
+	});
+
+	it("requires sandbox approval for POST bodies before fetching", async () => {
+		const fetcher = vi.fn();
+		const router = new ToolRouter(
+			[
+				createWebFetchTool({
+					fetcher,
+				}),
+			],
+			{ sandboxOrigin: "agent" },
+		);
+
+		const result = await router.execute({
+			id: "call-web-fetch-post-body",
+			name: "web_fetch",
+			arguments: {
+				url: "https://example.com/data",
+				method: "POST",
+				body: "ping",
+				headers: { "x-test": "1" },
+			},
+		});
+
+		expect(fetcher).not.toHaveBeenCalled();
+		expect(result.isError).toBe(true);
+		expect(JSON.parse(result.content)).toMatchObject({
+			error: "Tool execution requires sandbox approval.",
+			code: "sandbox_approval_required",
+			details: {
+				decision: {
+					kind: "ask",
+					reasonCodes: ["network_operation_requires_approval"],
+					requiredApprovals: ["network_access", "user_confirmation"],
+				},
+				approvalSummary: {
+					tool: "web_fetch",
+					call: "call-web-fetch-post-body",
+					origin: "agent",
+					kind: "ask",
+					requiredApprovals: ["network_access", "user_confirmation"],
+					reasonCodes: ["network_operation_requires_approval"],
+				},
+			},
+		});
+		expect(result.error?.code).toBe("sandbox_approval_required");
+	});
+
+	it("allows ordinary GET sandbox checks before fetching", async () => {
+		const fetcher = vi.fn(
+			async () =>
+				new Response("hello world", {
+					status: 200,
+					headers: {
+						"content-type": "text/plain",
+					},
+				}),
+		);
+		const router = new ToolRouter(
+			[
+				createWebFetchTool({
+					fetcher,
+					resolver: createResolver({ "example.com": ["93.184.216.34"] }),
+				}),
+			],
+			{ sandboxOrigin: "agent" },
+		);
+
+		const result = await router.execute({
+			id: "call-web-fetch-get",
+			name: "web_fetch",
+			arguments: {
+				url: "https://example.com/data",
+			},
+		});
+
+		expect(result.isError).toBe(false);
+		expect(fetcher).toHaveBeenCalledWith(
+			"https://example.com/data",
+			expect.objectContaining({
+				method: "GET",
+				body: undefined,
+				redirect: "manual",
+				signal: expect.any(AbortSignal),
+			}),
+		);
+		expect(JSON.parse(result.content)).toEqual({
+			url: "https://example.com/data",
+			status: 200,
+			contentType: "text/plain",
+			body: "hello world",
+			truncated: false,
 		});
 	});
 

@@ -294,6 +294,28 @@ function hasUrlUserinfo(url: URL): boolean {
 	return url.username !== "" || url.password !== "";
 }
 
+function normalizeRequestMethod(method: unknown): string {
+	if (typeof method !== "string" || method.length === 0) {
+		return "GET";
+	}
+
+	return method.toUpperCase();
+}
+
+function hasNonEmptyRequestBody(body: unknown): boolean {
+	return typeof body === "string" ? body.length > 0 : body != null;
+}
+
+function isKnownPrivateDestination(url: URL): boolean {
+	const hostname = normalizeHostname(url.hostname);
+	if (hostname === "localhost" || hostname.endsWith(".localhost")) {
+		return true;
+	}
+
+	const family = isIP(hostname);
+	return family !== 0 && isBlockedAddress(hostname, family as IPFamily);
+}
+
 function normalizeProtocol(protocol: string): string {
 	return protocol.endsWith(":") ? protocol.slice(0, -1) : protocol;
 }
@@ -302,37 +324,44 @@ function createSandboxRequestFromArgs(
 	args: unknown,
 	origin: SandboxRequest["origin"],
 ): SandboxRequest {
-	const {
-		url,
-		method = "GET",
-		headers,
-	} = args as {
+	const { url, method, body, headers } = args as {
 		url?: string;
-		method?: "GET" | "POST";
+		method?: string;
+		body?: unknown;
 		headers?: Record<string, string>;
 	};
+	const requestMethod = normalizeRequestMethod(method);
+	const hasRequestBody = hasNonEmptyRequestBody(body);
+	const requiresNetworkApproval = requestMethod !== "GET" || hasRequestBody;
 
 	let networkSignal: NonNullable<
 		NonNullable<SandboxRequest["signals"]>["network"]
 	> = {
-		method,
+		method: requestMethod,
 		sendsCredentials: hasSensitiveHeaders(headers),
 	};
 
 	if (typeof url === "string") {
 		try {
 			const parsedUrl = new URL(url);
+			const sendsCredentials =
+				networkSignal.sendsCredentials || hasUrlUserinfo(parsedUrl);
+			const shouldPreserveDestination =
+				!requiresNetworkApproval ||
+				sendsCredentials ||
+				isKnownPrivateDestination(parsedUrl);
 			networkSignal = {
 				...networkSignal,
-				destination: parsedUrl.host,
 				protocol: normalizeProtocol(parsedUrl.protocol),
-				sendsCredentials:
-					networkSignal.sendsCredentials || hasUrlUserinfo(parsedUrl),
+				sendsCredentials,
+				...(shouldPreserveDestination ? { destination: parsedUrl.host } : {}),
 			};
 		} catch {
 			networkSignal = {
 				...networkSignal,
-				destination: url,
+				...(requiresNetworkApproval && networkSignal.sendsCredentials !== true
+					? {}
+					: { destination: url }),
 			};
 		}
 	}

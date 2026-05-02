@@ -1365,7 +1365,69 @@ describe("ToolRouter", () => {
 			toolCallId: "call-sandbox-approved",
 			isError: false,
 			content: JSON.stringify({ ok: true }),
+			audit: {
+				tool: "file_write",
+				call: "call-sandbox-approved",
+				outcome: "success",
+				sandboxKind: "ask",
+				sandboxOrigin: "agent",
+				requiredApprovals: ["write_authority", "user_confirmation"],
+				reasonCodes: ["write_operation_requires_approval"],
+				summary: "Tool file_write completed successfully.",
+				detail:
+					"tool=file_write; call=call-sandbox-approved; outcome=success; sandboxKind=ask; sandboxOrigin=agent; requiredApprovals=write_authority,user_confirmation; reasonCodes=write_operation_requires_approval",
+			},
 		});
+		expect(JSON.stringify(result.audit)).not.toContain("hello");
+	});
+
+	it("sandbox 审批通过后工具执行失败仍保留审批审计来源", async () => {
+		const execute = vi
+			.fn()
+			.mockRejectedValue(new Error("unexpected write failure"));
+		const sandboxApproval = vi.fn(async () => true);
+		const tool: ToolWithMetadata = {
+			name: "file_write",
+			description: "Write a file.",
+			parameters: z.object({ path: z.string(), content: z.string() }),
+			sandboxPolicy: { operation: "write" },
+			execute,
+			category: "programmatic",
+			riskLevel: "write",
+		};
+		const router = new ToolRouter([tool], {
+			sandboxApproval,
+			sandboxOrigin: "agent",
+		});
+
+		const result = await router.execute({
+			id: "call-sandbox-approved-error",
+			name: "file_write",
+			arguments: { path: "demo.txt", content: "hello" },
+		});
+
+		expect(execute).toHaveBeenCalledTimes(1);
+		expect(result).toMatchObject({
+			toolCallId: "call-sandbox-approved-error",
+			isError: true,
+			error: {
+				code: "execution_failed",
+			},
+			audit: {
+				tool: "file_write",
+				call: "call-sandbox-approved-error",
+				outcome: "tool_error",
+				errorCode: "execution_failed",
+				sandboxKind: "ask",
+				sandboxOrigin: "agent",
+				requiredApprovals: ["write_authority", "user_confirmation"],
+				reasonCodes: ["write_operation_requires_approval"],
+				summary: "Tool file_write failed with execution_failed.",
+				detail:
+					"tool=file_write; call=call-sandbox-approved-error; outcome=tool_error; code=execution_failed; sandboxKind=ask; sandboxOrigin=agent; requiredApprovals=write_authority,user_confirmation; reasonCodes=write_operation_requires_approval",
+			},
+		});
+		expect(JSON.stringify(result.audit)).not.toContain("hello");
 	});
 
 	it("sandbox 审批拒绝后不执行工具调用", async () => {

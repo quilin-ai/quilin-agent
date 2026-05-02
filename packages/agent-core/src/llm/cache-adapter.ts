@@ -3,7 +3,9 @@ import type {
 	AssembledPrompt,
 	RecommendedBreakpoint,
 } from "../context/prompt-types.js";
+import { redactString } from "../safety/redaction.js";
 import type { Message } from "../state/types.js";
+import type { ThinkingMode } from "./types.js";
 
 export type CacheAwareProvider =
 	| "anthropic"
@@ -17,6 +19,7 @@ export interface CacheAdapterInput {
 	readonly messages: readonly Message[];
 	readonly prompt?: AssembledPrompt;
 	readonly provider?: string;
+	readonly thinkingMode?: ThinkingMode;
 }
 
 export interface CacheAdapterOutput {
@@ -57,7 +60,10 @@ function getDeepSeekReasoningParts(
 	const parts: AssistantReasoningContentPart[] = [];
 	for (const part of message.reasoning ?? []) {
 		if (part.provider === "deepseek" && part.text.length > 0) {
-			parts.push({ type: "reasoning", text: part.text });
+			const redactedText = redactString(part.text);
+			if (redactedText.length > 0) {
+				parts.push({ type: "reasoning", text: redactedText });
+			}
 		}
 	}
 
@@ -66,10 +72,12 @@ function getDeepSeekReasoningParts(
 
 function shouldSerializeDeepSeekReasoning(
 	provider: string | undefined,
+	thinkingMode: ThinkingMode | undefined,
 	message: Message,
 ): boolean {
 	return (
 		normalizeProvider(provider) === "deepseek" &&
+		thinkingMode !== "disabled" &&
 		message.role === "assistant" &&
 		(message.toolCalls?.length ?? 0) > 0
 	);
@@ -78,6 +86,7 @@ function shouldSerializeDeepSeekReasoning(
 function toSdkMessage(
 	message: Message,
 	provider: string | undefined,
+	thinkingMode: ThinkingMode | undefined,
 ): ModelMessage[] {
 	switch (message.role) {
 		case "system":
@@ -92,7 +101,7 @@ function toSdkMessage(
 			}
 
 			const content: AssistantContent = [
-				...(shouldSerializeDeepSeekReasoning(provider, message)
+				...(shouldSerializeDeepSeekReasoning(provider, thinkingMode, message)
 					? getDeepSeekReasoningParts(message)
 					: []),
 				...(message.content === ""
@@ -142,8 +151,11 @@ function toSdkMessage(
 function serializeMessages(
 	messages: readonly Message[],
 	provider: string | undefined,
+	thinkingMode: ThinkingMode | undefined,
 ): ModelMessage[] {
-	return messages.flatMap((message) => toSdkMessage(message, provider));
+	return messages.flatMap((message) =>
+		toSdkMessage(message, provider, thinkingMode),
+	);
 }
 
 function toAnthropicSystemMessage(
@@ -182,10 +194,11 @@ function normalizeProvider(provider: string | undefined): CacheAwareProvider {
 function adaptAnthropicMessages(
 	messages: readonly Message[],
 	prompt: AssembledPrompt | undefined,
+	thinkingMode: ThinkingMode | undefined,
 ): CacheAdapterOutput {
 	if (prompt == null || prompt.segments.length === 0) {
 		return {
-			messages: serializeMessages(messages, "anthropic"),
+			messages: serializeMessages(messages, "anthropic", thinkingMode),
 			appliedBreakpoints: [],
 		};
 	}
@@ -213,7 +226,7 @@ function adaptAnthropicMessages(
 	return {
 		messages: [
 			...systemMessages,
-			...serializeMessages(transcript, "anthropic"),
+			...serializeMessages(transcript, "anthropic", thinkingMode),
 		],
 		appliedBreakpoints,
 	};
@@ -224,14 +237,22 @@ export function adaptMessagesForModel(
 ): CacheAdapterOutput {
 	switch (normalizeProvider(input.provider)) {
 		case "anthropic":
-			return adaptAnthropicMessages(input.messages, input.prompt);
+			return adaptAnthropicMessages(
+				input.messages,
+				input.prompt,
+				input.thinkingMode,
+			);
 		case "deepseek":
 		case "openai":
 		case "gemini":
 		case "xai":
 		case "unknown":
 			return {
-				messages: serializeMessages(input.messages, input.provider),
+				messages: serializeMessages(
+					input.messages,
+					input.provider,
+					input.thinkingMode,
+				),
 				appliedBreakpoints: [],
 			};
 	}
