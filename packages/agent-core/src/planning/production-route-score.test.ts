@@ -418,7 +418,7 @@ describe("summarizeProductionRouteExplanations", () => {
 });
 
 describe("summarizeProductionRouteScores", () => {
-	it("matches the explanation-only summary for full score objects", () => {
+	it("summarizes full diagnostic reason codes for score objects", () => {
 		const scores = [
 			scoreProductionRoute({
 				taskRisk: "low",
@@ -440,11 +440,23 @@ describe("summarizeProductionRouteScores", () => {
 			}),
 		];
 
-		expect(summarizeProductionRouteScores(scores)).toEqual(
-			summarizeProductionRouteExplanations(
-				scores.map((score) => score.explanation),
-			),
-		);
+		expect(summarizeProductionRouteScores(scores)).toMatchObject({
+			byReasonCode: {
+				task_risk_low_local: 1,
+				task_risk_medium_monitor: 1,
+				task_risk_high_supervisor: 1,
+				complexity_low_local: 2,
+				complexity_medium: 1,
+				cost_low_local: 3,
+				capability_fit_strong_local: 2,
+				capability_fit_partial: 1,
+				risk_requires_supervisor_handoff: 1,
+				score_above_threshold: 1,
+				score_below_threshold: 2,
+				recommend_handoff_to_supervisor: 1,
+				recommend_keep_local: 2,
+			},
+		});
 	});
 
 	it("returns a stable empty summary", () => {
@@ -493,15 +505,9 @@ describe("summarizeProductionRouteScores", () => {
 
 		const summary = summarizeProductionRouteScores([score, score]);
 
-		expect(Object.keys(summary.byReasonCode)).toEqual([
-			"non_blocking_supervisor_required",
-			"score_below_threshold",
-			"recommend_handoff_to_supervisor",
-		]);
+		expect(Object.keys(summary.byReasonCode)).toEqual(["recommend_keep_local"]);
 		expect(summary.byReasonCode).toEqual({
-			non_blocking_supervisor_required: 2,
-			score_below_threshold: 2,
-			recommend_handoff_to_supervisor: 2,
+			recommend_keep_local: 2,
 		});
 		expect(summary.bySelectedRoute).toEqual({
 			keep_local: 0,
@@ -581,6 +587,14 @@ describe("scoreProductionRoutes", () => {
 				handoff_to_supervisor: 1,
 			},
 			byReasonCode: {
+				task_risk_low_local: 1,
+				task_risk_medium_monitor: 1,
+				task_risk_high_supervisor: 1,
+				complexity_low_local: 2,
+				complexity_medium: 1,
+				cost_low_local: 3,
+				capability_fit_strong_local: 2,
+				capability_fit_partial: 1,
 				risk_requires_supervisor_handoff: 1,
 				score_above_threshold: 1,
 				score_below_threshold: 2,

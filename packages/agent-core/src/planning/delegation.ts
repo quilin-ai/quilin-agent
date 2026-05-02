@@ -1,7 +1,7 @@
 import { assertAcyclicDag, getStepWriteSet, type WriteSet } from "./dag.js";
 import type { DagPlan, RiskLevel, SubTask } from "./types.js";
 
-export const DELEGATION_HANDOFF_SCHEMA_VERSION = 1;
+export const DELEGATION_HANDOFF_SCHEMA_VERSION = 2;
 
 export type DelegationRiskLevel = "safe" | RiskLevel | "critical";
 export type JsonPrimitive = string | number | boolean | null;
@@ -54,6 +54,30 @@ export interface DelegationResumeContract {
 	readonly checkpointOwner: "child_agent";
 }
 
+export interface DelegationWriteAuthorityEnvelope {
+	readonly gate: "WriteAuthority";
+	readonly origin: "delegation";
+	readonly required: true;
+	readonly risk: DelegationRiskLevel;
+	readonly scope: WriteSet["scope"];
+	readonly canonicalResources: ReadonlyArray<string>;
+}
+
+export interface DelegationCancellationStrategy {
+	readonly token: string;
+	readonly mode: "cooperative";
+	readonly requestedBy: "parent_or_supervisor";
+	readonly reasonRequired: true;
+}
+
+export interface DelegationTraceEnvelope {
+	readonly traceId: string;
+	readonly parentRunId: string;
+	readonly childRunId: string;
+	readonly spanId: string;
+	readonly schemaRef: "planning.delegation.trace.v1";
+}
+
 export interface DelegationHandoff {
 	readonly kind: "delegation_handoff";
 	readonly schemaVersion: typeof DELEGATION_HANDOFF_SCHEMA_VERSION;
@@ -69,9 +93,13 @@ export interface DelegationHandoff {
 	readonly historyFilter: "task_only";
 	readonly writeSet: WriteSet;
 	readonly writeScope: ReadonlyArray<string>;
+	readonly writeAuthority: DelegationWriteAuthorityEnvelope;
 	readonly risk: DelegationRiskLevel;
 	readonly retryPolicy: DelegationRetryPolicy;
 	readonly cancelToken: string;
+	readonly cancellation: DelegationCancellationStrategy;
+	readonly trace: DelegationTraceEnvelope;
+	readonly idempotencyKey: string;
 	readonly resultSchemaRef: string;
 	readonly resume: DelegationResumeContract;
 }
@@ -319,7 +347,15 @@ function writeScopeFor(writeSet: WriteSet): readonly string[] {
 		return [];
 	}
 
-	return writeSet.resources.map((resource) => `${writeSet.scope}:${resource}`);
+	return [...normalizedResourceSet(writeSet)]
+		.sort((left, right) => left.localeCompare(right))
+		.map((resource) => `${writeSet.scope}:${resource}`);
+}
+
+function canonicalResourcesFor(writeSet: WriteSet): readonly string[] {
+	return [...normalizedResourceSet(writeSet)].sort((left, right) =>
+		left.localeCompare(right),
+	);
 }
 
 function createDelegationHandoff(
@@ -329,11 +365,15 @@ function createDelegationHandoff(
 	risk: DelegationRiskLevel,
 	inputPayload: JsonRecord,
 ): DelegationHandoff {
+	const traceId = `${childRunId}:handoff`;
+	const cancelToken = `${childRunId}:cancel`;
+	const canonicalResources = canonicalResourcesFor(writeSet);
+
 	return {
 		kind: "delegation_handoff",
 		schemaVersion: DELEGATION_HANDOFF_SCHEMA_VERSION,
 		route: "sub_agent",
-		traceId: `${childRunId}:handoff`,
+		traceId,
 		parentRunId: candidate.parentRunId,
 		childRunId,
 		task: createHandoffTask(candidate.candidateStep, inputPayload),
@@ -347,12 +387,34 @@ function createDelegationHandoff(
 		historyFilter: "task_only",
 		writeSet,
 		writeScope: writeScopeFor(writeSet),
+		writeAuthority: {
+			gate: "WriteAuthority",
+			origin: "delegation",
+			required: true,
+			risk,
+			scope: writeSet.scope,
+			canonicalResources,
+		},
 		risk,
 		retryPolicy: {
 			maxAttempts: 1,
 			backoff: "none",
 		},
-		cancelToken: `${childRunId}:cancel`,
+		cancelToken,
+		cancellation: {
+			token: cancelToken,
+			mode: "cooperative",
+			requestedBy: "parent_or_supervisor",
+			reasonRequired: true,
+		},
+		trace: {
+			traceId,
+			parentRunId: candidate.parentRunId,
+			childRunId,
+			spanId: `${traceId}:span`,
+			schemaRef: "planning.delegation.trace.v1",
+		},
+		idempotencyKey: `delegation:${candidate.parentRunId}:${candidate.candidateStep.id}:${writeSet.scope}:${canonicalResources.join(",")}`,
 		resultSchemaRef: "planning.delegation.result.v1",
 		resume: {
 			checkpointRequired: true,

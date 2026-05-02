@@ -118,20 +118,24 @@ export type ContextCompressionDecisionKind = "keep" | "drop" | "truncate";
 export type ContextCompressionReason =
 	| "within_budget"
 	| "estimated_token_cost"
+	| "protected_authority"
 	| "budget_truncated"
 	| "budget_exhausted"
 	| "below_truncation_threshold";
 
 export interface ContextCompressionScore {
 	readonly relevance: number;
+	readonly authority: number;
+	readonly placementPriority: number;
 	readonly tokenCost: number;
 	readonly tokenCostEstimated: boolean;
 	readonly tokenEfficiency: number;
+	readonly protectedRetain: boolean;
 	readonly finalScore: number;
 }
 
 export interface ContextCompressionOrderingDecision {
-	readonly strategy: "final_score_desc_token_asc_timestamp_desc_input_order";
+	readonly strategy: "protected_authority_desc_final_score_desc_token_asc_timestamp_desc_input_order";
 	readonly orderedSourceIds: readonly string[];
 }
 

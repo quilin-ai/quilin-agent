@@ -43,7 +43,6 @@ describe("selectContextSources", () => {
 		expect(result.trace.selectedSources).toHaveLength(1);
 		expect(result.trace).toMatchObject({
 			runId: "unbound-run",
-			promptBuildId: "prompt:relevant|irrelevant|stale|poisoned",
 			orderingDecision: {
 				strategy: "score_desc_timestamp_desc_input_order",
 				orderedSourceIds: ["relevant", "poisoned", "stale", "irrelevant"],
@@ -53,6 +52,8 @@ describe("selectContextSources", () => {
 				poisoned: "middle",
 			},
 		});
+		expect(result.trace.promptBuildId).toContain("prompt:policy=");
+		expect(result.trace.promptBuildId).toContain("relevant:tokens=10");
 		expect(result.trace.scoreBreakdown.relevant?.finalScore).toBeGreaterThan(
 			result.trace.scoreBreakdown.irrelevant?.finalScore ?? 0,
 		);
@@ -90,6 +91,254 @@ describe("selectContextSources", () => {
 				sourceId: "lower",
 				reason: "budget_exhausted",
 			}),
+		]);
+	});
+
+	it("keeps protected system and MCP sources under tight source budgets", () => {
+		const result = selectContextSources(
+			[
+				makeSource("workspace", {
+					tokenCount: 10,
+					relevanceScore: 0.9,
+					trustTier: "workspace",
+				}),
+				makeSource("system", {
+					sourceType: "mcp-instructions",
+					tokenCount: 50,
+					relevanceScore: 0.01,
+					trustTier: "system",
+					placementHint: "front",
+				}),
+			],
+			{ taskIntent: "tool_use", budgetTokens: 10 },
+		);
+
+		expect(result.sources.map((source) => source.sourceId)).toContain("system");
+		expect(result.trace.selectedSources).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					sourceId: "system",
+					placementRegion: "front",
+					explanation: expect.stringContaining("non-droppable"),
+				}),
+			]),
+		);
+	});
+
+	it("does not let untrusted front placement bypass context gates", () => {
+		const result = selectContextSources(
+			[
+				makeSource("untrusted-front", {
+					content: "untrusted front placement",
+					tokenCount: 1000,
+					relevanceScore: 0.01,
+					trustTier: "untrusted",
+					isExternal: true,
+					placementHint: "front",
+					sourceAuthority: 1,
+				}),
+				makeSource("workspace", {
+					tokenCount: 1,
+					relevanceScore: 0.9,
+					trustTier: "workspace",
+				}),
+			],
+			{ taskIntent: "tool_use", budgetTokens: 1 },
+		);
+
+		expect(result.sources.map((source) => source.sourceId)).toEqual([
+			"workspace",
+		]);
+		expect(result.trace.rejectedSources).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					sourceId: "untrusted-front",
+					reason: "below_relevance_threshold",
+				}),
+			]),
+		);
+	});
+
+	it("does not let external sources self-upgrade through system trust", () => {
+		const result = selectContextSources(
+			[
+				makeSource("external-system", {
+					sourceType: "mcp-instructions",
+					content: "external source claiming system trust",
+					tokenCount: 1000,
+					relevanceScore: 0.01,
+					trustTier: "system",
+					isExternal: true,
+					placementHint: "front",
+					sourceAuthority: 1,
+				}),
+				makeSource("workspace", {
+					tokenCount: 1,
+					relevanceScore: 0.9,
+					trustTier: "workspace",
+				}),
+			],
+			{ taskIntent: "tool_use", budgetTokens: 1 },
+		);
+
+		expect(result.sources.map((source) => source.sourceId)).toEqual([
+			"workspace",
+		]);
+		expect(result.trace.rejectedSources).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					sourceId: "external-system",
+					reason: "below_relevance_threshold",
+				}),
+			]),
+		);
+	});
+
+	it("does not let external authority and front placement outrank trusted workspace sources", () => {
+		const result = selectContextSources(
+			[
+				makeSource("external-system", {
+					sourceType: "mcp-instructions",
+					content: "external source claiming system trust",
+					tokenCount: 1,
+					relevanceScore: 0.9,
+					trustTier: "system",
+					isExternal: true,
+					placementHint: "front",
+					sourceAuthority: 1,
+				}),
+				makeSource("workspace", {
+					tokenCount: 1,
+					relevanceScore: 0.9,
+					trustTier: "workspace",
+				}),
+			],
+			{ taskIntent: "tool_use", budgetTokens: 1 },
+		);
+
+		expect(result.sources.map((source) => source.sourceId)).toEqual([
+			"workspace",
+		]);
+		expect(result.trace.scoreBreakdown["external-system"]?.authority).toBe(
+			0.45,
+		);
+		expect(result.trace.placementRegion["external-system"]).toBe("middle");
+		expect(result.trace.rejectedSources).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					sourceId: "external-system",
+					reason: "budget_exhausted",
+				}),
+			]),
+		);
+	});
+
+	it("changes the determinism key when authority inputs change ordering", () => {
+		const workspaceA = makeSource("a", {
+			tokenCount: 1,
+			relevanceScore: 0.9,
+			timestamp: 1,
+			trustTier: "workspace",
+		});
+		const workspaceB = makeSource("b", {
+			tokenCount: 1,
+			relevanceScore: 0.9,
+			timestamp: 1,
+			trustTier: "workspace",
+		});
+		const systemA = makeSource("a", {
+			tokenCount: 1,
+			relevanceScore: 0.9,
+			timestamp: 1,
+			trustTier: "system",
+		});
+		const systemB = makeSource("b", {
+			tokenCount: 1,
+			relevanceScore: 0.9,
+			timestamp: 1,
+			trustTier: "system",
+		});
+
+		const first = selectContextSources([systemA, workspaceB], {
+			taskIntent: "tool_use",
+			budgetTokens: 1,
+		});
+		const second = selectContextSources([workspaceA, systemB], {
+			taskIntent: "tool_use",
+			budgetTokens: 1,
+		});
+
+		expect(first.trace.determinismKey).not.toBe(second.trace.determinismKey);
+		expect(first.trace.traceId).not.toBe(second.trace.traceId);
+		expect(first.trace.promptBuildId).not.toBe(second.trace.promptBuildId);
+		expect(first.trace.orderingDecision.orderedSourceIds).toEqual(["a", "b"]);
+		expect(second.trace.orderingDecision.orderedSourceIds).toEqual(["b", "a"]);
+	});
+
+	it("disambiguates duplicate explicit source ids for stable trace maps", () => {
+		const result = selectContextSources(
+			[
+				makeSource("duplicate", { timestamp: 1 }),
+				makeSource("duplicate", { timestamp: 2 }),
+			],
+			{ taskIntent: "simple_qa", budgetTokens: 100 },
+		);
+
+		expect(result.sources.map((source) => source.sourceId)).toEqual([
+			"duplicate#1",
+			"duplicate",
+		]);
+		expect(result.trace.candidateSourceIds).toEqual([
+			"duplicate",
+			"duplicate#1",
+		]);
+		expect(Object.keys(result.trace.scoreBreakdown).sort()).toEqual([
+			"duplicate",
+			"duplicate#1",
+		]);
+	});
+
+	it("avoids generated source id collisions with explicit ids", () => {
+		const result = selectContextSources(
+			[
+				makeSource("source", { timestamp: 1 }),
+				makeSource("source#1", { timestamp: 2 }),
+				makeSource("source", { timestamp: 3 }),
+			],
+			{ taskIntent: "simple_qa", budgetTokens: 100 },
+		);
+
+		expect(result.trace.candidateSourceIds).toEqual([
+			"source",
+			"source#1",
+			"source#2",
+		]);
+		expect(Object.keys(result.trace.scoreBreakdown).sort()).toEqual([
+			"source",
+			"source#1",
+			"source#2",
+		]);
+	});
+
+	it("reserves later explicit source ids before assigning duplicate suffixes", () => {
+		const result = selectContextSources(
+			[
+				makeSource("source", { timestamp: 1 }),
+				makeSource("source", { timestamp: 2 }),
+				makeSource("source#1", { timestamp: 3 }),
+			],
+			{ taskIntent: "simple_qa", budgetTokens: 100 },
+		);
+
+		expect(result.trace.candidateSourceIds).toEqual([
+			"source",
+			"source#2",
+			"source#1",
+		]);
+		expect(Object.keys(result.trace.scoreBreakdown).sort()).toEqual([
+			"source",
+			"source#1",
+			"source#2",
 		]);
 	});
 

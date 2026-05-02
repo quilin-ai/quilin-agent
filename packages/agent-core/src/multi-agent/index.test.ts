@@ -314,13 +314,13 @@ describe("multi-agent barrel exports", () => {
 			batch: {
 				byType: {
 					progress_snapshot: 1,
-					child_heartbeat: 3,
+					child_heartbeat: 1,
 					terminal_children_summary: 1,
 				},
 				bySeverity: {
-					info: 3,
+					info: 2,
 					warning: 1,
-					success: 1,
+					success: 0,
 					error: 0,
 				},
 			},

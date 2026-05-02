@@ -84,8 +84,10 @@ describe("ContextAssembler", () => {
 			]);
 
 			expect(result.budgetBreakdown.taskType).toBe("deep_reasoning");
-			expect(result.contextSources[0]?.content).toContain(
-				"[REDACTED: instruction_override]",
+			expect(result.contextSources.map((source) => source.content)).toEqual(
+				expect.arrayContaining([
+					expect.stringContaining("[REDACTED: instruction_override]"),
+				]),
 			);
 			expect(result.selectionTrace.selectedSources).toHaveLength(2);
 			expect(warnSpy).toHaveBeenCalledWith(
@@ -130,7 +132,8 @@ describe("ContextAssembler", () => {
 			budgetTokens: 14,
 			usedTokens: 14,
 			orderingDecision: {
-				strategy: "final_score_desc_token_asc_timestamp_desc_input_order",
+				strategy:
+					"protected_authority_desc_final_score_desc_token_asc_timestamp_desc_input_order",
 				orderedSourceIds: ["high", "low"],
 			},
 		});
@@ -184,12 +187,11 @@ describe("ContextAssembler", () => {
 
 		expect(result.contextSources.map((source) => source.sourceId)).toEqual([
 			"high",
-			"partial",
 		]);
-		expect(result.totalTokens).toBe(8);
+		expect(result.totalTokens).toBe(6);
 		expect(trace).toMatchObject({
 			budgetTokens: 8,
-			usedTokens: 8,
+			usedTokens: 6,
 			candidateSourceIds: ["high", "partial", "dropped"],
 		});
 		expect(
@@ -208,14 +210,14 @@ describe("ContextAssembler", () => {
 			},
 			{
 				sourceId: "partial",
-				decision: "truncate",
-				reason: "budget_truncated",
-				outputTokens: 2,
+				decision: "drop",
+				reason: "below_truncation_threshold",
+				outputTokens: 0,
 			},
 			{
 				sourceId: "dropped",
 				decision: "drop",
-				reason: "budget_exhausted",
+				reason: "below_truncation_threshold",
 				outputTokens: 0,
 			},
 		]);
@@ -234,14 +236,14 @@ describe("ContextAssembler", () => {
 				},
 				{
 					sourceId: "partial",
-					compressionDecision: "truncate",
-					compressionReason: "budget_truncated",
-					outputTokens: 2,
+					compressionDecision: "drop",
+					compressionReason: "below_truncation_threshold",
+					outputTokens: 0,
 				},
 				{
 					sourceId: "dropped",
 					compressionDecision: "drop",
-					compressionReason: "budget_exhausted",
+					compressionReason: "below_truncation_threshold",
 					outputTokens: 0,
 				},
 			],
@@ -250,7 +252,7 @@ describe("ContextAssembler", () => {
 			[
 				`selection=${result.selectionTrace.determinismKey}`,
 				`compression=${trace.determinismKey}`,
-				"selected=high:keep:6,partial:truncate:2,dropped:drop:0",
+				"selected=high:keep:6,partial:drop:0,dropped:drop:0",
 				"rejectedExcluded=",
 				"missing=",
 			].join("|"),
@@ -307,25 +309,25 @@ describe("ContextAssembler", () => {
 			candidateCount: 4,
 			selectedCount: 3,
 			rejectedCount: 1,
-			compressedCount: 2,
-			truncatedCount: 1,
-			droppedCount: 1,
-			usedTokens: 8,
+			compressedCount: 1,
+			truncatedCount: 0,
+			droppedCount: 2,
+			usedTokens: 6,
 			budgetTokens: 8,
 			sectionCount: 0,
 			decisionCounts: {
 				selected: 3,
 				rejected: 1,
 				keep: 1,
-				truncate: 1,
-				drop: 1,
+				truncate: 0,
+				drop: 2,
 			},
 			sourceSummaries: [
 				{
 					sourceId: "dropped",
 					selection: "selected",
 					compressionDecision: "drop",
-					compressionReason: "budget_exhausted",
+					compressionReason: "below_truncation_threshold",
 					originalTokens: 6,
 					outputTokens: 0,
 				},
@@ -340,10 +342,10 @@ describe("ContextAssembler", () => {
 				{
 					sourceId: "partial",
 					selection: "selected",
-					compressionDecision: "truncate",
-					compressionReason: "budget_truncated",
+					compressionDecision: "drop",
+					compressionReason: "below_truncation_threshold",
 					originalTokens: 6,
-					outputTokens: 2,
+					outputTokens: 0,
 				},
 				{
 					sourceId: "poisoned",
@@ -355,10 +357,10 @@ describe("ContextAssembler", () => {
 			determinismKey: summary.determinismKey,
 		});
 		expect(summary.determinismKey).toContain(
-			"candidate=4|selected=3|rejected=1|compressed=2|truncated=1|dropped=1|tokens=8/8",
+			"candidate=4|selected=3|rejected=1|compressed=1|truncated=0|dropped=2|tokens=6/8",
 		);
 		expect(summary.determinismKey).toContain(
-			"decisions=selected:3,rejected:1,keep:1,truncate:1,drop:1",
+			"decisions=selected:3,rejected:1,keep:1,truncate:0,drop:2",
 		);
 	});
 
@@ -479,14 +481,14 @@ describe("ContextAssembler", () => {
 			},
 			{
 				sourceId: "memory:30:2",
-				compressionDecision: "truncate",
-				compressionReason: "budget_truncated",
-				outputTokens: 2,
+				compressionDecision: "drop",
+				compressionReason: "below_truncation_threshold",
+				outputTokens: 0,
 			},
 			{
 				sourceId: "memory:40:3",
 				compressionDecision: "drop",
-				compressionReason: "budget_exhausted",
+				compressionReason: "below_truncation_threshold",
 				outputTokens: 0,
 			},
 		]);

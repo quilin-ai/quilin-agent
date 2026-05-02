@@ -574,9 +574,24 @@ export function summarizeProductionRouteExplanations(
 export function summarizeProductionRouteScores(
 	scores: ReadonlyArray<ProductionRouteScore>,
 ): ProductionRouteExplanationBatchSummary {
-	return summarizeProductionRouteExplanations(
+	const summary = summarizeProductionRouteExplanations(
 		scores.map((score) => score.explanation),
 	);
+	const reasonCodeCounts = new Map<ProductionRouteScoreReasonCode, number>();
+
+	for (const score of scores) {
+		for (const reasonCode of score.reasonCodes) {
+			reasonCodeCounts.set(
+				reasonCode,
+				(reasonCodeCounts.get(reasonCode) ?? 0) + 1,
+			);
+		}
+	}
+
+	return {
+		...summary,
+		byReasonCode: orderedReasonCodeCounts(reasonCodeCounts),
+	};
 }
 
 export function scoreProductionRoutes(

@@ -4,6 +4,7 @@ import {
 	applySupervisorProgressProjection,
 	applySupervisorProgressProjectionReport,
 	applySupervisorProgressProjectionsReport,
+	childRunStatusToDurableRuntimePlanStatus,
 	createBufferedSupervisorProgressSink,
 	createChildRunStatusRecord,
 	flushSupervisorProgressSinkReport,
@@ -431,6 +432,49 @@ describe("multi-agent supervisor progress", () => {
 		).toThrow(/known supervisor confidence/u);
 	});
 
+	it("maps legacy child run statuses onto durable runtime plan statuses", () => {
+		expect(childRunStatusToDurableRuntimePlanStatus("assigned")).toBe("queued");
+		expect(childRunStatusToDurableRuntimePlanStatus("active")).toBe("running");
+		expect(childRunStatusToDurableRuntimePlanStatus("waiting_for_review")).toBe(
+			"checkpointed",
+		);
+		expect(childRunStatusToDurableRuntimePlanStatus("deferred")).toBe(
+			"cancelled",
+		);
+		expect(childRunStatusToDurableRuntimePlanStatus("completed")).toBe(
+			"completed",
+		);
+	});
+
+	it("clears live-only fields when a child transitions to a terminal status", () => {
+		const record = createChildRunStatusRecord({
+			runId: "run-terminal-cleanup",
+			taskId: "task-terminal-cleanup",
+			status: "active",
+			summary: "running",
+			currentStep: "writing",
+			progress: { completedSteps: 1, totalSteps: 2 },
+			blocker: "temporary gate",
+			nextCheckpointAt: "2026-05-02T08:05:00.000Z",
+			lastHeartbeatAt: NOW,
+		});
+
+		const completed = recordChildRunHeartbeat(
+			record,
+			{
+				status: "completed",
+				summary: "done",
+			},
+			"2026-05-02T08:01:00.000Z",
+		);
+
+		expect(completed.status).toBe("completed");
+		expect(completed.currentStep).toBeUndefined();
+		expect(completed.progress).toBeUndefined();
+		expect(completed.blocker).toBeUndefined();
+		expect(completed.nextCheckpointAt).toBeUndefined();
+	});
+
 	it("rejects invalid runtime enum values at every progress boundary", () => {
 		const record = createChildRunStatusRecord({
 			runId: "run-1",
@@ -529,7 +573,6 @@ describe("multi-agent supervisor progress", () => {
 			"progress_snapshot",
 			"child_stale:run-a",
 			"child_heartbeat:run-a",
-			"child_heartbeat:run-c",
 			"child_heartbeat:run-b",
 			"child_checkpoint:run-a",
 			"child_checkpoint:run-b",
@@ -601,6 +644,37 @@ describe("multi-agent supervisor progress", () => {
 				isDue: false,
 			},
 		});
+	});
+
+	it("does not project heartbeat or checkpoint events for terminal children", () => {
+		const projection = projectSupervisorProgressEvents(
+			[
+				createChildRunStatusRecord({
+					runId: "run-terminal-live-fields",
+					taskId: "task-terminal-live-fields",
+					status: "completed",
+					summary: "done",
+					currentStep: "old live step",
+					blocker: "old live blocker",
+					nextCheckpointAt: "2026-05-02T08:05:00.000Z",
+					lastHeartbeatAt: "2026-05-02T07:59:00.000Z",
+				}),
+			],
+			{ now: NOW },
+		);
+
+		expect(
+			projection.events
+				.filter((event) => "runId" in event)
+				.map((event) => `${event.type}:${event.runId}`),
+		).toEqual([]);
+		expect(projection.snapshot.currentSteps).toEqual([]);
+		expect(projection.snapshot.blockers).toEqual([]);
+		expect(projection.snapshot.nextCheckpointAt).toBeNull();
+		expect(projection.events.map((event) => event.type)).toEqual([
+			"progress_snapshot",
+			"terminal_children_summary",
+		]);
 	});
 
 	it("projects stale child signals from the snapshot threshold", () => {
@@ -913,14 +987,14 @@ describe("multi-agent supervisor progress", () => {
 		expect(result.counts).toEqual({
 			progress_snapshot: 1,
 			child_stale: 1,
-			child_heartbeat: 3,
+			child_heartbeat: 2,
 			child_checkpoint: 1,
 			terminal_children_summary: 1,
 		});
 		expect(result.severities).toEqual({
 			info: 2,
 			warning: 3,
-			success: 2,
+			success: 1,
 			error: 0,
 		});
 		expect(result.cursor).toBe(
@@ -1573,18 +1647,18 @@ describe("multi-agent supervisor progress", () => {
 			]),
 		).toEqual({
 			flushCount: 3,
-			totalEvents: 7,
+			totalEvents: 6,
 			byType: {
 				progress_snapshot: 2,
 				child_stale: 1,
-				child_heartbeat: 2,
+				child_heartbeat: 1,
 				child_checkpoint: 1,
 				terminal_children_summary: 1,
 			},
 			bySeverity: {
 				info: 2,
 				warning: 2,
-				success: 3,
+				success: 2,
 				error: 0,
 			},
 			latestOccurredAt: "2026-05-02T08:02:00.000Z",
@@ -1644,9 +1718,9 @@ describe("multi-agent supervisor progress", () => {
 		expect(summarizeSupervisorProgressSinkBatchAttention(errorSummary)).toEqual(
 			{
 				status: "needs_attention",
-				totalEvents: 3,
+				totalEvents: 2,
 				warningCount: 0,
-				errorCount: 3,
+				errorCount: 2,
 			},
 		);
 	});

@@ -10,6 +10,16 @@ export type ChildRunStatus =
 	| "cancelled"
 	| "deferred";
 
+export type DurableRuntimePlanStatus =
+	| "queued"
+	| "running"
+	| "checkpointed"
+	| "cancel_requested"
+	| "cancelled"
+	| "retrying"
+	| "failed"
+	| "completed";
+
 export type TerminalChildRunStatus = Extract<
 	ChildRunStatus,
 	"completed" | "failed" | "cancelled" | "deferred"
@@ -348,6 +358,28 @@ const CONFIDENCE_RANK: Readonly<Record<SupervisorConfidence, number>> = {
 	high: 3,
 };
 
+export function childRunStatusToDurableRuntimePlanStatus(
+	status: ChildRunStatus,
+): DurableRuntimePlanStatus {
+	switch (status) {
+		case "queued":
+		case "assigned":
+			return "queued";
+		case "waiting_for_review":
+			return "checkpointed";
+		case "cancelled":
+		case "deferred":
+			return "cancelled";
+		case "failed":
+		case "completed":
+			return status;
+		case "active":
+		case "blocked":
+		case "aggregating":
+			return "running";
+	}
+}
+
 function assertNonEmpty(value: string, name: string): void {
 	if (value.trim().length === 0) {
 		throw new RangeError(`${name} must be a non-empty string`);
@@ -424,6 +456,24 @@ function optionalProgress(
 	return nextValue === undefined ? previousValue : normalizeProgress(nextValue);
 }
 
+function withoutLiveOnlyFields(
+	record: ChildRunStatusRecord,
+): ChildRunStatusRecord {
+	if (!isTerminalStatus(record.status)) {
+		return record;
+	}
+
+	const {
+		currentStep: _currentStep,
+		progress: _progress,
+		blocker: _blocker,
+		nextCheckpointAt: _nextCheckpointAt,
+		...terminalRecord
+	} = record;
+
+	return terminalRecord;
+}
+
 function isTerminalStatus(
 	status: ChildRunStatus,
 ): status is TerminalChildRunStatus {
@@ -483,6 +533,7 @@ function earliestCheckpoint(
 	records: readonly ChildRunStatusRecord[],
 ): string | null {
 	const checkpoints = records
+		.filter((record) => !isTerminalStatus(record.status))
 		.map((record) => record.nextCheckpointAt)
 		.filter((value): value is string => value != null)
 		.sort((left, right) => Date.parse(left) - Date.parse(right));
@@ -1033,7 +1084,7 @@ export function createChildRunStatusRecord(
 		"reviewedArtifactCount",
 	);
 
-	return {
+	return withoutLiveOnlyFields({
 		runId: input.runId,
 		taskId: input.taskId,
 		workerId: input.workerId,
@@ -1048,7 +1099,7 @@ export function createChildRunStatusRecord(
 		nextCheckpointAt: input.nextCheckpointAt,
 		createdAt,
 		updatedAt,
-	};
+	});
 }
 
 export function recordChildRunHeartbeat(
@@ -1069,7 +1120,7 @@ export function recordChildRunHeartbeat(
 		"reviewedArtifactCount",
 	);
 
-	return {
+	return withoutLiveOnlyFields({
 		...record,
 		status,
 		summary: heartbeat.summary ?? record.summary,
@@ -1085,7 +1136,7 @@ export function recordChildRunHeartbeat(
 			record.nextCheckpointAt,
 		),
 		updatedAt: now,
-	};
+	});
 }
 
 export function aggregateSupervisorProgress(
@@ -1131,16 +1182,27 @@ export function aggregateSupervisorProgress(
 		if (isTerminalStatus(record.status)) {
 			terminalRunIds.push(record.runId);
 		}
-		if (record.status === "blocked" || record.blocker != null) {
+		if (
+			!isTerminalStatus(record.status) &&
+			(record.status === "blocked" || record.blocker != null)
+		) {
 			blockedRunIds.push(record.runId);
 		}
 		if (!isTerminalStatus(record.status) && ageMs > staleAfterMs) {
 			staleRunIds.push(record.runId);
 		}
-		if (record.currentStep != null && record.currentStep.length > 0) {
+		if (
+			!isTerminalStatus(record.status) &&
+			record.currentStep != null &&
+			record.currentStep.length > 0
+		) {
 			currentSteps.push(record.currentStep);
 		}
-		if (record.blocker != null && record.blocker.length > 0) {
+		if (
+			!isTerminalStatus(record.status) &&
+			record.blocker != null &&
+			record.blocker.length > 0
+		) {
 			blockers.push(record.blocker);
 		}
 	}
@@ -1189,6 +1251,10 @@ export function projectSupervisorProgressEvents(
 	}
 
 	for (const record of sortedRecords) {
+		if (isTerminalStatus(record.status)) {
+			continue;
+		}
+
 		events.push(createChildHeartbeatEvent(record, nowMs));
 		if (record.nextCheckpointAt != null) {
 			events.push(

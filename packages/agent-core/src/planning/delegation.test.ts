@@ -126,12 +126,35 @@ describe("evaluateDelegation", () => {
 						unknown: false,
 					},
 					writeScope: ["episodic:research.md"],
+					writeAuthority: {
+						gate: "WriteAuthority",
+						origin: "delegation",
+						required: true,
+						risk: "medium",
+						scope: "episodic",
+						canonicalResources: ["research.md"],
+					},
 					risk: "medium",
 					retryPolicy: {
 						maxAttempts: 1,
 						backoff: "none",
 					},
 					cancelToken: "run-c3:delegated:delegated-research:cancel",
+					cancellation: {
+						token: "run-c3:delegated:delegated-research:cancel",
+						mode: "cooperative",
+						requestedBy: "parent_or_supervisor",
+						reasonRequired: true,
+					},
+					trace: {
+						traceId: "run-c3:delegated:delegated-research:handoff",
+						parentRunId: "run-c3",
+						childRunId: "run-c3:delegated:delegated-research",
+						spanId: "run-c3:delegated:delegated-research:handoff:span",
+						schemaRef: "planning.delegation.trace.v1",
+					},
+					idempotencyKey:
+						"delegation:run-c3:delegated-research:episodic:research.md",
 					resultSchemaRef: "planning.delegation.result.v1",
 					resume: {
 						checkpointRequired: true,
@@ -155,7 +178,7 @@ describe("evaluateDelegation", () => {
 		);
 		expect(decision.assignment.handoff).toMatchObject({
 			kind: "delegation_handoff",
-			schemaVersion: 1,
+			schemaVersion: DELEGATION_HANDOFF_SCHEMA_VERSION,
 			route: "sub_agent",
 			traceId: "run-c3:delegated:delegated-research:handoff",
 			receiver: {
@@ -175,6 +198,16 @@ describe("evaluateDelegation", () => {
 				backoff: "none",
 			},
 			cancelToken: "run-c3:delegated:delegated-research:cancel",
+			cancellation: {
+				token: "run-c3:delegated:delegated-research:cancel",
+				mode: "cooperative",
+			},
+			trace: {
+				traceId: "run-c3:delegated:delegated-research:handoff",
+				schemaRef: "planning.delegation.trace.v1",
+			},
+			idempotencyKey:
+				"delegation:run-c3:delegated-research:episodic:research.md",
 			resultSchemaRef: "planning.delegation.result.v1",
 			resume: {
 				checkpointRequired: true,
@@ -274,6 +307,44 @@ describe("evaluateDelegation", () => {
 				}),
 			),
 		).toEqual({ delegate: false, reason: "shared_write_set" });
+	});
+
+	it("uses canonical write resources in the handoff runtime envelope", () => {
+		const candidateStep = makeStep("delegated-normalized-handoff", {
+			writeScope: "working",
+			arguments: { path: "./notes/../notes/research.md" },
+			risk: "medium",
+		});
+		const decision = evaluateDelegation(
+			makeCandidate({
+				candidateStep,
+				plan: {
+					kind: "dag",
+					subtasks: [candidateStep],
+					edges: [],
+				},
+				mainAgentSteps: [],
+			}),
+		);
+
+		if (!decision.delegate) {
+			throw new Error("expected delegation to be accepted");
+		}
+
+		expect(decision.assignment.handoff.writeSet.resources).toEqual([
+			"./notes/../notes/research.md",
+		]);
+		expect(decision.assignment.handoff.writeScope).toEqual([
+			"working:notes/research.md",
+		]);
+		expect(decision.assignment.handoff.writeAuthority).toMatchObject({
+			gate: "WriteAuthority",
+			origin: "delegation",
+			canonicalResources: ["notes/research.md"],
+		});
+		expect(decision.assignment.handoff.idempotencyKey).toBe(
+			"delegation:run-c3:delegated-normalized-handoff:working:notes/research.md",
+		);
 	});
 
 	it("rejects high and critical risk writes conservatively", () => {

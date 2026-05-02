@@ -1147,7 +1147,17 @@ describe("package entrypoint production route exports", () => {
 		);
 		expect(explanation).toEqual(score.explanation);
 		expect(summary.total).toBe(1);
-		expect(summaryFromScores).toEqual(summary);
+		expect(summaryFromScores).toMatchObject({
+			total: summary.total,
+			bySelectedRoute: summary.bySelectedRoute,
+			byReasonCode: {
+				...summary.byReasonCode,
+				capability_fit_weak_supervisor: 1,
+				complexity_high_supervisor: 1,
+				cost_medium: 1,
+				task_risk_high_supervisor: 1,
+			},
+		});
 		expect(batch.scores).toHaveLength(1);
 		expect(batch.summary).toEqual(summaryFromScores);
 	});
