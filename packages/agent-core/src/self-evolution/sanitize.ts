@@ -86,12 +86,14 @@ export function sanitizeForSelfEvolution(value: unknown): JsonValue {
 
 	if (isPlainObject(value)) {
 		return Object.fromEntries(
-			Object.entries(value).map(([key, entryValue]) => [
-				key,
-				isSensitiveSelfEvolutionKey(key)
-					? REDACTED
-					: sanitizeForSelfEvolution(entryValue),
-			]),
+			Object.entries(value).map(([key, entryValue]) => {
+				const sanitizedKey = sanitizeString(key);
+				const sensitiveKey = isSensitiveSelfEvolutionKey(key);
+				return [
+					sensitiveKey ? REDACTED : sanitizedKey,
+					sensitiveKey ? REDACTED : sanitizeForSelfEvolution(entryValue),
+				];
+			}),
 		);
 	}
 

@@ -39,9 +39,13 @@ function difference(
 	return left.filter((value) => !right.has(value));
 }
 
-function divideOrPerfect(numerator: number, denominator: number): number {
+function divideOr(
+	numerator: number,
+	denominator: number,
+	fallback: number,
+): number {
 	if (denominator === 0) {
-		return 1;
+		return fallback;
 	}
 
 	return numerator / denominator;
@@ -72,13 +76,15 @@ function qualityBand(score: number): SkillTriggerQualityBand {
 export function scoreSkillTriggerQuality(
 	counts: SkillTriggerQualityCounts,
 ): SkillTriggerQualityScore {
-	const precision = divideOrPerfect(
+	const precision = divideOr(
 		counts.truePositives,
 		counts.truePositives + counts.falsePositives,
+		1,
 	);
-	const recall = divideOrPerfect(
+	const recall = divideOr(
 		counts.truePositives,
 		counts.truePositives + counts.falseNegatives,
+		0,
 	);
 	const score = f1Score(precision, recall);
 

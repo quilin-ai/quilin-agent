@@ -166,6 +166,9 @@ export {
 	type CreateSkillProvenanceReceiptOptions,
 	createSkillContentDigest,
 	createSkillProvenanceReceipt,
+	type SkillProvenanceValidationResult,
+	type ValidateSkillProvenanceReceiptOptions,
+	validateSkillProvenanceReceipt,
 } from "./skills/provenance.js";
 export type {
 	SkillContentDigest,

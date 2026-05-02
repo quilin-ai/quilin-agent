@@ -14,6 +14,7 @@ export interface CreateSkillProvenanceReceiptOptions {
 export interface ValidateSkillProvenanceReceiptOptions {
 	readonly descriptor: SkillDescriptor;
 	readonly provenance: SkillProvenanceReceipt;
+	readonly content: string | Buffer;
 }
 
 export type SkillProvenanceValidationResult =
@@ -49,8 +50,10 @@ export function createSkillProvenanceReceipt(
 export function validateSkillProvenanceReceipt(
 	options: ValidateSkillProvenanceReceiptOptions,
 ): SkillProvenanceValidationResult {
-	const { descriptor, provenance } = options;
+	const { content, descriptor, provenance } = options;
 	const mismatches: string[] = [];
+	const digestAlgorithm = provenance.digest?.algorithm;
+	const digestValue = provenance.digest?.value;
 	const compare = (
 		field: string,
 		expected: string | undefined,
@@ -76,6 +79,27 @@ export function validateSkillProvenanceReceipt(
 	);
 	compare("source", descriptor.source, provenance.source);
 	compare("path", descriptor.path, provenance.path);
+
+	if (digestAlgorithm !== "sha256") {
+		mismatches.push(
+			`digest.algorithm expected sha256 but received ${digestAlgorithm ?? "<unset>"}`,
+		);
+	}
+	if (typeof digestValue !== "string" || !/^[a-f0-9]{64}$/u.test(digestValue)) {
+		mismatches.push("digest.value must be a lowercase sha256 hex digest");
+	}
+	if (!Number.isSafeInteger(provenance.sizeBytes) || provenance.sizeBytes < 0) {
+		mismatches.push("sizeBytes must be a non-negative safe integer");
+	}
+	const expectedDigest = createSkillContentDigest(content);
+	const expectedSizeBytes = Buffer.byteLength(content);
+	compare("digest.algorithm", expectedDigest.algorithm, digestAlgorithm);
+	compare("digest.value", expectedDigest.value, digestValue);
+	if (provenance.sizeBytes !== expectedSizeBytes) {
+		mismatches.push(
+			`sizeBytes expected ${expectedSizeBytes} but received ${provenance.sizeBytes}`,
+		);
+	}
 
 	if (mismatches.length === 0) {
 		return { ok: true };

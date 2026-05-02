@@ -129,14 +129,11 @@ function formatFinding(finding: FailureFinding): string {
 function buildRiskPreview(
 	findings: readonly FailureFinding[],
 ): ProposalRiskPreview {
-	const hasSchemaViolation = findings.some(
-		(finding) => finding.category === "schema_violation",
-	);
 	return {
-		level: hasSchemaViolation ? "critical" : "high",
+		level: "critical",
 		reasons: [
 			"Generated patch proposal is a synthetic review artifact and must not be applied automatically.",
-			"Candidate file changes stay inside the self-evolution component boundary.",
+			"Runtime scaffold patch proposals are critical-risk writes and require WriteAuthority confirmation metadata.",
 			...findings.map((finding) => `Evidence category: ${finding.category}`),
 		],
 		touchesRuntime: true,
@@ -209,6 +206,10 @@ function generatedPatchProposalFor(
 			"Generated synthetic diff for reviewer consideration. The local optimizer cannot apply this patch.",
 		sourceRefs,
 		beforeAfterEvaluationId: evaluation.evaluationId,
+		writeAuthorityPreview: {
+			origin: "agent",
+			summary: `Review-only scaffold patch proposal for ${runId}`,
+		},
 		rollbackPlan:
 			"No runtime rollback is needed while this remains a proposal. If a human later applies a change, rollback through the same reviewed change path.",
 		fileChanges: [
@@ -223,27 +224,120 @@ function generatedPatchProposalFor(
 	});
 }
 
+function hasBooleanMetadataFlag(
+	trajectory: StoredTrajectoryRecord,
+	key: string,
+): boolean {
+	return trajectory.metadata?.[key] === true;
+}
+
+function hasEvidenceRefWithPrefix(
+	findings: readonly FailureFinding[],
+	prefix: string,
+): boolean {
+	return findings.some((finding) =>
+		finding.evidenceRefs.some((evidenceRef) => evidenceRef.startsWith(prefix)),
+	);
+}
+
+function hasSimilarDiagnosticGate(
+	findings: readonly FailureFinding[],
+): boolean {
+	const counts = new Map<string, number>();
+	for (const finding of findings) {
+		const key = `${finding.category}:${finding.message}`;
+		counts.set(key, (counts.get(key) ?? 0) + 1);
+	}
+	return [...counts.values()].some((count) => count >= 3);
+}
+
+function hasPatchProposalGate(
+	trajectory: StoredTrajectoryRecord,
+	findings: readonly FailureFinding[],
+): boolean {
+	return (
+		hasSimilarDiagnosticGate(findings) ||
+		hasBooleanMetadataFlag(trajectory, "deterministicRegressionFixture") ||
+		hasBooleanMetadataFlag(trajectory, "manualCriticalFailure") ||
+		hasEvidenceRefWithPrefix(findings, "regression-fixture:") ||
+		hasEvidenceRefWithPrefix(findings, "manual-critical:")
+	);
+}
+
+function insufficientSignalReason(
+	trajectory: StoredTrajectoryRecord,
+	findings: readonly FailureFinding[],
+): NoProposalReason {
+	return {
+		code: "insufficient_signal",
+		message:
+			"Scaffold patch proposals require at least three similar diagnostics, a deterministic regression fixture, or a manually marked critical failure.",
+		evidenceRefs: normalizeEvidenceRefs([
+			trajectory.trajectoryRef,
+			trajectory.taskRef,
+			...findings.flatMap((finding) => finding.evidenceRefs),
+		]),
+	};
+}
+
+function missingTaskRefReason(
+	trajectory: StoredTrajectoryRecord,
+	findings: readonly FailureFinding[],
+): NoProposalReason {
+	return {
+		code: "missing_task_ref_requires_linear_issue",
+		message:
+			"Scaffold patch proposals require a Linear/source issue taskRef before generating review artifacts.",
+		evidenceRefs: normalizeEvidenceRefs([
+			trajectory.trajectoryRef,
+			...findings.flatMap((finding) => finding.evidenceRefs),
+		]),
+	};
+}
+
+interface ProposalAnalysisCandidate {
+	readonly proposal: OptimizationProposalDraft | null;
+	readonly noProposalReason?: NoProposalReason;
+}
+
 function proposalForAnalysis(
 	trajectory: StoredTrajectoryRecord,
 	analysis: FailureAnalysis,
-): OptimizationProposalDraft | null {
+): ProposalAnalysisCandidate {
 	const sanitizedAnalysis = sanitizeAnalysis(analysis);
 	const actionableFindings = sanitizedAnalysis.findings.filter(
 		(finding) => finding.proposalAllowed,
 	);
 	if (actionableFindings.length === 0) {
-		return null;
+		return { proposal: null };
 	}
 	if (actionableFindings.some((finding) => finding.evidenceRefs.length === 0)) {
-		return null;
+		return { proposal: null };
+	}
+	if (normalizeEvidenceRefs([trajectory.taskRef]).length === 0) {
+		return {
+			proposal: null,
+			noProposalReason: missingTaskRefReason(trajectory, actionableFindings),
+		};
+	}
+	if (!hasPatchProposalGate(trajectory, actionableFindings)) {
+		return {
+			proposal: null,
+			noProposalReason: insufficientSignalReason(
+				trajectory,
+				actionableFindings,
+			),
+		};
 	}
 
-	const sourceRefs = [
+	const sourceRefs = normalizeEvidenceRefs([
 		trajectory.trajectoryRef,
+		trajectory.taskRef,
 		...actionableFindings.flatMap((finding) => finding.evidenceRefs),
-	];
+	]);
 	const runId = sanitizeSelfEvolutionString(trajectory.runId);
 	const trajectoryRef = sanitizeSelfEvolutionString(trajectory.trajectoryRef);
+	const taskRef = normalizeEvidenceRefs([trajectory.taskRef])[0];
 	const beforeAfterEvaluation = beforeAfterEvaluationFor(
 		sourceRefs,
 		actionableFindings,
@@ -266,6 +360,7 @@ function proposalForAnalysis(
 		"## Generated patch proposal",
 		`Patch proposal id: ${generatedPatchProposal.patchProposalId}`,
 		`Application mode: ${generatedPatchProposal.safetyBoundary.applicationMode}`,
+		...(taskRef == null ? [] : [`Task reference: ${taskRef}`]),
 		"",
 		"## Review boundary",
 		"This local optimizer only emits candidate artifacts. It does not write source files or apply scaffold/runtime changes.",
@@ -274,6 +369,7 @@ function proposalForAnalysis(
 		{
 			runId,
 			trajectoryRef,
+			taskRef,
 			findings: sanitizeForSelfEvolution(actionableFindings),
 			beforeAfterEvaluation,
 			generatedPatchProposal,
@@ -311,20 +407,28 @@ function proposalForAnalysis(
 	];
 
 	return {
-		title: `Review self-evolution finding for ${runId}`,
-		summary:
-			"Local no-op optimizer found deterministic failure signals and produced review-only patch proposal artifacts.",
-		artifacts,
-		evidenceHashes,
-		riskPreview: buildRiskPreview(actionableFindings),
-		generatedPatchProposal,
-		beforeAfterEvaluation,
-		metadata: {
-			optimizer_id: LOCAL_NOOP_OPTIMIZER_ID,
-			trajectory_ref: trajectoryRef,
-			patch_proposal_id: generatedPatchProposal.patchProposalId,
-			before_after_evaluation_id: beforeAfterEvaluation.evaluationId,
-			application_mode: "proposal_only",
+		proposal: {
+			title: `Review self-evolution finding for ${runId}`,
+			summary:
+				"Local no-op optimizer found deterministic failure signals and produced review-only patch proposal artifacts.",
+			artifacts,
+			evidenceHashes,
+			riskPreview: buildRiskPreview(actionableFindings),
+			generatedPatchProposal,
+			beforeAfterEvaluation,
+			metadata: {
+				optimizer_id: LOCAL_NOOP_OPTIMIZER_ID,
+				trajectory_ref: trajectoryRef,
+				...(taskRef == null ? {} : { task_ref: taskRef }),
+				patch_proposal_id: generatedPatchProposal.patchProposalId,
+				before_after_evaluation_id: beforeAfterEvaluation.evaluationId,
+				application_mode: "proposal_only",
+				write_authority_tool: generatedPatchProposal.writeAuthorityPreview.tool,
+				write_authority_origin:
+					generatedPatchProposal.writeAuthorityPreview.origin,
+				write_authority_risk_level:
+					generatedPatchProposal.writeAuthorityPreview.riskLevel,
+			},
 		},
 	};
 }
@@ -356,18 +460,29 @@ export class LocalNoopOfflineOptimizer {
 		const proposalCandidates = input.trajectories.map((trajectory, index) =>
 			proposalForAnalysis(trajectory, analyses[index] as FailureAnalysis),
 		);
-		const noProposalReasons: NoProposalReason[] = analyses.flatMap(
-			(analysis) => (analysis.shouldPropose ? [] : analysis.noProposalReasons),
+		const gatedNoProposalReasons = proposalCandidates.flatMap((candidate) =>
+			candidate.noProposalReason === undefined
+				? []
+				: [candidate.noProposalReason],
 		);
+		const noProposalReasons: NoProposalReason[] = [
+			...analyses.flatMap((analysis) =>
+				analysis.shouldPropose ? [] : analysis.noProposalReasons,
+			),
+			...gatedNoProposalReasons,
+		];
 
 		return {
 			schemaVersion: SELF_EVOLUTION_SCHEMA_VERSION,
 			optimizerId: LOCAL_NOOP_OPTIMIZER_ID,
 			mode: "artifact_only",
 			createdAt,
-			proposals: proposalCandidates.filter(
-				(proposal): proposal is OptimizationProposalDraft => proposal !== null,
-			),
+			proposals: proposalCandidates
+				.map((candidate) => candidate.proposal)
+				.filter(
+					(proposal): proposal is OptimizationProposalDraft =>
+						proposal !== null,
+				),
 			noProposalReasons,
 		};
 	}

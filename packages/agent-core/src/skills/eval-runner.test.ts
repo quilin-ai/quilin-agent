@@ -132,6 +132,28 @@ describe("runSkillTriggerEval", () => {
 		expect(report.cases).toEqual([]);
 	});
 
+	it("fails all-negative suites because recall coverage is unproven", () => {
+		const report = runSkillTriggerEval({
+			cases: [
+				{
+					id: "negative",
+					input: "Just say hello",
+					expectedSkillNames: [],
+				},
+			],
+			selectSkillNames: () => [],
+		});
+
+		expect(report.passed).toBe(false);
+		expect(report.metrics).toEqual({ precision: 1, recall: 0 });
+		expect(report.quality).toEqual({
+			score: 0,
+			precision: 1,
+			recall: 0,
+			band: "poor",
+		});
+	});
+
 	it("scores trigger quality into stable bands", () => {
 		expect(
 			scoreSkillTriggerQuality({

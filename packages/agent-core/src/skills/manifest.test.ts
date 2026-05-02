@@ -19,6 +19,10 @@ import {
 	summarizeSkillManifestCatalogReadinessInputs,
 	summarizeSkillManifestHealth,
 } from "./manifest.js";
+import {
+	createSkillContentDigest,
+	createSkillProvenanceReceipt,
+} from "./provenance.js";
 import type { SkillDescriptor } from "./types.js";
 
 const descriptor: SkillDescriptor = {
@@ -83,26 +87,28 @@ describe("buildSkillManifest", () => {
 	});
 
 	it("attaches an optional provenance receipt without changing the digest", () => {
-		const provenance = {
-			schemaVersion: "quilin.skill_provenance.v1" as const,
-			skillName: "web-research",
-			skillVersion: "1.2.3",
-			source: "project" as const,
-			path: "/repo/skills/web-research/SKILL.md",
-			digest: {
-				algorithm: "sha256" as const,
-				value: "a".repeat(64),
-			},
-			sizeBytes: 128,
-		};
+		const content = "---\nname: web-research\n---\n# Web Research";
+		const provenance = createSkillProvenanceReceipt({ descriptor, content });
 
-		const manifest = buildSkillManifest({ descriptor, provenance });
+		const manifest = buildSkillManifest({ descriptor, provenance, content });
 
 		expect(manifest.provenance).toBe(provenance);
-		expect(manifest.provenance?.digest.value).toBe("a".repeat(64));
+		expect(manifest.provenance?.digest).toEqual(
+			createSkillContentDigest(content),
+		);
+	});
+
+	it("requires content when attaching provenance to a manifest", () => {
+		const content = "---\nname: web-research\n---\n# Web Research";
+		const provenance = createSkillProvenanceReceipt({ descriptor, content });
+
+		expect(() => buildSkillManifest({ descriptor, provenance })).toThrow(
+			"Skill provenance content is required",
+		);
 	});
 
 	it("rejects provenance that does not match descriptor identity, path, source, or version", () => {
+		const content = "---\nname: web-research\n---\n# Web Research";
 		const provenance = {
 			schemaVersion: "quilin.skill_provenance.v1" as const,
 			skillName: "other-skill",
@@ -116,21 +122,21 @@ describe("buildSkillManifest", () => {
 			sizeBytes: 128,
 		};
 
-		expect(() => buildSkillManifest({ descriptor, provenance })).toThrow(
-			"Skill provenance receipt does not match descriptor",
-		);
-		expect(() => buildSkillManifest({ descriptor, provenance })).toThrow(
-			"skillName expected web-research",
-		);
-		expect(() => buildSkillManifest({ descriptor, provenance })).toThrow(
-			"skillVersion expected 1.2.3",
-		);
-		expect(() => buildSkillManifest({ descriptor, provenance })).toThrow(
-			"source expected project",
-		);
-		expect(() => buildSkillManifest({ descriptor, provenance })).toThrow(
-			"path expected /repo/skills/web-research/SKILL.md",
-		);
+		expect(() =>
+			buildSkillManifest({ descriptor, provenance, content }),
+		).toThrow("Skill provenance receipt does not match descriptor");
+		expect(() =>
+			buildSkillManifest({ descriptor, provenance, content }),
+		).toThrow("skillName expected web-research");
+		expect(() =>
+			buildSkillManifest({ descriptor, provenance, content }),
+		).toThrow("skillVersion expected 1.2.3");
+		expect(() =>
+			buildSkillManifest({ descriptor, provenance, content }),
+		).toThrow("source expected project");
+		expect(() =>
+			buildSkillManifest({ descriptor, provenance, content }),
+		).toThrow("path expected /repo/skills/web-research/SKILL.md");
 	});
 });
 

@@ -35,7 +35,7 @@ function artifact(): CandidateArtifact {
 		title: "Review summary",
 		content: "Review this finding.",
 		contentHash: "c".repeat(64),
-		sourceRefs: ["trajectory:1"],
+		sourceRefs: ["trajectory:1", "QUI-45"],
 	};
 }
 
@@ -62,7 +62,7 @@ function beforeAfterEvaluation() {
 		baselineLabel: "Current behavior",
 		candidateLabel: "Generated patch proposal",
 		summary: "Static comparison for reviewer triage.",
-		evidenceRefs: ["trajectory:1"],
+		evidenceRefs: ["trajectory:1", "QUI-45"],
 		metrics: [
 			{
 				name: "reviewable proposal coverage",
@@ -70,7 +70,7 @@ function beforeAfterEvaluation() {
 				candidateValue: 1,
 				unit: "proposals",
 				direction: "increase_is_better",
-				evidenceRefs: ["trajectory:1"],
+				evidenceRefs: ["trajectory:1", "QUI-45"],
 			},
 		],
 	});
@@ -81,7 +81,7 @@ function generatedPatchProposal(evaluationId: string) {
 		proposalKind: "scaffold_patch",
 		title: "Review-only self-evolution patch",
 		summary: "Synthetic diff for human review.",
-		sourceRefs: ["trajectory:1"],
+		sourceRefs: ["trajectory:1", "QUI-45"],
 		beforeAfterEvaluationId: evaluationId,
 		rollbackPlan:
 			"No rollback is needed before a human applies a reviewed change.",
@@ -193,6 +193,13 @@ describe("JsonlProposalStore", () => {
 		expect(stored.generatedPatchProposal?.safetyBoundary.autoApplyAllowed).toBe(
 			false,
 		);
+		expect(stored.generatedPatchProposal?.writeAuthorityPreview).toMatchObject({
+			tool: "scaffold_patch",
+			riskLevel: "critical",
+			origin: "agent",
+			requiresConfirmation: true,
+			auditRequired: true,
+		});
 		expect(stored.beforeAfterEvaluation?.requiresHumanReview).toBe(true);
 		expect(fetched?.generatedPatchProposal?.beforeAfterEvaluationId).toBe(
 			fetched?.beforeAfterEvaluation?.evaluationId,
@@ -200,6 +207,71 @@ describe("JsonlProposalStore", () => {
 		expect(fetched?.generatedPatchProposal?.fileChanges).toEqual(
 			patchProposal.fileChanges,
 		);
+	});
+
+	it("rejects generated patch proposals without a source issue taskRef anchor", async () => {
+		const store = new JsonlProposalStore({
+			filePath: path.join(tmpDir, "patch-proposals-no-task-ref.jsonl"),
+		});
+		const evaluation = createBeforeAfterEvaluation({
+			baselineLabel: "Current behavior",
+			candidateLabel: "Generated patch proposal",
+			summary: "Static comparison for reviewer triage.",
+			evidenceRefs: ["trajectory:1"],
+			metrics: [
+				{
+					name: "reviewable proposal coverage",
+					baselineValue: 0,
+					candidateValue: 1,
+					unit: "proposals",
+					direction: "increase_is_better",
+					evidenceRefs: ["trajectory:1"],
+				},
+			],
+		});
+		const patchProposal = createGeneratedPatchProposal({
+			proposalKind: "scaffold_patch",
+			title: "Review-only self-evolution patch",
+			summary: "Synthetic diff for human review.",
+			sourceRefs: ["trajectory:1"],
+			beforeAfterEvaluationId: evaluation.evaluationId,
+			rollbackPlan:
+				"No rollback is needed before a human applies a reviewed change.",
+			fileChanges: [
+				{
+					path: "packages/agent-core/src/self-evolution/failure-analyzer.test.ts",
+					changeKind: "modify",
+					summary: "Add a regression fixture before changing runtime behavior.",
+					unifiedDiff: [
+						"--- a/packages/agent-core/src/self-evolution/failure-analyzer.test.ts",
+						"+++ b/packages/agent-core/src/self-evolution/failure-analyzer.test.ts",
+						"@@ synthetic review proposal @@",
+						"+// proposal only",
+					].join("\n"),
+				},
+			],
+		});
+
+		await expect(
+			store.append(
+				proposal({
+					artifacts: [
+						{
+							...artifact(),
+							sourceRefs: ["trajectory:1"],
+						},
+					],
+					riskPreview: {
+						level: "critical",
+						reasons: ["synthetic patch proposal"],
+						touchesRuntime: true,
+						requiresHumanReview: true,
+					},
+					beforeAfterEvaluation: evaluation,
+					generatedPatchProposal: patchProposal,
+				}),
+			),
+		).rejects.toThrow(/source issue taskRef/u);
 	});
 
 	it("rejects generated patch proposals that bypass review or path scope", async () => {
@@ -216,6 +288,12 @@ describe("JsonlProposalStore", () => {
 		await expect(
 			store.append(
 				proposal({
+					riskPreview: {
+						level: "critical",
+						reasons: ["synthetic patch proposal"],
+						touchesRuntime: true,
+						requiresHumanReview: true,
+					},
 					beforeAfterEvaluation: evaluation,
 					generatedPatchProposal: {
 						...patchProposal,
@@ -231,6 +309,12 @@ describe("JsonlProposalStore", () => {
 		await expect(
 			store.append(
 				proposal({
+					riskPreview: {
+						level: "critical",
+						reasons: ["synthetic patch proposal"],
+						touchesRuntime: true,
+						requiresHumanReview: true,
+					},
 					beforeAfterEvaluation: evaluation,
 					generatedPatchProposal: {
 						...patchProposal,
@@ -244,6 +328,21 @@ describe("JsonlProposalStore", () => {
 				}),
 			),
 		).rejects.toThrow(/allowed prefixes/u);
+
+		await expect(
+			store.append(
+				proposal({
+					riskPreview: {
+						level: "high",
+						reasons: ["synthetic patch proposal"],
+						touchesRuntime: true,
+						requiresHumanReview: true,
+					},
+					beforeAfterEvaluation: evaluation,
+					generatedPatchProposal: patchProposal,
+				}),
+			),
+		).rejects.toThrow(/critical/u);
 	});
 
 	it("forces generated records back to pending_review and sanitizes artifacts", async () => {
@@ -282,7 +381,8 @@ describe("JsonlProposalStore", () => {
 			"trajectory:1",
 			"[REDACTED]",
 		]);
-		expect(stored.metadata?.token).toBe("[REDACTED]");
+		expect(stored.metadata?.token).toBeUndefined();
+		expect(stored.metadata?.["[REDACTED]"]).toBe("[REDACTED]");
 	});
 
 	it("transitions pending_review proposals to reviewed terminal states with metadata", async () => {
@@ -394,7 +494,7 @@ describe("JsonlProposalStore", () => {
 
 		expect(superseded.status).toBe("superseded");
 		expect(superseded.review?.metadata).toEqual({
-			token: "[REDACTED]",
+			"[REDACTED]": "[REDACTED]",
 			replacementProposalId: "proposal:next",
 		});
 	});
@@ -484,6 +584,61 @@ describe("JsonlProposalStore", () => {
 		expect(listed).toHaveLength(1);
 		expect(listed[0]?.proposalId).toBe(stored.proposalId);
 		expect(listed[0]?.status).toBe("rejected");
+	});
+
+	it("does not reopen approved or rejected proposals when the same content is appended", async () => {
+		const store = new JsonlProposalStore({
+			filePath: path.join(tmpDir, "terminal-duplicate.jsonl"),
+			now: () => new Date("2026-05-02T00:00:00.000Z"),
+		});
+		const input = proposal({
+			title: "Stable terminal proposal",
+			createdAt: "2026-05-02T00:00:00.000Z",
+		});
+		const stored = await store.append(input);
+
+		await store.transitionReviewState(stored.proposalId, {
+			status: "approved",
+			reviewer: "Reviewer",
+			reason: "Terminal review decision.",
+		});
+
+		await expect(store.append(input)).rejects.toThrow(/cannot be reopened/u);
+		expect(await store.getById(stored.proposalId)).toMatchObject({
+			status: "approved",
+		});
+	});
+
+	it("serializes duplicate appends with review transitions so terminal decisions remain latest", async () => {
+		const store = new JsonlProposalStore({
+			filePath: path.join(tmpDir, "append-transition-queue.jsonl"),
+			now: () => new Date("2026-05-02T00:00:00.000Z"),
+		});
+		const input = proposal({
+			title: "Queued terminal proposal",
+			createdAt: "2026-05-02T00:00:00.000Z",
+		});
+		const stored = await store.append(input);
+
+		const duplicateAppend = store.append(input);
+		const transition = store.transitionReviewState(stored.proposalId, {
+			status: "approved",
+			reviewer: "Reviewer",
+			reason: "Terminal review decision.",
+			reviewedAt: "2026-05-02T01:00:00.000Z",
+		});
+
+		await expect(duplicateAppend).resolves.toMatchObject({
+			proposalId: stored.proposalId,
+			status: "pending_review",
+		});
+		await expect(transition).resolves.toMatchObject({
+			proposalId: stored.proposalId,
+			status: "approved",
+		});
+		expect(await store.getById(stored.proposalId)).toMatchObject({
+			status: "approved",
+		});
 	});
 
 	it("serializes concurrent in-process review transitions for the same store", async () => {
@@ -868,6 +1023,12 @@ describe("JsonlProposalStore", () => {
 		const evaluation = beforeAfterEvaluation();
 		const stored = await store.append(
 			proposal({
+				riskPreview: {
+					level: "critical",
+					reasons: ["synthetic patch proposal"],
+					touchesRuntime: true,
+					requiresHumanReview: true,
+				},
 				beforeAfterEvaluation: evaluation,
 				generatedPatchProposal: generatedPatchProposal(evaluation.evaluationId),
 			}),
@@ -963,6 +1124,12 @@ describe("JsonlProposalStore", () => {
 		const evaluation = beforeAfterEvaluation();
 		const stored = await store.append(
 			proposal({
+				riskPreview: {
+					level: "critical",
+					reasons: ["synthetic patch proposal"],
+					touchesRuntime: true,
+					requiresHumanReview: true,
+				},
 				beforeAfterEvaluation: evaluation,
 				generatedPatchProposal: generatedPatchProposal(evaluation.evaluationId),
 			}),

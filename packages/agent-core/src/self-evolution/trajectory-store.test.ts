@@ -80,10 +80,11 @@ describe("JsonlTrajectoryStore", () => {
 		expect(records[0]?.trajectoryRef).toBe(first.trajectoryRef);
 
 		const exported = await store.exportSanitized({ runId: "run-123" });
-		expect(exported[0]?.metadata?.authorization).toBe("[REDACTED]");
+		expect(exported[0]?.metadata?.authorization).toBeUndefined();
+		expect(exported[0]?.metadata?.["[REDACTED]"]).toBe("[REDACTED]");
 		expect(exported[0]?.steps[0]?.input).toEqual({
 			command: "do thing",
-			api_key: "[REDACTED]",
+			"[REDACTED]": "[REDACTED]",
 		});
 		expect(exported[0]?.steps[0]?.evidenceRefs).toEqual(["tool-call:1"]);
 		expect(exported[0]?.failures?.[0]?.message).not.toContain(
@@ -91,7 +92,10 @@ describe("JsonlTrajectoryStore", () => {
 		);
 		expect(exported[0]?.failures?.[0]?.source).toBe("[REDACTED]");
 		expect(exported[0]?.failures?.[0]?.evidenceRefs).toEqual(["failure:1"]);
-		expect(exported[0]?.failures?.[0]?.metadata?.token).toBe("[REDACTED]");
+		expect(exported[0]?.failures?.[0]?.metadata?.token).toBeUndefined();
+		expect(exported[0]?.failures?.[0]?.metadata?.["[REDACTED]"]).toBe(
+			"[REDACTED]",
+		);
 	});
 
 	it("redacts shared safety patterns before persisting JSONL records", async () => {

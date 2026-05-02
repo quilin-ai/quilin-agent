@@ -90,6 +90,7 @@ export interface SkillManifestCatalogReadinessSummary {
 export interface BuildSkillManifestOptions {
 	readonly descriptor: SkillDescriptor;
 	readonly provenance?: SkillProvenanceReceipt;
+	readonly content?: string | Buffer;
 }
 
 export function buildSkillManifest(
@@ -98,9 +99,15 @@ export function buildSkillManifest(
 	const { descriptor, provenance } = options;
 	const { frontmatter } = descriptor;
 	if (provenance != null) {
+		if (options.content === undefined) {
+			throw new Error(
+				"Skill provenance content is required to verify digest and size",
+			);
+		}
 		const provenanceValidation = validateSkillProvenanceReceipt({
 			descriptor,
 			provenance,
+			content: options.content,
 		});
 		if (!provenanceValidation.ok) {
 			throw new Error(provenanceValidation.detail);

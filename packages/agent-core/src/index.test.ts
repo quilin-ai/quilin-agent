@@ -1510,7 +1510,7 @@ describe("package entrypoint self-evolution exports", () => {
 			baselineLabel: "Current package boundary",
 			candidateLabel: "Root-exported self-evolution boundary",
 			summary: "Static estimate for reviewer triage.",
-			evidenceRefs: [trajectory.trajectoryRef],
+			evidenceRefs: [trajectory.trajectoryRef, "QUI-45"],
 			metrics: [
 				{
 					name: "entrypoint coverage",
@@ -1518,7 +1518,7 @@ describe("package entrypoint self-evolution exports", () => {
 					candidateValue: 1,
 					unit: "tests",
 					direction: "increase_is_better",
-					evidenceRefs: [trajectory.trajectoryRef],
+					evidenceRefs: [trajectory.trajectoryRef, "QUI-45"],
 				},
 			],
 		});
@@ -1526,7 +1526,7 @@ describe("package entrypoint self-evolution exports", () => {
 			proposalKind: "scaffold_patch",
 			title: "Review-only self-evolution package boundary",
 			summary: "Synthetic diff proposal for human review.",
-			sourceRefs: [trajectory.trajectoryRef],
+			sourceRefs: [trajectory.trajectoryRef, "QUI-45"],
 			beforeAfterEvaluationId: beforeAfterEvaluation.evaluationId,
 			rollbackPlan:
 				"No rollback is needed until a reviewer applies the proposal.",
@@ -1555,13 +1555,16 @@ describe("package entrypoint self-evolution exports", () => {
 			artifacts: [],
 			evidenceHashes: [trajectory.contentHash],
 			riskPreview: {
-				level: "medium",
-				reasons: ["Touches a package boundary"],
-				touchesRuntime: false,
+				level: "critical",
+				reasons: ["Runtime scaffold requires WriteAuthority review"],
+				touchesRuntime: true,
 				requiresHumanReview: true,
 			},
 			generatedPatchProposal,
 			beforeAfterEvaluation,
+			metadata: {
+				task_ref: "QUI-45",
+			},
 		};
 
 		expect(analysis).toMatchObject({

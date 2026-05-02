@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import { LocalNoopOfflineOptimizer } from "./offline-optimizer.js";
 import type { StoredTrajectoryRecord } from "./types.js";
 
-function trajectory(error: string): StoredTrajectoryRecord {
+function trajectory(
+	error: string,
+	overrides: Partial<StoredTrajectoryRecord> = {},
+): StoredTrajectoryRecord {
 	return {
 		schemaVersion: 1,
 		runId: "run-tool",
@@ -19,6 +22,7 @@ function trajectory(error: string): StoredTrajectoryRecord {
 				evidenceRefs: ["tool-call:1"],
 			},
 		],
+		...overrides,
 	};
 }
 
@@ -39,44 +43,106 @@ describe("LocalNoopOfflineOptimizer", () => {
 		const optimizer = new LocalNoopOfflineOptimizer();
 
 		const result = optimizer.optimize({
-			trajectories: [trajectory("tool error: timeout")],
+			trajectories: [
+				trajectory("tool error: timeout", {
+					taskRef: "QUI-45",
+					metadata: {
+						deterministicRegressionFixture: true,
+					},
+				}),
+			],
 			now: () => new Date("2026-05-01T00:00:00.000Z"),
 		});
 
 		expect(result.optimizerId).toBe("local-noop");
 		expect(result.mode).toBe("artifact_only");
 		expect(result.proposals).toHaveLength(1);
-		expect(
-			result.proposals[0]?.artifacts.map((artifact) => artifact.kind),
-		).toEqual(["markdown", "json", "patch"]);
-		expect(result.proposals[0]?.riskPreview).toMatchObject({
+		const [proposal] = result.proposals;
+		expect(proposal?.artifacts.map((artifact) => artifact.kind)).toEqual([
+			"markdown",
+			"json",
+			"patch",
+		]);
+		expect(proposal?.riskPreview).toMatchObject({
+			level: "critical",
 			touchesRuntime: true,
 			requiresHumanReview: true,
 		});
-		expect(result.proposals[0]?.generatedPatchProposal).toMatchObject({
+		expect(proposal?.generatedPatchProposal).toMatchObject({
 			proposalKind: "scaffold_patch",
 			reviewState: "pending_human_review",
+			writeAuthorityPreview: {
+				tool: "scaffold_patch",
+				riskLevel: "critical",
+				origin: "agent",
+				requiresConfirmation: true,
+				auditRequired: true,
+			},
 			safetyBoundary: {
 				applicationMode: "proposal_only",
 				autoApplyAllowed: false,
 				requiresHumanReview: true,
 			},
 		});
-		expect(result.proposals[0]?.beforeAfterEvaluation).toMatchObject({
+		expect(proposal?.beforeAfterEvaluation).toMatchObject({
 			mode: "static_estimate",
 			requiresHumanReview: true,
 			regressionRisk: "critical",
 		});
-		expect(
-			result.proposals[0]?.generatedPatchProposal?.beforeAfterEvaluationId,
-		).toBe(result.proposals[0]?.beforeAfterEvaluation?.evaluationId);
-		expect(result.proposals[0]?.evidenceHashes).toContain("b".repeat(64));
-		expect(result.proposals[0]?.artifacts[0]?.content).toContain(
+		expect(proposal?.generatedPatchProposal?.beforeAfterEvaluationId).toBe(
+			proposal?.beforeAfterEvaluation?.evaluationId,
+		);
+		expect(proposal?.evidenceHashes).toContain("b".repeat(64));
+		expect(proposal?.metadata).toMatchObject({
+			task_ref: "QUI-45",
+		});
+		expect(proposal?.generatedPatchProposal?.sourceRefs).toContain("QUI-45");
+		expect(proposal?.beforeAfterEvaluation?.evidenceRefs).toContain("QUI-45");
+		expect(proposal?.artifacts[0]?.sourceRefs).toContain("QUI-45");
+		expect(proposal?.artifacts[0]?.content).toContain(
 			"does not write source files",
 		);
-		expect(result.proposals[0]?.artifacts[2]?.content).toContain(
+		expect(proposal?.artifacts[0]?.content).toContain("Task reference: QUI-45");
+		expect(proposal?.artifacts[1]?.content).toContain('"taskRef": "QUI-45"');
+		expect(proposal?.artifacts[2]?.content).toContain(
 			"pending_review proposal",
 		);
+	});
+
+	it("does not propose scaffold patches without a task reference audit anchor", () => {
+		const optimizer = new LocalNoopOfflineOptimizer();
+
+		const result = optimizer.optimize({
+			trajectories: [
+				trajectory("tool error: timeout", {
+					metadata: {
+						deterministicRegressionFixture: true,
+					},
+				}),
+			],
+			now: () => new Date("2026-05-01T00:00:00.000Z"),
+		});
+
+		expect(result.proposals).toEqual([]);
+		expect(result.noProposalReasons[0]?.code).toBe(
+			"missing_task_ref_requires_linear_issue",
+		);
+	});
+
+	it("does not propose scaffold patches from a single uncorroborated tool error", () => {
+		const optimizer = new LocalNoopOfflineOptimizer();
+
+		const result = optimizer.optimize({
+			trajectories: [
+				trajectory("tool error: timeout", {
+					taskRef: "QUI-45",
+				}),
+			],
+			now: () => new Date("2026-05-01T00:00:00.000Z"),
+		});
+
+		expect(result.proposals).toEqual([]);
+		expect(result.noProposalReasons[0]?.code).toBe("insufficient_signal");
 	});
 
 	it("sanitizes secrets before writing candidate artifacts", () => {
@@ -85,7 +151,12 @@ describe("LocalNoopOfflineOptimizer", () => {
 		const result = optimizer.optimize({
 			trajectories: [
 				{
-					...trajectory("tool error: leaked sk-secret1234567890"),
+					...trajectory("tool error: leaked sk-secret1234567890", {
+						taskRef: "QUI-45",
+						metadata: {
+							deterministicRegressionFixture: true,
+						},
+					}),
 					steps: [
 						{
 							index: 0,

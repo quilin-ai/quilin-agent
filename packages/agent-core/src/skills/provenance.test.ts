@@ -77,6 +77,7 @@ describe("validateSkillProvenanceReceipt", () => {
 					skillName: "other",
 					path: "/other/SKILL.md",
 				},
+				content: "skill body",
 			}),
 		).toEqual({
 			ok: false,
@@ -84,5 +85,58 @@ describe("validateSkillProvenanceReceipt", () => {
 				"Skill provenance receipt does not match descriptor",
 			),
 		});
+	});
+
+	it("rejects malformed digest metadata and content tampering", () => {
+		const receipt = createSkillProvenanceReceipt({
+			descriptor,
+			content: "skill body",
+		});
+
+		expect(
+			validateSkillProvenanceReceipt({
+				descriptor,
+				provenance: {
+					...receipt,
+					digest: {
+						algorithm: "md5" as "sha256",
+						value: "not-hex",
+					},
+					sizeBytes: -1,
+				},
+				content: "skill body",
+			}),
+		).toEqual({
+			ok: false,
+			detail: expect.stringContaining("digest.algorithm expected sha256"),
+		});
+
+		expect(
+			validateSkillProvenanceReceipt({
+				descriptor,
+				provenance: {
+					...receipt,
+					digest: undefined as never,
+				},
+				content: "skill body",
+			}),
+		).toEqual({
+			ok: false,
+			detail: expect.stringContaining(
+				"digest.algorithm expected sha256 but received <unset>",
+			),
+		});
+
+		const tampered = validateSkillProvenanceReceipt({
+			descriptor,
+			provenance: receipt,
+			content: "tampered skill body",
+		});
+
+		if (tampered.ok) {
+			throw new Error("Tampered skill content must fail provenance validation");
+		}
+		expect(tampered.detail).toContain("digest.value expected");
+		expect(tampered.detail).toContain("sizeBytes expected");
 	});
 });

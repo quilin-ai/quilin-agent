@@ -62,6 +62,13 @@ describe("patch proposal boundary", () => {
 			autoApplyAllowed: false,
 			requiresHumanReview: true,
 		});
+		expect(generatedPatchProposal.writeAuthorityPreview).toMatchObject({
+			tool: "scaffold_patch",
+			riskLevel: "critical",
+			origin: "agent",
+			requiresConfirmation: true,
+			auditRequired: true,
+		});
 		expect(generatedPatchProposal.fileChanges[0]?.diffKind).toBe(
 			"synthetic_unified_diff",
 		);
@@ -205,5 +212,18 @@ describe("patch proposal boundary", () => {
 				beforeAfterEvaluation,
 			),
 		).toThrow(/before\/after evaluation/u);
+
+		expect(() =>
+			assertGeneratedPatchProposalBoundary(
+				{
+					...generatedPatchProposal,
+					writeAuthorityPreview: {
+						...generatedPatchProposal.writeAuthorityPreview,
+						riskLevel: "high" as "critical",
+					},
+				},
+				beforeAfterEvaluation,
+			),
+		).toThrow(/critical/u);
 	});
 });

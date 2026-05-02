@@ -69,4 +69,22 @@ describe("sanitizeForSelfEvolution", () => {
 		expect(serialized).not.toContain(providerKey);
 		expect(hasSecretPattern(serialized)).toBe(false);
 	});
+
+	it("redacts secrets embedded in object keys as well as values", () => {
+		const secretKey = "OPENAI_API_KEY=plain-openai-secret";
+		const bearerKey = "Bearer secret-source-ref-123456";
+
+		const sanitized = sanitizeForSelfEvolution({
+			[secretKey]: "value",
+			nested: {
+				[bearerKey]: "value",
+			},
+		});
+		const serialized = JSON.stringify(sanitized);
+
+		expect(serialized).not.toContain("plain-openai-secret");
+		expect(serialized).not.toContain("secret-source-ref-123456");
+		expect(serialized).toContain("[REDACTED]");
+		expect(hasSecretPattern(serialized)).toBe(false);
+	});
 });

@@ -15,6 +15,8 @@ import type {
 	GeneratedPatchFileChange,
 	GeneratedPatchProposal,
 	GeneratedPatchProposalKind,
+	GeneratedPatchWriteAuthorityPreview,
+	GeneratedPatchWriteOrigin,
 	PatchProposalSafetyBoundary,
 	ProposalRiskLevel,
 } from "./types.js";
@@ -91,6 +93,11 @@ export interface GeneratedPatchFileChangeInput {
 	readonly unifiedDiff: string;
 }
 
+export interface GeneratedPatchWriteAuthorityPreviewInput {
+	readonly origin?: GeneratedPatchWriteOrigin;
+	readonly summary?: string;
+}
+
 export interface GeneratedPatchProposalInput {
 	readonly proposalKind: GeneratedPatchProposalKind;
 	readonly title: string;
@@ -98,6 +105,7 @@ export interface GeneratedPatchProposalInput {
 	readonly fileChanges: readonly GeneratedPatchFileChangeInput[];
 	readonly sourceRefs: readonly unknown[];
 	readonly beforeAfterEvaluationId: string;
+	readonly writeAuthorityPreview?: GeneratedPatchWriteAuthorityPreviewInput;
 	readonly rollbackPlan: string;
 	readonly safetyBoundary?: PatchProposalSafetyBoundaryInput;
 }
@@ -332,6 +340,33 @@ function sanitizeFileChange(
 	};
 }
 
+function createWriteAuthorityPreview(
+	input: GeneratedPatchWriteAuthorityPreviewInput | undefined,
+	title: string,
+): GeneratedPatchWriteAuthorityPreview {
+	const origin = input?.origin ?? "agent";
+	if (origin !== "agent" && origin !== "idle") {
+		throw new TypeError(
+			"Generated patch proposal WriteAuthority origin is invalid",
+		);
+	}
+
+	return {
+		tool: "scaffold_patch",
+		riskLevel: "critical",
+		origin,
+		summary:
+			input?.summary == null
+				? `Review-only scaffold patch proposal: ${title}`
+				: assertNonEmptyString(
+						input.summary,
+						"Generated patch proposal WriteAuthority summary",
+					),
+		requiresConfirmation: true,
+		auditRequired: true,
+	};
+}
+
 export function createGeneratedPatchProposal(
 	input: GeneratedPatchProposalInput,
 ): GeneratedPatchProposal {
@@ -351,11 +386,15 @@ export function createGeneratedPatchProposal(
 	if (sourceRefs.length === 0) {
 		throw new TypeError("Generated patch proposal must include source refs");
 	}
+	const title = assertNonEmptyString(
+		input.title,
+		"Generated patch proposal title",
+	);
 
 	const payload = {
 		proposalKind: input.proposalKind,
 		reviewState: "pending_human_review" as const,
-		title: assertNonEmptyString(input.title, "Generated patch proposal title"),
+		title,
 		summary: assertNonEmptyString(
 			input.summary,
 			"Generated patch proposal summary",
@@ -366,6 +405,10 @@ export function createGeneratedPatchProposal(
 		beforeAfterEvaluationId: assertNonEmptyString(
 			input.beforeAfterEvaluationId,
 			"Generated patch proposal before/after evaluation id",
+		),
+		writeAuthorityPreview: createWriteAuthorityPreview(
+			input.writeAuthorityPreview,
+			title,
 		),
 		rollbackPlan: assertNonEmptyString(
 			input.rollbackPlan,
@@ -441,6 +484,36 @@ export function assertGeneratedPatchProposalBoundary(
 	if (normalizeEvidenceRefs(proposal.sourceRefs).length === 0) {
 		throw new TypeError("Generated patch proposal must include source refs");
 	}
+	if (proposal.writeAuthorityPreview.tool !== "scaffold_patch") {
+		throw new TypeError(
+			"Generated patch proposal WriteAuthority tool must be scaffold_patch",
+		);
+	}
+	if (proposal.writeAuthorityPreview.riskLevel !== "critical") {
+		throw new TypeError(
+			"Generated patch proposal WriteAuthority risk must be critical",
+		);
+	}
+	if (
+		proposal.writeAuthorityPreview.origin !== "agent" &&
+		proposal.writeAuthorityPreview.origin !== "idle"
+	) {
+		throw new TypeError(
+			"Generated patch proposal WriteAuthority origin is invalid",
+		);
+	}
+	if (
+		proposal.writeAuthorityPreview.requiresConfirmation !== true ||
+		proposal.writeAuthorityPreview.auditRequired !== true
+	) {
+		throw new TypeError(
+			"Generated patch proposal WriteAuthority preview must require confirmation and audit",
+		);
+	}
+	assertNonEmptyString(
+		proposal.writeAuthorityPreview.summary,
+		"Generated patch proposal WriteAuthority summary",
+	);
 	assertNonEmptyString(
 		proposal.rollbackPlan,
 		"Generated patch proposal rollback plan",

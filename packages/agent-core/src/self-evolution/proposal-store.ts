@@ -53,6 +53,8 @@ const PROPOSAL_REVIEW_QUEUE_VIEW_OPTION_KEYS = new Set([
 	"stalePendingAfterMs",
 ]);
 const DEFAULT_STALE_PENDING_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
+const SOURCE_ISSUE_REF_PATTERN =
+	/(?:^|\b)(?:[A-Z][A-Z0-9]+-\d+|(?:linear|issue|source-issue|task):[A-Za-z0-9_.:/-]+)(?:\b|$)/u;
 
 const PROPOSAL_REVIEW_QUEUE_NEXT_ACTIONS = {
 	review_stale_pending: {
@@ -158,6 +160,38 @@ function assertProposalStatus(value: unknown, field: string): ProposalStatus {
 	return value as ProposalStatus;
 }
 
+function hasSourceIssueRef(value: unknown): boolean {
+	if (typeof value === "string") {
+		return SOURCE_ISSUE_REF_PATTERN.test(value);
+	}
+	if (Array.isArray(value)) {
+		return value.some(hasSourceIssueRef);
+	}
+	if (isPlainObject(value)) {
+		return Object.entries(value).some(
+			([key, entryValue]) =>
+				SOURCE_ISSUE_REF_PATTERN.test(key) || hasSourceIssueRef(entryValue),
+		);
+	}
+	return false;
+}
+
+function assertGeneratedPatchSourceIssueAnchor(
+	input: ProposalRecordInput,
+): void {
+	if (
+		!hasSourceIssueRef(input.metadata) &&
+		!hasSourceIssueRef(input.generatedPatchProposal?.sourceRefs) &&
+		!hasSourceIssueRef(
+			input.artifacts.flatMap((artifact) => artifact.sourceRefs),
+		)
+	) {
+		throw new TypeError(
+			"Generated patch proposal must include a Linear/source issue taskRef anchor",
+		);
+	}
+}
+
 function assertProposalShape(input: ProposalRecordInput): void {
 	if (
 		input.schemaVersion !== undefined &&
@@ -184,11 +218,20 @@ function assertProposalShape(input: ProposalRecordInput): void {
 				"Generated patch proposal must include a before/after evaluation",
 			);
 		}
+		if (
+			input.riskPreview.level !== "critical" ||
+			input.riskPreview.touchesRuntime !== true
+		) {
+			throw new TypeError(
+				"Generated patch proposal riskPreview must mark runtime scaffold risk as critical",
+			);
+		}
 		assertBeforeAfterEvaluationBoundary(input.beforeAfterEvaluation);
 		assertGeneratedPatchProposalBoundary(
 			input.generatedPatchProposal,
 			input.beforeAfterEvaluation,
 		);
+		assertGeneratedPatchSourceIssueAnchor(input);
 	}
 }
 
@@ -676,6 +719,27 @@ export class JsonlProposalStore {
 	}
 
 	async append(input: ProposalRecordInput): Promise<StoredProposalRecord> {
+		return this.enqueueMutation(() => this.appendPendingRecord(input));
+	}
+
+	private async enqueueMutation<T>(operation: () => Promise<T>): Promise<T> {
+		const previousTransition = this.transitionQueue;
+		let releaseTransition!: () => void;
+		this.transitionQueue = new Promise<void>((resolve) => {
+			releaseTransition = resolve;
+		});
+
+		await previousTransition;
+		try {
+			return await operation();
+		} finally {
+			releaseTransition();
+		}
+	}
+
+	private async appendPendingRecord(
+		input: ProposalRecordInput,
+	): Promise<StoredProposalRecord> {
 		assertProposalShape(input);
 		const sanitizedInput = sanitizeProposalInput(input);
 		assertProposalShape(sanitizedInput);
@@ -702,6 +766,12 @@ export class JsonlProposalStore {
 			sanitizedDraft.title,
 			contentHash,
 		]);
+		const current = await this.getById(proposalId);
+		if (current !== null && current.status !== "pending_review") {
+			throw new TypeError(
+				`Proposal ${proposalId} is already ${current.status} and cannot be reopened as pending_review`,
+			);
+		}
 		const record: StoredProposalRecord = {
 			...sanitizedDraft,
 			schemaVersion: SELF_EVOLUTION_SCHEMA_VERSION,
@@ -766,14 +836,7 @@ export class JsonlProposalStore {
 		proposalId: string,
 		input: ProposalStoreReviewTransitionInput,
 	): Promise<StoredProposalRecord> {
-		const previousTransition = this.transitionQueue;
-		let releaseTransition!: () => void;
-		this.transitionQueue = new Promise<void>((resolve) => {
-			releaseTransition = resolve;
-		});
-
-		await previousTransition;
-		try {
+		return this.enqueueMutation(async () => {
 			const current = await this.getById(proposalId);
 			if (current === null) {
 				throw new TypeError("Proposal not found");
@@ -790,8 +853,6 @@ export class JsonlProposalStore {
 				"utf8",
 			);
 			return transitioned;
-		} finally {
-			releaseTransition();
-		}
+		});
 	}
 }

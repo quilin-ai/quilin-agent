@@ -74,6 +74,7 @@ export type FailureConfidence = "high" | "medium" | "low";
 export type NoProposalReasonCode =
 	| "no_failure_detected"
 	| "missing_evidence_requires_human_context"
+	| "missing_task_ref_requires_linear_issue"
 	| "budget_policy_requires_human_review"
 	| "unknown_failure_not_actionable"
 	| "insufficient_signal";
@@ -129,6 +130,16 @@ export type GeneratedPatchReviewState = "pending_human_review";
 export type GeneratedPatchApplicationMode = "proposal_only";
 export type GeneratedPatchDiffKind = "synthetic_unified_diff";
 export type GeneratedPatchChangeKind = "add" | "modify" | "delete";
+export type GeneratedPatchWriteOrigin = "agent" | "idle";
+
+export interface GeneratedPatchWriteAuthorityPreview {
+	readonly tool: "scaffold_patch";
+	readonly riskLevel: "critical";
+	readonly origin: GeneratedPatchWriteOrigin;
+	readonly summary: string;
+	readonly requiresConfirmation: true;
+	readonly auditRequired: true;
+}
 
 export interface PatchProposalSafetyBoundary {
 	readonly applicationMode: GeneratedPatchApplicationMode;
@@ -185,6 +196,7 @@ export interface GeneratedPatchProposal {
 	readonly fileChanges: readonly GeneratedPatchFileChange[];
 	readonly sourceRefs: readonly string[];
 	readonly beforeAfterEvaluationId: string;
+	readonly writeAuthorityPreview: GeneratedPatchWriteAuthorityPreview;
 	readonly rollbackPlan: string;
 }
 
