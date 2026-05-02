@@ -1,15 +1,24 @@
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { generateText } from "ai";
 import { runConfigCommand } from "./cli/config-cmd.js";
 import {
 	buildCapabilitiesRuntime,
 	loadCapabilitiesConfig,
 } from "./config/loader.js";
 import { bootstrapUserRuntime } from "./config/runtime.js";
+import type { UserConfigLoadResult } from "./config/user-config.js";
+import {
+	normalizeProviderError,
+	ProviderControlPlaneLLMClient,
+	VercelLLMClient,
+} from "./llm/client.js";
 import { createProvider, getDefaultModel } from "./llm/provider.js";
-import { normalizeTokenUsage } from "./llm/token-usage.js";
+import type {
+	InferenceConfig,
+	LLMProviderId,
+	ProviderRunRecord,
+} from "./llm/types.js";
 import { configureLogger, logger } from "./logger.js";
 import { JsonFileSpanExporter } from "./observability/exporters/json-file.js";
 import { startRepl } from "./repl.js";
@@ -18,9 +27,29 @@ import { SQLiteCheckpoint } from "./state/checkpoint.js";
 export * from "./context/index.js";
 export * from "./llm/client.js";
 export * from "./llm/provider.js";
-export * from "./memory/index.js";
 export { runAgentLoop } from "./loop.js";
 export type { AgentLoopConfig, LoopHooks } from "./loop-types.js";
+export * from "./memory/index.js";
+export * from "./multi-agent/index.js";
+export * from "./observability/index.js";
+export {
+	classifyProductionRouteScoreBatchReadiness,
+	explainProductionRoute,
+	type ProductionRouteExplanationBatchSummary,
+	type ProductionRouteHandoffRecommendation,
+	type ProductionRouteScore,
+	type ProductionRouteScoreBatch,
+	type ProductionRouteScoreBatchReadiness,
+	type ProductionRouteScoreBatchReadinessCounts,
+	type ProductionRouteScoreBatchReadinessSummary,
+	type ProductionRouteScoreInput,
+	type ProductionRouteScoreOptions,
+	scoreProductionRoute,
+	scoreProductionRoutes,
+	summarizeProductionRouteExplanations,
+	summarizeProductionRouteScoreBatchReadiness,
+	summarizeProductionRouteScores,
+} from "./planning/production-route-score.js";
 export {
 	applyEvent,
 	type BudgetLedger,
@@ -47,12 +76,138 @@ export type {
 } from "./planning/types.js";
 export * from "./repl.js";
 export * from "./safety/write-authority.js";
+export * from "./self-evolution/index.js";
+export {
+	type RunSkillTriggerEvalOptions,
+	runSkillTriggerEval,
+} from "./skills/eval-runner.js";
+export {
+	type BuildSkillManifestOptions,
+	buildSkillManifest,
+	type SkillManifestCatalogHealthInput,
+	type SkillManifestCatalogHealthSummary,
+	type SkillManifestCatalogMissingFieldSummary,
+	type SkillManifestCatalogRawHealthInput,
+	type SkillManifestCatalogReadinessStatus,
+	type SkillManifestCatalogReadinessSummary,
+	type SkillManifestCatalogRiskCodeSummary,
+	type SkillManifestHealthInput,
+	type SkillManifestHealthStatus,
+	type SkillManifestHealthSummary,
+	type SkillManifestRiskCode,
+	summarizeSkillManifestCatalogHealth,
+	summarizeSkillManifestCatalogReadiness,
+	summarizeSkillManifestCatalogReadinessInputs,
+	summarizeSkillManifestHealth,
+} from "./skills/manifest.js";
+export {
+	type CreateSkillProvenanceReceiptOptions,
+	createSkillContentDigest,
+	createSkillProvenanceReceipt,
+} from "./skills/provenance.js";
+export type {
+	SkillContentDigest,
+	SkillManifest,
+	SkillManifestSchemaVersion,
+	SkillProvenanceReceipt,
+	SkillProvenanceSchemaVersion,
+	SkillTriggerEvalCase,
+	SkillTriggerEvalCaseResult,
+	SkillTriggerEvalReport,
+} from "./skills/types.js";
 export * from "./state/checkpoint.js";
+export type {
+	FileListToolOptions,
+	FileReadToolOptions,
+	FileWriteToolOptions,
+} from "./tools/builtin/file-tools.js";
+export {
+	type BuiltinToolOptions,
+	createBuiltinTools,
+	createFileListTool,
+	createFileReadTool,
+	createFileWriteTool,
+	createShellExecTool,
+	createSkillManageTool,
+	createSkillViewTool,
+	createWebFetchTool,
+} from "./tools/builtin/index.js";
+export type {
+	ShellExecToolOptions,
+	ShellRunner,
+	ShellRunnerOptions,
+} from "./tools/builtin/shell-exec.js";
+export type { SkillManageToolOptions } from "./tools/builtin/skill-manage.js";
+export type { SkillViewToolOptions } from "./tools/builtin/skill-view.js";
+export type { WebFetchToolOptions } from "./tools/builtin/web-fetch.js";
 export * from "./tools/mcp-client.js";
+export { MCPRegistry, type MCPServerEntry } from "./tools/registry.js";
 export * from "./tools/router.js";
+export {
+	createSandboxApprovalSummary,
+	defaultSandboxEvaluator,
+	evaluateSandboxRequest,
+	genericSandboxPolicy,
+	resolveSandboxPolicy,
+	type SandboxApprovalSummary,
+	type SandboxDecision,
+	type SandboxDecisionKind,
+	type SandboxEvaluator,
+	type SandboxNetworkSignal,
+	type SandboxOperationType,
+	type SandboxOrigin,
+	type SandboxPathAccess,
+	type SandboxPathSignal,
+	type SandboxPolicy,
+	type SandboxProcessSignal,
+	type SandboxReasonCode,
+	type SandboxRequest,
+	type SandboxRequiredApproval,
+	type SandboxRiskSignals,
+	type SandboxToolContext,
+} from "./tools/sandbox.js";
+export {
+	type JsonSchema,
+	type JsonSchemaArray,
+	type JsonSchemaObject,
+	jsonSchemaToZod,
+} from "./tools/schema-converter.js";
+export {
+	type CreateToolErrorOptions,
+	type CreateToolErrorResultOptions,
+	classifyToolException,
+	createToolError,
+	createToolErrorResult,
+	toolExceptionMessage,
+} from "./tools/tool-errors.js";
+export type {
+	RiskLevel as ToolRiskLevel,
+	ToolCategory,
+	ToolPromptDescriptor,
+	ToolWithMetadata,
+} from "./tools/tool-metadata.js";
+export {
+	MCP_TOOL_METADATA_MAX_LENGTH,
+	MCP_TOOL_NAME_PATTERN,
+	sanitizeMCPToolDescription,
+	sanitizeMCPToolName,
+} from "./tools/tool-sanitizer.js";
+export type {
+	Tool,
+	ToolCall,
+	ToolError,
+	ToolErrorCode,
+	ToolResult,
+} from "./tools/types.js";
 export * from "./types/index.js";
 
 const HEARTBEAT_INTERVAL_MS = 60_000;
+const DEFAULT_PROVIDER_ID = "deepseek" satisfies LLMProviderId;
+const STARTUP_VERIFICATION_CONFIG: InferenceConfig = {
+	temperature: 0,
+	maxTokens: 20,
+	thinkingMode: "disabled",
+};
 
 export type RuntimeMode = "repl" | "service";
 
@@ -64,6 +219,83 @@ export interface MainOptions {
 interface ReplCliOptions {
 	readonly sessionId?: string;
 	readonly resumeLatest: boolean;
+}
+
+interface RuntimeModelSelection {
+	readonly modelId: string;
+	readonly source: "provider_default" | "user_config";
+	readonly providerDefaultModel: string;
+	readonly userConfigDefaultModel: string;
+	readonly userConfigDefaultModelSource: UserConfigLoadResult["sources"][string];
+}
+
+type ProviderRunRecordRuntimePhase = "startup_verification" | "repl_turn";
+
+function firstProviderRunError(record: ProviderRunRecord) {
+	return (
+		record.error ?? record.attempts.find((attempt) => attempt.error)?.error
+	);
+}
+
+function providerErrorLogFields(error: unknown): Record<string, string> {
+	const normalized = normalizeProviderError(error);
+
+	return {
+		name: normalized.name,
+		...(normalized.code == null ? {} : { code: normalized.code }),
+		...(normalized.category == null ? {} : { category: normalized.category }),
+	};
+}
+
+function providerRunRecordLogPayload(
+	record: ProviderRunRecord,
+	runtimePhase: ProviderRunRecordRuntimePhase,
+): Record<string, unknown> {
+	const firstAttempt = record.attempts[0];
+	const error = firstProviderRunError(record);
+
+	return {
+		runtime_phase: runtimePhase,
+		provider: record.route.provider,
+		configured_model: record.route.configuredModel,
+		effective_model: record.route.effectiveModel,
+		fallback_used: record.fallbackUsed,
+		outcome: record.outcome,
+		attempt_count: record.attempts.length,
+		reasoning_state_adapter: record.route.reasoningStateAdapter,
+		...(firstAttempt == null
+			? {}
+			: {
+					attempt_provider: firstAttempt.provider,
+					attempt_model: firstAttempt.model,
+					attempt_outcome: firstAttempt.outcome,
+					input_tokens: firstAttempt.usage?.inputTokens,
+					output_tokens: firstAttempt.usage?.outputTokens,
+					cache_read_tokens: firstAttempt.usage?.cache?.readTokens,
+					cache_write_tokens: firstAttempt.usage?.cache?.writeTokens,
+					cache_source: firstAttempt.usage?.cache?.source,
+				}),
+		...(error == null
+			? {}
+			: {
+					error: {
+						name: error.name,
+						...(error.code == null ? {} : { code: error.code }),
+						...(error.category == null ? {} : { category: error.category }),
+					},
+				}),
+	};
+}
+
+function createProviderRunRecordLogger(
+	runtimePhase: ProviderRunRecordRuntimePhase,
+): (record: ProviderRunRecord) => void {
+	return (record) => {
+		logger.info(
+			providerRunRecordLogPayload(record, runtimePhase),
+			"LLM provider run recorded",
+		);
+	};
 }
 
 function findWorkspaceRoot(startDir: string): string {
@@ -121,6 +353,24 @@ function parseReplCliOptions(argv: readonly string[]): ReplCliOptions {
 	return { sessionId, resumeLatest };
 }
 
+function selectRuntimeModel(
+	userConfig: UserConfigLoadResult,
+	providerDefaultModel: string,
+): RuntimeModelSelection {
+	const userConfigDefaultModel = userConfig.config.llm.default_model;
+	const userConfigDefaultModelSource =
+		userConfig.sources["llm.default_model"] ?? "default";
+	const useUserConfigModel = userConfigDefaultModelSource !== "default";
+
+	return {
+		modelId: useUserConfigModel ? userConfigDefaultModel : providerDefaultModel,
+		source: useUserConfigModel ? "user_config" : "provider_default",
+		providerDefaultModel,
+		userConfigDefaultModel,
+		userConfigDefaultModelSource,
+	};
+}
+
 async function resolveReplSessionId(
 	argv: readonly string[] = process.argv.slice(2),
 ): Promise<string | undefined> {
@@ -150,6 +400,46 @@ async function runServiceLoop(): Promise<void> {
 	});
 }
 
+async function verifyLLMConnection(
+	provider: ReturnType<typeof createProvider>,
+	providerId: LLMProviderId,
+	modelId: string,
+	onProviderRunRecord: (record: ProviderRunRecord) => void,
+): Promise<void> {
+	const verificationClient = new ProviderControlPlaneLLMClient(
+		new VercelLLMClient({
+			model: provider(modelId),
+			resolveModel: provider,
+		}),
+		{
+			routeRequest: {
+				provider: providerId,
+				model: modelId,
+			},
+			onRunRecord: onProviderRunRecord,
+		},
+	);
+	const response = await verificationClient.chat(
+		[
+			{
+				role: "user",
+				content: 'Reply with exactly: "Quilin Agent online." Nothing else.',
+			},
+		],
+		[],
+		STARTUP_VERIFICATION_CONFIG,
+	);
+
+	logger.info(
+		{
+			response: response.content.trim(),
+			inputTokens: response.usage.inputTokens,
+			outputTokens: response.usage.outputTokens,
+		},
+		"LLM connection verified",
+	);
+}
+
 export async function main(options: MainOptions = {}): Promise<void> {
 	const runtimeMode = resolveRuntimeMode(options.runtimeMode);
 	configureLogger(runtimeMode);
@@ -169,33 +459,42 @@ export async function main(options: MainOptions = {}): Promise<void> {
 	);
 
 	const provider = createProvider();
-	const modelId = getDefaultModel();
+	const modelSelection = selectRuntimeModel(
+		userRuntime.result,
+		getDefaultModel(),
+	);
+	const modelId = modelSelection.modelId;
 
 	logger.info(
-		{ provider: "deepseek", model: modelId },
+		{
+			provider: DEFAULT_PROVIDER_ID,
+			model: modelId,
+			model_source: modelSelection.source,
+			provider_default_model: modelSelection.providerDefaultModel,
+			user_config_default_model: modelSelection.userConfigDefaultModel,
+			user_config_default_model_source:
+				modelSelection.userConfigDefaultModelSource,
+		},
 		"LLM provider initialized",
 	);
 
 	logger.info("Verifying LLM connection...");
+	const logStartupProviderRunRecord = createProviderRunRecordLogger(
+		"startup_verification",
+	);
 
 	try {
-		const { text, usage } = await generateText({
-			model: provider(modelId),
-			prompt: 'Reply with exactly: "Quilin Agent online." Nothing else.',
-			maxOutputTokens: 20,
-		});
-		const normalizedUsage = normalizeTokenUsage(usage);
-
-		logger.info(
-			{
-				response: text.trim(),
-				inputTokens: normalizedUsage.inputTokens,
-				outputTokens: normalizedUsage.outputTokens,
-			},
-			"LLM connection verified",
+		await verifyLLMConnection(
+			provider,
+			DEFAULT_PROVIDER_ID,
+			modelId,
+			logStartupProviderRunRecord,
 		);
 	} catch (err) {
-		logger.fatal({ err }, "LLM connection failed");
+		logger.fatal(
+			{ error: providerErrorLogFields(err) },
+			"LLM connection failed",
+		);
 		process.exit(1);
 	}
 
@@ -216,6 +515,7 @@ export async function main(options: MainOptions = {}): Promise<void> {
 
 		await startRepl({
 			provider,
+			providerId: DEFAULT_PROVIDER_ID,
 			modelId,
 			...(sessionId == null ? {} : { sessionId }),
 			observability: {
@@ -227,6 +527,7 @@ export async function main(options: MainOptions = {}): Promise<void> {
 			...(capabilitiesRuntime.skillsManager == null
 				? {}
 				: { skillsManager: capabilitiesRuntime.skillsManager }),
+			onProviderRunRecord: createProviderRunRecordLogger("repl_turn"),
 		});
 		shouldExit = true;
 
@@ -256,7 +557,7 @@ async function dispatchCli(argv: readonly string[]): Promise<void> {
 
 if (import.meta.main) {
 	dispatchCli(process.argv.slice(2)).catch((err) => {
-		logger.fatal({ err }, "Unexpected error");
+		logger.fatal({ error: providerErrorLogFields(err) }, "Unexpected error");
 		process.exit(1);
 	});
 }

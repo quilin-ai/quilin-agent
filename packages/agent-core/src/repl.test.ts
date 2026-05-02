@@ -16,6 +16,7 @@ const mockCreateInterface = vi.fn(() => ({
 const mockRunAgentLoop = vi.fn();
 const mockLoggerError = vi.fn();
 const mockStreamingClient = vi.fn();
+const mockProviderControlPlaneClient = vi.fn();
 const mockCheckpointLoad = vi.fn();
 const mockCheckpointSave = vi.fn();
 const mockCheckpointConstructor = vi.fn();
@@ -30,6 +31,9 @@ const mockRegistryOnChange = vi.fn((_listener: () => void) => () => undefined);
 const mockRegistryConstructor = vi.fn();
 let capturedStreamCallback:
 	| ((event: Record<string, unknown>) => void)
+	| undefined;
+let capturedProviderControlPlaneInstance:
+	| MockProviderControlPlaneLLMClient
 	| undefined;
 
 const registryBuiltinTools: ToolWithMetadata[] = [];
@@ -51,6 +55,17 @@ function createToolWithMetadata(
 	};
 }
 
+function createSecretProviderError(messagePrefix = "provider failed"): Error {
+	const secretMessage = `${messagePrefix} token=secret Authorization: Bearer abcdefghijklmnopqrstuvwxyz012345 sk-abcdefghijklmnopqrstuvwxyz012345`;
+	const error = Object.assign(new Error(secretMessage), {
+		name: "ProviderAuthError",
+		code: "AUTH_FAILED",
+		category: "auth",
+	});
+	error.stack = `ProviderAuthError: ${secretMessage}\n    at providerSecretFrame`;
+	return error;
+}
+
 class MockStreamingLLMClient {
 	chat = vi.fn();
 
@@ -60,6 +75,70 @@ class MockStreamingLLMClient {
 			(arg): arg is (event: Record<string, unknown>) => void =>
 				typeof arg === "function",
 		);
+	}
+}
+
+class MockProviderControlPlaneLLMClient {
+	chat = vi.fn();
+
+	constructor(
+		readonly delegate: unknown,
+		readonly options: unknown,
+	) {
+		mockProviderControlPlaneClient(delegate, options);
+		capturedProviderControlPlaneInstance = this;
+		this.chat.mockImplementation(async (_messages, _tools, config) => {
+			const routeRequest = (
+				options as {
+					routeRequest?: { provider?: string; model?: string };
+					onRunRecord?: (record: unknown) => void;
+				}
+			).routeRequest;
+			const provider = routeRequest?.provider ?? "deepseek";
+			const configuredModel = routeRequest?.model ?? "deepseek-chat";
+			const effectiveModel =
+				provider === "deepseek" &&
+				configuredModel === "deepseek-chat" &&
+				(config as { thinkingMode?: string }).thinkingMode !== "disabled"
+					? "deepseek-reasoner"
+					: configuredModel;
+			const record = {
+				route: {
+					provider,
+					configuredModel,
+					effectiveModel,
+					fallbackUsed: false,
+					reasoningStateAdapter:
+						(config as { thinkingMode?: string }).thinkingMode === "disabled"
+							? "none"
+							: "captured_not_replayed",
+				},
+				attempts: [
+					{
+						attemptNumber: 1,
+						provider,
+						model: effectiveModel,
+						startedAt: "2026-05-02T00:00:00.000Z",
+						completedAt: "2026-05-02T00:00:01.000Z",
+						outcome: "success",
+						usage: { inputTokens: 3, outputTokens: 5 },
+					},
+				],
+				outcome: "success",
+				fallbackUsed: false,
+			};
+			(
+				options as {
+					onRunRecord?: (record: unknown) => void;
+				}
+			).onRunRecord?.(record);
+
+			return {
+				content: "ok",
+				usage: { inputTokens: 3, outputTokens: 5 },
+				finishReason: "stop",
+			};
+		});
 	}
 }
 
@@ -101,6 +180,22 @@ vi.mock("./logger.js", () => ({
 }));
 
 vi.mock("./llm/client.js", () => ({
+	normalizeProviderError: (error: unknown) => {
+		if (typeof error !== "object" || error == null) {
+			return { name: "Error", message: "Provider error details redacted." };
+		}
+		const record = error as Record<string, unknown>;
+
+		return {
+			name: typeof record.name === "string" ? record.name : "Error",
+			message: "Provider error details redacted.",
+			...(typeof record.code === "string" ? { code: record.code } : {}),
+			...(typeof record.category === "string"
+				? { category: record.category }
+				: {}),
+		};
+	},
+	ProviderControlPlaneLLMClient: MockProviderControlPlaneLLMClient,
 	StreamingLLMClient: MockStreamingLLMClient,
 }));
 
@@ -125,6 +220,7 @@ describe("startRepl", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		capturedStreamCallback = undefined;
+		capturedProviderControlPlaneInstance = undefined;
 		capturedMessages.length = 0;
 		registryBuiltinTools.length = 0;
 		registryServerTools.length = 0;
@@ -244,6 +340,73 @@ describe("startRepl", () => {
 			createdAt: expect.any(String),
 			lastActiveAt: expect.any(String),
 		});
+	});
+
+	it("emits provider run records through the DeepSeek runtime control plane", async () => {
+		mockQuestion.mockResolvedValueOnce("hello").mockResolvedValueOnce("/exit");
+		mockRunAgentLoop.mockImplementation(async (config) => {
+			await config.llm.chat([], [], {
+				temperature: 0.7,
+				maxTokens: 4096,
+				thinkingMode: "enabled",
+			});
+			return "ok";
+		});
+		const records: unknown[] = [];
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: createMockProvider((requestedModelId: string) =>
+				createMockLanguageModel({
+					provider: "deepseek",
+					modelId: requestedModelId,
+				}),
+			),
+			modelId: "deepseek-chat",
+			onProviderRunRecord: (record) => records.push(record),
+		});
+
+		const [delegate, controlPlaneOptions] =
+			mockProviderControlPlaneClient.mock.calls[0] ?? [];
+		expect(delegate).toBeInstanceOf(MockStreamingLLMClient);
+		expect(controlPlaneOptions).toEqual(
+			expect.objectContaining({
+				routeRequest: {
+					provider: "deepseek",
+					model: "deepseek-chat",
+				},
+				onRunRecord: expect.any(Function),
+			}),
+		);
+		expect(mockRunAgentLoop).toHaveBeenCalledWith(
+			expect.objectContaining({
+				llm: capturedProviderControlPlaneInstance,
+			}),
+			expect.any(Array),
+		);
+
+		expect(records).toEqual([
+			expect.objectContaining({
+				route: {
+					provider: "deepseek",
+					configuredModel: "deepseek-chat",
+					effectiveModel: "deepseek-reasoner",
+					fallbackUsed: false,
+					reasoningStateAdapter: "captured_not_replayed",
+				},
+				attempts: [
+					expect.objectContaining({
+						provider: "deepseek",
+						model: "deepseek-reasoner",
+						outcome: "success",
+						usage: { inputTokens: 3, outputTokens: 5 },
+					}),
+				],
+				outcome: "success",
+				fallbackUsed: false,
+			}),
+		]);
 	});
 
 	it("starts and stops the skills watcher and prints catalog hints", async () => {
@@ -377,6 +540,7 @@ describe("startRepl", () => {
 				observability: expect.objectContaining({
 					spans,
 					sessionId: "session-1",
+					llmProviderId: "deepseek",
 				}),
 			}),
 			expect.any(Array),
@@ -440,7 +604,7 @@ describe("startRepl", () => {
 				return "ok";
 			}
 
-			throw new Error("boom");
+			throw createSecretProviderError("boom");
 		});
 
 		const { startRepl } = await import("./repl.js");
@@ -456,7 +620,26 @@ describe("startRepl", () => {
 			{ role: "assistant", content: "ok" },
 			{ role: "user", content: "second" },
 		]);
-		expect(mockLoggerError).toHaveBeenCalled();
+		expect(mockLoggerError).toHaveBeenCalledWith(
+			{
+				error: {
+					name: "ProviderAuthError",
+					code: "AUTH_FAILED",
+					category: "auth",
+				},
+			},
+			"REPL: LLM call failed",
+		);
+		const serializedErrorLogs = JSON.stringify(mockLoggerError.mock.calls);
+		expect(serializedErrorLogs).not.toContain("token=secret");
+		expect(serializedErrorLogs).not.toContain(
+			"Bearer abcdefghijklmnopqrstuvwxyz012345",
+		);
+		expect(serializedErrorLogs).not.toContain(
+			"sk-abcdefghijklmnopqrstuvwxyz012345",
+		);
+		expect(serializedErrorLogs).not.toContain("providerSecretFrame");
+		expect(serializedErrorLogs).not.toContain("stack");
 		expect(stderrWriteSpy).toHaveBeenCalledWith(
 			"\n[Error: LLM call failed. Check logs for details.]\n\n",
 		);
@@ -1033,7 +1216,7 @@ describe("startRepl", () => {
 		expect(spans.clear).toHaveBeenCalledTimes(1);
 
 		spans.clear.mockClear();
-		exportSpan.mockRejectedValueOnce(new Error("disk full"));
+		exportSpan.mockRejectedValueOnce(createSecretProviderError("disk full"));
 		mockQuestion
 			.mockResolvedValueOnce("hello again")
 			.mockResolvedValueOnce("/exit");
@@ -1046,9 +1229,25 @@ describe("startRepl", () => {
 		});
 
 		expect(mockLoggerError).toHaveBeenCalledWith(
-			{ err: expect.any(Error) },
+			{
+				error: {
+					name: "ProviderAuthError",
+					code: "AUTH_FAILED",
+					category: "auth",
+				},
+			},
 			"REPL: span export failed",
 		);
+		const serializedErrorLogs = JSON.stringify(mockLoggerError.mock.calls);
+		expect(serializedErrorLogs).not.toContain("token=secret");
+		expect(serializedErrorLogs).not.toContain(
+			"Bearer abcdefghijklmnopqrstuvwxyz012345",
+		);
+		expect(serializedErrorLogs).not.toContain(
+			"sk-abcdefghijklmnopqrstuvwxyz012345",
+		);
+		expect(serializedErrorLogs).not.toContain("providerSecretFrame");
+		expect(serializedErrorLogs).not.toContain("stack");
 		expect(spans.clear).not.toHaveBeenCalled();
 	});
 

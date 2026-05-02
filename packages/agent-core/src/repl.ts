@@ -10,9 +10,18 @@ import {
 	createSkillsCatalogSection,
 } from "./context/skills-catalog-section.js";
 import { createTemporalBucketSection } from "./context/temporal.js";
-import { StreamingLLMClient } from "./llm/client.js";
-import type { createProvider } from "./llm/provider.js";
-import type { InferenceConfig, LLMStreamEvent } from "./llm/types.js";
+import {
+	normalizeProviderError,
+	ProviderControlPlaneLLMClient,
+	StreamingLLMClient,
+} from "./llm/client.js";
+import { type createProvider, decideLLMRoute } from "./llm/provider.js";
+import type {
+	InferenceConfig,
+	LLMProviderId,
+	LLMStreamEvent,
+	ProviderRunRecord,
+} from "./llm/types.js";
 import { logger } from "./logger.js";
 import { runAgentLoop } from "./loop.js";
 import type { SpanExporter } from "./observability/exporters/composite.js";
@@ -34,6 +43,7 @@ const DEFAULT_INFERENCE_CONFIG: InferenceConfig = {
 
 interface ReplOptions {
 	provider: ReturnType<typeof createProvider>;
+	providerId?: LLMProviderId;
 	modelId: string;
 	sessionId?: string;
 	observability?: AgentLoopObservability;
@@ -41,6 +51,7 @@ interface ReplOptions {
 	tools?: readonly Tool[];
 	mcpServers?: readonly MCPServerEntry[];
 	skillsManager?: SkillsManager;
+	onProviderRunRecord?: (record: ProviderRunRecord) => void;
 }
 
 function createState(
@@ -114,6 +125,16 @@ function withDefaultMetadata(tools: readonly Tool[]): ToolWithMetadata[] {
 	}));
 }
 
+function providerErrorLogFields(error: unknown): Record<string, string> {
+	const normalized = normalizeProviderError(error);
+
+	return {
+		name: normalized.name,
+		...(normalized.code == null ? {} : { code: normalized.code }),
+		...(normalized.category == null ? {} : { category: normalized.category }),
+	};
+}
+
 async function flushObservabilitySpans(
 	observability: AgentLoopObservability | undefined,
 	exporter: SpanExporter | undefined,
@@ -138,7 +159,10 @@ async function flushObservabilitySpans(
 		}
 		spans.clear();
 	} catch (err) {
-		logger.error({ err }, "REPL: span export failed");
+		logger.error(
+			{ error: providerErrorLogFields(err) },
+			"REPL: span export failed",
+		);
 	}
 }
 
@@ -242,14 +266,19 @@ function renderStreamEvent(
 }
 
 function getEffectiveModelId(
-	baseProvider: string | undefined,
+	providerId: LLMProviderId,
 	baseModelId: string,
 	thinkingMode: InferenceConfig["thinkingMode"],
 ): string {
-	return baseProvider?.split(".")[0]?.toLowerCase() === "deepseek" &&
-		thinkingMode !== "disabled"
-		? "deepseek-reasoner"
-		: baseModelId;
+	try {
+		return decideLLMRoute({
+			provider: providerId,
+			model: baseModelId,
+			thinkingMode,
+		}).effectiveModel;
+	} catch {
+		return baseModelId;
+	}
 }
 
 function renderSkillsCatalogHint(change: SkillsCatalogChange): string | null {
@@ -283,11 +312,13 @@ function renderSkillsCatalogHint(change: SkillsCatalogChange): string | null {
 export async function startRepl(options: ReplOptions): Promise<void> {
 	const {
 		provider,
+		providerId = "deepseek",
 		modelId,
 		sessionId,
 		tools = [],
 		mcpServers = [],
 		skillsManager,
+		onProviderRunRecord,
 	} = options;
 	const context = new BasicContextManager();
 	if (skillsManager != null) {
@@ -398,7 +429,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 		};
 		let reasoningDisplay: ReasoningDisplayMode = "collapsed";
 		let streamRenderState = createStreamRenderState();
-		const llm = new StreamingLLMClient(
+		const streamingLlm = new StreamingLLMClient(
 			{
 				model: baseModel,
 				resolveModel: provider,
@@ -407,6 +438,15 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 				renderStreamEvent(event, reasoningDisplay, streamRenderState);
 			},
 		);
+		const llm = new ProviderControlPlaneLLMClient(streamingLlm, {
+			routeRequest: {
+				provider: providerId,
+				model: modelId,
+			},
+			...(onProviderRunRecord == null
+				? {}
+				: { onRunRecord: onProviderRunRecord }),
+		});
 
 		while (true) {
 			const input = queuedCommands.shift() ?? (await rl.question("quilin> "));
@@ -443,7 +483,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 
 			if (trimmed === "/status") {
 				stderr.write(
-					`Status: model=${modelId} | effective=${getEffectiveModelId(baseModel.provider, modelId, inferenceConfig.thinkingMode)} | thinking=${inferenceConfig.thinkingMode} | reasoning=${reasoningDisplay}\n`,
+					`Status: model=${modelId} | effective=${getEffectiveModelId(providerId, modelId, inferenceConfig.thinkingMode)} | thinking=${inferenceConfig.thinkingMode} | reasoning=${reasoningDisplay}\n`,
 				);
 				continue;
 			}
@@ -514,7 +554,10 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 						lastMessageTime: previousLastActiveAt,
 						tools: allTools,
 						inferenceConfig,
-						observability: options.observability,
+						observability: {
+							...options.observability,
+							llmProviderId: providerId,
+						},
 						hooks: {
 							onAssistantMessage: (message) => {
 								latestAssistantMessage = message;
@@ -536,7 +579,10 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 				});
 				stderr.write("\n\n");
 			} catch (err) {
-				logger.error({ err }, "REPL: LLM call failed");
+				logger.error(
+					{ error: providerErrorLogFields(err) },
+					"REPL: LLM call failed",
+				);
 				streamRenderState = createStreamRenderState();
 				stderr.write("\n[Error: LLM call failed. Check logs for details.]\n\n");
 				messages.pop();
