@@ -1,0 +1,44 @@
+{
+  "generated_at": "2026-04-20T11:55:10.770916+00:00",
+  "dataset_path": "/Users/raysonmeng/repo/quilin-agent/docs/03-memory/l3a-observer/fixtures/dataset.json",
+  "dataset_size": 1039,
+  "pricing": {
+    "haiku_input_per_mtok_usd": 0.8,
+    "haiku_output_per_mtok_usd": 4.0,
+    "pricing_note": "Anthropic API list price (no caching/batch multipliers)."
+  },
+  "arms": {
+    "rule_v2_r3_baseline": {
+      "status": "ok",
+      "source": "/Users/raysonmeng/repo/quilin-agent/.spike/observer/results-v2-r3.json",
+      "metrics": {
+        "sample_count": 1039,
+        "tp": 176,
+        "fn": 648,
+        "fp": 6,
+        "tn": 209,
+        "precision": 0.967032967032967,
+        "recall": 0.21359223300970873,
+        "fpr": 0.027906976744186046,
+        "f1": 0.34990059642147114,
+        "p50_latency_ms": 2.636,
+        "p95_latency_ms": 4.1928,
+        "avg_latency_ms": 2.795695861405197,
+        "cost_per_1k_calls_usd": 0.0,
+        "total_cost_usd": 0.0
+      }
+    },
+    "haiku_only": {
+      "status": "blocked",
+      "blocker": "ANTHROPIC_API_KEY unavailable"
+    },
+    "rule_prefilter_to_haiku": {
+      "status": "blocked",
+      "blocker": "ANTHROPIC_API_KEY unavailable"
+    },
+    "local_2b": {
+      "status": "blocked",
+      "blocker": "ollama unavailable: HTTP Error 503: Service Unavailable"
+    }
+  }
+}

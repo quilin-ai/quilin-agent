@@ -1,38 +1,62 @@
-# `docs/` — 文档地图
+# 文档 / Docs
 
-> **目的**：帮你在 7 个子目录里快速找到"该去哪写 / 该去哪查"。**每一份文档只能落在一个子目录里**；跨分类的 cross-ref 用链接，不复制内容。
+This directory only carries current project facts.
 
-## TL;DR — 三个常用入口
+本目录只承载当前项目事实。
 
-| 你想做什么 | 去哪 |
+## 入口 / Entry Points
+
+| 你要看什么 | 入口 |
 |---|---|
-| 看总路线图（Iter A→F） | [`planning/00-implementation-plan.md`](planning/00-implementation-plan.md) |
-| 看一个 Iter 正在做什么 | [`iterations/NN-iter-*/plan.md`](iterations/) |
-| 查术语 / 缩写 / 数量 | [`architecture/glossary.md`](architecture/glossary.md)（**CI 强制**，写新词之前先读） |
+| 全局状态快照 | [STATUS.md](STATUS.md) |
+| 任务管理 / backlog | [Linear: QuiLin Agent](https://linear.app/quilin-agent) |
+| Runtime split、Core Loop、docs 规则 | [00-core-loop](00-core-loop/README.md) |
+| 某个组件的架构 / 当前事实 | 对应组件 README |
 
-## 子目录索引
+## 组件 / Components
 
-| 目录 | 里面是什么 | **该写**什么 | **不该写**什么 | 怎么查 |
-|---|---|---|---|---|
-| [`adr/`](adr/) | 已定稿的架构决策（ADR-001, ADR-002, …） | 一次性、已拍板、要长期生效的技术决策 | 进行中的讨论、phase 状态、代码细节 | 编号查找 `adr-###-slug.md` |
-| [`architecture/`](architecture/) | 架构总览 / Harness / 术语表 / benchmark roadmap | 跨领域的顶层概念、全景图、规范术语 | 单领域实现细节（→ `engineering/`）、迭代进度（→ `iterations/`） | 从 `architecture/overview.md` 出发导航 |
-| [`engineering/`](engineering/) | 12 个活跃领域 spec + 1 parked（`01..11` + `13-skills`；`02-context/conversation-engineering/` 为 parked 子模块） | 单领域的**规范 spec**（接口、数据结构、策略、风险） | phase 状态（→ `iterations/`）、一次性决策（→ `adr/`）、review 结论（→ `review/`） | 按编号读对应 `README.md` |
-| [`planning/`](planning/) | 规划文档：总路线图 + 单 feature 的 phase 拆分 | `00-implementation-plan.md` 宏观路线；`YYYY-MM-DD-NN-slug.md` 单 feature tracking（含 `threat_surface_delta` frontmatter） | 已完成回顾（→ `review/`）、spec（→ `engineering/`）、ADR（→ `adr/`） | 读 [`planning/README.md`](planning/README.md) + 按日期 + 编号排序 |
-| [`iterations/`](iterations/) | 每个 Iter 一个目录：`NN-iter-*/plan.md` | Iter 内部的执行 plan（目标、范围、验证、产出） | 跨 Iter 的全景（→ `planning/00-implementation-plan.md`） | 按前缀顺序 `00-phase-0` → `06-iter-f-scaleout` |
-| [`research/`](research/) | 一次性调研材料（Claude Code / Codex / OpenClaw / Hermes / skill loading…） | 深度调研产出、对比表、probe 报告 | 决策本身（→ `adr/`）、spec（→ `engineering/`） | 按主题 / 日期文件名 |
-| [`review/`](review/) | 架构 / spec / PR review 报告 | ultra-review、phase review、opus revisit 等**一次完成的评审快照** | 进行中的 planning（→ `planning/`） | 按 `YYYY-MM-DD-<topic>.md` |
+| 组件 | 负责内容 |
+|---|---|
+| [00-core-loop](00-core-loop/README.md) | Core Loop、运行时切分、Harness 原则、术语表 |
+| [01-llm-integration](01-llm-integration/README.md) | AI SDK v6、模型/provider 抽象、thinking/reasoning 控制 |
+| [02-context](02-context/README.md) | Prompt assembly、token budgets、temporal awareness、parked conversation engineering |
+| [03-memory](03-memory/README.md) | OmniMem、profiles、scratchpad、L3a observer reports |
+| [04-planning](04-planning/README.md) | Intent、task decomposition、strategy/audit contracts |
+| [05-tool](05-tool/README.md) | Built-in tools、MCP、browser/CLI tool surfaces |
+| [06-multi-agent](06-multi-agent/README.md) | 内部 sub-agent orchestration 和 supervisor model |
+| [07-safety-guardrails](07-safety-guardrails/README.md) | WriteAuthority、trust tiers、classifiers、sandbox threat model |
+| [08-observability](08-observability/README.md) | OTel、metrics、logs、coverage gates |
+| [09-deployment-runtime](09-deployment-runtime/README.md) | CLI/runtime、config cascade、hot update |
+| [10-self-evolution](10-self-evolution/README.md) | Trajectory analysis、skills/profile/soul prerequisites、future scaffold patch loop |
+| [11-agent-mesh](11-agent-mesh/README.md) | Mesh SDK stub 和未来 AgentMesh runtime 边界 |
+| [13-skills](13-skills/README.md) | SKILL.md、catalog、`skill_view`、CRUD、guard、restore、watcher |
+| [14-benchmark-harness](14-benchmark-harness/README.md) | Frozen Benchmark implementation snapshot; read-only unless the user explicitly asks |
 
-## 写入规则（3 条硬约束）
+## 写入规则 / Writing Rules
 
-1. **顺序前缀强制**
-   - `planning/`：`00-` 是总路线图；feature tracking 用 `YYYY-MM-DD-NN-slug.md`（同日多篇 `01` / `02` 递增）
-   - `iterations/`：固定 `00-phase-0` → `06-iter-f-scaleout`，不要改
-2. **Cross-ref 用链接**：跨目录引用只写 markdown 链接，不要把同一内容粘到第二个地方。
-3. **术语以 `architecture/glossary.md` 为准**：写到术语表之外的词（OmniMem tier casing、`skill_view`、Iter 阶段名…）会被 `scripts/lint-glossary.py` CI 拦住。
+1. **任务管理只写 Linear。** `docs/` 不再承载 TODO board、backlog 或 phase tracking。
+2. **全局状态快照只写 [STATUS.md](STATUS.md)。**
+3. **组件当前事实只写该组件的 `README.md`。**
+4. 不再保留 `evidence/` 档案目录；历史快照通过 git history 追溯。
+5. 不再恢复顶层 `planning/`、`iterations/`、`adr/`、`architecture/`、`research/`、`review/` 目录。
+6. 历史材料仍有当前价值时，只把结论摘要写进对应组件 README。
+7. phase done / capability landed / contract satisfied 这类声明必须带 commit hash、测试数、lint/check 结果或实测值。
+8. **新增或重写项目文档必须中英双语。** 标题优先中文，可在同一标题中补英文；正文按段落对照写作，顺序为英文段落后一段中文翻译，避免只写英文造成阅读负担。
 
-## 查阅约定
+## 导航模型 / Navigation Model
 
-- **默认从 `planning/00-implementation-plan.md` 进入**（路线图）→ 想看细节就点进 `iterations/` 或 `engineering/`。
-- **新 session 接续**：读 `planning/` 最新的 `YYYY-MM-DD-NN-handoff.md`（或 pre-phase checklist）。
-- **被 review 挂起的改动**：去 `review/` 找对应日期 + topic 的报告。
-- **找不到**：先 `grep -r 'keyword' docs/`，或问术语表。
+The old structure split planning, iterations, ADR, architecture, research, and review into separate top-level docs areas, which made multiple files look like competing sources of truth.
+
+旧结构把 planning、iterations、ADR、architecture、research、review 分开，容易出现多个文件同时像“真相源”的问题。
+
+The current structure is fixed as:
+
+当前结构固定为：
+
+```text
+docs/
+  README.md
+  STATUS.md      # 当前状态快照；任务链接到 Linear
+  <component>/
+    README.md      # 当前架构、约束、实现状态
+```

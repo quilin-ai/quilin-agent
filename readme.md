@@ -4,7 +4,7 @@
 >
 > 一个基于对主流 Agent 框架系统性研究、原生构建的自演进 Agent 平台
 
-**愿景**：把 harness（包裹在 LLM 外面的一切）做到极致，让任何模型都能超水平发挥。我们从 Agent 工程的 **12 个关键维度** 深入研究领先框架的设计取舍，提炼跨方案的共性模式，形成统一的原生实现——每一次架构演进都走人工 review PR 流程，配合 benchmark 验证。
+**愿景**：把 harness（包裹在 LLM 外面的一切）做到极致，让任何模型都能超水平发挥。我们从 Agent 工程的 **12 个关键维度** 深入研究领先框架的设计取舍，提炼跨方案的共性模式，形成统一的原生实现——每一次架构演进都走人工 review PR 流程，并优先用本地组件实证与交叉 review 验证。
 
 ## 一句话定位
 
@@ -21,7 +21,7 @@
 - **LLM 抽象** —— Vercel AI SDK v6（630M+ 周下载，25+ providers）
 - **极简哲学** —— 约束悖论、Build to Delete、最小化然后迭代
 
-详见 [架构总览](docs/architecture/overview.md) 与 [Harness Engineering](docs/architecture/harness-engineering.md)。
+详见 [Core Loop](docs/00-core-loop/README.md) 与 [Harness Engineering](docs/00-core-loop/harness-engineering.md)。
 
 ## 技术栈
 
@@ -44,22 +44,20 @@
 
 | # | 领域 | 关键设计 | Iter | Spec |
 |---|------|---------|------|------|
-| 01 | LLM 接入 | Vercel AI SDK v6、ThinkingMode、InferenceConfig | A | [01](docs/engineering/01-llm-integration/README.md) |
-| 02 | 上下文 | System prompt 组装、token 预算、KV-cache 优化、三层时间感知 | A | [02](docs/engineering/02-context/README.md) |
-| 03 | 记忆 | OmniMem 4 层 + 向量+KG + 自反思 + User Profile Store | A-B | [03](docs/engineering/03-memory/README.md) |
-| 04 | 规划 | 意图识别、任务分解、推理策略切换、动态重规划 | C | [04](docs/engineering/04-planning/README.md) |
-| 05 | 工具 | 4 类混合动作空间、MCP 客户端、浏览器（Zoom-In）、CLI-Anything | B | [05](docs/engineering/05-tool/README.md) |
-| 06 | 多 Agent | 同构 spawn + 异构 mesh + 非阻塞 Supervisor + 进度汇报协议 | D | [06](docs/engineering/06-multi-agent/README.md) |
-| 07 | 安全护栏 | 4 层验证、**READ-ONLY 默认 + AUTO opt-in**、2-stage Classifier、Two-Strike Rule | B | [07](docs/engineering/07-safety-guardrails/README.md) |
-| 08 | 可观测性 | OTel 追踪、指标、结构化日志、WebUI Dashboard、评估驱动开发 | B-C | [08](docs/engineering/08-observability/README.md) |
-| 09 | 部署运行时 | CLI、配置管理、热更新 + 主动通知 | C | [09](docs/engineering/09-deployment-runtime/README.md) |
-| 10 | 自进化 | 轨迹分析、**human-in-loop scaffold patch**、技能自创、User Insight Engine | D | [10](docs/engineering/10-self-evolution/README.md) |
-| 11 | Agent Mesh | AgentMesh SDK 接入（Rust，Iter D） | D | [11](docs/engineering/11-agent-mesh/README.md) |
-| 13 | 技能工程 | SKILL.md + YAML frontmatter、catalog 索引 + 按需加载、Skill ≠ Tool、M0/M1/M2+ 分层 | B | [13](docs/engineering/13-skills/README.md) |
+| 01 | LLM 接入 | Vercel AI SDK v6、ThinkingMode、InferenceConfig | A | [01](docs/01-llm-integration/README.md) |
+| 02 | 上下文 | System prompt 组装、token 预算、KV-cache 优化、三层时间感知 | A | [02](docs/02-context/README.md) |
+| 03 | 记忆 | OmniMem 4 层 + 向量+KG + 自反思 + User Profile Store | A-B | [03](docs/03-memory/README.md) |
+| 04 | 规划 | 意图识别、任务分解、推理策略切换、动态重规划 | C | [04](docs/04-planning/README.md) |
+| 05 | 工具 | 4 类混合动作空间、MCP 客户端、浏览器（Zoom-In）、CLI-Anything | B | [05](docs/05-tool/README.md) |
+| 06 | 多 Agent | 同构 spawn + 异构 mesh + 非阻塞 Supervisor + 进度汇报协议 | D | [06](docs/06-multi-agent/README.md) |
+| 07 | 安全护栏 | 4 层验证、**READ-ONLY 默认 + AUTO opt-in**、2-stage Classifier、Two-Strike Rule | B | [07](docs/07-safety-guardrails/README.md) |
+| 08 | 可观测性 | OTel 追踪、指标、结构化日志、WebUI Dashboard、评估驱动开发 | B-C | [08](docs/08-observability/README.md) |
+| 09 | 部署运行时 | CLI、配置管理、热更新 + 主动通知 | C | [09](docs/09-deployment-runtime/README.md) |
+| 10 | 自进化 | 轨迹分析、**human-in-loop scaffold patch**、技能自创、User Insight Engine | D | [10](docs/10-self-evolution/README.md) |
+| 11 | Agent Mesh | AgentMesh SDK 接入（Rust，Iter D） | D | [11](docs/11-agent-mesh/README.md) |
+| 13 | 技能工程 | SKILL.md + YAML frontmatter、catalog 索引 + 按需加载、Skill ≠ Tool、M0/M1/M2+ 分层 | B | [13](docs/13-skills/README.md) |
 
-> **Domain 12（Conversation Engineering / 对话工程）** —— 暂停到 Iter F+，保留为研究笔记。核心回路在 benchmark 上稳态之前不投入"活人感"工程。
-
-> 技能工程域的设计依据见 [Claude Code / Hermes / OpenClaw / Codex CLI 四框架对比研究](docs/research/skill-loading-comparison.md)。
+> **Domain 12（Conversation Engineering / 对话工程）** —— 暂停到 Iter F+，保留为研究笔记。核心回路与依赖 runtime 组件有本地实证前，不投入"活人感"工程。
 
 ## Quilin 独特优势
 
@@ -86,9 +84,9 @@ Quilin 不是定版即止，而是持续演进的平台：
 1. **研究** —— 跟踪 Agent 工程前沿（学术论文 + 主流框架的设计动向）
 2. **提炼** —— 识别跨方案的共性模式与工程取舍
 3. **设计** —— 结合自身架构约束，给出原生解决方案
-4. **落地** —— 所有变更走人工 review PR，配合 benchmark 验证
+4. **落地** —— 所有变更走人工 review PR，优先用本地组件实证、测试和交叉 review 验证
 
-`scripts/sync-upstreams.py` 用作研究辅助——定时扫描领先框架的变更，生成摘要供 reviewer 参考。**不自动 apply 代码，不自动修改 scaffold**；所有架构变更必须经过团队 review + benchmark 验证。
+`scripts/sync-upstreams.py` 用作研究辅助——定时扫描领先框架的变更，生成摘要供 reviewer 参考。**不自动 apply 代码，不自动修改 scaffold**；所有架构变更必须经过团队 review 与本地实证验证。Benchmark 当前是全项目最低优先级，Iter E 已冻结；除非用户明确要求，任何 Iter 都不得新增或修改 Benchmark 代码。
 
 ## 目录结构
 
@@ -101,18 +99,14 @@ quilin-agent/
 # crates/                          # Rust — Iter D 引入（mesh-sdk）
 ├── upstreams/                      # ~100 git submodules（tracked, --depth 1）
 ├── docs/
-│   ├── adr/                        # 架构决策（adr-001 core loop、adr-002 skeleton）
-│   ├── architecture/               # 总览 + Harness Engineering + Fusion Index
-│   ├── engineering/                # 12 个活跃工程领域 spec
-│   │   ├── 01-llm-integration/ ... 11-agent-mesh/
-│   │   ├── 02-context/
-│   │   │   └── conversation-engineering/  # parked sub-module — Iter F+（搬自 12-）
-│   │   └── 13-skills/              #   ★ 技能工程（新）
-│   ├── review/                     # 架构 review 报告（2026-04-17 ultra-review）
-│   ├── research/                   # 深度调研（Claude Code / Codex / OpenClaw / Hermes / Skill Loading）
-│   ├── planning/                   # 规划文档（00-implementation-plan.md + YYYY-MM-DD-NN-*.md）
-│   ├── iterations/                 # 迭代记录（00-phase-0 → 06-iter-f-scaleout）
-│   └── README.md                   # docs/ 子文件夹导航（写入/查阅约定）
+│   ├── README.md                   # docs/ 写入/查阅约定
+│   ├── STATUS.md                   # 当前全局状态
+│   ├── 00-core-loop/               # 核心循环 / harness / glossary
+│   ├── 01-llm-integration/ ... 11-agent-mesh/
+│   ├── 02-context/
+│   │   └── conversation-engineering/  # parked sub-module — Iter F+
+│   ├── 13-skills/                  # 技能工程
+│   └── 14-benchmark-harness/       # frozen/read-only unless user explicitly asks
 ├── scripts/                        # 自动化脚本（sync-upstreams / merge-with-claude / release / setup-cron）
 ├── .github/workflows/ci.yml        # CI（TS + Python 矩阵；Rust 在 Iter D 加入）
 ├── justfile                        # 跨语言编排
@@ -140,17 +134,11 @@ bash scripts/release.sh --dry-run             # 预览发布
 bash scripts/init-all-submodules.sh           # 首次初始化 submodule
 ```
 
-## Benchmark 目标
+## Benchmark 冻结
 
-聚焦 **3 个核心 leaderboard**（不做"每一个榜单都参赛"的承诺）：
+截至 2026-05-02，Benchmark 是全项目最低优先级。Iter E 已冻结并在 Linear 中取消；未完成的 Benchmark project / issue 已从活跃队列移出或降为低优先级。
 
-| 榜单 | 覆盖能力 |
-|------|---------|
-| **SWE-bench Verified** | 代码 Agent 核心能力（500 真实 GitHub issue） |
-| **GAIA** | 通用推理 + 工具调用 |
-| **BFCL v4** | Function calling 准确率 |
-
-其余 benchmark（τ-bench / Terminal-Bench / LiveCodeBench / WebArena / OSWorld / ARC-AGI / AgentHarm / InjecAgent / ScienceAgentBench 等）作为 **aspirational roadmap**，视基线 harness 稳定性再启动。完整矩阵见 [benchmark-roadmap.md](docs/architecture/benchmark-roadmap.md)。
+仓库中已有的 `benchmarks/` 与 `providers/memory/benchmarks/` 代码保留为当前代码事实和历史证据。除非用户明确要求 Benchmark 工作，任何 Iter 都不得新增或修改 Benchmark 代码，也不得重开已取消的 Benchmark 任务。当前口径见 [Benchmark Harness](docs/14-benchmark-harness/README.md)。
 
 ## 多 Agent 协作
 
@@ -163,10 +151,11 @@ bash scripts/init-all-submodules.sh           # 首次初始化 submodule
 
 协作语言中文，所有协作消息必须回复，避免单方面沉默。详见 [quilin.md](quilin.md) 的 AgentBridge 章节。
 
-## 架构决策记录
+## 当前状态
 
-- [ADR-001 Core Loop and Language](docs/adr/adr-001-core-loop-and-language.md) — 不用 LangGraph，原生极简 Loop；TS（核心）+ Python（ML）。Rust 在 Iter D 引入。
-- [ADR-002 Project Skeleton](docs/adr/adr-002-project-skeleton.md) — 骨架蓝图、目录布局、日志 JSON schema
+- [全局状态](docs/STATUS.md)
+- [Core Loop](docs/00-core-loop/README.md)
+- 历史 ADR / research / review 不再作为 docs 入口；必要历史通过 git history 追溯。
 
 ## 为什么叫 Quilin？
 

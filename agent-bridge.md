@@ -4,9 +4,9 @@ status: draft
 version: v1.1
 owner: Claude + Codex (co-authored) + human (终审)
 created: 2026-04-22
-last_updated: 2026-04-22
-revision_note: v1.1 adds §10.3.1 Claude 代写代码细粒度约束 (PB-03 closed)
-supersedes: docs/planning/2026-04-21-05-collaboration-protocol.md
+last_updated: 2026-05-02
+revision_note: v1.2 migrates task tracking from docs to Linear issues/projects
+supersedes: historical planning collaboration protocol (removed from current docs; see git history)
 precedence: User instructions > this file > quilin.md > agent global rules
 ---
 
@@ -51,18 +51,18 @@ precedence: User instructions > this file > quilin.md > agent global rules
   Claude 主导   双方并行调研    双方独立意见     Claude 主导     Codex 主导      双方交叉
 ```
 
-**每步必须打标记**：tracking doc status 更新 + AgentBridge 消息 + 用户可见的简短同步（≤200 字）。
+**每步必须打标记**：Linear issue 状态 / 评论更新 + AgentBridge 消息 + 用户可见的简短同步（≤200 字）。
 
 ### §3.2 各步产出要求
 
 | 步骤 | 产出 | 标记 |
 |---|---|---|
-| 1 需求拆解 | tracking doc 骨架 + 需求理解清单 | `status: planning` |
-| 2 调研分析 | tracking doc `## Probe` 段（证据链 + 官方文档链接） | Phase 0 `pending → completed` |
-| 3 方案整理 | 2-3 个选项 + tradeoff + Claude / Codex 各自独立推荐 | tracking doc `## Decisions` 新增 |
-| 4 规划迭代 | Phase 0..N 表 + 每 phase 的 do/don't/threat_surface_delta/验证/产出 | `status: planning → in-progress` |
-| 5 按步执行 | 一次一个 phase，每 phase 完成即回传 | Phase 行 `in-progress → completed` + commit SHA |
-| 6 Review 验收 | `docs/review/YYYY-MM-DD-<topic>.md` 或 tracking doc 追加 review 结论 | 全 phase `completed` + review pass → `status: done` |
+| 1 需求拆解 | Linear issue / project + 需求理解清单 | Linear state `Todo` / `Backlog` |
+| 2 调研分析 | Linear comment `Probe`（证据链 + 官方文档链接） | 调研评论更新 |
+| 3 方案整理 | 2-3 个选项 + tradeoff + Claude / Codex 各自独立推荐 | Linear comment `Decision` |
+| 4 规划迭代 | Phase 0..N 表 + 每 phase 的 do/don't/threat_surface_delta/验证/产出 | Linear state `Todo → In Progress` |
+| 5 按步执行 | 一次一个 phase，每 phase 完成即回传 | Linear comment + commit SHA |
+| 6 Review 验收 | 必要时更新对应组件 README 的当前状态快照；历史报告不进 docs 档案目录 | review pass → Linear state `Done` |
 
 ### §3.3 长任务执行纪律（R4）
 
@@ -192,7 +192,8 @@ precedence: User instructions > this file > quilin.md > agent global rules
 ### §6.1 通信语言
 
 - **AgentBridge 消息**：中文（方便用户同步看）
-- **代码 / commit message / PR / tracking doc frontmatter**：英文
+- **代码 / commit message / PR / Linear issue title/description**：英文
+- **项目文档**：中英双语，标题优先中文，正文按"英文段落 → 中文段落"逐段对照
 
 ### §6.2 独立意见协议
 
@@ -214,9 +215,9 @@ precedence: User instructions > this file > quilin.md > agent global rules
 
 | 状态 | 含义 | 标记方式 |
 |---|---|---|
-| **Holding** | 等人（等用户授权 / 等对方 agent） | tracking doc `## Next Action` 注明 |
-| **Blocked** | 卡住（缺依赖 / 环境问题 / 不可达） | `status: blocked` + `## Blockers` 段 |
-| **Residual** | 本次不修但记录（超出 scope） | `## Open Questions` 段 |
+| **Holding** | 等人（等用户授权 / 等对方 agent） | Linear comment `Next Action` |
+| **Blocked** | 卡住（缺依赖 / 环境问题 / 不可达） | Linear state / label + blocker issue |
+| **Residual** | 本次不修但记录（超出 scope） | Linear related issue / follow-up |
 
 ### §6.5 越界打断
 
@@ -266,8 +267,8 @@ owning agent 主线程
         ├─→ 再 review
         ├─ ... 循环 ...
         ├─ 双方达成共识
-        ├─ 更新 tracking doc（Phase 行 → completed，挂残留项，next action）
-        ├─ commit（代码 + tracking doc 同一次）
+        ├─ 更新 Linear issue（state / residual / next action）；必要时同步 docs 状态快照
+        ├─ commit（代码 + 必要 docs 状态快照同一次）
         ├─ push
         └─ 自我关闭（发最终通知）
 
@@ -275,9 +276,9 @@ owning agent 主线程
 ```
 
 **顺序约束**（F1）：
-- tracking doc 更新**必须在 commit 之前**，和代码一起进入同一个 commit
-- 禁止 "push → 再补 tracking doc" —— 远端出现代码但 doc 没有对应 SHA / 状态，违反 §3 "tracking doc 是任务真相源"
-- 如果收敛后发现遗漏了 tracking doc 项，走新一条 commit（标 `docs: <task> 补挂残留项 / SHA`），不走 amend
+- Linear issue 状态更新**必须在 commit 之前**；如架构/范围/实证状态变化，还要同步更新对应 docs 状态快照并和代码一起进入同一个 commit
+- 禁止 "push → 再补 Linear/docs 状态" —— 远端出现代码但 Linear issue 没有关联 SHA / 状态，违反 §3 "Linear 是任务管理源"
+- 如果收敛后发现遗漏了 residual / next action，优先补 Linear；如 docs 状态快照也漏了，走新一条 commit（标 `docs: <task> sync status / SHA`），不走 amend
 
 **用户可见的 3 个通知事件**（E3）：
 1. subagent 启动
@@ -347,9 +348,9 @@ git stash pop && <test command>  # 记录本次
 
 **commit message 中必须写明**：前后对比结果（例如 "前后都是 1 failed | 266 passed，失败项一致"）。
 
-### §8.4 残留项必须进 tracking doc（C4）
+### §8.4 残留项必须进 Linear（C4）
 
-任何 "本次不修但未来要做" 的条目，**必须**进 tracking doc 的 `## Open Questions` 或 `## Blockers`。口头 "先不管" = 违规。
+任何 "本次不修但未来要做" 的条目，**必须**进 Linear issue / related issue / blocker。口头 "先不管" = 违规。
 
 ---
 
@@ -361,7 +362,8 @@ git stash pop && <test command>  # 记录本次
 ```
 ✅ <任务名> 完成
 Commit: <sha>
-Tracking doc: <path>
+Linear: <issue identifier / project>
+Docs: <status snapshot path if updated>
 Next Action: <下一 session 入口>
 → 建议开启新 session 以避免上下文过长
 ```
@@ -369,8 +371,8 @@ Next Action: <下一 session 入口>
 ### §9.2 关闭当前 session 的 3 个前置条件
 
 必须全部满足才能建议用户开新 session：
-1. 任务状态已写入 `docs/`（tracking doc status 拉到 `done` / `blocked` / `in-progress`）
-2. 残留项已挂 tracking doc（§8.4）
+1. 任务状态已写入 Linear（issue state 拉到 `done` / `blocked` / `in-progress`）
+2. 残留项已挂 Linear issue / blocker（§8.4）
 3. 下一 session 的最小入口已指定（一条命令 / 一个文件路径）
 
 **任一不满足 → 继续当前 session 收尾**。
@@ -380,13 +382,14 @@ Next Action: <下一 session 入口>
 新 session 启动时，Claude / Codex 读：
 1. Memory（auto-load，含 MEMORY.md 索引）
 2. `quilin.md`
-3. 上次 tracking doc 最新状态
+3. 上次 Linear issue / project 最新状态
+4. 必要的 docs 状态快照或组件 README
 
 **不**重新读全部历史。
 
-### §9.4 Docs 为任务管理源
+### §9.4 Linear 为任务管理源
 
-项目 `docs/` 结构已足够承载任务管理（`docs/planning/` + `docs/iterations/` + `docs/review/`）。**不再引入新的元目录或外部任务系统**。
+项目任务管理统一迁移到 Linear。`docs/` 只保留当前状态快照、架构事实、约束和实证口径；历史材料通过 git history 追溯。
 
 ---
 
@@ -431,21 +434,21 @@ Next Action: <下一 session 入口>
 - 跨 `llm/*` ↔ `context/*` ↔ `skills/*` ↔ `tools/*` 的接口漂移(需 Codex sandbox 验证回归)
 - 任何 `providers/memory/src/**` Python runtime 代码(Codex 专属域)
 
-**超出 allow-list 时**:Claude 只写 plan / tracking doc,用 AgentBridge 明确告知用户"此任务需唤醒 Codex",**不得**擅自扩大范围。
+**超出 allow-list 时**:Claude 只写 plan / Linear issue comment,用 AgentBridge 明确告知用户"此任务需唤醒 Codex",**不得**擅自扩大范围。
 
 **强制 review**:Claude 代写的 (b) / (c) 类改动必须在 commit message 附 LOC 实证(`wc -l` 或 diff stat)+ 测试结果,Codex 上线后走 §10.1 量化补 review(抽样 ≥30% diff)。
 
 ### §10.4 用户打断 / 改需求
 
-- tracking doc 的 `status` 按实际回退：`in-progress → planning`
-- 如果用户新需求 **替换** 原任务 → 原 tracking doc 加 `superseded by: <新 doc path>`
-- 如果用户新需求 **补充** 原任务 → 原 tracking doc 继续，加 `## Addendum <日期>` 段
+- Linear issue state 按实际回退：`In Progress → Todo`
+- 如果用户新需求 **替换** 原任务 → 原 Linear issue 标记 canceled / superseded，并关联新 issue
+- 如果用户新需求 **补充** 原任务 → 原 Linear issue 增加 `Addendum <日期>` 评论或拆 related issue
 
 ### §10.5 Subagent 降级模式
 
 **Subagent 失败**：
 - 主线程接管，但必须 review subagent 已有产出（看能否复用）
-- 失败原因进 tracking doc `## Blockers`
+- 失败原因进 Linear blocker / comment
 
 **Subagent token 不足**：
 - subagent 主动回传未完成部分 + 当前状态
@@ -467,20 +470,20 @@ Next Action: <下一 session 入口>
 ### §11.1 文件位置
 
 - **本文件**：`/agent-bridge.md`（仓库根目录）
-- **旧 v0**：`docs/planning/2026-04-21-05-collaboration-protocol.md`（已 superseded）
+- **旧 v0**：旧 planning 协作协议已被当前文件取代；历史可通过 git history 追溯
 - **项目主指南**：`quilin.md`（`## Agent Collaboration` 节内有指向本文件的引用）
 - **CLAUDE.md / AGENTS.md** → 符号链接到 `quilin.md`（**不**直接链接本文件，避免和项目编码规范职责缠死）
 
 ### §11.2 修订
 
 - 协议修订必须走 §3 六步流
-- 修订 tracking doc 放 `docs/planning/YYYY-MM-DD-NN-agent-bridge-revision.md`
+- 修订结论写回本文件，必要背景摘要写进相关组件 README
 - 修订后在本文件 frontmatter `last_updated` + `version` 递增
 
 ### §11.3 Open Questions（v1 留待观察 / 实战后定版）
 
-- [x] `threat_surface_delta` CI 强制检查何时上线 → **CLOSED 2026-04-22**:`scripts/lint-planning.py` 落地(SD-08,commit `a6c7cab`),本地可跑;CI 集成作为后续 track 任务
+- [x] `threat_surface_delta` CI 强制检查何时上线 → **SUPERSEDED 2026-05-01**：planning 目录已移除，当前任务源迁移到 Linear，docs 只保留状态快照与组件事实。
 - [ ] N=3 未收敛阈值是否合适（实战后可调）
 - [ ] 10-commit 图谱失效阈值是否合适（实战后可调）
-- [ ] 多 feature 并行时 tracking doc 如何交叉引用（未覆盖）
+- [ ] 多 feature 并行时 Linear issue / project 如何交叉引用（未覆盖）
 - [ ] Claude subagent 在 Claude Code 环境下如何保证 YOLO / auto-approve（tool permissions 配置）
