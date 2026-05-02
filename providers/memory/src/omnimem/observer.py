@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -8,11 +10,22 @@ from typing import Literal, Protocol, cast, runtime_checkable
 ObservationRole = Literal["user", "assistant", "tool", "system", "unknown"]
 ObservationKind = Literal["fact", "preference", "event", "intent", "relationship", "unknown"]
 ObservationBatchQualityStatus = Literal["rejected", "mixed", "high_quality"]
+ObservationLanguage = Literal["en", "zh", "mixed", "unknown"]
+ObservationExtractionPath = Literal["deterministic", "deterministic_escalation"]
+ObservationEscalationReason = Literal[
+    "ambiguous_memory_request",
+    "mixed_language_input",
+    "non_user_source",
+    "no_deterministic_candidate",
+    "safety_relevant",
+]
 ObservationArchiveBlockingReason = Literal[
     "empty_batch",
     "all_candidates_rejected",
     "mixed_batch",
     "rejected_candidates",
+    "escalation_required",
+    "policy_review_required",
     "low_confidence_candidates",
     "low_quality_candidates",
     "no_high_quality_candidates",
@@ -25,6 +38,8 @@ OBSERVATION_ARCHIVE_BLOCKING_REASON_ORDER: tuple[
     "all_candidates_rejected",
     "mixed_batch",
     "rejected_candidates",
+    "escalation_required",
+    "policy_review_required",
     "low_confidence_candidates",
     "low_quality_candidates",
     "no_high_quality_candidates",
@@ -59,6 +74,118 @@ EVIDENCE_METADATA_KEYS: tuple[str, ...] = (
     "citations",
     "source_excerpt",
     "supporting_turns",
+)
+RULE_FIRST_OBSERVER_VERSION = "rule-first-observer-v1"
+_VALUE_PATTERN = r"(?P<value>[^.!?\n。！？]{2,180})"
+_CJK_RE = re.compile(r"[\u3400-\u9fff]")
+_ASCII_WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]*")
+_WHITESPACE_RE = re.compile(r"\s+")
+_LINEAR_ISSUE_RE = re.compile(r"\b(?P<issue>[A-Z]{2,10}-\d+)\b")
+_PROJECT_PATH_RE = re.compile(
+    r"(?<![\w/.-])"
+    r"(?P<path>(?:providers|packages|docs|scripts|crates)/[A-Za-z0-9._/-]+)"
+)
+_TEST_OUTCOME_RE = re.compile(
+    r"\b(?P<command>uv run pytest|pytest|ruff check|ruff|vitest|bun test|cargo test|"
+    r"just test-py|just lint-py)\b(?P<tail>[^\n。！？]{0,120})",
+    re.IGNORECASE,
+)
+_OUTCOME_WORD_RE = re.compile(
+    r"\b(pass(?:ed|es)?|fail(?:ed|s|ures?)?|error(?:s)?|exit\s+0|exit\s+1|"
+    r"0\s+failed)\b",
+    re.IGNORECASE,
+)
+_AMBIGUOUS_MEMORY_RE = re.compile(
+    r"\b(maybe|might|possibly|probably|not sure|temporary|for now)\b|"
+    r"(可能|也许|大概|不确定|暂时|临时)"
+)
+_OBSERVER_RELEVANT_RE = re.compile(
+    r"\b(prefer|like|want|need|remember|always|never|please|use|keep|write|"
+    r"respond|answer|call me)\b|"
+    r"(喜欢|偏好|希望|需要|想要|记住|以后|之后|请|必须|不要|叫我|称呼)",
+    re.IGNORECASE,
+)
+_SAFETY_RELEVANT_RE = re.compile(
+    r"\b(secret|token|api[-_ ]?key|password|credential|permission|approval|"
+    r"private|sensitive)\b|"
+    r"(密钥|令牌|密码|凭证|权限|审批|批准|隐私|敏感)",
+    re.IGNORECASE,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _TextPattern:
+    pattern_id: str
+    kind: ObservationKind
+    confidence: float
+    regex: re.Pattern[str]
+    prefix: str
+
+
+_TEXT_PATTERNS: tuple[_TextPattern, ...] = (
+    _TextPattern(
+        pattern_id="en_explicit_preference",
+        kind="preference",
+        confidence=0.93,
+        regex=re.compile(
+            rf"\b(?:i|we|the user)\s+(?:prefer|like|want|need)\s+{_VALUE_PATTERN}",
+            re.IGNORECASE,
+        ),
+        prefix="User preference",
+    ),
+    _TextPattern(
+        pattern_id="en_please_instruction",
+        kind="preference",
+        confidence=0.9,
+        regex=re.compile(
+            rf"\bplease\s+(?:use|keep|write|respond(?:\s+in)?|answer(?:\s+in)?)\s+"
+            rf"{_VALUE_PATTERN}",
+            re.IGNORECASE,
+        ),
+        prefix="User requested",
+    ),
+    _TextPattern(
+        pattern_id="en_remember_statement",
+        kind="fact",
+        confidence=0.9,
+        regex=re.compile(rf"\bremember(?: that|:)?\s+{_VALUE_PATTERN}", re.IGNORECASE),
+        prefix="Remembered fact",
+    ),
+    _TextPattern(
+        pattern_id="en_call_me",
+        kind="preference",
+        confidence=0.95,
+        regex=re.compile(r"\bcall me\s+(?P<value>[^.!?\n。！？]{1,80})", re.IGNORECASE),
+        prefix="User naming preference",
+    ),
+    _TextPattern(
+        pattern_id="zh_explicit_preference",
+        kind="preference",
+        confidence=0.93,
+        regex=re.compile(rf"(?:我|我们|用户)(?:更?喜欢|偏好|希望|需要|想要){_VALUE_PATTERN}"),
+        prefix="User preference",
+    ),
+    _TextPattern(
+        pattern_id="zh_instruction",
+        kind="preference",
+        confidence=0.9,
+        regex=re.compile(rf"(?:请|以后|之后)(?:用|使用|保持|写|回复|回答){_VALUE_PATTERN}"),
+        prefix="User requested",
+    ),
+    _TextPattern(
+        pattern_id="zh_remember_statement",
+        kind="fact",
+        confidence=0.9,
+        regex=re.compile(rf"记住(?:我|用户)?{_VALUE_PATTERN}"),
+        prefix="Remembered fact",
+    ),
+    _TextPattern(
+        pattern_id="zh_call_me",
+        kind="preference",
+        confidence=0.95,
+        regex=re.compile(r"叫我(?P<value>[^.!?\n。！？]{1,80})"),
+        prefix="User naming preference",
+    ),
 )
 
 
@@ -253,6 +380,8 @@ class ObservationCandidateQuality:
     confidence_value: float | None
     has_known_kind: bool
     evidence_coverage: float
+    needs_escalation: bool
+    needs_policy_review: bool
     quality_score: float
     issues: tuple[str, ...] = ()
 
@@ -338,6 +467,37 @@ class ObservationBatchQualityReport:
     average_quality_score: float
     qualities: tuple[ObservationCandidateQuality, ...]
     issues: tuple[str, ...] = ()
+
+
+@dataclass(slots=True, frozen=True)
+class ObservationExtractionReport:
+    language: ObservationLanguage
+    extraction_path: ObservationExtractionPath
+    escalation_required: bool
+    escalation_reasons: tuple[ObservationEscalationReason, ...]
+    pattern_ids: tuple[str, ...]
+    candidates: tuple[ObservationCandidate, ...]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "language": self.language,
+            "extraction_path": self.extraction_path,
+            "escalation_required": self.escalation_required,
+            "escalation_reasons": self.escalation_reasons,
+            "pattern_ids": self.pattern_ids,
+            "candidates": tuple(_candidate_to_dict(candidate) for candidate in self.candidates),
+        }
+
+
+def _candidate_to_dict(candidate: ObservationCandidate) -> dict[str, object]:
+    return {
+        "content": candidate.content,
+        "confidence": candidate.confidence,
+        "kind": candidate.kind,
+        "source_turn_id": candidate.source_turn_id,
+        "metadata": candidate.metadata,
+        "created_at": candidate.created_at.isoformat(),
+    }
 
 
 def decide_observation_archive_gate(
@@ -435,6 +595,316 @@ def build_observation_archive_gate_report(
     )
 
 
+def detect_observation_language(text: str) -> ObservationLanguage:
+    if not isinstance(text, str) or not text.strip():
+        return "unknown"
+    has_cjk = bool(_CJK_RE.search(text))
+    has_ascii = bool(_ASCII_WORD_RE.search(text))
+    if has_cjk and has_ascii:
+        return "mixed"
+    if has_cjk:
+        return "zh"
+    if has_ascii:
+        return "en"
+    return "unknown"
+
+
+def _source_ref(turn: ObservationTurn) -> str:
+    if turn.turn_id and turn.turn_id.strip():
+        return turn.turn_id.strip()
+    digest = hashlib.sha256(turn.content.encode("utf-8")).hexdigest()[:16]
+    return f"content-sha256:{digest}"
+
+
+def _source_excerpt(content: str, *, max_length: int = 240) -> str:
+    collapsed = _WHITESPACE_RE.sub(" ", content).strip()
+    if len(collapsed) <= max_length:
+        return collapsed
+    return f"{collapsed[: max_length - 1]}..."
+
+
+def _clean_claim_fragment(value: str) -> str | None:
+    cleaned = _WHITESPACE_RE.sub(" ", value).strip(" \t\r\n:：,，;；-—")
+    cleaned = cleaned.strip("\"'`“”‘’()[]{}")
+    cleaned = cleaned.strip(" \t\r\n.。!！?？")
+    if len(cleaned) < 2:
+        return None
+    return cleaned
+
+
+def _ordered_escalation_reasons(
+    reasons: Iterable[ObservationEscalationReason],
+) -> tuple[ObservationEscalationReason, ...]:
+    order: dict[ObservationEscalationReason, int] = {
+        "ambiguous_memory_request": 0,
+        "mixed_language_input": 1,
+        "non_user_source": 2,
+        "safety_relevant": 3,
+        "no_deterministic_candidate": 4,
+    }
+    return tuple(sorted(set(reasons), key=lambda reason: (order[reason], reason)))
+
+
+def _turn_escalation_reasons(
+    turn: ObservationTurn,
+    *,
+    language: ObservationLanguage,
+) -> tuple[ObservationEscalationReason, ...]:
+    reasons: list[ObservationEscalationReason] = []
+    if language == "mixed":
+        reasons.append("mixed_language_input")
+    if turn.role in {"assistant", "tool", "system"}:
+        reasons.append("non_user_source")
+    if _AMBIGUOUS_MEMORY_RE.search(turn.content):
+        reasons.append("ambiguous_memory_request")
+    if _SAFETY_RELEVANT_RE.search(turn.content):
+        reasons.append("safety_relevant")
+    return _ordered_escalation_reasons(reasons)
+
+
+def _looks_observer_relevant(text: str) -> bool:
+    return bool(
+        _OBSERVER_RELEVANT_RE.search(text)
+        or _LINEAR_ISSUE_RE.search(text)
+        or _PROJECT_PATH_RE.search(text)
+        or _TEST_OUTCOME_RE.search(text)
+        or _SAFETY_RELEVANT_RE.search(text)
+    )
+
+
+def _base_candidate_metadata(
+    turn: ObservationTurn,
+    *,
+    language: ObservationLanguage,
+    pattern_id: str,
+    extraction_path: ObservationExtractionPath,
+    escalation_reasons: tuple[ObservationEscalationReason, ...],
+) -> dict[str, object]:
+    metadata: dict[str, object] = {
+        "source": "rule_first_observer",
+        "observer_version": RULE_FIRST_OBSERVER_VERSION,
+        "language": language,
+        "pattern_id": pattern_id,
+        "extraction_path": extraction_path,
+        "evidence": [_source_ref(turn)],
+        "source_excerpt": _source_excerpt(turn.content),
+        "needs_escalation": bool(escalation_reasons),
+        "needs_policy_review": bool(escalation_reasons) or turn.role != "user",
+    }
+    if turn.session_id:
+        metadata["session_id"] = turn.session_id
+    if turn.user_id:
+        metadata["user_id"] = turn.user_id
+    if escalation_reasons:
+        metadata["escalation_reasons"] = escalation_reasons
+    return metadata
+
+
+def _observation_candidate(
+    turn: ObservationTurn,
+    *,
+    content: str,
+    confidence: float,
+    kind: ObservationKind,
+    language: ObservationLanguage,
+    pattern_id: str,
+    extraction_path: ObservationExtractionPath,
+    escalation_reasons: tuple[ObservationEscalationReason, ...],
+) -> ObservationCandidate:
+    return ObservationCandidate(
+        content=content,
+        confidence=confidence,
+        kind=kind,
+        source_turn_id=turn.turn_id,
+        metadata=_base_candidate_metadata(
+            turn,
+            language=language,
+            pattern_id=pattern_id,
+            extraction_path=extraction_path,
+            escalation_reasons=escalation_reasons,
+        ),
+    )
+
+
+def _extract_text_pattern_candidates(
+    turn: ObservationTurn,
+    *,
+    language: ObservationLanguage,
+    escalation_reasons: tuple[ObservationEscalationReason, ...],
+) -> list[ObservationCandidate]:
+    candidates: list[ObservationCandidate] = []
+    for text_pattern in _TEXT_PATTERNS:
+        for match in text_pattern.regex.finditer(turn.content):
+            fragment = _clean_claim_fragment(match.group("value"))
+            if fragment is None:
+                continue
+            candidates.append(
+                _observation_candidate(
+                    turn,
+                    content=f"{text_pattern.prefix}: {fragment}",
+                    confidence=text_pattern.confidence,
+                    kind=text_pattern.kind,
+                    language=language,
+                    pattern_id=text_pattern.pattern_id,
+                    extraction_path="deterministic",
+                    escalation_reasons=escalation_reasons,
+                )
+            )
+    return candidates
+
+
+def _extract_structured_candidates(
+    turn: ObservationTurn,
+    *,
+    language: ObservationLanguage,
+    escalation_reasons: tuple[ObservationEscalationReason, ...],
+) -> list[ObservationCandidate]:
+    candidates: list[ObservationCandidate] = []
+    for match in _LINEAR_ISSUE_RE.finditer(turn.content):
+        issue_id = match.group("issue")
+        candidates.append(
+            _observation_candidate(
+                turn,
+                content=f"Referenced Linear issue: {issue_id}",
+                confidence=0.95,
+                kind="fact",
+                language=language,
+                pattern_id="linear_issue_reference",
+                extraction_path="deterministic",
+                escalation_reasons=escalation_reasons,
+            )
+        )
+
+    for match in _PROJECT_PATH_RE.finditer(turn.content):
+        path = match.group("path").rstrip(".,;:)")
+        candidates.append(
+            _observation_candidate(
+                turn,
+                content=f"Referenced project path: {path}",
+                confidence=0.92,
+                kind="fact",
+                language=language,
+                pattern_id="project_path_reference",
+                extraction_path="deterministic",
+                escalation_reasons=escalation_reasons,
+            )
+        )
+
+    for match in _TEST_OUTCOME_RE.finditer(turn.content):
+        command = _clean_claim_fragment(match.group("command"))
+        tail = _source_excerpt(match.group("tail"), max_length=120)
+        if command is None or not _OUTCOME_WORD_RE.search(tail):
+            continue
+        outcome = tail.strip(" ,;:")
+        candidates.append(
+            _observation_candidate(
+                turn,
+                content=f"Observed local validation result: {command} {outcome}".strip(),
+                confidence=0.9,
+                kind="event",
+                language=language,
+                pattern_id="test_outcome",
+                extraction_path="deterministic",
+                escalation_reasons=escalation_reasons,
+            )
+        )
+    return candidates
+
+
+def _dedupe_candidates(
+    candidates: Iterable[ObservationCandidate],
+) -> tuple[ObservationCandidate, ...]:
+    deduped: list[ObservationCandidate] = []
+    seen: set[tuple[str, ObservationKind, str | None]] = set()
+    for candidate in candidates:
+        key = (candidate.content.casefold(), candidate.kind, candidate.source_turn_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(candidate)
+    return tuple(deduped)
+
+
+def _escalation_candidate(
+    turn: ObservationTurn,
+    *,
+    language: ObservationLanguage,
+    escalation_reasons: tuple[ObservationEscalationReason, ...],
+) -> ObservationCandidate:
+    return _observation_candidate(
+        turn,
+        content=f"Escalate observation review for {_source_ref(turn)}",
+        confidence=0.0,
+        kind="unknown",
+        language=language,
+        pattern_id="model_assisted_escalation_required",
+        extraction_path="deterministic_escalation",
+        escalation_reasons=escalation_reasons,
+    )
+
+
+def build_observation_extraction_report(
+    turn: ObservationTurnInput,
+) -> ObservationExtractionReport:
+    normalized_turn = normalize_observation_turn(turn)
+    language = detect_observation_language(normalized_turn.content)
+    base_escalation_reasons = _turn_escalation_reasons(
+        normalized_turn,
+        language=language,
+    )
+    candidates = _dedupe_candidates(
+        (
+            *_extract_text_pattern_candidates(
+                normalized_turn,
+                language=language,
+                escalation_reasons=base_escalation_reasons,
+            ),
+            *_extract_structured_candidates(
+                normalized_turn,
+                language=language,
+                escalation_reasons=base_escalation_reasons,
+            ),
+        )
+    )
+
+    escalation_reasons = base_escalation_reasons
+    extraction_path: ObservationExtractionPath = "deterministic"
+    if not candidates and _looks_observer_relevant(normalized_turn.content):
+        escalation_reasons = _ordered_escalation_reasons(
+            (*base_escalation_reasons, "no_deterministic_candidate")
+        )
+        candidates = (
+            _escalation_candidate(
+                normalized_turn,
+                language=language,
+                escalation_reasons=escalation_reasons,
+            ),
+        )
+        extraction_path = "deterministic_escalation"
+    elif base_escalation_reasons:
+        extraction_path = "deterministic_escalation"
+
+    pattern_ids = tuple(
+        str(candidate.metadata["pattern_id"])
+        for candidate in candidates
+        if "pattern_id" in candidate.metadata
+    )
+    return ObservationExtractionReport(
+        language=language,
+        extraction_path=extraction_path,
+        escalation_required=bool(escalation_reasons),
+        escalation_reasons=escalation_reasons,
+        pattern_ids=pattern_ids,
+        candidates=candidates,
+    )
+
+
+def extract_observation_candidates(
+    turn: ObservationTurnInput,
+) -> tuple[ObservationCandidate, ...]:
+    return build_observation_extraction_report(turn).candidates
+
+
 def normalize_observation_turn(turn: ObservationTurnInput) -> ObservationTurn:
     if isinstance(turn, ObservationTurn):
         return turn
@@ -512,6 +982,8 @@ def evaluate_observation_candidate_quality(
                 confidence_value=None,
                 has_known_kind=False,
                 evidence_coverage=0.0,
+                needs_escalation=False,
+                needs_policy_review=False,
                 quality_score=0.0,
                 issues=("invalid_candidate_type",),
             )
@@ -534,6 +1006,11 @@ def evaluate_observation_candidate_quality(
         or _quality_metadata_value(normalized_metadata, SOURCE_METADATA_KEYS)
     )
     has_evidence = _quality_metadata_value(normalized_metadata, EVIDENCE_METADATA_KEYS)
+    needs_escalation = bool(normalized_metadata.get("needs_escalation")) or _quality_metadata_value(
+        normalized_metadata,
+        ("escalation_reasons",),
+    )
+    needs_policy_review = bool(normalized_metadata.get("needs_policy_review"))
     evidence_coverage = (float(has_source) + float(has_evidence)) / 2
 
     issues: list[str] = []
@@ -551,6 +1028,10 @@ def evaluate_observation_candidate_quality(
         issues.append("missing_or_unknown_kind")
     if not metadata_valid:
         issues.append("invalid_metadata")
+    if needs_escalation:
+        issues.append("needs_escalation")
+    if needs_policy_review:
+        issues.append("needs_policy_review")
 
     confidence_score = confidence_value if confidence_value is not None else 0.0
     quality_score = 0.0
@@ -572,6 +1053,8 @@ def evaluate_observation_candidate_quality(
         confidence_value=confidence_value,
         has_known_kind=has_known_kind,
         evidence_coverage=evidence_coverage,
+        needs_escalation=needs_escalation,
+        needs_policy_review=needs_policy_review,
         quality_score=quality_score,
         issues=tuple(issues),
     )
@@ -627,6 +1110,26 @@ def _has_low_confidence_candidate(
     )
 
 
+def _has_escalation_candidate(
+    qualities: tuple[ObservationCandidateQuality, ...],
+    accepted_flags: tuple[bool, ...],
+) -> bool:
+    return any(
+        accepted and quality.needs_escalation
+        for quality, accepted in zip(qualities, accepted_flags, strict=True)
+    )
+
+
+def _has_policy_review_candidate(
+    qualities: tuple[ObservationCandidateQuality, ...],
+    accepted_flags: tuple[bool, ...],
+) -> bool:
+    return any(
+        accepted and quality.needs_policy_review
+        for quality, accepted in zip(qualities, accepted_flags, strict=True)
+    )
+
+
 def _archive_readiness_blocking_reasons(
     *,
     total_candidates: int,
@@ -649,6 +1152,10 @@ def _archive_readiness_blocking_reasons(
         reasons.append("mixed_batch")
     if rejected_candidates:
         reasons.append("rejected_candidates")
+    if _has_escalation_candidate(qualities, accepted_flags):
+        reasons.append("escalation_required")
+    if _has_policy_review_candidate(qualities, accepted_flags):
+        reasons.append("policy_review_required")
     if low_quality_candidates:
         if _has_low_confidence_candidate(qualities, accepted_flags):
             reasons.append("low_confidence_candidates")
@@ -741,6 +1248,11 @@ class MemoryObserver(Protocol):
         self,
         turn: ObservationTurnInput,
     ) -> Iterable[ObservationCandidateInput]: ...
+
+
+class RuleFirstMemoryObserver:
+    async def observe(self, turn: ObservationTurnInput) -> tuple[ObservationCandidate, ...]:
+        return extract_observation_candidates(turn)
 
 
 class NoOpMemoryObserver:

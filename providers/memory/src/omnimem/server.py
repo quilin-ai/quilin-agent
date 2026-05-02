@@ -134,6 +134,29 @@ def _validate_tool_metadata(metadata: dict[str, object] | None) -> dict[str, obj
     return normalized
 
 
+def _is_blank_string(value: object) -> bool:
+    return not isinstance(value, str) or not value.strip()
+
+
+def _tool_metadata_with_defaults(
+    tier: MemoryTier,
+    layer: MemoryLayer | None,
+    metadata: dict[str, object] | None,
+) -> dict[str, object] | None:
+    resolved_layer = layer or tier
+    if resolved_layer != "semantic":
+        return metadata
+
+    normalized = dict(metadata or {})
+    normalized.setdefault("schema_version", 1)
+    if _is_blank_string(normalized.get("source")):
+        normalized["source"] = "memory_store_tool"
+    if _is_blank_string(normalized.get("stability_reason")):
+        normalized["stability_reason"] = "caller_selected_semantic_tier"
+
+    return normalized
+
+
 async def _memory_recall_with_store(
     store: OmniMemStore,
     query: str,
@@ -252,7 +275,8 @@ async def _memory_store_with_store(
         content: The text content to store.
         tier: Memory tier (default "working").
     """
-    validated_metadata = _validate_tool_metadata(metadata)
+    metadata_with_defaults = _tool_metadata_with_defaults(tier, layer, metadata)
+    validated_metadata = _validate_tool_metadata(metadata_with_defaults)
     try:
         if layer is None:
             record = await store.store(

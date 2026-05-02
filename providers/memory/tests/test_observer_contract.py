@@ -10,11 +10,15 @@ from omnimem.observer import (
     ObservationArchiveGateDecision,
     ObservationCandidate,
     ObservationTurn,
+    RuleFirstMemoryObserver,
     build_observation_archive_gate_report,
+    build_observation_extraction_report,
     decide_observation_archive_gate,
+    detect_observation_language,
     evaluate_observation_batch_quality,
     evaluate_observation_candidate_quality,
     evaluate_observation_candidates_quality,
+    extract_observation_candidates,
     normalize_observation_candidate,
     normalize_observation_candidates,
     normalize_observation_turn,
@@ -129,6 +133,142 @@ async def test_default_observer_accepts_wire_turn_schema() -> None:
     assert normalized.user_id == "user-1"
     assert normalized.metadata == {"source": "test"}
     assert candidates == []
+
+
+def test_observation_language_detection_covers_bilingual_turns() -> None:
+    assert detect_observation_language("Please keep updates concise") == "en"
+    assert detect_observation_language("用户喜欢中文总结") == "zh"
+    assert detect_observation_language("用户喜欢中文总结 and English headings") == "mixed"
+    assert detect_observation_language("  ") == "unknown"
+
+
+async def test_rule_first_observer_extracts_bilingual_multi_pattern_candidates() -> None:
+    observer = RuleFirstMemoryObserver()
+    turn = {
+        "content": (
+            "用户喜欢中文总结。Please keep status updates concise. "
+            "Track this in QUI-16 and providers/memory/src/omnimem/observer.py."
+        ),
+        "role": "user",
+        "turn_id": "turn-bilingual-1",
+        "session_id": "session-1",
+        "user_id": "user-1",
+    }
+
+    candidates = await observer.observe(turn)
+    report = build_observation_extraction_report(turn)
+
+    assert isinstance(observer, MemoryObserver)
+    assert report.language == "mixed"
+    assert report.extraction_path == "deterministic_escalation"
+    assert report.escalation_required is True
+    assert report.escalation_reasons == ("mixed_language_input",)
+    assert report.pattern_ids == (
+        "en_please_instruction",
+        "zh_explicit_preference",
+        "linear_issue_reference",
+        "project_path_reference",
+    )
+    assert [candidate.content for candidate in candidates] == [
+        "User requested: status updates concise",
+        "User preference: 中文总结",
+        "Referenced Linear issue: QUI-16",
+        "Referenced project path: providers/memory/src/omnimem/observer.py",
+    ]
+    assert all(candidate.source_turn_id == "turn-bilingual-1" for candidate in candidates)
+    assert all(candidate.metadata["source"] == "rule_first_observer" for candidate in candidates)
+    assert all(candidate.metadata["needs_escalation"] is True for candidate in candidates)
+    assert all(candidate.metadata["needs_policy_review"] is True for candidate in candidates)
+    assert [candidate.content for candidate in candidates] == [
+        candidate.content for candidate in report.candidates
+    ]
+
+
+def test_rule_first_extraction_marks_mixed_candidates_not_archive_ready() -> None:
+    report = evaluate_observation_batch_quality(
+        extract_observation_candidates(
+            {
+                "content": "用户喜欢中文总结 and please keep replies direct.",
+                "role": "user",
+                "turn_id": "turn-mixed-1",
+            }
+        )
+    )
+
+    assert report.status == "mixed"
+    assert report.archive_ready is False
+    assert report.accepted_candidates == 2
+    assert report.high_quality_candidates == 0
+    assert report.archive_readiness.blocking_reasons == (
+        "escalation_required",
+        "policy_review_required",
+        "low_quality_candidates",
+        "no_high_quality_candidates",
+    )
+    assert [quality.needs_escalation for quality in report.qualities] == [True, True]
+    assert [quality.needs_policy_review for quality in report.qualities] == [True, True]
+
+
+def test_rule_first_observer_escalates_ambiguous_memory_requests_without_silent_drop() -> None:
+    report = build_observation_extraction_report(
+        {
+            "content": "Maybe keep this for later, but I am not sure yet.",
+            "role": "user",
+            "turn_id": "turn-ambiguous-1",
+        }
+    )
+
+    assert report.language == "en"
+    assert report.extraction_path == "deterministic_escalation"
+    assert report.escalation_required is True
+    assert report.escalation_reasons == (
+        "ambiguous_memory_request",
+        "no_deterministic_candidate",
+    )
+    assert len(report.candidates) == 1
+    candidate = report.candidates[0]
+    assert candidate.kind == "unknown"
+    assert candidate.confidence == 0.0
+    assert candidate.content == "Escalate observation review for turn-ambiguous-1"
+    assert candidate.metadata["needs_escalation"] is True
+    assert candidate.metadata["needs_policy_review"] is True
+
+
+def test_rule_first_observer_extracts_test_outcome_events() -> None:
+    candidates = extract_observation_candidates(
+        {
+            "content": "uv run pytest tests/test_observer_contract.py passed with 0 failed",
+            "role": "tool",
+            "turn_id": "turn-test-1",
+        }
+    )
+
+    assert [candidate.content for candidate in candidates] == [
+        "Observed local validation result: uv run pytest tests/test_observer_contract.py "
+        "passed with 0 failed"
+    ]
+    assert candidates[0].kind == "event"
+    assert candidates[0].confidence == 0.9
+    assert candidates[0].metadata["pattern_id"] == "test_outcome"
+    assert candidates[0].metadata["escalation_reasons"] == ("non_user_source",)
+    assert candidates[0].metadata["needs_policy_review"] is True
+
+
+def test_rule_first_report_serializes_candidates_with_content_hash_evidence() -> None:
+    report = build_observation_extraction_report(
+        {
+            "content": f"Please keep {'x' * 260}",
+            "role": "user",
+        }
+    )
+
+    snapshot = report.to_dict()
+    candidate = snapshot["candidates"][0]  # type: ignore[index]
+    metadata = candidate["metadata"]  # type: ignore[index]
+
+    assert candidate["source_turn_id"] is None  # type: ignore[index]
+    assert metadata["evidence"][0].startswith("content-sha256:")  # type: ignore[index]
+    assert metadata["source_excerpt"].endswith("...")  # type: ignore[index]
 
 
 def test_observation_turn_preserves_wire_observed_at() -> None:
