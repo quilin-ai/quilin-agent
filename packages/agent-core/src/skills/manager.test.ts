@@ -159,6 +159,44 @@ trust: trusted
 		);
 	});
 
+	it("discovers skills that use YAML block sequences in frontmatter", async () => {
+		const userRoot = await createTempDir();
+		await writeSkillMarkdown(
+			userRoot,
+			"block-sequence-skill",
+			`---
+name: block-sequence-skill
+description: Uses block sequences
+allowedTools:
+  - shell_exec
+  - file_read
+dependencies:
+  skills:
+    - planner
+  tools:
+    - file_read
+---
+# Block Sequence Skill
+`,
+		);
+		const manager = new SkillsManager({ userRoots: [userRoot] });
+
+		const descriptors = await manager.discover();
+
+		expect(descriptors.map((descriptor) => descriptor.name)).toContain(
+			"block-sequence-skill",
+		);
+		expect(
+			manager.findByName("block-sequence-skill")?.frontmatter,
+		).toMatchObject({
+			allowedTools: ["shell_exec", "file_read"],
+			dependencies: {
+				skills: ["planner"],
+				tools: ["file_read"],
+			},
+		});
+	});
+
 	it("records viewed skills as newest-first unique recentSkillNames", async () => {
 		const userRoot = await createTempDir();
 		await writeSkill(userRoot, "alpha", "Alpha", "# alpha");

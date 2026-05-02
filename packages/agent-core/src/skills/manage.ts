@@ -24,6 +24,8 @@ import {
 } from "./manager.js";
 import type {
 	GuardDecision,
+	SkillDependencyMetadata,
+	SkillDescriptor,
 	SkillFrontmatter,
 	SkillManageAction,
 	SkillManageResult,
@@ -34,6 +36,7 @@ import type {
 
 const SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
 const SENSITIVE_TOOLS = new Set(["shell_exec", "file_write", "skill_manage"]);
+type ManagedLocalSource = Extract<SkillSource, "user" | "project">;
 
 interface FsOps {
 	readonly mkdir: (
@@ -109,6 +112,40 @@ function pushField(
 	lines.push(`${key}: ${serializeScalar(value as string | boolean)}`);
 }
 
+function pushNestedStringArray(
+	lines: string[],
+	key: string,
+	value: readonly string[] | undefined,
+): void {
+	if (value == null || value.length === 0) {
+		return;
+	}
+
+	lines.push(`  ${key}: ${serializeStringArray(value)}`);
+}
+
+function pushDependencies(
+	lines: string[],
+	dependencies: SkillDependencyMetadata | undefined,
+): void {
+	if (dependencies == null) {
+		return;
+	}
+
+	const dependencyLines: string[] = [];
+	pushNestedStringArray(dependencyLines, "skills", dependencies.skills);
+	pushNestedStringArray(dependencyLines, "tools", dependencies.tools);
+	pushNestedStringArray(dependencyLines, "toolsets", dependencies.toolsets);
+	pushNestedStringArray(dependencyLines, "packages", dependencies.packages);
+
+	if (dependencyLines.length === 0) {
+		return;
+	}
+
+	lines.push("dependencies:");
+	lines.push(...dependencyLines);
+}
+
 function serializeSkillMarkdown(
 	frontmatter: SkillFrontmatter,
 	body: string,
@@ -123,6 +160,7 @@ function serializeSkillMarkdown(
 	pushField(lines, "requiresToolsets", frontmatter.requiresToolsets);
 	pushField(lines, "platforms", frontmatter.platforms);
 	pushField(lines, "version", frontmatter.version);
+	pushDependencies(lines, frontmatter.dependencies);
 	pushField(lines, "userInvocable", frontmatter.userInvocable);
 	pushField(
 		lines,
@@ -154,6 +192,27 @@ function mergeFrontmatter(
 		...original,
 		...patch,
 		name: original.name,
+	};
+}
+
+function normalizeManagedFrontmatter(
+	frontmatter: SkillFrontmatter,
+	source: ManagedLocalSource,
+): SkillFrontmatter {
+	return {
+		...frontmatter,
+		trust: defaultTrustForSource(source),
+	};
+}
+
+function normalizeManagedDescriptor(
+	descriptor: SkillDescriptor,
+	source: ManagedLocalSource,
+): SkillDescriptor {
+	return {
+		...descriptor,
+		source,
+		frontmatter: normalizeManagedFrontmatter(descriptor.frontmatter, source),
 	};
 }
 
@@ -243,16 +302,28 @@ export class SkillManager {
 		if ("error" in root) {
 			return root.error;
 		}
+		const managedDescriptor = normalizeManagedDescriptor(
+			action.descriptor,
+			root.source,
+		);
+		const safeAction = {
+			...action,
+			descriptor: managedDescriptor,
+		};
 
 		const validation = this.validateBody(action.body);
 		if (validation != null) {
 			return validation;
 		}
 
-		const targetDir = join(root.path, action.descriptor.name);
+		const targetDir = join(root.path, managedDescriptor.name);
 		const targetPath = join(targetDir, "SKILL.md");
-		if (!(await this.isPathWithinRoot(targetDir, root.realpath))) {
-			return createError("path_denied", "target path escapes configured root");
+		const targetDirCheck = await this.validateCreateTargetDir(
+			targetDir,
+			root.realpath,
+		);
+		if (targetDirCheck != null) {
+			return targetDirCheck;
 		}
 
 		const existingCheck = await this.validateNoSymlinkTarget(targetPath);
@@ -261,7 +332,7 @@ export class SkillManager {
 		}
 
 		const serialized = this.serializeAndValidate(
-			action.descriptor.frontmatter,
+			managedDescriptor.frontmatter,
 			action.body,
 		);
 		if ("error" in serialized) {
@@ -270,23 +341,30 @@ export class SkillManager {
 
 		const guardOutcome = this.evaluateGuard(action.body, {
 			trust:
-				action.descriptor.frontmatter.trust ??
-				defaultTrustForSource(action.descriptor.source),
+				managedDescriptor.frontmatter.trust ??
+				defaultTrustForSource(managedDescriptor.source),
 			stage: "write",
-			skillName: action.descriptor.name,
+			skillName: managedDescriptor.name,
 		});
 		if ("error" in guardOutcome) {
 			return guardOutcome.error;
 		}
 
 		const authorization = await this.authorizeWrite(
-			this.buildCreateRequest(action, targetPath, guardOutcome),
+			this.buildCreateRequest(safeAction, targetPath, guardOutcome),
 		);
 		if (authorization != null) {
 			return authorization;
 		}
 
 		await this.fsOps.mkdir(targetDir, { recursive: true });
+		const createdDirCheck = await this.validateCreateTargetDir(
+			targetDir,
+			root.realpath,
+		);
+		if (createdDirCheck != null) {
+			return createdDirCheck;
+		}
 		await this.fsOps.writeFile(targetPath, serialized.markdown, { flag: "wx" });
 		await this.skillsManager.discover();
 		const descriptor = this.skillsManager.findByName(action.descriptor.name);
@@ -338,9 +416,15 @@ export class SkillManager {
 
 		const content = await this.fsOps.readFile(existingPath.path, "utf8");
 		const parsed = parseSkillMarkdown(content);
-		const nextFrontmatter = mergeFrontmatter(
-			existing.frontmatter,
-			action.patch.frontmatter,
+		if (parsed.frontmatter.name !== action.name) {
+			return createError(
+				"validation_failed",
+				"disk frontmatter.name must match the updated skill name",
+			);
+		}
+		const nextFrontmatter = normalizeManagedFrontmatter(
+			mergeFrontmatter(parsed.frontmatter, action.patch.frontmatter),
+			existingPath.source,
 		);
 		const nextBody = action.body ?? parsed.body;
 		const validation = this.validateBody(nextBody);
@@ -354,7 +438,8 @@ export class SkillManager {
 		}
 
 		const guardOutcome = this.evaluateGuard(nextBody, {
-			trust: nextFrontmatter.trust ?? defaultTrustForSource(existing.source),
+			trust:
+				nextFrontmatter.trust ?? defaultTrustForSource(existingPath.source),
 			stage: "write",
 			skillName: action.name,
 		});
@@ -375,7 +460,13 @@ export class SkillManager {
 			return authorization;
 		}
 
-		await this.fsOps.writeFile(existingPath.path, serialized.markdown);
+		const latestExistingPath = await this.resolveExistingPath(
+			existingPath.path,
+		);
+		if ("error" in latestExistingPath) {
+			return latestExistingPath.error;
+		}
+		await this.fsOps.writeFile(latestExistingPath.path, serialized.markdown);
 		await this.skillsManager.discover();
 		const descriptor = this.skillsManager.findByName(action.name);
 		if (descriptor == null) {
@@ -438,7 +529,11 @@ export class SkillManager {
 	private async resolveCreateRoot(
 		target: "user" | "project" | undefined,
 	): Promise<
-		| { readonly path: string; readonly realpath: string }
+		| {
+				readonly path: string;
+				readonly realpath: string;
+				readonly source: ManagedLocalSource;
+		  }
 		| { readonly error: SkillManageResult }
 	> {
 		if (target === "project") {
@@ -454,6 +549,7 @@ export class SkillManager {
 			return {
 				path: this.projectRoot,
 				realpath: await this.fsOps.realpath(this.projectRoot),
+				source: "project",
 			};
 		}
 
@@ -461,13 +557,15 @@ export class SkillManager {
 		return {
 			path: this.userRoot,
 			realpath: await this.fsOps.realpath(this.userRoot),
+			source: "user",
 		};
 	}
 
 	private async resolveExistingPath(
 		path: string,
 	): Promise<
-		{ readonly path: string } | { readonly error: SkillManageResult }
+		| { readonly path: string; readonly source: ManagedLocalSource }
+		| { readonly error: SkillManageResult }
 	> {
 		let resolvedPath: string;
 		try {
@@ -485,13 +583,19 @@ export class SkillManager {
 			};
 		}
 
-		const roots = [this.userRoot, this.projectRoot].filter(
-			(root): root is string => root != null,
-		);
+		const roots: Array<{
+			readonly source: ManagedLocalSource;
+			readonly path: string;
+		}> = [
+			{ source: "user", path: this.userRoot },
+			...(this.projectRoot == null
+				? []
+				: [{ source: "project" as const, path: this.projectRoot }]),
+		];
 		for (const root of roots) {
-			const resolvedRoot = await this.fsOps.realpath(root);
+			const resolvedRoot = await this.fsOps.realpath(root.path);
 			if (isWithinRoot(resolvedPath, resolvedRoot)) {
-				return { path };
+				return { path, source: root.source };
 			}
 		}
 
@@ -503,13 +607,44 @@ export class SkillManager {
 		};
 	}
 
-	private async isPathWithinRoot(
+	private async validateCreateTargetDir(
 		targetDir: string,
 		rootPath: string,
-	): Promise<boolean> {
+	): Promise<SkillManageResult | null> {
 		const parentDir = dirname(targetDir);
 		const resolvedParentDir = await this.fsOps.realpath(parentDir);
-		return isWithinRoot(resolvedParentDir, rootPath);
+		if (!isWithinRoot(resolvedParentDir, rootPath)) {
+			return createError("path_denied", "target path escapes configured root");
+		}
+
+		try {
+			const stats = await this.fsOps.lstat(targetDir);
+			if (stats.isSymbolicLink()) {
+				return createError(
+					"path_denied",
+					"target directory cannot be a symlink",
+				);
+			}
+			if (!stats.isDirectory()) {
+				return createError(
+					"validation_failed",
+					"target path already exists and is not a directory",
+				);
+			}
+			const resolvedTargetDir = await this.fsOps.realpath(targetDir);
+			if (!isWithinRoot(resolvedTargetDir, rootPath)) {
+				return createError(
+					"path_denied",
+					"target directory resolves outside configured root",
+				);
+			}
+		} catch (error) {
+			if (!isNotFoundError(error)) {
+				throw error;
+			}
+		}
+
+		return null;
 	}
 
 	private async validateNoSymlinkTarget(
@@ -683,10 +818,18 @@ interface GuardWriteOutcome {
 }
 
 function isNonEmptyDirectoryError(error: unknown): boolean {
+	return isFsErrorCode(error, "ENOTEMPTY");
+}
+
+function isNotFoundError(error: unknown): boolean {
+	return isFsErrorCode(error, "ENOENT");
+}
+
+function isFsErrorCode(error: unknown, code: string): boolean {
 	return (
 		typeof error === "object" &&
 		error != null &&
 		"code" in error &&
-		(error as { code?: string }).code === "ENOTEMPTY"
+		(error as { code?: string }).code === code
 	);
 }

@@ -75,6 +75,46 @@ describe("parseSkillFrontmatter", () => {
 		expect(frontmatter.trust).toBe("trusted");
 	});
 
+	it("normalizes dependency metadata from top-level and metadata.quilin", () => {
+		const topLevel = parseSkillFrontmatter({
+			name: "dependency-top-level",
+			description: "Record direct dependency metadata",
+			dependencies: {
+				skills: ["web-research"],
+				tools: ["web_fetch"],
+				toolsets: ["browser"],
+				packages: ["zod"],
+			},
+		});
+		const nested = parseSkillFrontmatter({
+			name: "dependency-nested",
+			description: "Record nested dependency metadata",
+			metadata: {
+				quilin: {
+					dependencies: {
+						skills: ["planner"],
+						tools: ["file_read"],
+						tool_sets: ["filesystem"],
+						packages: ["ai"],
+					},
+				},
+			},
+		});
+
+		expect(topLevel.dependencies).toEqual({
+			skills: ["web-research"],
+			tools: ["web_fetch"],
+			toolsets: ["browser"],
+			packages: ["zod"],
+		});
+		expect(nested.dependencies).toEqual({
+			skills: ["planner"],
+			tools: ["file_read"],
+			toolsets: ["filesystem"],
+			packages: ["ai"],
+		});
+	});
+
 	it("ignores unknown fields", () => {
 		const frontmatter = parseSkillFrontmatter({
 			name: "ignore-unknown",
@@ -173,6 +213,16 @@ describe("parseSkillFrontmatter", () => {
 
 		expect(() =>
 			parseSkillFrontmatter({
+				name: "bad-dependency",
+				description: "dependencies entries must be arrays",
+				dependencies: {
+					skills: "planner",
+				},
+			}),
+		).toThrow("dependencies.skills must be an array");
+
+		expect(() =>
+			parseSkillFrontmatter({
 				name: "bad-trust",
 				description: "trust must be recognized",
 				trust: "local",
@@ -254,7 +304,6 @@ metadata:
 	it("parses quoted scalars, comments, empty arrays, and explicit booleans", () => {
 		const parsed = parseSkillMarkdown(`---
 # comment lines are ignored
-ignored malformed line
 name: "quoted-skill"
 description: 'Quoted description'
 when-to-use: "Use when quoting matters"
@@ -276,6 +325,47 @@ Body
 			version: "1.0.0",
 		});
 		expect(parsed.body).toBe("Body\n");
+	});
+
+	it("parses YAML block sequences for top-level and nested arrays", () => {
+		const parsed = parseSkillMarkdown(`---
+name: dependency-blocks
+description: Parse common YAML block arrays
+allowedTools:
+  - shell_exec
+  - file_read
+dependencies:
+  skills:
+    - planner
+    - browser-use
+  tools:
+    - file_read
+  toolsets:
+    - filesystem
+  packages:
+    - zod
+metadata:
+  quilin:
+    requires_tools:
+      - shell_exec
+    platforms:
+      - linux
+      - darwin
+---
+# Dependency Blocks
+`);
+
+		expect(parsed.frontmatter).toMatchObject({
+			allowedTools: ["shell_exec", "file_read"],
+			requiresTools: ["shell_exec"],
+			platforms: ["linux", "darwin"],
+			dependencies: {
+				skills: ["planner", "browser-use"],
+				tools: ["file_read"],
+				toolsets: ["filesystem"],
+				packages: ["zod"],
+			},
+		});
 	});
 
 	const upstreamFixturePaths = [
@@ -342,5 +432,50 @@ name: malformed
 description: Missing closing delimiter
 `),
 		).toThrow("SKILL.md frontmatter block is malformed");
+	});
+
+	it("rejects malformed key-value and array lines instead of silently dropping them", () => {
+		expect(() =>
+			parseSkillMarkdown(`---
+name: malformed-line
+description: Bad frontmatter line
+not a key value line
+---
+Body
+`),
+		).toThrow("expected key: value");
+
+		expect(() =>
+			parseSkillMarkdown(`---
+name: orphan-array-item
+description: Bad array placement
+- shell_exec
+---
+Body
+`),
+		).toThrow("array item outside an array field");
+
+		expect(() =>
+			parseSkillMarkdown(`---
+name: missing-array-dash
+description: Bad permission array
+allowedTools:
+  shell_exec
+---
+Body
+`),
+		).toThrow("expected key: value");
+
+		expect(() =>
+			parseSkillMarkdown(`---
+name: key-inside-array
+description: Bad dependency array
+allowedTools:
+  - shell_exec
+  dependencies: [planner]
+---
+Body
+`),
+		).toThrow("key/value data inside an array");
 	});
 });

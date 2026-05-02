@@ -16,6 +16,7 @@ import {
 import { parseSkillMarkdown } from "./frontmatter.js";
 import { SkillManager } from "./manage.js";
 import { SkillsManager } from "./manager.js";
+import { buildSkillManifest } from "./manifest.js";
 import type {
 	SkillDescriptor,
 	SkillFrontmatter,
@@ -108,6 +109,210 @@ describe("SkillManager", () => {
 		);
 		expect(markdown).toContain("name: new-skill");
 		expect(markdown).toContain("# New Skill");
+	});
+
+	it("create forces managed local skills to safe source and trust before guard policy runs", async () => {
+		const userRoot = await createTempDir();
+		const skillsManager = new SkillsManager({ userRoots: [userRoot] });
+		await skillsManager.discover();
+		const guard: SkillsGuard = {
+			scan: vi.fn(() => ({ kind: "pass" as const })),
+		};
+		const subject = createSubject({ userRoot, skillsManager, guard });
+
+		const result = await subject.manage({
+			action: "create",
+			descriptor: {
+				...makeDescriptor("self-promote-create", "bundled"),
+				source: "bundled",
+				frontmatter: {
+					...makeDescriptor("self-promote-create", "bundled").frontmatter,
+					trust: "builtin",
+				},
+			},
+			body: "# Self Promote Create",
+		});
+
+		expect(result).toEqual({
+			ok: true,
+			descriptor: expect.objectContaining({
+				name: "self-promote-create",
+				source: "user",
+				frontmatter: expect.objectContaining({ trust: "community" }),
+			}),
+		});
+		expect(guard.scan).toHaveBeenCalledWith(
+			"# Self Promote Create",
+			expect.objectContaining({
+				trust: "community",
+				skillName: "self-promote-create",
+			}),
+		);
+		const markdown = await readFile(
+			join(userRoot, "self-promote-create", "SKILL.md"),
+			"utf8",
+		);
+		expect(markdown).toContain("trust: community");
+		expect(markdown).not.toContain("trust: builtin");
+	});
+
+	it("create serializes dependency metadata into SKILL.md and manifest round trips", async () => {
+		const userRoot = await createTempDir();
+		const skillsManager = new SkillsManager({ userRoots: [userRoot] });
+		await skillsManager.discover();
+		const subject = createSubject({ userRoot, skillsManager });
+		const dependencies = {
+			skills: ["planner"],
+			tools: ["file_read"],
+			toolsets: ["filesystem"],
+			packages: ["zod"],
+		};
+
+		const result = await subject.manage({
+			action: "create",
+			descriptor: {
+				...makeDescriptor("dependency-skill"),
+				frontmatter: {
+					...makeDescriptor("dependency-skill").frontmatter,
+					dependencies,
+				},
+			},
+			body: "# Dependency Skill",
+		});
+
+		expect(result.ok).toBe(true);
+		const markdown = await readFile(
+			join(userRoot, "dependency-skill", "SKILL.md"),
+			"utf8",
+		);
+		expect(markdown).toContain("dependencies:\n  skills: [planner]");
+		const parsed = parseSkillMarkdown(markdown);
+		expect(parsed.frontmatter.dependencies).toEqual(dependencies);
+		const descriptor = skillsManager.findByName("dependency-skill");
+		expect(descriptor?.frontmatter.dependencies).toEqual(dependencies);
+		expect(
+			descriptor == null
+				? undefined
+				: buildSkillManifest({ descriptor }).dependencies,
+		).toEqual(dependencies);
+	});
+
+	it("update preserves and changes dependency metadata through serialized frontmatter", async () => {
+		const userRoot = await createTempDir();
+		const skillsManager = new SkillsManager({ userRoots: [userRoot] });
+		await skillsManager.discover();
+		const subject = createSubject({ userRoot, skillsManager });
+		const initialDependencies = {
+			skills: ["planner"],
+			tools: ["file_read"],
+		};
+		const nextDependencies = {
+			skills: ["planner", "browser-use"],
+			tools: ["shell_exec"],
+			packages: ["zod"],
+		};
+
+		await subject.manage({
+			action: "create",
+			descriptor: {
+				...makeDescriptor("update-dependencies"),
+				frontmatter: {
+					...makeDescriptor("update-dependencies").frontmatter,
+					dependencies: initialDependencies,
+				},
+			},
+			body: "# Update Dependencies",
+		});
+
+		const result = await subject.manage({
+			action: "update",
+			name: "update-dependencies",
+			patch: {
+				frontmatter: {
+					...makeDescriptor("update-dependencies").frontmatter,
+					dependencies: nextDependencies,
+				},
+			},
+		});
+
+		expect(result.ok).toBe(true);
+		const markdown = await readFile(
+			join(userRoot, "update-dependencies", "SKILL.md"),
+			"utf8",
+		);
+		expect(parseSkillMarkdown(markdown).frontmatter.dependencies).toEqual(
+			nextDependencies,
+		);
+		expect(
+			skillsManager.findByName("update-dependencies")?.frontmatter.dependencies,
+		).toEqual(nextDependencies);
+	});
+
+	it("update merges patches over freshly parsed disk frontmatter", async () => {
+		const userRoot = await createTempDir();
+		const skillsManager = new SkillsManager({ userRoots: [userRoot] });
+		await skillsManager.discover();
+		const subject = createSubject({ userRoot, skillsManager });
+		const initialDependencies = {
+			skills: ["planner"],
+			tools: ["file_read"],
+		};
+		const diskDependencies = {
+			skills: ["planner", "disk-edited"],
+			tools: ["shell_exec"],
+			toolsets: ["filesystem"],
+		};
+
+		await subject.manage({
+			action: "create",
+			descriptor: {
+				...makeDescriptor("fresh-disk-update"),
+				frontmatter: {
+					...makeDescriptor("fresh-disk-update").frontmatter,
+					dependencies: initialDependencies,
+				},
+			},
+			body: "# Fresh Disk Update",
+		});
+		await writeFile(
+			join(userRoot, "fresh-disk-update", "SKILL.md"),
+			[
+				"---",
+				"name: fresh-disk-update",
+				"description: Disk edited description",
+				"whenToUse: When disk metadata changed",
+				"dependencies:",
+				"  skills: [planner, disk-edited]",
+				"  tools: [shell_exec]",
+				"  toolsets: [filesystem]",
+				"userInvocable: true",
+				"disableModelInvocation: false",
+				"trust: community",
+				"---",
+				"# Disk Edited Body",
+			].join("\n"),
+			"utf8",
+		);
+
+		const result = await subject.manage({
+			action: "update",
+			name: "fresh-disk-update",
+			patch: {
+				frontmatter: {
+					description: "Patch-only description",
+				},
+			},
+		});
+
+		expect(result.ok).toBe(true);
+		const markdown = await readFile(
+			join(userRoot, "fresh-disk-update", "SKILL.md"),
+			"utf8",
+		);
+		const parsed = parseSkillMarkdown(markdown);
+		expect(parsed.frontmatter.description).toBe("Patch-only description");
+		expect(parsed.frontmatter.dependencies).toEqual(diskDependencies);
+		expect(parsed.body).toContain("# Disk Edited Body");
 	});
 
 	it("rejects invalid create names such as path traversal", async () => {
@@ -233,6 +438,53 @@ describe("SkillManager", () => {
 			error: "path_denied",
 			detail: expect.stringContaining("symlink"),
 		});
+	});
+
+	it("rejects create when target directory is a symlink outside the root", async () => {
+		const userRoot = await createTempDir();
+		const outsideDir = await createTempDir();
+		await symlink(outsideDir, join(userRoot, "escape-root"));
+		const skillsManager = new SkillsManager({ userRoots: [userRoot] });
+		const subject = createSubject({ userRoot, skillsManager });
+
+		const result = await subject.manage({
+			action: "create",
+			descriptor: {
+				...makeDescriptor("escape-root"),
+				path: join(userRoot, "escape-root", "SKILL.md"),
+			},
+			body: "body",
+		});
+
+		expect(result).toEqual({
+			ok: false,
+			error: "path_denied",
+			detail: expect.stringContaining("symlink"),
+		});
+		await expect(
+			readFile(join(outsideDir, "SKILL.md"), "utf8"),
+		).rejects.toThrow();
+	});
+
+	it("allows create when target directory already exists inside the root", async () => {
+		const userRoot = await createTempDir();
+		await mkdir(join(userRoot, "local-existing"), { recursive: true });
+		const skillsManager = new SkillsManager({ userRoots: [userRoot] });
+		const subject = createSubject({ userRoot, skillsManager });
+
+		const result = await subject.manage({
+			action: "create",
+			descriptor: makeDescriptor("local-existing"),
+			body: "body",
+		});
+
+		expect(result).toEqual({
+			ok: true,
+			descriptor: expect.objectContaining({ name: "local-existing" }),
+		});
+		await expect(
+			readFile(join(userRoot, "local-existing", "SKILL.md"), "utf8"),
+		).resolves.toContain("name: local-existing");
 	});
 
 	it("rejects create when a regular skill file already exists", async () => {
@@ -401,6 +653,51 @@ describe("SkillManager", () => {
 		});
 	});
 
+	it("update rejects when SKILL.md is swapped to an external symlink during authorization", async () => {
+		const userRoot = await createTempDir();
+		const outsideDir = await createTempDir();
+		const skillsManager = new SkillsManager({ userRoots: [userRoot] });
+		const skillPath = join(userRoot, "toctou-update", "SKILL.md");
+		const outsidePath = join(outsideDir, "escaped.md");
+		let swappedDuringAuthorization = false;
+		const subject = createSubject({
+			userRoot,
+			skillsManager,
+			writeAuthority: new WriteAuthority({
+				mode: "ask",
+				confirm: async (request) => {
+					if (request.summary === "skills.update toctou-update") {
+						await rm(skillPath, { force: true });
+						await symlink(outsidePath, skillPath);
+						swappedDuringAuthorization = true;
+					}
+					return true;
+				},
+			}),
+		});
+		await subject.manage({
+			action: "create",
+			descriptor: makeDescriptor("toctou-update"),
+			body: "body",
+		});
+		await writeFile(outsidePath, "external", "utf8");
+
+		const result = await subject.manage({
+			action: "update",
+			name: "toctou-update",
+			patch: {},
+			body: "updated",
+		});
+
+		expect(swappedDuringAuthorization).toBe(true);
+		expect(result).toEqual({
+			ok: false,
+			error: "path_denied",
+			detail: expect.stringContaining("symlink"),
+		});
+		await expect(readFile(outsidePath, "utf8")).resolves.toBe("external");
+	});
+
 	it("update rewrites markdown and roundtrips through parseSkillMarkdown", async () => {
 		const userRoot = await createTempDir();
 		const skillsManager = new SkillsManager({ userRoots: [userRoot] });
@@ -433,6 +730,51 @@ describe("SkillManager", () => {
 		expect(parsed.frontmatter.description).toBe("Updated description");
 		expect(parsed.frontmatter.allowedTools).toEqual(["web_fetch"]);
 		expect(parsed.body).toContain("# New Body");
+	});
+
+	it("update cannot promote a managed local skill to builtin trust before guard policy runs", async () => {
+		const userRoot = await createTempDir();
+		const skillsManager = new SkillsManager({ userRoots: [userRoot] });
+		await skillsManager.discover();
+		const guard: SkillsGuard = {
+			scan: vi.fn(() => ({ kind: "pass" as const })),
+		};
+		const subject = createSubject({ userRoot, skillsManager, guard });
+		await subject.manage({
+			action: "create",
+			descriptor: makeDescriptor("self-promote-update"),
+			body: "# Self Promote Update",
+		});
+
+		const result = await subject.manage({
+			action: "update",
+			name: "self-promote-update",
+			patch: {
+				frontmatter: {
+					trust: "builtin",
+				},
+			},
+			body: "# Updated Self Promote",
+		});
+
+		expect(result).toEqual({
+			ok: true,
+			descriptor: expect.objectContaining({
+				frontmatter: expect.objectContaining({ trust: "community" }),
+			}),
+		});
+		expect(guard.scan).toHaveBeenLastCalledWith(
+			"# Updated Self Promote",
+			expect.objectContaining({
+				trust: "community",
+				skillName: "self-promote-update",
+			}),
+		);
+		const markdown = await readFile(
+			join(userRoot, "self-promote-update", "SKILL.md"),
+			"utf8",
+		);
+		expect(parseSkillMarkdown(markdown).frontmatter.trust).toBe("community");
 	});
 
 	it("delete returns not_found for unknown skills", async () => {
@@ -1042,7 +1384,7 @@ describe("SkillManager", () => {
 		);
 	});
 
-	it("falls back to source trust and omits empty array frontmatter fields", async () => {
+	it("forces managed local trust and omits empty array frontmatter fields", async () => {
 		const userRoot = await createTempDir();
 		const skillsManager = new SkillsManager({ userRoots: [userRoot] });
 		const seenTrust: string[] = [];
@@ -1071,7 +1413,7 @@ describe("SkillManager", () => {
 		}
 
 		expect(seenTrust).toEqual([
-			"builtin",
+			"community",
 			"community",
 			"community",
 			"community",

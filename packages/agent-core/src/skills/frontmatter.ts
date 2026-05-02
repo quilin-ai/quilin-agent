@@ -1,4 +1,8 @@
-import type { SkillFrontmatter, SkillTrustLevel } from "./types.js";
+import type {
+	SkillDependencyMetadata,
+	SkillFrontmatter,
+	SkillTrustLevel,
+} from "./types.js";
 
 interface ParsedSkillMarkdown {
 	readonly frontmatter: SkillFrontmatter;
@@ -7,6 +11,7 @@ interface ParsedSkillMarkdown {
 
 type SkillFrontmatterInput = Record<string, unknown>;
 type NestedObject = Record<string, unknown>;
+type YamlContainer = NestedObject | unknown[];
 
 const MAX_NAME_LENGTH = 64;
 const MAX_DESCRIPTION_LENGTH = 1024;
@@ -44,27 +49,48 @@ function parseScalar(rawValue: string): unknown {
 	return trimmed.replace(/^['"]|['"]$/g, "");
 }
 
+function inferBlockContainer(
+	lines: readonly string[],
+	index: number,
+	indent: number,
+): YamlContainer {
+	for (let nextIndex = index + 1; nextIndex < lines.length; nextIndex += 1) {
+		const nextLine = lines[nextIndex] ?? "";
+		const trimmed = nextLine.trim();
+		if (trimmed === "" || trimmed.startsWith("#")) {
+			continue;
+		}
+
+		const nextIndent = nextLine.length - nextLine.trimStart().length;
+		if (nextIndent <= indent) {
+			throw new Error(
+				`Skill frontmatter line ${index + 1} must be followed by an indented block`,
+			);
+		}
+
+		return trimmed.startsWith("- ") ? [] : {};
+	}
+
+	throw new Error(
+		`Skill frontmatter line ${index + 1} must be followed by an indented block`,
+	);
+}
+
 function parseYamlLike(yamlText: string): SkillFrontmatterInput {
 	const parsed: SkillFrontmatterInput = {};
 	const lines = yamlText.split(/\r?\n/);
-	const stack: Array<{ indent: number; value: NestedObject }> = [
+	const stack: Array<{ indent: number; value: YamlContainer }> = [
 		{ indent: -1, value: parsed },
 	];
 
-	for (const line of lines) {
+	for (let index = 0; index < lines.length; index += 1) {
+		const line = lines[index] ?? "";
 		const trimmed = line.trim();
 		if (trimmed === "" || trimmed.startsWith("#")) {
 			continue;
 		}
 
-		const separatorIndex = line.indexOf(":");
-		if (separatorIndex <= 0) {
-			continue;
-		}
-
 		const indent = line.length - line.trimStart().length;
-		const key = line.slice(0, separatorIndex).trim();
-		const rawValue = line.slice(separatorIndex + 1);
 
 		while (stack.length > 1 && indent <= stack[stack.length - 1]?.indent) {
 			stack.pop();
@@ -75,8 +101,45 @@ function parseYamlLike(yamlText: string): SkillFrontmatterInput {
 			throw new Error("Skill frontmatter nesting is malformed");
 		}
 
+		if (trimmed.startsWith("- ")) {
+			if (!Array.isArray(parent)) {
+				throw new Error(
+					`Skill frontmatter line ${index + 1} has an array item outside an array field`,
+				);
+			}
+			const item = trimmed.slice(2).trim();
+			if (item.length === 0) {
+				throw new Error(
+					`Skill frontmatter line ${index + 1} has an empty array item`,
+				);
+			}
+			if (/^[a-zA-Z0-9_-]+:\s/.test(item)) {
+				throw new Error(
+					`Skill frontmatter line ${index + 1} cannot define key/value data inside a scalar array`,
+				);
+			}
+			parent.push(parseScalar(item));
+			continue;
+		}
+
+		const separatorIndex = line.indexOf(":");
+		if (separatorIndex <= 0) {
+			throw new Error(
+				`Skill frontmatter line ${index + 1} is malformed; expected key: value`,
+			);
+		}
+
+		if (Array.isArray(parent)) {
+			throw new Error(
+				`Skill frontmatter line ${index + 1} cannot define key/value data inside an array`,
+			);
+		}
+
+		const key = line.slice(0, separatorIndex).trim();
+		const rawValue = line.slice(separatorIndex + 1);
+
 		if (rawValue.trim() === "") {
-			const nested: NestedObject = {};
+			const nested = inferBlockContainer(lines, index, indent);
 			parent[key] = nested;
 			stack.push({ indent, value: nested });
 			continue;
@@ -182,6 +245,39 @@ function firstDefined(...values: unknown[]): unknown {
 	return values.find((value) => value !== undefined);
 }
 
+function normalizeDependencies(
+	value: unknown,
+): SkillDependencyMetadata | undefined {
+	const dependencies = getNestedRecord(value, "dependencies");
+	if (dependencies == null) {
+		return undefined;
+	}
+
+	const normalized: SkillDependencyMetadata = {
+		skills: normalizeStringArray(dependencies.skills, "dependencies.skills"),
+		tools: normalizeStringArray(dependencies.tools, "dependencies.tools"),
+		toolsets: normalizeStringArray(
+			firstDefined(dependencies.toolsets, dependencies.tool_sets),
+			"dependencies.toolsets",
+		),
+		packages: normalizeStringArray(
+			dependencies.packages,
+			"dependencies.packages",
+		),
+	};
+
+	if (
+		normalized.skills == null &&
+		normalized.tools == null &&
+		normalized.toolsets == null &&
+		normalized.packages == null
+	) {
+		return undefined;
+	}
+
+	return normalized;
+}
+
 export function parseSkillFrontmatter(
 	input: SkillFrontmatterInput,
 ): SkillFrontmatter {
@@ -235,6 +331,9 @@ export function parseSkillFrontmatter(
 		"platforms",
 	);
 	const trustValue = firstDefined(input.trust, quilinMetadata?.trust);
+	const dependencies = normalizeDependencies(
+		firstDefined(input.dependencies, quilinMetadata?.dependencies),
+	);
 
 	return {
 		name,
@@ -253,6 +352,7 @@ export function parseSkillFrontmatter(
 		requiresToolsets,
 		platforms,
 		version: normalizeString(input.version, "version", false),
+		dependencies,
 		userInvocable: normalizeBoolean(input.userInvocable, true),
 		disableModelInvocation: normalizeBoolean(
 			input.disableModelInvocation,
