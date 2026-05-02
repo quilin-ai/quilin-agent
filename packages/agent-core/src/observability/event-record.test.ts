@@ -14,6 +14,7 @@ import type {
 } from "../tools/types.js";
 import {
 	buildComponentHealthEventRecord,
+	buildContextTraceDeltaEventRecord,
 	buildContextTraceSummaryEventRecord,
 	buildObservabilityEventRecord,
 	buildRuntimeReloadAuditEventRecord,
@@ -27,6 +28,8 @@ import {
 	buildToolResultAuditReportHealthEventRecord,
 	COMPONENT_HEALTH_EVENT_KIND,
 	COMPONENT_HEALTH_EVENT_SOURCE,
+	CONTEXT_TRACE_DELTA_EVENT_KIND,
+	CONTEXT_TRACE_DELTA_EVENT_SOURCE,
 	CONTEXT_TRACE_SUMMARY_EVENT_KIND,
 	CONTEXT_TRACE_SUMMARY_EVENT_SOURCE,
 	type ComponentHealthEventPayload,
@@ -391,6 +394,55 @@ describe("observability event records", () => {
 			payload: result.traceSummary,
 		});
 		expect(serializeRoundTrip(firstRecord)).toEqual(firstRecord);
+	});
+
+	it("wraps context trace deltas with stable record fields and serializable payload", () => {
+		const assembler = createDefaultContextAssembler({ modelWindow: 12 });
+		const previous = assembler.assembleContext(
+			"test",
+			{},
+			[],
+			[
+				makeSource("high relevance source", {
+					sourceId: "high",
+					tokenCount: 6,
+					relevanceScore: 0.95,
+				}),
+			],
+		);
+		const current = assembler.assembleContext(
+			"test",
+			{},
+			[],
+			[
+				makeSource("high relevance source", {
+					sourceId: "high",
+					tokenCount: 6,
+					relevanceScore: 0.95,
+				}),
+				makeSource("new source under pressure", {
+					sourceId: "new",
+					tokenCount: 6,
+					relevanceScore: 0.9,
+				}),
+			],
+			{ previousTraceSummary: previous.traceSummary },
+		);
+		if (current.traceDelta == null) {
+			throw new Error("expected trace delta");
+		}
+
+		const record = buildContextTraceDeltaEventRecord(current.traceDelta, {
+			timestamp: TEST_TIMESTAMP,
+		});
+
+		expect(record).toEqual({
+			kind: CONTEXT_TRACE_DELTA_EVENT_KIND,
+			timestamp: TEST_TIMESTAMP,
+			source: CONTEXT_TRACE_DELTA_EVENT_SOURCE,
+			payload: current.traceDelta,
+		});
+		expect(serializeRoundTrip(record)).toEqual(record);
 	});
 
 	it("wraps supervisor progress flush results with stable record fields and serializable payload", () => {

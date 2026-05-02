@@ -1,5 +1,5 @@
 import type { ScanResult } from "./context/injection-scanner.js";
-import type { PromptSessionAssembler } from "./context/prompt-session-assembler.js";
+import type { OutboundPromptRequest } from "./context/prompt-session-assembler.js";
 import type { ContextManager } from "./context/types.js";
 import type { InferenceConfig, LLMClient } from "./llm/types.js";
 import type { AgentLoopObservability } from "./observability/loop.js";
@@ -64,10 +64,13 @@ export function createAssistantMessage(
 export interface AgentLoopConfig {
 	readonly llm: LLMClient;
 	readonly context?: ContextManager;
-	readonly sessionAssembler?: Pick<
-		PromptSessionAssembler,
-		"buildOutboundRequest"
-	>;
+	readonly sessionAssembler?: {
+		readonly buildOutboundRequest: (input: {
+			readonly transcript: readonly Message[];
+			readonly turnKind: "user-turn" | "tool-resume";
+			readonly lastMessageTime?: string;
+		}) => OutboundPromptRequest;
+	};
 	readonly tools?: readonly Tool[];
 	readonly checkpoint?: Checkpoint;
 	readonly state?: AgentState;

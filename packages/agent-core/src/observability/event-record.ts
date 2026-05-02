@@ -4,6 +4,7 @@ import {
 	type RuntimeReloadAuditEventInput,
 } from "../config/runtime.js";
 import type { ContextTraceSummary } from "../context/draft/source-types.js";
+import type { ContextTraceDelta } from "../context/draft/trace-delta.js";
 import { redactJsonLikeValue } from "../safety/redaction.js";
 import type {
 	ToolInvocationAuditBatchSummary,
@@ -67,6 +68,9 @@ export const CONTEXT_TRACE_SUMMARY_EVENT_KIND =
 	"context_trace_summary" as const;
 export const CONTEXT_TRACE_SUMMARY_EVENT_SOURCE =
 	"agent-core.context.draft.context-assembler" as const;
+export const CONTEXT_TRACE_DELTA_EVENT_KIND = "context_trace_delta" as const;
+export const CONTEXT_TRACE_DELTA_EVENT_SOURCE =
+	"agent-core.context.draft.trace-delta" as const;
 export const SUPERVISOR_PROGRESS_FLUSH_EVENT_KIND =
 	"supervisor_progress_flush" as const;
 export const SUPERVISOR_PROGRESS_FLUSH_EVENT_SOURCE =
@@ -241,6 +245,18 @@ export function buildContextTraceSummaryEventRecord(
 	return buildObservabilityEventRecord({
 		kind: CONTEXT_TRACE_SUMMARY_EVENT_KIND,
 		source: CONTEXT_TRACE_SUMMARY_EVENT_SOURCE,
+		timestamp: options.timestamp,
+		payload,
+	});
+}
+
+export function buildContextTraceDeltaEventRecord(
+	payload: ContextTraceDelta,
+	options: ObservabilityEventAdapterOptions,
+): ObservabilityEventRecord<typeof CONTEXT_TRACE_DELTA_EVENT_KIND> {
+	return buildObservabilityEventRecord({
+		kind: CONTEXT_TRACE_DELTA_EVENT_KIND,
+		source: CONTEXT_TRACE_DELTA_EVENT_SOURCE,
 		timestamp: options.timestamp,
 		payload,
 	});

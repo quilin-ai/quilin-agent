@@ -27,6 +27,8 @@ export type AgentRunLogPhase =
 	| "loop.turn_started"
 	| "context.rebuild_skipped"
 	| "context.outbound_request_built"
+	| "context.trace_summary"
+	| "context.trace_delta"
 	| "checkpoint.saved"
 	| "llm.request_prepared"
 	| "llm.response_received"

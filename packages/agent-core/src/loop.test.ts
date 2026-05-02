@@ -1,4 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+	ContextTraceDelta,
+	ContextTraceSummary,
+} from "./context/index.js";
 import { getLoggerRuntimeMode, logger } from "./logger.js";
 import { runAgentLoop } from "./loop.js";
 import type { Message } from "./state/types.js";
@@ -15,6 +19,74 @@ describe("runAgentLoop", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 	});
+
+	function makeTraceSummary(): ContextTraceSummary {
+		return {
+			traceId: "trace-summary:test",
+			selectionTraceId: "selection:test",
+			compressionTraceId: "compression:test",
+			candidateCount: 1,
+			selectedCount: 1,
+			rejectedCount: 0,
+			compressedCount: 1,
+			truncatedCount: 0,
+			droppedCount: 0,
+			usedTokens: 4,
+			budgetTokens: 16,
+			sectionCount: 1,
+			decisionCounts: {
+				selected: 1,
+				rejected: 0,
+				keep: 1,
+				truncate: 0,
+				drop: 0,
+			},
+			sourceSummaries: [
+				{
+					sourceId: "source-a",
+					selection: "selected",
+					compressionDecision: "keep",
+					compressionReason: "within_budget",
+					originalTokens: 4,
+					outputTokens: 4,
+				},
+			],
+			determinismKey: "summary-key",
+		};
+	}
+
+	function makeTraceDelta(): ContextTraceDelta {
+		return {
+			traceId: "trace-delta:test",
+			sourceIds: {
+				added: ["source-a"],
+				removed: [],
+				changed: [],
+			},
+			tokenChanges: {
+				usedTokens: { previous: 0, current: 4, delta: 4 },
+				budgetTokens: { previous: 16, current: 16, delta: 0 },
+			},
+			countChanges: {
+				candidateCount: { previous: 0, current: 1, delta: 1 },
+				selectedCount: { previous: 0, current: 1, delta: 1 },
+				rejectedCount: { previous: 0, current: 0, delta: 0 },
+				compressedCount: { previous: 0, current: 1, delta: 1 },
+				truncatedCount: { previous: 0, current: 0, delta: 0 },
+				droppedCount: { previous: 0, current: 0, delta: 0 },
+				sectionCount: { previous: 1, current: 1, delta: 0 },
+			},
+			decisionCountChanges: {
+				selected: { previous: 0, current: 1, delta: 1 },
+				rejected: { previous: 0, current: 0, delta: 0 },
+				keep: { previous: 0, current: 1, delta: 1 },
+				truncate: { previous: 0, current: 0, delta: 0 },
+				drop: { previous: 0, current: 0, delta: 0 },
+			},
+			hasChanges: true,
+			determinismKey: "delta-key",
+		};
+	}
 
 	it("在 service 模式下记录 loop debug 日志", async () => {
 		vi.mocked(getLoggerRuntimeMode).mockReturnValue("service");
@@ -123,7 +195,7 @@ describe("runAgentLoop", () => {
 			buildOutboundRequest: vi.fn(
 				({ transcript }: { readonly transcript: readonly Message[] }) => ({
 					messages: [
-						{ role: "system", content: "assembled system prompt" },
+						{ role: "system" as const, content: "assembled system prompt" },
 						...transcript,
 					],
 				}),
@@ -273,6 +345,98 @@ describe("runAgentLoop", () => {
 				],
 				truncatedCount: 0,
 			},
+		});
+	});
+
+	it("records context trace summary and delta from outbound requests without changing model messages", async () => {
+		vi.mocked(getLoggerRuntimeMode).mockReturnValue("repl");
+		const records: Array<{ phase: string; payload?: Record<string, unknown> }> =
+			[];
+		const runLogger = {
+			record: vi.fn(async (input) => {
+				records.push(input);
+			}),
+		};
+		const contextTraceSummary = makeTraceSummary();
+		const contextTraceDelta = makeTraceDelta();
+		const sessionAssembler = {
+			buildOutboundRequest: vi.fn(
+				({ transcript }: { readonly transcript: readonly Message[] }) => ({
+					messages: [
+						{ role: "system" as const, content: "assembled system prompt" },
+						...transcript,
+					],
+					prompt: {
+						segments: [],
+						recommendedBreakpoints: [],
+						staticPrefix: "assembled system prompt",
+						dynamicSuffix: "",
+						sectionTokens: {},
+						totalTokens: 5,
+					},
+					temporal: {
+						currentTime: new Date("2026-05-02T00:00:00.000Z"),
+						lastMessageTime: null,
+						sessionStartTime: new Date("2026-05-02T00:00:00.000Z"),
+						lastSessionEndTime: null,
+					},
+					contextTraceSummary,
+					contextTraceDelta,
+				}),
+			),
+		};
+		const chat = vi.fn().mockResolvedValue({
+			content: "assistant reply",
+			usage: {
+				inputTokens: 10,
+				outputTokens: 20,
+			},
+			finishReason: "stop",
+		});
+
+		await expect(
+			runAgentLoop(
+				{
+					llm: { chat },
+					sessionAssembler,
+					observability: { runLogger },
+					inferenceConfig: {
+						temperature: 0.7,
+						maxTokens: 1024,
+						thinkingMode: "disabled",
+					},
+				},
+				[{ role: "user", content: "hello" }],
+			),
+		).resolves.toBe("assistant reply");
+
+		expect(chat).toHaveBeenCalledWith(
+			[
+				{ role: "system", content: "assembled system prompt" },
+				{ role: "user", content: "hello" },
+			],
+			[],
+			expect.any(Object),
+			expect.objectContaining({ totalTokens: 5 }),
+		);
+		expect(records.map((record) => record.phase)).toContain(
+			"context.trace_summary",
+		);
+		expect(records.map((record) => record.phase)).toContain(
+			"context.trace_delta",
+		);
+		expect(
+			records.find((record) => record.phase === "context.trace_summary")
+				?.payload,
+		).toEqual({
+			turnKind: "user-turn",
+			traceSummary: contextTraceSummary,
+		});
+		expect(
+			records.find((record) => record.phase === "context.trace_delta")?.payload,
+		).toEqual({
+			turnKind: "user-turn",
+			traceDelta: contextTraceDelta,
 		});
 	});
 

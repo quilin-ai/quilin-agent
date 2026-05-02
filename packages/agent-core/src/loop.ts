@@ -173,6 +173,34 @@ export async function runAgentLoop(
 				},
 				runLogContext,
 			);
+			if (
+				"contextTraceSummary" in outboundRequest &&
+				outboundRequest.contextTraceSummary != null
+			) {
+				await recordAgentRunEvent(
+					runLogger,
+					"context.trace_summary",
+					{
+						turnKind,
+						traceSummary: outboundRequest.contextTraceSummary,
+					},
+					runLogContext,
+				);
+			}
+			if (
+				"contextTraceDelta" in outboundRequest &&
+				outboundRequest.contextTraceDelta != null
+			) {
+				await recordAgentRunEvent(
+					runLogger,
+					"context.trace_delta",
+					{
+						turnKind,
+						traceDelta: outboundRequest.contextTraceDelta,
+					},
+					runLogContext,
+				);
+			}
 			await recordAgentRunEvent(
 				runLogger,
 				"llm.request_prepared",
