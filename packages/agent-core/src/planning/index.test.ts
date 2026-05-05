@@ -29,13 +29,16 @@ import type {
 	StrategySelection,
 	SubTask,
 	SubtreeReplacementResult,
+	SupervisorHandoffPlan,
 	TerminationDecision,
 } from "./index.js";
 import {
 	applyGlobalReplan,
 	applyLocalRearrange,
 	buildPlanContext,
+	buildPlannerRoutingTracePayload,
 	buildProductionRouteDelegationHandoffPlan,
+	buildSupervisorHandoffPlan,
 	classifyIntent,
 	classifyProductionRouteScoreBatchReadiness,
 	computeAuditAgreement,
@@ -53,7 +56,9 @@ import {
 	detectTermination,
 	dispatchIntent,
 	evaluateBudget,
+	evaluateCostRoutingGate,
 	evaluateDelegation,
+	evaluateTinyClassifierGate,
 	linearPlanToDag,
 	observePlannerAudit,
 	PLAN_REVIEW_SCHEMA_VERSION,
@@ -489,6 +494,17 @@ describe("planning barrel contract", () => {
 			traceId: "trace-planning-barrel-routing",
 		};
 		const decision: PlannerRoutingDecision = decidePlannerRoute(request);
+		const tracePayload = buildPlannerRoutingTracePayload(request, decision);
+		const handoffPlan: SupervisorHandoffPlan = buildSupervisorHandoffPlan({
+			routingDecision: decision,
+			receiverCapability: "research",
+			inputSchemaRef: "planning.supervisor.input.v1",
+			inputPayloadRef: "payload://run-planning-barrel-routing",
+			writeScope: ["working:docs/04-planning"],
+			retryPolicyRef: "policy://retry/once",
+			cancellationPolicyRef: "policy://cancel/cooperative",
+			resultSchemaRef: "planning.supervisor.result.v1",
+		});
 
 		expect(decision).toEqual({
 			schemaVersion: 1,
@@ -499,6 +515,42 @@ describe("planning barrel contract", () => {
 			requiresHandoffEnvelope: true,
 			reasonCodes: ["tool_call_count_requires_supervisor"],
 			traceId: "trace-planning-barrel-routing",
+		});
+		expect(tracePayload).toMatchObject({
+			runId: "run-planning-barrel-routing",
+			route: "supervisor_required",
+			requiresHandoffEnvelope: true,
+		});
+		expect(handoffPlan).toMatchObject({
+			schemaVersion: 1,
+			handoffKind: "in_process",
+			receiverCapability: "research",
+			traceId: "trace-planning-barrel-routing",
+		});
+		expect(
+			evaluateCostRoutingGate({
+				schemaVersion: 1,
+				costStrategy: "none",
+				recommendedModelTier: "balanced",
+				mayDownshift: false,
+				traceId: "trace-planning-barrel-routing",
+			}),
+		).toMatchObject({
+			enabled: false,
+			mayAffectDefaultRoute: false,
+		});
+		expect(
+			evaluateTinyClassifierGate({
+				schemaVersion: 1,
+				enabled: false,
+				modelRef: "classifier://disabled",
+				predictedRoute: "simple_answer",
+				confidence: 0.5,
+				calibrated: false,
+			}),
+		).toMatchObject({
+			enabled: false,
+			mayInfluenceDefaultRoute: false,
 		});
 	});
 

@@ -7,6 +7,11 @@ import type {
 	NormalizedProviderError,
 	ProviderRunRecord,
 } from "../llm/types.js";
+import {
+	buildPlannerRoutingTracePayload,
+	type PlannerRoutingDecision,
+	type PlannerRoutingRequest,
+} from "../planning/planner-routing.js";
 import type { ActionVerificationResult } from "../safety/action-verifier.js";
 import {
 	isSensitiveObjectKey,
@@ -34,6 +39,7 @@ export type AgentRunLogPhase =
 	| "llm.request_prepared"
 	| "llm.response_received"
 	| "llm.provider_run"
+	| "planning.route_decision"
 	| "planning.tool_calls_selected"
 	| "tool.call_started"
 	| "tool.safety_action_verified"
@@ -302,6 +308,21 @@ export async function recordAgentRunEvent(
 	} catch {
 		// Observability must never break the agent loop.
 	}
+}
+
+export async function recordPlannerRoutingDecisionRunLog(
+	sink: AgentRunLogSink | undefined,
+	request: PlannerRoutingRequest,
+	decision: PlannerRoutingDecision,
+	options: AgentRunLogRecordOptions = {},
+): Promise<void> {
+	const payload = buildPlannerRoutingTracePayload(request, decision);
+	await recordAgentRunEvent(
+		sink,
+		"planning.route_decision",
+		payload as unknown as Record<string, unknown>,
+		{ traceId: decision.traceId, ...options },
+	);
 }
 
 export function textPreview(

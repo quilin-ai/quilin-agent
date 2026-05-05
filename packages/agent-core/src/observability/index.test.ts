@@ -8,6 +8,7 @@ import {
 	aggregateSpanMetrics,
 	buildComponentHealthEventRecord,
 	buildContextCachePlanEventRecord,
+	buildPlannerRoutingDecisionEventRecord,
 	buildToolResultAuditReportHealthBatchEventRecord,
 	CONTEXT_CACHE_PLAN_EVENT_KIND,
 	CONTEXT_CACHE_PLAN_EVENT_SOURCE,
@@ -118,6 +119,42 @@ describe("observability barrel exports", () => {
 			source: CONTEXT_CACHE_PLAN_EVENT_SOURCE,
 			payload: {
 				cachePlanId: "cache-plan:index",
+			},
+		});
+		expect(
+			buildPlannerRoutingDecisionEventRecord(
+				{
+					schemaVersion: 1,
+					runId: "run-observability-index",
+					traceId: TEST_TRACE_ID,
+					route: "simple_answer",
+					strategy: "react",
+					reasonCodes: ["no_tool_or_plan_simple_answer"],
+					budget: {
+						tokenRemaining: 1000,
+						turnRemaining: 3,
+					},
+					structuralSignals: {
+						hasToolCalls: false,
+						toolCallCount: 0,
+						hasPlanSketch: false,
+						needsClarification: false,
+					},
+					riskTier: "read_only",
+					capabilitiesRequired: [],
+					capabilityCount: 0,
+					requiresSupervisor: false,
+					requiresProviderRoute: false,
+					requiresHandoffEnvelope: false,
+				},
+				{ timestamp: TEST_TIMESTAMP },
+			),
+		).toMatchObject({
+			kind: "planner_routing_decision",
+			source: "agent-core.planning.planner-routing",
+			payload: {
+				traceId: TEST_TRACE_ID,
+				route: "simple_answer",
 			},
 		});
 	});

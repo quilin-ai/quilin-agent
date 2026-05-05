@@ -8,6 +8,7 @@ import type {
 	ContextTraceSummary,
 } from "../context/draft/source-types.js";
 import type { ContextTraceDelta } from "../context/draft/trace-delta.js";
+import type { PlannerRoutingTracePayload } from "../planning/planner-routing.js";
 import { redactJsonLikeValue } from "../safety/redaction.js";
 import type {
 	ToolInvocationAuditBatchSummary,
@@ -81,6 +82,10 @@ export const SUPERVISOR_PROGRESS_FLUSH_EVENT_KIND =
 	"supervisor_progress_flush" as const;
 export const SUPERVISOR_PROGRESS_FLUSH_EVENT_SOURCE =
 	"agent-core.multi-agent.supervisor-progress" as const;
+export const PLANNER_ROUTING_DECISION_EVENT_KIND =
+	"planner_routing_decision" as const;
+export const PLANNER_ROUTING_DECISION_EVENT_SOURCE =
+	"agent-core.planning.planner-routing" as const;
 export const TOOL_INVOCATION_AUDIT_EVENT_KIND =
 	"tool_invocation_audit" as const;
 export const TOOL_INVOCATION_AUDIT_EVENT_SOURCE =
@@ -287,6 +292,18 @@ export function buildSupervisorProgressFlushEventRecord(
 	return buildObservabilityEventRecord({
 		kind: SUPERVISOR_PROGRESS_FLUSH_EVENT_KIND,
 		source: SUPERVISOR_PROGRESS_FLUSH_EVENT_SOURCE,
+		timestamp: options.timestamp,
+		payload,
+	});
+}
+
+export function buildPlannerRoutingDecisionEventRecord(
+	payload: PlannerRoutingTracePayload,
+	options: ObservabilityEventAdapterOptions,
+): ObservabilityEventRecord<typeof PLANNER_ROUTING_DECISION_EVENT_KIND> {
+	return buildObservabilityEventRecord({
+		kind: PLANNER_ROUTING_DECISION_EVENT_KIND,
+		source: PLANNER_ROUTING_DECISION_EVENT_SOURCE,
 		timestamp: options.timestamp,
 		payload,
 	});

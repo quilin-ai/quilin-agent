@@ -105,6 +105,34 @@ export * from "./memory/index.js";
 export * from "./multi-agent/index.js";
 export * from "./observability/index.js";
 export {
+	buildPlannerRoutingTracePayload,
+	decidePlannerRoute,
+	explainPlannerRoutingDecision,
+	type PlannerRoute,
+	type PlannerRoutingDecision,
+	type PlannerRoutingPolicy,
+	type PlannerRoutingReasonCode,
+	type PlannerRoutingRequest,
+	type PlannerRoutingRiskTier,
+	type PlannerRoutingStrategy,
+	type PlannerRoutingTracePayload,
+	validatePlannerRoutingDecision,
+} from "./planning/planner-routing.js";
+export {
+	type CostRoutingGateDecision,
+	type CostRoutingGateReason,
+	type CostRoutingSignal,
+	type CostRoutingStrategy,
+	evaluateCostRoutingGate,
+	evaluateTinyClassifierGate,
+	type RecommendedModelTier,
+	type TinyClassifierGateDecision,
+	type TinyClassifierGateReason,
+	type TinyClassifierSignal,
+	validateCostRoutingSignal,
+	validateTinyClassifierSignal,
+} from "./planning/planner-routing-signals.js";
+export {
 	buildProductionRouteDelegationHandoffPlan,
 	buildProductionRouteSupervisorHandoffPlan,
 	classifyProductionRouteScoreBatchReadiness,
@@ -138,6 +166,21 @@ export {
 	type PlanningState,
 	type PlanPhase,
 } from "./planning/state.js";
+export {
+	buildSupervisorHandoffPlan,
+	CROSS_PROCESS_ROUTE_DECISION_SCHEMA_VERSION,
+	type CrossProcessDeniedReason,
+	type CrossProcessRouteDecision,
+	type CrossProcessRouteMode,
+	type CrossProcessRouteRequest,
+	decideCrossProcessRoute,
+	parseSupervisorHandoffPlan,
+	SUPERVISOR_HANDOFF_PLAN_SCHEMA_VERSION,
+	type SupervisorHandoffHistoryFilter,
+	type SupervisorHandoffKind,
+	type SupervisorHandoffPlan,
+	validateSupervisorHandoffPlan,
+} from "./planning/supervisor-handoff-plan.js";
 export type {
 	ClarificationRequest,
 	DagPlan,

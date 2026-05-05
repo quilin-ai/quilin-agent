@@ -18,6 +18,7 @@ import {
 	buildContextTraceDeltaEventRecord,
 	buildContextTraceSummaryEventRecord,
 	buildObservabilityEventRecord,
+	buildPlannerRoutingDecisionEventRecord,
 	buildRuntimeReloadAuditEventRecord,
 	buildSupervisorProgressFlushEventRecord,
 	buildToolInvocationAuditBatchEventRecord,
@@ -37,6 +38,8 @@ import {
 	CONTEXT_TRACE_SUMMARY_EVENT_SOURCE,
 	type ComponentHealthEventPayload,
 	type ObservabilityEventPayload,
+	PLANNER_ROUTING_DECISION_EVENT_KIND,
+	PLANNER_ROUTING_DECISION_EVENT_SOURCE,
 	RUNTIME_RELOAD_AUDIT_EVENT_KIND,
 	RUNTIME_RELOAD_AUDIT_EVENT_SOURCE,
 	SUPERVISOR_PROGRESS_FLUSH_EVENT_KIND,
@@ -217,6 +220,31 @@ const TOOL_RESULT_AUDIT_REPORT_HEALTH_BATCH_SUMMARY = {
 	blockedTotal: 4,
 	missingTotal: 5,
 } as const satisfies ToolResultAuditReportHealthBatchSummary;
+
+const PLANNER_ROUTING_TRACE_PAYLOAD = {
+	schemaVersion: 1,
+	runId: "run-routing-event",
+	traceId: "trace-routing-event",
+	route: "supervisor_required",
+	strategy: "plan_and_execute",
+	reasonCodes: ["tool_call_count_requires_supervisor"],
+	budget: {
+		tokenRemaining: 2048,
+		turnRemaining: 4,
+	},
+	structuralSignals: {
+		hasToolCalls: true,
+		toolCallCount: 3,
+		hasPlanSketch: false,
+		needsClarification: false,
+	},
+	riskTier: "ask_on_write",
+	capabilitiesRequired: ["coding"],
+	capabilityCount: 1,
+	requiresSupervisor: true,
+	requiresProviderRoute: false,
+	requiresHandoffEnvelope: true,
+} as const satisfies ObservabilityEventPayload;
 
 const COMPONENT_HEALTH_PAYLOAD = {
 	component: "skills.manifest",
@@ -517,6 +545,23 @@ describe("observability event records", () => {
 			timestamp: TEST_TIMESTAMP,
 			source: SUPERVISOR_PROGRESS_FLUSH_EVENT_SOURCE,
 			payload: SUPERVISOR_PROGRESS_FLUSH_PAYLOAD,
+		});
+		expect(serializeRoundTrip(record)).toEqual(record);
+	});
+
+	it("wraps planner routing trace payloads with stable record fields", () => {
+		const record = buildPlannerRoutingDecisionEventRecord(
+			PLANNER_ROUTING_TRACE_PAYLOAD,
+			{
+				timestamp: new Date(TEST_TIMESTAMP),
+			},
+		);
+
+		expect(record).toEqual({
+			kind: PLANNER_ROUTING_DECISION_EVENT_KIND,
+			timestamp: TEST_TIMESTAMP,
+			source: PLANNER_ROUTING_DECISION_EVENT_SOURCE,
+			payload: PLANNER_ROUTING_TRACE_PAYLOAD,
 		});
 		expect(serializeRoundTrip(record)).toEqual(record);
 	});
