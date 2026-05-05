@@ -18,6 +18,7 @@ export {
 	createSkillViewTool,
 	createWebFetchTool,
 } from "./builtin/index.js";
+export * from "./docker-sandbox-router.js";
 export * from "./mcp-client.js";
 export * from "./registry.js";
 export * from "./router.js";

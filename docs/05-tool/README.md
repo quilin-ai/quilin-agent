@@ -1,8 +1,13 @@
 # 工具工程（Tool Engineering）
 
-> **实现状态（2026-04-30 校准）**
-> - ✅ **已实现**：`packages/agent-core/src/tools/` — ToolRegistry / Router、MCP client stdio spawn allowlist、schema converter、tool sanitizer/metadata、builtin `shell_exec` / file tools / `web_fetch` / `skill_view` / `skill_manage`，以及 WriteAuthority / SSRF guard 等安全接线。
-> - 🚧 **部分实现 / 延期**：DockerSandbox MVP 已在 `benchmarks/src/sandbox/` 为 benchmark harness 落地，但 09-deployment 的通用 sandbox family 尚未冻结；MCP over TCP / mesh transport 延期到 Iter F。
+> **实现状态 / Implementation Status（2026-05-05 校准 / 2026-05-05 calibration）**
+> - ✅ **Implemented**: `packages/agent-core/src/tools/` includes ToolRegistry / Router, MCP client stdio spawn allowlist, schema converter, tool sanitizer/metadata, builtin `shell_exec` / file tools / `web_fetch` / `skill_view` / `skill_manage`, plus WriteAuthority and SSRF guard wiring.
+> - ✅ **已实现**：`packages/agent-core/src/tools/` 已包含 ToolRegistry / Router、MCP client stdio spawn allowlist、schema converter、tool sanitizer/metadata、builtin `shell_exec` / file tools / `web_fetch` / `skill_view` / `skill_manage`，以及 WriteAuthority / SSRF guard 等安全接线。
+> - ✅ **Implemented**: The `SandboxRouter` contract and agent-core `DockerSandboxRouter` adapter are now landed; the adapter uses an injectable Docker CLI runner and covers Docker create/execute/install/destroy paths, mount / network / resource / output policy mapping, the LocalSandbox dev-only boundary, and structured failure output. Evidence: `src/tools/docker-sandbox-router.test.ts` + `src/tools/sandbox-router.test.ts` + barrel/root export tests pass.
+> - ✅ **已实现**：`SandboxRouter` 合同与 agent-core `DockerSandboxRouter` adapter 已落地；adapter 使用可注入 Docker CLI runner，覆盖 Docker create/execute/install/destroy 路径、mount / network / resource / output policy 映射、LocalSandbox dev-only 防线，以及 structured failure output。实证：`src/tools/docker-sandbox-router.test.ts` + `src/tools/sandbox-router.test.ts` + barrel/root export tests 通过。
+> - 🚧 **Partial / deferred**: Durable Docker snapshot/resume currently fail closed in the adapter; allowlist/debug-bridge networking still lacks a production-grade implementation; CloudSandbox family, BrowserProvider, Computer Use, and MCP over TCP / mesh transport remain deferred to later Linear work.
+> - 🚧 **部分实现 / 延期**：Docker durable snapshot/resume 目前在 adapter 中 fail-closed；allowlist/debug-bridge network 仍未提供生产级实现；CloudSandbox family、BrowserProvider、Computer Use、MCP over TCP / mesh transport 延期到后续 Linear 项。
+> - Linear follow-up: [QUI-18](https://linear.app/quilin-agent/issue/QUI-18/05-tools-generic-sandbox-browser-openapi-and-computer-use).
 > - Linear 后续项：[QUI-18](https://linear.app/quilin-agent/issue/QUI-18/05-tools-generic-sandbox-browser-openapi-and-computer-use)。
 
 > **ADR-001 对齐说明**：工具系统用 TS 实现（MCP Client Manager），Python ML 工具封装为独立 MCP Server。本文档中的 Python 代码示例仅表达设计意图，实施时将以 TS 重写。`quilin/` 路径为规划参考。详见 [Core Loop](../00-core-loop/README.md)。

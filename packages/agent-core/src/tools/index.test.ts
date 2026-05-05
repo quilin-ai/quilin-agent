@@ -3,6 +3,7 @@ import { WriteAuthority } from "../safety/write-authority.js";
 import { SkillsManager } from "../skills/manager.js";
 import type {
 	BuiltinToolOptions,
+	DockerSandboxCliRunner,
 	FileListToolOptions,
 	FileReadToolOptions,
 	FileWriteToolOptions,
@@ -30,6 +31,7 @@ import type {
 import {
 	classifyToolException,
 	createBuiltinTools,
+	createDockerSandboxRouter,
 	createFileReadTool,
 	createSandboxApprovalSummary,
 	createSandboxAuditRef,
@@ -37,6 +39,7 @@ import {
 	createSandboxRouteDecision,
 	createToolError,
 	createToolErrorResult,
+	DockerSandboxRuntimeError,
 	defaultSandboxEvaluator,
 	evaluateSandboxRequest,
 	genericSandboxPolicy,
@@ -219,6 +222,18 @@ describe("tools barrel", () => {
 				auditRef: sandboxAuditRef,
 			},
 		);
+		const dockerRunner: DockerSandboxCliRunner = async () => ({
+			stdout: "",
+			stderr: "",
+			exitCode: 0,
+		});
+		const dockerSandboxRouter = createDockerSandboxRouter({
+			runner: dockerRunner,
+			now: () => new Date("2026-05-05T08:45:00.000Z"),
+			createSessionId: () => "barrel-session",
+		});
+		const dockerSession =
+			await dockerSandboxRouter.createSession(sandboxCreateRequest);
 		const readTool = createFileReadTool({ allowedRoots: [process.cwd()] });
 
 		expect(() => validateMCPServerConfig(config)).not.toThrow();
@@ -275,6 +290,16 @@ describe("tools barrel", () => {
 				provider: "docker",
 			},
 		});
+		expect(dockerSession).toMatchObject({
+			id: "barrel-session",
+			provider: "docker",
+			state: {
+				id: "barrel-session",
+				provider: "docker",
+				traceId: "run-barrel",
+			},
+		});
+		expect(DockerSandboxRuntimeError).toBeTypeOf("function");
 		expect(builtinTools.map((tool) => tool.name)).toEqual(
 			expect.arrayContaining([
 				"file_read",

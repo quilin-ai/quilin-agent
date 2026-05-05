@@ -1141,6 +1141,7 @@ describe("package entrypoint tools public boundary exports", () => {
 		const {
 			createSandboxAuditRef,
 			createSandboxApprovalSummary,
+			createDockerSandboxRouter,
 			createSandboxPolicyDigest,
 			createSandboxRouteDecision,
 			defaultSandboxEvaluator,
@@ -1227,6 +1228,13 @@ describe("package entrypoint tools public boundary exports", () => {
 				auditRef,
 			},
 		);
+		const dockerSandboxRouter = createDockerSandboxRouter({
+			runner: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+			now: () => new Date("2026-05-05T08:45:00.000Z"),
+			createSessionId: () => "root-session",
+		});
+		const dockerSession =
+			await dockerSandboxRouter.createSession(sandboxCreateRequest);
 
 		expect(decision).toEqual(directDecision);
 		expect(approvalSummary).toEqual(
@@ -1260,6 +1268,14 @@ describe("package entrypoint tools public boundary exports", () => {
 				decision: expect.objectContaining({ provider: "docker" }),
 			}),
 		);
+		expect(dockerSession).toMatchObject({
+			id: "root-session",
+			provider: "docker",
+			state: {
+				id: "root-session",
+				traceId: "run-root",
+			},
+		});
 	});
 
 	it("exposes tool-error helpers and selected base error types", async () => {

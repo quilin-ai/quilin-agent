@@ -1,8 +1,13 @@
 # 部署运行时工程（Deployment & Runtime Engineering）
 
-> **实现状态（2026-04-30 校准）**
+> **实现状态 / Implementation Status（2026-05-05 校准 / 2026-05-05 calibration）**
+> - ✅ **Implemented**: `justfile` cross-language orchestration, REPL entrypoint, config schema/loader/user config cascade, `quilin config show/set` CLI, three-language CI matrix, Rust stub CI, fixed Vitest runner, and DockerSandbox benchmark MVP + Linux smoke gate.
 > - ✅ **已实现**：`justfile` 跨语言编排、REPL 入口、config schema/loader/user config cascade、`quilin config show/set` CLI、CI 三语言矩阵、Rust stub CI、Vitest runner 固化、DockerSandbox benchmark MVP + Linux smoke gate。
-> - 🚧 **部分实现 / 延期**：DockerSandbox 只作为 benchmark harness MVP，不是完整 LocalSandbox / CloudSandbox family；config 热更新与 daemon runtime 尚未冻结。
+> - ✅ **Implemented**: `packages/agent-core/src/tools/docker-sandbox-router.ts` now provides a production-facing DockerSandboxRouter adapter; it reuses the `SandboxRouter` contract, uses an injectable Docker CLI runner, defaults to a Docker isolation boundary, maps mount / resource / output policies, and reports command failure, network denial, output truncation, and deferred snapshot/resume through structured failures.
+> - ✅ **已实现**：`packages/agent-core/src/tools/docker-sandbox-router.ts` 已提供 production-facing DockerSandboxRouter adapter；它复用 `SandboxRouter` 合同，使用可注入 Docker CLI runner，默认 Docker isolation boundary，映射 mount / resource / output policy，并用 structured failure 表达 command failure、network denial、output truncation、snapshot/resume deferred。
+> - 🚧 **Partial / deferred**: Durable DockerSandbox snapshot/resume, LocalSandbox / CloudSandbox family, daemon sandbox lifecycle, config hot reload, and suspend/resume are not frozen yet; LocalSandbox remains a dev-only unsafe opt-in, not a production fallback.
+> - 🚧 **部分实现 / 延期**：DockerSandbox durable snapshot/resume、LocalSandbox / CloudSandbox family、daemon sandbox lifecycle、config 热更新与 suspend/resume 尚未冻结；LocalSandbox 仍只能作为 dev-only unsafe opt-in，不是生产 fallback。
+> - Linear follow-up: [QUI-21](https://linear.app/quilin-agent/issue/QUI-21/09-runtime-packaging-hot-update-devcontainercd-and-sandbox-lifecycle).
 > - Linear 后续项：[QUI-21](https://linear.app/quilin-agent/issue/QUI-21/09-runtime-packaging-hot-update-devcontainercd-and-sandbox-lifecycle)。
 
 > 本文档是 Quilin Agent 工程规格系列的第 9 篇，定义部署运行时层的设计方案、参考来源与验证标准。

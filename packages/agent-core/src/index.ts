@@ -264,6 +264,7 @@ export type {
 export type { SkillManageToolOptions } from "./tools/builtin/skill-manage.js";
 export type { SkillViewToolOptions } from "./tools/builtin/skill-view.js";
 export type { WebFetchToolOptions } from "./tools/builtin/web-fetch.js";
+export * from "./tools/docker-sandbox-router.js";
 export * from "./tools/mcp-client.js";
 export { MCPRegistry, type MCPServerEntry } from "./tools/registry.js";
 export * from "./tools/router.js";
