@@ -15,6 +15,8 @@ import type {
 	LLMPlannerResponse,
 	LocalPlanPatch,
 	PlannerAuditObservation,
+	PlannerRoutingDecision,
+	PlannerRoutingRequest,
 	PlanningEvent,
 	PlanningStrategy,
 	PlanReviewRecord,
@@ -44,6 +46,7 @@ import {
 	createPlanReviewMemoryItem,
 	DEFAULT_AUDIT_CONFIDENCE_THRESHOLD,
 	DEFAULT_GOAL_DRIFT_THRESHOLD,
+	decidePlannerRoute,
 	decomposePlan,
 	deriveStructuralIntent,
 	detectGoalDrift,
@@ -463,6 +466,39 @@ describe("planning barrel contract", () => {
 				handoff_required: 1,
 			},
 			highestRequiredReadiness: "handoff_required",
+		});
+	});
+
+	it("exports planner routing contract helpers", () => {
+		const request: PlannerRoutingRequest = {
+			schemaVersion: 1,
+			runId: "run-planning-barrel-routing",
+			userGoal: "Route a planning request",
+			structuralSignals: {
+				hasToolCalls: true,
+				toolCallCount: 3,
+				hasPlanSketch: false,
+				needsClarification: false,
+			},
+			budget: {
+				tokenRemaining: 2048,
+				turnRemaining: 6,
+			},
+			capabilitiesRequired: ["research"],
+			riskTier: "ask_on_write",
+			traceId: "trace-planning-barrel-routing",
+		};
+		const decision: PlannerRoutingDecision = decidePlannerRoute(request);
+
+		expect(decision).toEqual({
+			schemaVersion: 1,
+			route: "supervisor_required",
+			strategy: "plan_and_execute",
+			requiresSupervisor: true,
+			requiresProviderRoute: false,
+			requiresHandoffEnvelope: true,
+			reasonCodes: ["tool_call_count_requires_supervisor"],
+			traceId: "trace-planning-barrel-routing",
 		});
 	});
 
