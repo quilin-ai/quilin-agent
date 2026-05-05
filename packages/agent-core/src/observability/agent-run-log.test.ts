@@ -6,6 +6,7 @@ import {
 	createToolProvenanceEntry,
 	JsonlAgentRunLogger,
 	recordAgentRunEvent,
+	recordPlannerRoutingDecisionRunLog,
 	summarizeProviderRunRecord,
 	summarizeToolCall,
 	summarizeToolResult,
@@ -81,6 +82,76 @@ describe("JsonlAgentRunLogger", () => {
 		expect(lines).toHaveLength(5);
 		expect(lines.map((line) => line.seq)).toEqual([1, 2, 3, 4, 5]);
 		expect(JSON.stringify(lines)).toContain("[truncated:1019]");
+	});
+
+	it("writes planner routing decisions before execution through the run log sink", async () => {
+		const logsDir = await mkdtemp(join(tmpdir(), "quilin-agent-run-log-"));
+		const logger = new JsonlAgentRunLogger({
+			sessionId: "routing",
+			logsDir,
+			runId: "run-routing-log",
+			now: () => new Date("2026-05-02T13:00:00.000Z"),
+		});
+		const request = {
+			schemaVersion: 1,
+			runId: "run-routing-log",
+			userGoal: "Route before execution",
+			structuralSignals: {
+				hasToolCalls: true,
+				toolCallCount: 3,
+				hasPlanSketch: false,
+				needsClarification: false,
+			},
+			budget: {
+				tokenRemaining: 2048,
+				turnRemaining: 4,
+			},
+			capabilitiesRequired: ["coding"],
+			riskTier: "ask_on_write",
+			traceId: "trace-routing-log",
+		} as const;
+		const decision = {
+			schemaVersion: 1,
+			route: "supervisor_required",
+			strategy: "plan_and_execute",
+			requiresSupervisor: true,
+			requiresProviderRoute: false,
+			requiresHandoffEnvelope: true,
+			reasonCodes: ["tool_call_count_requires_supervisor"],
+			traceId: "trace-routing-log",
+		} as const;
+
+		await recordPlannerRoutingDecisionRunLog(logger, request, decision, {
+			turnId: "turn-routing-log",
+		});
+
+		const [line] = (await readFile(join(logsDir, "routing.jsonl"), "utf8"))
+			.trim()
+			.split("\n")
+			.map((entry) => JSON.parse(entry) as Record<string, unknown>);
+
+		expect(line).toMatchObject({
+			schema_version: 1,
+			session_id: "routing",
+			run_id: "run-routing-log",
+			trace_id: "trace-routing-log",
+			turn_id: "turn-routing-log",
+			phase: "planning.route_decision",
+			payload: {
+				runId: "run-routing-log",
+				traceId: "trace-routing-log",
+				route: "supervisor_required",
+				strategy: "plan_and_execute",
+				reasonCodes: ["tool_call_count_requires_supervisor"],
+				budget: {
+					tokenRemaining: 2048,
+					turnRemaining: 4,
+				},
+				requiresSupervisor: true,
+				requiresProviderRoute: false,
+				requiresHandoffEnvelope: true,
+			},
+		});
 	});
 
 	it("extracts URL provenance from web_fetch tool results", () => {

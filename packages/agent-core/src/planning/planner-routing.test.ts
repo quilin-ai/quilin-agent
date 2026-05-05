@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+	buildPlannerRoutingTracePayload,
 	decidePlannerRoute,
+	explainPlannerRoutingDecision,
 	type PlannerRoutingDecision,
 	type PlannerRoutingRequest,
+	validatePlannerRoutingDecision,
 } from "./index.js";
 
 function makeRequest(
@@ -48,6 +51,30 @@ describe("decidePlannerRoute", () => {
 		expect(decidePlannerRoute(JSON.parse(JSON.stringify(request)))).toEqual(
 			decision,
 		);
+		expect(buildPlannerRoutingTracePayload(request, decision)).toEqual({
+			schemaVersion: 1,
+			runId: "run-planner-routing",
+			traceId: "trace-planner-routing",
+			route: "simple_answer",
+			strategy: "react",
+			reasonCodes: ["no_tool_or_plan_simple_answer"],
+			budget: {
+				tokenRemaining: 4096,
+				turnRemaining: 8,
+			},
+			structuralSignals: {
+				hasToolCalls: false,
+				toolCallCount: 0,
+				hasPlanSketch: false,
+				needsClarification: false,
+			},
+			riskTier: "read_only",
+			capabilitiesRequired: [],
+			capabilityCount: 0,
+			requiresSupervisor: false,
+			requiresProviderRoute: false,
+			requiresHandoffEnvelope: false,
+		});
 	});
 
 	it("distinguishes single-tool and multi-step linear routes", () => {
@@ -243,6 +270,75 @@ describe("decidePlannerRoute", () => {
 		).toBe("supervisor_required");
 	});
 
+	it("builds trace payloads for every route without changing route decisions", () => {
+		const cases: PlannerRoutingRequest[] = [
+			makeRequest(),
+			makeRequest({
+				structuralSignals: {
+					hasToolCalls: true,
+					toolCallCount: 1,
+					hasPlanSketch: false,
+					needsClarification: false,
+				},
+			}),
+			makeRequest({
+				structuralSignals: {
+					hasToolCalls: true,
+					toolCallCount: 2,
+					hasPlanSketch: false,
+					needsClarification: false,
+				},
+			}),
+			makeRequest({
+				structuralSignals: {
+					hasToolCalls: false,
+					toolCallCount: 0,
+					hasPlanSketch: true,
+					needsClarification: false,
+				},
+				capabilitiesRequired: ["research", "write"],
+			}),
+			makeRequest({
+				structuralSignals: {
+					hasToolCalls: false,
+					toolCallCount: 0,
+					hasPlanSketch: false,
+					needsClarification: true,
+				},
+			}),
+			makeRequest({ riskTier: "critical" }),
+			makeRequest({ budget: { tokenRemaining: 0, turnRemaining: 8 } }),
+		];
+		const routes = cases.map((request) => {
+			const decision = decidePlannerRoute(request);
+			const payload = buildPlannerRoutingTracePayload(request, decision);
+			expect(payload).toMatchObject({
+				runId: request.runId,
+				traceId: request.traceId,
+				route: decision.route,
+				strategy: decision.strategy,
+				reasonCodes: decision.reasonCodes,
+				requiresSupervisor: decision.requiresSupervisor,
+				requiresHandoffEnvelope: decision.requiresHandoffEnvelope,
+				budget: request.budget,
+			});
+			expect(explainPlannerRoutingDecision(decision)).toMatch(
+				/Routing (is|asks|requires|uses|stays)/,
+			);
+			return decision.route;
+		});
+
+		expect(routes).toEqual([
+			"simple_answer",
+			"single_tool",
+			"multi_step_linear",
+			"multi_step_parallel",
+			"clarification",
+			"supervisor_required",
+			"deferred_due_to_budget",
+		]);
+	});
+
 	it("rejects invalid routing requests and policies", () => {
 		expect(() => decidePlannerRoute(null as never)).toThrow(
 			"request must be an object",
@@ -318,5 +414,18 @@ describe("decidePlannerRoute", () => {
 		expect(() =>
 			decidePlannerRoute(makeRequest(), { supervisorToolCallThreshold: 0 }),
 		).toThrow("supervisorToolCallThreshold must be a positive integer");
+		expect(() =>
+			validatePlannerRoutingDecision({
+				...decidePlannerRoute(makeRequest()),
+				requiresSupervisor: true,
+			}),
+		).toThrow(
+			"decision.requiresSupervisor must match supervisor_required route",
+		);
+		expect(() =>
+			buildPlannerRoutingTracePayload(makeRequest({ traceId: "trace-a" }), {
+				...decidePlannerRoute(makeRequest({ traceId: "trace-b" })),
+			}),
+		).toThrow("request.traceId must match decision.traceId");
 	});
 });

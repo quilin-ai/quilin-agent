@@ -59,6 +59,27 @@ export interface PlannerRoutingDecision {
 	readonly traceId: string;
 }
 
+export interface PlannerRoutingTracePayload {
+	readonly schemaVersion: 1;
+	readonly runId: string;
+	readonly traceId: string;
+	readonly route: PlannerRoute;
+	readonly strategy: PlannerRoutingStrategy;
+	readonly reasonCodes: readonly PlannerRoutingReasonCode[];
+	readonly budget: {
+		readonly tokenRemaining: number;
+		readonly turnRemaining: number;
+		readonly spendCapUsd?: number;
+	};
+	readonly structuralSignals: PlannerRoutingRequest["structuralSignals"];
+	readonly riskTier: PlannerRoutingRiskTier;
+	readonly capabilitiesRequired: readonly string[];
+	readonly capabilityCount: number;
+	readonly requiresSupervisor: boolean;
+	readonly requiresProviderRoute: boolean;
+	readonly requiresHandoffEnvelope: boolean;
+}
+
 export interface PlannerRoutingPolicy {
 	readonly supervisorToolCallThreshold?: number;
 	readonly supervisorCapabilityThreshold?: number;
@@ -77,6 +98,36 @@ const PLANNER_ROUTING_RISK_TIERS = new Set<PlannerRoutingRiskTier>([
 	"ask_on_write",
 	"auto_opt_in",
 	"critical",
+]);
+
+const PLANNER_ROUTES = new Set<PlannerRoute>([
+	"simple_answer",
+	"single_tool",
+	"multi_step_linear",
+	"multi_step_parallel",
+	"clarification",
+	"supervisor_required",
+	"deferred_due_to_budget",
+]);
+
+const PLANNER_ROUTING_STRATEGIES = new Set<PlannerRoutingStrategy>([
+	"cot",
+	"react",
+	"plan_and_execute",
+]);
+
+const PLANNER_ROUTING_REASON_CODES = new Set<PlannerRoutingReasonCode>([
+	"needs_clarification",
+	"budget_token_exhausted",
+	"budget_turn_exhausted",
+	"risk_critical_supervisor",
+	"tool_call_count_requires_supervisor",
+	"capability_count_requires_supervisor",
+	"plan_sketch_present",
+	"multiple_capabilities_parallel",
+	"multiple_tool_calls_linear",
+	"single_tool_call",
+	"no_tool_or_plan_simple_answer",
 ]);
 
 function assertNever(value: never): never {
@@ -114,6 +165,30 @@ function assertNonNegativeNumber(value: number, name: string): void {
 function assertNonNegativeInteger(value: number, name: string): void {
 	if (!Number.isInteger(value) || value < 0) {
 		throw new RangeError(`${name} must be a non-negative integer`);
+	}
+}
+
+function assertPlannerRoute(value: PlannerRoute, name: string): void {
+	if (!PLANNER_ROUTES.has(value)) {
+		throw new RangeError(`${name} must be a known planner route`);
+	}
+}
+
+function assertPlannerRoutingStrategy(
+	value: PlannerRoutingStrategy,
+	name: string,
+): void {
+	if (!PLANNER_ROUTING_STRATEGIES.has(value)) {
+		throw new RangeError(`${name} must be a known planner routing strategy`);
+	}
+}
+
+function assertPlannerRoutingReasonCode(
+	value: PlannerRoutingReasonCode,
+	name: string,
+): void {
+	if (!PLANNER_ROUTING_REASON_CODES.has(value)) {
+		throw new RangeError(`${name} must be a known planner routing reason code`);
 	}
 }
 
@@ -215,6 +290,51 @@ function validatePlannerRoutingRequest(request: PlannerRoutingRequest): void {
 	}
 	if (!PLANNER_ROUTING_RISK_TIERS.has(request.riskTier)) {
 		throw new RangeError("riskTier must be a known planner routing risk tier");
+	}
+}
+
+export function validatePlannerRoutingDecision(
+	decision: PlannerRoutingDecision,
+): void {
+	assertRecord(decision, "decision");
+	if (decision.schemaVersion !== 1) {
+		throw new RangeError("decision.schemaVersion must be 1");
+	}
+	assertPlannerRoute(decision.route, "decision.route");
+	assertPlannerRoutingStrategy(decision.strategy, "decision.strategy");
+	assertBoolean(decision.requiresSupervisor, "decision.requiresSupervisor");
+	assertBoolean(
+		decision.requiresProviderRoute,
+		"decision.requiresProviderRoute",
+	);
+	assertBoolean(
+		decision.requiresHandoffEnvelope,
+		"decision.requiresHandoffEnvelope",
+	);
+	if (!Array.isArray(decision.reasonCodes)) {
+		throw new TypeError("decision.reasonCodes must be an array");
+	}
+	if (decision.reasonCodes.length === 0) {
+		throw new RangeError("decision.reasonCodes must not be empty");
+	}
+	for (const [index, reasonCode] of decision.reasonCodes.entries()) {
+		assertPlannerRoutingReasonCode(
+			reasonCode,
+			`decision.reasonCodes[${index}]`,
+		);
+	}
+	assertNonEmptyString(decision.traceId, "decision.traceId");
+
+	const routeRequiresSupervisor = decision.route === "supervisor_required";
+	if (decision.requiresSupervisor !== routeRequiresSupervisor) {
+		throw new RangeError(
+			"decision.requiresSupervisor must match supervisor_required route",
+		);
+	}
+	if (decision.requiresHandoffEnvelope !== decision.requiresSupervisor) {
+		throw new RangeError(
+			"decision.requiresHandoffEnvelope must match requiresSupervisor",
+		);
 	}
 }
 
@@ -336,4 +456,62 @@ export function decidePlannerRoute(
 		reasonCodes,
 		traceId: request.traceId,
 	};
+}
+
+export function buildPlannerRoutingTracePayload(
+	request: PlannerRoutingRequest,
+	decision: PlannerRoutingDecision,
+): PlannerRoutingTracePayload {
+	validatePlannerRoutingRequest(request);
+	validatePlannerRoutingDecision(decision);
+	if (request.traceId !== decision.traceId) {
+		throw new RangeError("request.traceId must match decision.traceId");
+	}
+
+	return {
+		schemaVersion: 1,
+		runId: request.runId,
+		traceId: decision.traceId,
+		route: decision.route,
+		strategy: decision.strategy,
+		reasonCodes: [...decision.reasonCodes],
+		budget: {
+			tokenRemaining: request.budget.tokenRemaining,
+			turnRemaining: request.budget.turnRemaining,
+			...(request.budget.spendCapUsd == null
+				? {}
+				: { spendCapUsd: request.budget.spendCapUsd }),
+		},
+		structuralSignals: { ...request.structuralSignals },
+		riskTier: request.riskTier,
+		capabilitiesRequired: [...request.capabilitiesRequired],
+		capabilityCount: request.capabilitiesRequired.length,
+		requiresSupervisor: decision.requiresSupervisor,
+		requiresProviderRoute: decision.requiresProviderRoute,
+		requiresHandoffEnvelope: decision.requiresHandoffEnvelope,
+	};
+}
+
+export function explainPlannerRoutingDecision(
+	decision: PlannerRoutingDecision,
+): string {
+	validatePlannerRoutingDecision(decision);
+	switch (decision.route) {
+		case "deferred_due_to_budget":
+			return "Routing is deferred because the remaining token or turn budget is exhausted.";
+		case "clarification":
+			return "Routing asks for clarification because the request is not specific enough to execute safely.";
+		case "supervisor_required":
+			return "Routing requires a supervisor because the request is broad, risky, or has enough tool work to need managed handoff.";
+		case "multi_step_parallel":
+			return "Routing uses parallel planning because the request has a plan sketch spanning multiple capabilities.";
+		case "multi_step_linear":
+			return "Routing uses linear planning because the request needs multiple ordered planning steps.";
+		case "single_tool":
+			return "Routing uses one tool-backed step because the request has exactly one tool action.";
+		case "simple_answer":
+			return "Routing stays with a direct answer because no tool, handoff, budget, or clarification gate was triggered.";
+		default:
+			return assertNever(decision.route);
+	}
 }

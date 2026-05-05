@@ -1311,6 +1311,93 @@ describe("package entrypoint tools public boundary exports", () => {
 });
 
 describe("package entrypoint production route exports", () => {
+	it("exposes planner routing, handoff, and disabled signal gates for package consumers", async () => {
+		const {
+			buildPlannerRoutingTracePayload,
+			buildSupervisorHandoffPlan,
+			decideCrossProcessRoute,
+			decidePlannerRoute,
+			evaluateCostRoutingGate,
+			evaluateTinyClassifierGate,
+			parseSupervisorHandoffPlan,
+		} = await import("./index.js");
+		const request = {
+			schemaVersion: 1,
+			runId: "run-root-planner-routing",
+			userGoal: "Route through the package root",
+			structuralSignals: {
+				hasToolCalls: true,
+				toolCallCount: 3,
+				hasPlanSketch: false,
+				needsClarification: false,
+			},
+			budget: {
+				tokenRemaining: 2048,
+				turnRemaining: 6,
+			},
+			capabilitiesRequired: ["coding"],
+			riskTier: "ask_on_write",
+			traceId: "trace-root-planner-routing",
+		} as const;
+
+		const decision = decidePlannerRoute(request);
+		const payload = buildPlannerRoutingTracePayload(request, decision);
+		const handoffPlan = buildSupervisorHandoffPlan({
+			routingDecision: decision,
+			receiverCapability: "coding",
+			inputSchemaRef: "planning.supervisor.input.v1",
+			inputPayloadRef: "payload://run-root-planner-routing",
+			writeScope: ["working:packages/agent-core/src/planning"],
+			retryPolicyRef: "policy://retry/once",
+			cancellationPolicyRef: "policy://cancel/cooperative",
+			resultSchemaRef: "planning.supervisor.result.v1",
+		});
+
+		expect(payload).toMatchObject({
+			runId: "run-root-planner-routing",
+			route: "supervisor_required",
+			requiresSupervisor: true,
+		});
+		expect(parseSupervisorHandoffPlan(handoffPlan)).toEqual(handoffPlan);
+		expect(
+			decideCrossProcessRoute({
+				mode: "remote_mesh",
+				timeoutMs: 10_000,
+				traceId: "trace-root-planner-routing",
+			}),
+		).toMatchObject({
+			allowed: false,
+			deniedReason: "mesh_deferred",
+		});
+		expect(
+			evaluateCostRoutingGate({
+				schemaVersion: 1,
+				costStrategy: "threshold_router",
+				recommendedModelTier: "cheap",
+				mayDownshift: true,
+				traceId: "trace-root-planner-routing",
+			}),
+		).toMatchObject({
+			enabled: false,
+			mayAffectDefaultRoute: false,
+			reason: "provider_evidence_required",
+		});
+		expect(
+			evaluateTinyClassifierGate({
+				schemaVersion: 1,
+				enabled: true,
+				modelRef: "classifier://tiny/root",
+				predictedRoute: "single_tool",
+				confidence: 0.7,
+				calibrated: false,
+			}),
+		).toMatchObject({
+			enabled: false,
+			mayInfluenceDefaultRoute: false,
+			reason: "classifier_calibration_required",
+		});
+	});
+
 	it("exposes scoring helpers and types for package consumers", async () => {
 		const {
 			explainProductionRoute,
