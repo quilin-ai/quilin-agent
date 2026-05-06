@@ -45,6 +45,7 @@ export type ContextSelectionRejectReason =
 export interface ContextSource {
 	readonly sourceId?: string;
 	readonly sourceType: ContextSourceType;
+	readonly contentHash?: string;
 	readonly content: string;
 	readonly tokenCount: number;
 	readonly relevanceScore: number;
@@ -215,6 +216,41 @@ export interface ContextTraceSummary {
 	readonly sectionCount: number;
 	readonly decisionCounts: ContextTraceDecisionCounts;
 	readonly sourceSummaries: readonly ContextTraceSourceSummary[];
+	readonly determinismKey: string;
+}
+
+export type ContextDeltaStreamEventType =
+	| "context.source_selected"
+	| "context.source_rejected"
+	| "context.source_compressed"
+	| "context.cache_plan_emitted"
+	| "context.trace_summary_emitted"
+	| "context.trace_delta_emitted"
+	| "context.cancelled";
+
+export interface ContextDeltaStreamTraceEvent {
+	readonly deltaTraceId: string;
+	readonly sessionId: string;
+	readonly streamId: string;
+	readonly eventId: string;
+	readonly eventType: ContextDeltaStreamEventType;
+	readonly sourceHashes: Readonly<Record<string, string>>;
+	readonly stablePrefixHash?: string;
+	readonly cachePlanId?: string;
+	readonly resumeCursor: string;
+	readonly payloadBytes: number;
+	readonly dedupeKey: string;
+	readonly deliveredAt: string;
+	readonly payload: Readonly<Record<string, unknown>>;
+}
+
+export interface ContextDeltaStreamTrace {
+	readonly deltaTraceId: string;
+	readonly sessionId: string;
+	readonly streamId: string;
+	readonly events: readonly ContextDeltaStreamTraceEvent[];
+	readonly resumeCursor: string;
+	readonly deliveredEventCount: number;
 	readonly determinismKey: string;
 }
 

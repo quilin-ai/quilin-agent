@@ -1,4 +1,5 @@
 import { stderr, stdin } from "node:process";
+import { clearScreenDown, emitKeypressEvents, moveCursor } from "node:readline";
 import * as readline from "node:readline/promises";
 import {
 	isRuntimeToolEnabled,
@@ -57,6 +58,57 @@ const DEFAULT_INFERENCE_CONFIG: InferenceConfig = {
 	maxTokens: 4096,
 	thinkingMode: "disabled",
 };
+const REPL_PROMPT = "quilin> ";
+const SLASH_COMMAND_NAME_WIDTH = 18;
+
+interface SlashCommandEntry {
+	readonly name: string;
+	readonly signature: string;
+	readonly description: string;
+}
+
+const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
+	{
+		name: "help",
+		signature: "/help",
+		description: "Show this command list",
+	},
+	{
+		name: "status",
+		signature: "/status",
+		description: "Show model, routing, and reasoning state",
+	},
+	{
+		name: "think",
+		signature: "/think on|off|auto",
+		description: "Set thinking mode",
+	},
+	{
+		name: "verbose",
+		signature: "/verbose",
+		description: "Show reasoning stream",
+	},
+	{
+		name: "collapse",
+		signature: "/collapse",
+		description: "Hide reasoning stream",
+	},
+	{
+		name: "clear",
+		signature: "/clear",
+		description: "Clear the conversation",
+	},
+	{
+		name: "exit",
+		signature: "/exit",
+		description: "Save and quit",
+	},
+	{
+		name: "quit",
+		signature: "/quit",
+		description: "Save and quit",
+	},
+];
 
 interface ReplOptions {
 	provider: ReturnType<typeof createProvider>;
@@ -388,6 +440,389 @@ function renderSkillsCatalogHint(change: SkillsCatalogChange): string | null {
 	return "🎯 Skills catalog updated\n";
 }
 
+function parseSlashCommandQuery(line: string): string {
+	const trimmed = line.trimStart();
+	if (!trimmed.startsWith("/")) {
+		return "";
+	}
+
+	const commandAndArgs = trimmed.slice(1).trimStart();
+	const [command] = commandAndArgs.split(/\s+/u, 1);
+	return command?.toLowerCase() ?? "";
+}
+
+function matchesSlashCommandQuery(
+	command: SlashCommandEntry,
+	query: string,
+): boolean {
+	return query === "" || command.name.startsWith(query);
+}
+
+function formatSlashCommandEntry(command: SlashCommandEntry): string {
+	return `  ${command.signature.padEnd(SLASH_COMMAND_NAME_WIDTH)} ${command.description}`;
+}
+
+function renderSlashCommandHelp(line = ""): string {
+	const query = parseSlashCommandQuery(line);
+	const matchingCommands = SLASH_COMMANDS.filter((command) =>
+		matchesSlashCommandQuery(command, query),
+	);
+	const commandLines =
+		matchingCommands.length > 0
+			? matchingCommands.map(formatSlashCommandEntry)
+			: ["  No matching slash commands."];
+
+	return [
+		"Slash commands:",
+		...commandLines,
+		"Tip: type /help to show this list again.",
+	].join("\n");
+}
+
+interface SlashCommandHelpRenderState {
+	renderedLine: string | undefined;
+	renderedCursorPos: ReadlineDisplayPosition | undefined;
+	renderedHelpRows: number;
+}
+
+function resetSlashCommandHelpRenderState(
+	state: SlashCommandHelpRenderState,
+): void {
+	state.renderedLine = undefined;
+	state.renderedCursorPos = undefined;
+	state.renderedHelpRows = 0;
+}
+
+interface ReadlineDisplayPosition {
+	readonly cols: number;
+	readonly rows: number;
+}
+
+function isSlashCommandLine(line: string): boolean {
+	return line.trimStart().startsWith("/");
+}
+
+function renderPromptLine(line: string): string {
+	return `${REPL_PROMPT}${line}`;
+}
+
+function getTerminalColumns(): number {
+	return Math.max(1, stderr.columns ?? 80);
+}
+
+function measureDisplayPosition(
+	text: string,
+	columns = getTerminalColumns(),
+): ReadlineDisplayPosition {
+	let rows = 0;
+	let cols = 0;
+
+	for (const char of text) {
+		if (char === "\n") {
+			rows += 1;
+			cols = 0;
+			continue;
+		}
+
+		cols += 1;
+		if (cols >= columns) {
+			rows += Math.floor(cols / columns);
+			cols %= columns;
+		}
+	}
+
+	return { cols, rows };
+}
+
+function measureDisplayRows(
+	text: string,
+	columns = getTerminalColumns(),
+): number {
+	let rows = 0;
+
+	for (const line of text.split("\n")) {
+		rows += Math.max(1, Math.ceil(line.length / columns));
+	}
+
+	return rows;
+}
+
+function moveToBlockTop(
+	cursorPos: ReadlineDisplayPosition,
+	helpRows: number,
+): void {
+	moveCursor(stderr, -cursorPos.cols, -(cursorPos.rows + helpRows));
+}
+
+function restoreCursorPosition(
+	from: ReadlineDisplayPosition,
+	to: ReadlineDisplayPosition,
+): void {
+	moveCursor(stderr, to.cols - from.cols, to.rows - from.rows);
+}
+
+function clearPromptBlock(
+	cursorPos: ReadlineDisplayPosition,
+	helpRows: number,
+): void {
+	moveToBlockTop(cursorPos, helpRows);
+	clearScreenDown(stderr);
+}
+
+interface SlashCommandInputSnapshot {
+	readonly line: string;
+	readonly cursorPos: ReadlineDisplayPosition;
+}
+
+interface KeypressEventInfo {
+	readonly name?: string;
+	readonly sequence?: string;
+	readonly ctrl?: boolean;
+	readonly meta?: boolean;
+	readonly shift?: boolean;
+}
+
+function isControlCharacter(char: string): boolean {
+	const codePoint = char.codePointAt(0) ?? 0;
+	return codePoint < 32 || codePoint === 127;
+}
+
+function getPrintableKeypressText(input: string | undefined): string {
+	if (input == null) {
+		return "";
+	}
+
+	return Array.from(input)
+		.filter((char) => !isControlCharacter(char))
+		.join("");
+}
+
+class SlashCommandInputTracker {
+	private readonly chars: string[] = [];
+	private cursorIndex = 0;
+
+	reset(): void {
+		this.chars.length = 0;
+		this.cursorIndex = 0;
+	}
+
+	snapshot(): SlashCommandInputSnapshot {
+		const line = this.chars.join("");
+		const lineBeforeCursor = this.chars.slice(0, this.cursorIndex).join("");
+
+		return {
+			line,
+			cursorPos: measureDisplayPosition(renderPromptLine(lineBeforeCursor)),
+		};
+	}
+
+	applyKeypress(
+		input: string | undefined,
+		key: KeypressEventInfo | undefined,
+	): void {
+		const keyName = key?.name;
+
+		if (key?.ctrl === true || key?.meta === true) {
+			this.applyControlKey(keyName, key);
+			return;
+		}
+
+		switch (keyName) {
+			case "return":
+			case "enter":
+				this.reset();
+				return;
+			case "backspace":
+				if (this.cursorIndex > 0) {
+					this.chars.splice(this.cursorIndex - 1, 1);
+					this.cursorIndex -= 1;
+				}
+				return;
+			case "delete":
+				if (this.cursorIndex < this.chars.length) {
+					this.chars.splice(this.cursorIndex, 1);
+				}
+				return;
+			case "left":
+				this.cursorIndex = Math.max(0, this.cursorIndex - 1);
+				return;
+			case "right":
+				this.cursorIndex = Math.min(this.chars.length, this.cursorIndex + 1);
+				return;
+			case "home":
+				this.cursorIndex = 0;
+				return;
+			case "end":
+				this.cursorIndex = this.chars.length;
+				return;
+			case "tab":
+				return;
+			default:
+				break;
+		}
+
+		const printableText = getPrintableKeypressText(input);
+		if (printableText === "") {
+			return;
+		}
+
+		const insertedChars = Array.from(printableText);
+		this.chars.splice(this.cursorIndex, 0, ...insertedChars);
+		this.cursorIndex += insertedChars.length;
+	}
+
+	private applyControlKey(
+		keyName: string | undefined,
+		key: KeypressEventInfo,
+	): void {
+		if (key.ctrl !== true || key.meta === true) {
+			return;
+		}
+
+		switch (keyName) {
+			case "a":
+				this.cursorIndex = 0;
+				return;
+			case "e":
+				this.cursorIndex = this.chars.length;
+				return;
+			case "u":
+				this.chars.splice(0, this.cursorIndex);
+				this.cursorIndex = 0;
+				return;
+			case "k":
+				this.chars.splice(this.cursorIndex);
+				return;
+			default:
+				return;
+		}
+	}
+}
+
+function renderSlashCommandHelpBlock(
+	state: SlashCommandHelpRenderState,
+	line: string,
+	cursorPos: ReadlineDisplayPosition,
+): void {
+	if (
+		state.renderedLine === line &&
+		state.renderedCursorPos?.cols === cursorPos.cols &&
+		state.renderedCursorPos?.rows === cursorPos.rows
+	) {
+		return;
+	}
+
+	const helpText = renderSlashCommandHelp(line);
+	const helpRows = measureDisplayRows(helpText);
+	const promptText = renderPromptLine(line);
+	clearPromptBlock(
+		cursorPos,
+		state.renderedLine == null ? 0 : state.renderedHelpRows,
+	);
+	const fullBlockText = `${helpText}\n${promptText}`;
+	const targetCursorPos = {
+		cols: cursorPos.cols,
+		rows: helpRows + cursorPos.rows,
+	};
+	stderr.write(fullBlockText);
+	restoreCursorPosition(measureDisplayPosition(fullBlockText), targetCursorPos);
+	state.renderedLine = line;
+	state.renderedCursorPos = { ...cursorPos };
+	state.renderedHelpRows = helpRows;
+}
+
+function updateSlashCommandHelpBlock(
+	snapshot: SlashCommandInputSnapshot,
+	state: SlashCommandHelpRenderState,
+): boolean {
+	const { line, cursorPos } = snapshot;
+	if (!isSlashCommandLine(line)) {
+		if (state.renderedLine != null) {
+			const promptText = renderPromptLine(line);
+			clearPromptBlock(cursorPos, state.renderedHelpRows);
+			stderr.write(promptText);
+			restoreCursorPosition(measureDisplayPosition(promptText), cursorPos);
+			resetSlashCommandHelpRenderState(state);
+		}
+		return false;
+	}
+
+	renderSlashCommandHelpBlock(state, line, cursorPos);
+	return true;
+}
+
+interface SlashCommandHelpController {
+	resetInput(): void;
+	dispose(): void;
+}
+
+function installSlashCommandHelp(options: {
+	isActive: () => boolean;
+	onShown: () => void;
+}): SlashCommandHelpController {
+	const noopController: SlashCommandHelpController = {
+		resetInput: () => undefined,
+		dispose: () => undefined,
+	};
+
+	if (stdin.isTTY !== true || stderr.isTTY !== true) {
+		return noopController;
+	}
+
+	const inputTracker = new SlashCommandInputTracker();
+	const renderState: SlashCommandHelpRenderState = {
+		renderedLine: undefined,
+		renderedCursorPos: undefined,
+		renderedHelpRows: 0,
+	};
+	let disposed = false;
+	let scheduled: NodeJS.Immediate | undefined;
+	emitKeypressEvents(stdin);
+
+	const scheduleRender = (): void => {
+		if (scheduled != null) {
+			return;
+		}
+
+		scheduled = setImmediate(() => {
+			scheduled = undefined;
+			if (disposed || !options.isActive()) {
+				resetSlashCommandHelpRenderState(renderState);
+				return;
+			}
+
+			if (updateSlashCommandHelpBlock(inputTracker.snapshot(), renderState)) {
+				options.onShown();
+			}
+		});
+	};
+
+	const handleKeypress = (
+		input: string | undefined,
+		key: KeypressEventInfo | undefined,
+	): void => {
+		inputTracker.applyKeypress(input, key);
+		scheduleRender();
+	};
+
+	stdin.on("keypress", handleKeypress);
+
+	return {
+		resetInput: () => {
+			inputTracker.reset();
+			resetSlashCommandHelpRenderState(renderState);
+		},
+		dispose: () => {
+			disposed = true;
+			if (scheduled != null) {
+				clearImmediate(scheduled);
+				scheduled = undefined;
+			}
+			stdin.off("keypress", handleKeypress);
+		},
+	};
+}
+
 export async function startRepl(options: ReplOptions): Promise<void> {
 	const {
 		provider,
@@ -415,6 +850,9 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 	const runLogger =
 		agentRunLogger ?? createDefaultAgentRunLogger(resolvedSessionId);
 	let rl: readline.Interface | undefined;
+	let slashCommandHelpController: SlashCommandHelpController | undefined;
+	let slashCommandHelpShownForPrompt = false;
+	let mainPromptActive = false;
 	const queuedCommands: string[] = [];
 	const toolProvenance: ToolProvenanceEntry[] = [];
 	let activeTurnId: string | undefined;
@@ -514,7 +952,9 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 				`Messages: ${restoredMessages.length} | Last active: ${restoredState.lastActiveAt}\n`,
 			);
 		}
-		stderr.write("Type your message, or /exit to quit.\n\n");
+		stderr.write(
+			"Type your message, or / to list commands. /exit to quit.\n\n",
+		);
 		await recordAgentRunEvent(runLogger, "repl.session_started", {
 			sessionId: resolvedSessionId,
 			restored: restoredState != null,
@@ -525,6 +965,12 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 		});
 
 		rl = readline.createInterface({ input: stdin, output: stderr });
+		slashCommandHelpController = installSlashCommandHelp({
+			isActive: () => mainPromptActive,
+			onShown: () => {
+				slashCommandHelpShownForPrompt = true;
+			},
+		});
 
 		let state = restoredState;
 		if (state == null) {
@@ -596,7 +1042,13 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 		});
 
 		while (true) {
-			const input = queuedCommands.shift() ?? (await rl.question("quilin> "));
+			slashCommandHelpShownForPrompt = false;
+			mainPromptActive = queuedCommands.length === 0;
+			if (mainPromptActive) {
+				slashCommandHelpController?.resetInput();
+			}
+			const input = queuedCommands.shift() ?? (await rl.question(REPL_PROMPT));
+			mainPromptActive = false;
 			const trimmed = input.trim();
 
 			if (!trimmed) {
@@ -693,6 +1145,19 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 			if (trimmed === "/collapse") {
 				reasoningDisplay = "collapsed";
 				stderr.write("Reasoning display: collapsed.\n");
+				continue;
+			}
+
+			if (trimmed === "/" || trimmed === "/help" || trimmed === "/?") {
+				if (!slashCommandHelpShownForPrompt) {
+					stderr.write(`${renderSlashCommandHelp()}\n`);
+				}
+				continue;
+			}
+
+			if (trimmed.startsWith("/")) {
+				stderr.write(`Unknown command: ${trimmed}\n`);
+				stderr.write(`${renderSlashCommandHelp(trimmed)}\n`);
 				continue;
 			}
 
@@ -823,6 +1288,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 		}
 	} finally {
 		await flushAgentRunLogger(runLogger);
+		slashCommandHelpController?.dispose();
 		rl?.close();
 		skillsManager?.stopWatching();
 		await registry.disconnectAll();

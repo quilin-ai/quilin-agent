@@ -302,6 +302,20 @@ function shouldInstantiateSkillsManager(skills: SkillsConfig): boolean {
 	);
 }
 
+function resolveSkillsWatcherEnabled(
+	skills: SkillsConfig,
+): boolean | undefined {
+	if (skills.watcherEnabled != null) {
+		return skills.watcherEnabled;
+	}
+
+	if (skills.reloadStrategy == null) {
+		return undefined;
+	}
+
+	return skills.reloadStrategy === "watch";
+}
+
 function buildSkillsManager(
 	config: CapabilitiesConfig,
 	baseDir: string,
@@ -310,7 +324,10 @@ function buildSkillsManager(
 		return undefined;
 	}
 
+	const watcherEnabled = resolveSkillsWatcherEnabled(config.skills);
+
 	return new SkillsManager({
+		...(watcherEnabled == null ? {} : { watcherEnabled }),
 		...(config.skills.bundledRoots == null
 			? {}
 			: {
@@ -329,9 +346,6 @@ function buildSkillsManager(
 			: {
 					pluginRoots: resolveStringArray(config.skills.pluginRoots, baseDir),
 				}),
-		...(config.skills.watcherEnabled == null
-			? {}
-			: { watcherEnabled: config.skills.watcherEnabled }),
 		...(config.skills.debounceMs == null
 			? {}
 			: { debounceMs: config.skills.debounceMs }),

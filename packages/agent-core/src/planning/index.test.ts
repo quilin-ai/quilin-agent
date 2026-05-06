@@ -638,6 +638,37 @@ describe("planning barrel contract", () => {
 				production: true,
 			},
 		);
+		const preservingGlobalPatch: GlobalPlanPatch = applyGlobalReplan(
+			previousPlan,
+			makeLinearPlan(["search", "confirm"]),
+			{
+				reason: "external_context_changed",
+			},
+		);
+		const preservingPayload = toReplanEventPayload(preservingGlobalPatch);
+		const preservingState = replayPlanningEvents(
+			"run-barrel-g-replan-preserve",
+			[
+				{
+					seq: 1,
+					timestamp: 1_000,
+					kind: "task_decomposed",
+					payload: { plan: previousPlan },
+				},
+				{
+					seq: 2,
+					timestamp: 1_100,
+					kind: "subtask_started",
+					payload: { leafId: "search" },
+				},
+				{
+					seq: 3,
+					timestamp: 1_200,
+					kind: "replan",
+					payload: preservingPayload,
+				},
+			],
+		);
 
 		expect(localPatch).toMatchObject({
 			level: "L-Rearrange",
@@ -649,6 +680,11 @@ describe("planning barrel contract", () => {
 			id: "search",
 			action: "cached_search",
 			arguments: { query: "fallback" },
+		});
+		expect(toReplanEventPayload(localPatch)).toEqual({
+			plan: localPatch.plan,
+			currentLeafId: "search",
+			reason: "tool_failed:TIMEOUT",
 		});
 		expect(toReplanEventPayload(globalPatch)).toEqual({
 			plan: nextPlan,
@@ -662,6 +698,8 @@ describe("planning barrel contract", () => {
 				production: true,
 			},
 		});
+		expect("currentLeafId" in preservingPayload).toBe(false);
+		expect(preservingState.currentLeafId).toBe("search");
 	});
 
 	it("exports replan metrics helpers and metric types", () => {
@@ -901,6 +939,35 @@ describe("planning barrel contract", () => {
 				leafId: "loop",
 				repairs: 2,
 			},
+		});
+		const maxStepsDecision = detectTermination(
+			replayPlanningEvents("run-barrel-max-steps", [
+				{
+					seq: 1,
+					timestamp: 2_000,
+					kind: "task_decomposed",
+					payload: { plan: makeLinearPlan(["one", "two"]) },
+				},
+				{
+					seq: 2,
+					timestamp: 2_010,
+					kind: "subtask_started",
+					payload: { leafId: "one" },
+				},
+				{
+					seq: 3,
+					timestamp: 2_020,
+					kind: "subtask_started",
+					payload: { leafId: "two" },
+				},
+			]),
+			{ maxSteps: 2 },
+		);
+
+		expect(maxStepsDecision).toMatchObject({
+			shouldTerminate: true,
+			reason: "MaxSteps",
+			stepCount: 2,
 		});
 	});
 });

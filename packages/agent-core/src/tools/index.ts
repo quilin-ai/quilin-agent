@@ -18,6 +18,9 @@ export {
 	createSkillViewTool,
 	createWebFetchTool,
 } from "./builtin/index.js";
+// DockerSandboxRouter is exported as an explicit provider adapter. Built-in
+// tools such as shell_exec still execute through their own host runners after
+// ToolRouter sandbox approval unless a caller explicitly creates a Docker session.
 export * from "./docker-sandbox-router.js";
 export * from "./mcp-client.js";
 export * from "./registry.js";

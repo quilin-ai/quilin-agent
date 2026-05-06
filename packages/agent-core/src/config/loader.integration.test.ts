@@ -1,6 +1,9 @@
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { LanguageModel } from "ai";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	createMockProvider,
 	mockGenerateTextResult,
@@ -68,6 +71,8 @@ vi.mock("../skills/manager.js", () => ({
 	},
 }));
 
+const createdDirs: string[] = [];
+
 vi.mock("../state/checkpoint.js", () => ({
 	SQLiteCheckpoint: class MockSQLiteCheckpoint {
 		list = mockCheckpointList;
@@ -96,6 +101,24 @@ function createMockLanguageModel(
 	} as unknown as LanguageModel;
 }
 
+async function createTempWorkspace(): Promise<string> {
+	const workspaceRoot = await mkdtemp(join(tmpdir(), "quilin-loader-"));
+	createdDirs.push(workspaceRoot);
+	return workspaceRoot;
+}
+
+async function writeCapabilitiesFile(
+	workspaceRoot: string,
+	fileName: string,
+	content: string,
+): Promise<string> {
+	const directory = join(workspaceRoot, ".quilin");
+	await mkdir(directory, { recursive: true });
+	const filePath = join(directory, fileName);
+	await writeFile(filePath, content, "utf8");
+	return filePath;
+}
+
 describe("config loader integration", () => {
 	const exitSpy = vi
 		.spyOn(process, "exit")
@@ -105,6 +128,14 @@ describe("config loader integration", () => {
 		vi.clearAllMocks();
 		vi.resetModules();
 		process.argv = ["bun", "packages/agent-core/src/index.ts"];
+	});
+
+	afterEach(async () => {
+		await Promise.all(
+			createdDirs
+				.splice(0)
+				.map((directory) => rm(directory, { recursive: true, force: true })),
+		);
 	});
 
 	it("loads JSON fixture into main() and wires SkillsManager plus stub MCP without spawning a process", async () => {
@@ -294,6 +325,178 @@ describe("config loader integration", () => {
 		});
 		expect(mockConnect).not.toHaveBeenCalled();
 		expect(mockDisconnect).not.toHaveBeenCalled();
+		expect(exitSpy).toHaveBeenCalledWith(0);
+	});
+
+	it("lets explicit watcherEnabled override reloadStrategy", async () => {
+		const workspaceRoot = await createTempWorkspace();
+		const fixturePath = await writeCapabilitiesFile(
+			workspaceRoot,
+			"capabilities.json",
+			JSON.stringify(
+				{
+					schema_version: 1,
+					mcpServers: {
+						stub: {
+							command: "node",
+							args: ["stub-server.js"],
+							cwd: ".",
+							namespace: "stub",
+						},
+					},
+					skills: {
+						enabled: true,
+						bundledRoots: ["./bundled-skills"],
+						userRoots: ["./user-skills"],
+						projectRoots: ["./project-skills"],
+						pluginRoots: ["./plugin-skills"],
+						reloadStrategy: "manual",
+						watcherEnabled: true,
+						debounceMs: 75,
+					},
+				},
+				null,
+				2,
+			),
+		);
+		const fixtureDir = join(workspaceRoot, ".quilin");
+		const { generateText } = await import("ai");
+		const { createProvider, getDefaultModel } = await import(
+			"../llm/provider.js"
+		);
+		const { startRepl } = await import("../repl.js");
+		const model = createMockLanguageModel({
+			provider: "deepseek",
+			modelId: "deepseek-chat",
+		});
+
+		vi.mocked(createProvider).mockReturnValue(createMockProvider(() => model));
+		vi.mocked(getDefaultModel).mockReturnValue("deepseek-chat");
+		vi.mocked(generateText).mockResolvedValue(
+			mockGenerateTextResult({
+				text: "Quilin Agent online.",
+				usage: {
+					promptTokens: 18,
+					completionTokens: 5,
+				},
+				finishReason: "stop",
+			}),
+		);
+		process.argv = [
+			"bun",
+			"packages/agent-core/src/index.ts",
+			"--config",
+			fixturePath,
+		];
+
+		const { main } = await import("../index.js");
+
+		await main({ runtimeMode: "repl" });
+
+		expect(mockSkillsManagerConstructor).toHaveBeenCalledWith({
+			bundledRoots: [join(fixtureDir, "bundled-skills")],
+			userRoots: [join(fixtureDir, "user-skills")],
+			projectRoots: [join(fixtureDir, "project-skills")],
+			pluginRoots: [join(fixtureDir, "plugin-skills")],
+			watcherEnabled: true,
+			debounceMs: 75,
+		});
+		expect(startRepl).toHaveBeenCalledWith(
+			expect.objectContaining({
+				skillsManager: expect.objectContaining(mockSkillsManagerInstance),
+				mcpServers: [
+					{
+						id: "stub",
+						namespace: "stub",
+						config: {
+							command: "node",
+							args: ["stub-server.js"],
+							cwd: fixtureDir,
+						},
+					},
+				],
+			}),
+		);
+	});
+
+	it("lets explicit watcherEnabled disable watch mode even when reloadStrategy requests it", async () => {
+		const workspaceRoot = await createTempWorkspace();
+		const fixtureDir = join(workspaceRoot, ".quilin");
+		const fixturePath = await writeCapabilitiesFile(
+			workspaceRoot,
+			"capabilities.json",
+			JSON.stringify(
+				{
+					schema_version: 1,
+					mcpServers: {
+						stub: {
+							command: "node",
+							args: ["stub-server.js"],
+							cwd: ".",
+							namespace: "stub",
+						},
+					},
+					skills: {
+						enabled: true,
+						bundledRoots: ["./bundled-skills"],
+						userRoots: ["./user-skills"],
+						projectRoots: ["./project-skills"],
+						pluginRoots: ["./plugin-skills"],
+						reloadStrategy: "watch",
+						watcherEnabled: false,
+						debounceMs: 90,
+					},
+				},
+				null,
+				2,
+			),
+		);
+		const { generateText } = await import("ai");
+		const { createProvider, getDefaultModel } = await import(
+			"../llm/provider.js"
+		);
+		const { startRepl } = await import("../repl.js");
+		const model = createMockLanguageModel({
+			provider: "deepseek",
+			modelId: "deepseek-chat",
+		});
+
+		vi.mocked(createProvider).mockReturnValue(createMockProvider(() => model));
+		vi.mocked(getDefaultModel).mockReturnValue("deepseek-chat");
+		vi.mocked(generateText).mockResolvedValue(
+			mockGenerateTextResult({
+				text: "Quilin Agent online.",
+				usage: {
+					promptTokens: 18,
+					completionTokens: 5,
+				},
+				finishReason: "stop",
+			}),
+		);
+		process.argv = [
+			"bun",
+			"packages/agent-core/src/index.ts",
+			"--config",
+			fixturePath,
+		];
+
+		const { main } = await import("../index.js");
+
+		await main({ runtimeMode: "repl" });
+
+		expect(mockSkillsManagerConstructor).toHaveBeenCalledWith({
+			bundledRoots: [join(fixtureDir, "bundled-skills")],
+			userRoots: [join(fixtureDir, "user-skills")],
+			projectRoots: [join(fixtureDir, "project-skills")],
+			pluginRoots: [join(fixtureDir, "plugin-skills")],
+			watcherEnabled: false,
+			debounceMs: 90,
+		});
+		expect(startRepl).toHaveBeenCalledWith(
+			expect.objectContaining({
+				skillsManager: expect.objectContaining(mockSkillsManagerInstance),
+			}),
+		);
 		expect(exitSpy).toHaveBeenCalledWith(0);
 	});
 });

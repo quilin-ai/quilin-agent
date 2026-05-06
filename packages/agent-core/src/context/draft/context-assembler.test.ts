@@ -5,6 +5,7 @@ import {
 	createDefaultContextAssembler as createDefaultContextAssemblerFromIndex,
 	type ContextCachePlan as PublicContextCachePlan,
 	type ContextCompressionTrace as PublicContextCompressionTrace,
+	type ContextDeltaStreamTrace as PublicContextDeltaStreamTrace,
 	type ContextTraceDelta as PublicContextTraceDelta,
 	type ContextTraceSummary as PublicContextTraceSummary,
 } from "../index.js";
@@ -501,6 +502,7 @@ describe("ContextAssembler", () => {
 	it("emits a runtime trace delta when a previous trace summary is supplied", () => {
 		const assembler = createDefaultContextAssemblerFromIndex({
 			modelWindow: 12,
+			now: () => new Date("2026-05-06T00:00:00.000Z"),
 		});
 		const previous = assembler.assembleContext(
 			"test",
@@ -567,6 +569,28 @@ describe("ContextAssembler", () => {
 		});
 		expect(delta.traceId).toBe(`trace-delta:${delta.determinismKey}`);
 		expect(delta.determinismKey).toContain("added=new");
+
+		const deltaStreamTrace: PublicContextDeltaStreamTrace =
+			current.deltaStreamTrace;
+		expect(deltaStreamTrace.events.map((event) => event.eventType)).toEqual([
+			"context.source_selected",
+			"context.source_selected",
+			"context.source_compressed",
+			"context.source_compressed",
+			"context.cache_plan_emitted",
+			"context.trace_summary_emitted",
+			"context.trace_delta_emitted",
+		]);
+		expect(deltaStreamTrace.resumeCursor).toBe(
+			deltaStreamTrace.events.at(-1)?.resumeCursor,
+		);
+		expect(deltaStreamTrace.events.at(-1)).toMatchObject({
+			eventType: "context.trace_delta_emitted",
+			deliveredAt: "2026-05-06T00:00:00.000Z",
+			payload: {
+				traceDelta: delta,
+			},
+		});
 	});
 
 	it("emits a provider-neutral cache plan with stable and dynamic source boundaries", () => {

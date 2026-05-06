@@ -1,6 +1,8 @@
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { WriteAuthority } from "../safety/write-authority.js";
+import { createShellExecTool, type ShellRunner } from "./builtin/shell-exec.js";
 import {
 	createDockerSandboxRouter,
 	type DockerSandboxCliRunner,
@@ -127,6 +129,50 @@ describe("DockerSandboxRouter", () => {
 			},
 		});
 		expect(session.id).toMatch(/^[a-z0-9-]+$/u);
+	});
+
+	it("keeps Docker routing separate from host shell_exec execution", async () => {
+		const dockerRunner = vi.fn<DockerSandboxCliRunner>(async () => ({
+			stdout: "docker\n",
+			stderr: "",
+			exitCode: 0,
+		}));
+		const shellRunner = vi.fn<ShellRunner>(async () => ({
+			stdout: "host\n",
+			stderr: "",
+			exitCode: 0,
+			timedOut: false,
+		}));
+		const router = createDockerSandboxRouter({
+			runner: dockerRunner,
+			now: fixedNow,
+			createSessionId: () => "session-shell-boundary",
+		});
+		await router.createSession(createRequest("shell-boundary"));
+		const shellExec = createShellExecTool({
+			runner: shellRunner,
+			authority: new WriteAuthority({
+				mode: "ask",
+				confirm: async () => true,
+			}),
+		});
+
+		const result = await shellExec.execute({ command: "echo host" });
+
+		expect(result.isError).toBe(false);
+		expect(JSON.parse(result.content)).toMatchObject({
+			command: "echo host",
+			exitCode: 0,
+			stdout: "host\n",
+		});
+		expect(shellRunner).toHaveBeenCalledWith(
+			"echo",
+			["host"],
+			expect.objectContaining({
+				timeoutMs: 30_000,
+			}),
+		);
+		expect(dockerRunner).not.toHaveBeenCalled();
 	});
 
 	it("derives trace ids from task id or generated session id when run id is absent", async () => {
@@ -807,6 +853,53 @@ describe("DockerSandboxRouter", () => {
 		});
 	});
 
+	it("throws the documented fail-closed resume error directly from the router", async () => {
+		const runner = vi.fn<DockerSandboxCliRunner>();
+		const router = createDockerSandboxRouter({
+			runner,
+			now: fixedNow,
+			createSessionId: () => "session-direct-resume",
+		});
+		const request = createRequest("direct-resume");
+		const snapshot: SandboxSnapshotRef = {
+			id: "snapshot-direct",
+			provider: "docker",
+			sessionId: "session-direct-resume",
+			createdAt: "2026-05-05T08:45:00.000Z",
+			image: request.image,
+			policyDigest: createSandboxPolicyDigest(request),
+			state: "ready",
+			files: [],
+			environmentManifest: {},
+		};
+
+		let caught: unknown;
+		try {
+			await router.resumeSession({
+				owner: request.owner,
+				snapshot,
+				traceId: "trace-direct-resume",
+				auditRef: createSandboxAuditRef({
+					traceId: "trace-direct-resume",
+					phase: "resume",
+					sessionId: "session-direct-resume",
+				}),
+			});
+		} catch (error) {
+			caught = error;
+		}
+
+		expect(caught).toBeInstanceOf(DockerSandboxRuntimeError);
+		expect(caught).toMatchObject({
+			failure: {
+				kind: "resume_mismatch",
+				code: "docker_resume_not_implemented",
+				retryable: false,
+			},
+		});
+		expect(runner).not.toHaveBeenCalled();
+	});
+
 	it("does not allow local-dev sessions through the docker adapter", async () => {
 		const router = createDockerSandboxRouter({
 			runner: vi.fn<DockerSandboxCliRunner>(),
@@ -838,14 +931,19 @@ describe("DockerSandboxRouter", () => {
 		});
 	});
 
-	it("destroys tracked sessions and makes future inspection fail", async () => {
+	it("keeps create/inspect/destroy in memory without running Docker", async () => {
+		const runner = vi.fn<DockerSandboxCliRunner>();
 		const router = createDockerSandboxRouter({
-			runner: vi.fn<DockerSandboxCliRunner>(),
+			runner,
 			now: fixedNow,
 			createSessionId: () => "session-destroy",
 		});
 		const session = await router.createSession(createRequest("destroy"));
 
+		await expect(router.inspectSession(session.id)).resolves.toMatchObject({
+			id: "session-destroy",
+			state: "ready",
+		});
 		await router.destroySession(session.id, "completed");
 		await router.destroySession("missing-session", "cleanup");
 
@@ -856,6 +954,7 @@ describe("DockerSandboxRouter", () => {
 				retryable: false,
 			},
 		});
+		expect(runner).not.toHaveBeenCalled();
 	});
 
 	it("limits raw CLI output before resolving process results", async () => {

@@ -12,6 +12,7 @@ import type {
 	ContextCacheRetentionPolicy,
 	ContextCacheStrategy,
 	ContextCompressionTrace,
+	ContextDeltaStreamTrace,
 	ContextSelectionCompressionTraceLink,
 	ContextSelectionTrace,
 	ContextSource,
@@ -19,6 +20,7 @@ import type {
 	ContextTraceSummary,
 } from "./source-types.js";
 import {
+	buildContextDeltaStreamTrace,
 	type ContextTraceDelta,
 	diffContextTraceSummaries,
 } from "./trace-delta.js";
@@ -31,6 +33,7 @@ export interface AssembledContext {
 	readonly selectionTrace: ContextSelectionTrace;
 	readonly selectionCompressionTraceLink: ContextSelectionCompressionTraceLink;
 	readonly traceSummary: ContextTraceSummary;
+	readonly deltaStreamTrace: ContextDeltaStreamTrace;
 	readonly cachePlan?: ContextCachePlan;
 	readonly traceDelta?: ContextTraceDelta;
 	readonly totalTokens: number;
@@ -351,6 +354,16 @@ export class ContextAssembler {
 						runOptions.previousTraceSummary,
 						traceSummary,
 					);
+		const deltaStreamTrace = buildContextDeltaStreamTrace({
+			sessionId: selection.trace.runId,
+			streamId: selection.trace.promptBuildId,
+			selectionTrace: selection.trace,
+			compressionTrace: compression.trace,
+			cachePlan,
+			traceSummary,
+			...(traceDelta == null ? {} : { traceDelta }),
+			deliveredAt: (this.options.now ?? (() => new Date()))().toISOString(),
+		});
 
 		return {
 			prompt,
@@ -360,6 +373,7 @@ export class ContextAssembler {
 			selectionTrace: selection.trace,
 			selectionCompressionTraceLink,
 			traceSummary,
+			deltaStreamTrace,
 			cachePlan,
 			...(traceDelta == null ? {} : { traceDelta }),
 			totalTokens: prompt.totalTokens + sumTokens(compression.sources),

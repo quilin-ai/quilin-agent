@@ -469,6 +469,57 @@ describe("compressContextSources", () => {
 		expect(tight.trace.determinismKey).toContain("protected=false");
 	});
 
+	it("changes the determinism key when same-size source content changes", () => {
+		const first = compressContextSources(
+			[
+				makeSource("memory-a", {
+					content: "alpha fact",
+					tokenCount: 4,
+					relevanceScore: 0.9,
+				}),
+			],
+			{ budgetTokens: 4 },
+		);
+		const second = compressContextSources(
+			[
+				makeSource("memory-a", {
+					content: "omega fact",
+					tokenCount: 4,
+					relevanceScore: 0.9,
+				}),
+			],
+			{ budgetTokens: 4 },
+		);
+
+		expect(first.trace.determinismKey).not.toBe(second.trace.determinismKey);
+		expect(first.trace.traceId).not.toBe(second.trace.traceId);
+		expect(first.trace.determinismKey).toContain("contentHash=");
+	});
+
+	it("keeps dynamic metadata fields out of the determinism key", () => {
+		const first = compressContextSources(
+			[
+				makeSource("memory-a", {
+					content: "stable remembered fact",
+					metadata: { lastRetrievedAt: "2026-05-06T00:00:00.000Z" },
+				}),
+			],
+			{ budgetTokens: 10 },
+		);
+		const second = compressContextSources(
+			[
+				makeSource("memory-a", {
+					content: "stable remembered fact",
+					metadata: { lastRetrievedAt: "2026-05-06T00:01:00.000Z" },
+				}),
+			],
+			{ budgetTokens: 10 },
+		);
+
+		expect(first.trace.determinismKey).toBe(second.trace.determinismKey);
+		expect(first.trace.traceId).toBe(second.trace.traceId);
+	});
+
 	it("changes the determinism key when authority inputs change ordering", () => {
 		const workspaceA = makeSource("a", {
 			tokenCount: 1,

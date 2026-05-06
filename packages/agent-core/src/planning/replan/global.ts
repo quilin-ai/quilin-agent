@@ -28,7 +28,7 @@ export interface GlobalPlanPatch {
 	readonly note?: string;
 	readonly plan: Plan;
 	readonly previousPlan: Plan;
-	readonly currentLeafId: string | null;
+	readonly currentLeafId?: string | null;
 	readonly production: boolean;
 	readonly metric: GlobalReplanMetricObservation;
 }
@@ -44,7 +44,9 @@ export function applyGlobalReplan(
 		note: trigger.note,
 		plan: nextPlan,
 		previousPlan,
-		currentLeafId: trigger.currentLeafId ?? null,
+		...(trigger.currentLeafId === undefined
+			? {}
+			: { currentLeafId: trigger.currentLeafId }),
 		production: trigger.production ?? false,
 		metric: {
 			kind: "global_replan_triggered",
@@ -60,7 +62,9 @@ export function toReplanEventPayload(
 	if (patch.level === "G-Replan") {
 		return {
 			plan: patch.plan,
-			currentLeafId: patch.currentLeafId,
+			...(patch.currentLeafId === undefined
+				? {}
+				: { currentLeafId: patch.currentLeafId }),
 			reason: patch.reason,
 			note: patch.note,
 			production: patch.production,
@@ -71,5 +75,6 @@ export function toReplanEventPayload(
 	return {
 		plan: patch.plan,
 		currentLeafId: patch.currentLeafId,
+		reason: patch.reason,
 	};
 }

@@ -12,5 +12,5 @@ skills:
   userRoots: [./user-skills]
   projectRoots: [./project-skills]
   pluginRoots: [./plugin-skills]
-  watcherEnabled: false
+  reloadStrategy: manual
   debounceMs: 250

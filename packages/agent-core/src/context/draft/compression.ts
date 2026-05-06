@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
 	ContextCompressionDecisionTrace,
 	ContextCompressionScore,
@@ -40,6 +41,10 @@ interface CompressionCandidate {
 	readonly tokenCostEstimated: boolean;
 	readonly score: ContextCompressionScore;
 	readonly protectedRetain: boolean;
+}
+
+function sha256(value: string): string {
+	return createHash("sha256").update(value).digest("hex");
 }
 
 function clamp01(value: number): number {
@@ -86,6 +91,19 @@ function normalizeBudget(value: number): number {
 
 function sourceId(source: ContextSource, index: number): string {
 	return source.sourceId ?? `${source.sourceType}:${source.timestamp}:${index}`;
+}
+
+function sourceContentHash(source: ContextSource): string {
+	if (source.contentHash != null && source.contentHash.length > 0) {
+		return source.contentHash;
+	}
+
+	const metadataHash = source.metadata.contentHash;
+	if (typeof metadataHash === "string" && metadataHash.length > 0) {
+		return metadataHash;
+	}
+
+	return sha256(source.content.trim());
 }
 
 function stableSourceIds(sources: readonly ContextSource[]): readonly string[] {
@@ -345,6 +363,7 @@ function determinismKeyFor(
 		...candidates.map((candidate) =>
 			[
 				candidate.sourceId,
+				`contentHash=${sourceContentHash(candidate.source)}`,
 				`tokens=${candidate.tokenCost}`,
 				`estimated=${candidate.tokenCostEstimated}`,
 				`relevance=${candidate.score.relevance}`,

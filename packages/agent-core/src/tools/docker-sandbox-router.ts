@@ -79,6 +79,17 @@ export function createDockerSandboxRouter(
 	return new DockerSandboxRouter(options);
 }
 
+/**
+ * Docker provider adapter for explicit SandboxRouter sessions.
+ *
+ * This router is not a shell_exec interceptor and does not allocate a durable
+ * container during createSession. It tracks session policy/state in memory and
+ * runs each execute/install call as a fresh `docker run --rm` process with the
+ * requested mounts, network mode, and resource limits. inspectSession therefore
+ * reports only the in-memory session state, resume/snapshot/suspend fail closed
+ * until durable snapshot/replay exists, and destroySession only drops tracked
+ * state because normal command containers are already removed by Docker.
+ */
 export class DockerSandboxRouter implements SandboxRouter {
 	private readonly runner: DockerSandboxCliRunner;
 	private readonly dockerBinary: string | undefined;

@@ -1,8 +1,5 @@
 import type { ToolCall } from "../tools/types.js";
-import type {
-	GlobalReplanMetricObservation,
-	GlobalReplanReason,
-} from "./replan.js";
+import type { GlobalReplanMetricObservation } from "./replan.js";
 import type { IntentClassification, Plan } from "./types.js";
 
 export interface BudgetLedger {
@@ -101,7 +98,7 @@ export type PlanningEvent =
 			readonly payload: {
 				readonly plan: Plan;
 				readonly currentLeafId?: string | null;
-				readonly reason?: GlobalReplanReason;
+				readonly reason?: string;
 				readonly note?: string;
 				readonly production?: boolean;
 				readonly metric?: GlobalReplanMetricObservation;
@@ -174,6 +171,23 @@ function phaseForIntent(intent: IntentClassification["intent"]): PlanPhase {
 	return intent === "MULTI_STEP" ? "decomposing" : "executing";
 }
 
+function resolveReplannedLeafId(
+	state: PlanningState,
+	plan: Plan,
+	currentLeafId: string | null | undefined,
+): string | null {
+	if (currentLeafId !== undefined) {
+		return currentLeafId;
+	}
+	if (state.currentLeafId == null) {
+		return null;
+	}
+
+	return plan.subtasks.some((step) => step.id === state.currentLeafId)
+		? state.currentLeafId
+		: null;
+}
+
 export function applyEvent(
 	state: PlanningState,
 	event: PlanningEvent,
@@ -222,14 +236,20 @@ export function applyEvent(
 				phase: "repairing",
 				events,
 			};
-		case "replan":
+		case "replan": {
+			const nextCurrentLeafId = resolveReplannedLeafId(
+				state,
+				event.payload.plan,
+				event.payload.currentLeafId,
+			);
 			return {
 				...state,
 				plan: event.payload.plan,
-				currentLeafId: event.payload.currentLeafId ?? null,
+				currentLeafId: nextCurrentLeafId,
 				phase: "replanning",
 				events,
 			};
+		}
 		case "checkpoint_saved":
 			return {
 				...state,

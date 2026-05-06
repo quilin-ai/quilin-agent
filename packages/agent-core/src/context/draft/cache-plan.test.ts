@@ -154,6 +154,74 @@ describe("buildContextCachePlan", () => {
 		expect(first.cachePlanId).toMatch(/^cache-plan:[a-f0-9]{16}$/);
 	});
 
+	it("keeps dynamic source fields out of the rendered stable prefix hash", () => {
+		const first = buildContextCachePlan({
+			prompt: makePrompt(),
+			contextSources: [
+				makeSource("stable-source", {
+					cacheVolatility: "stable",
+					content: "rendered stable instructions",
+					tokenCount: 4,
+					metadata: { lastSeenAt: "2026-05-06T00:00:00.000Z" },
+					relevanceScore: 0.7,
+				}),
+			],
+			promptBuildId: "prompt-stable-fields",
+			modelId: "deepseek-chat",
+			renderedCacheBoundarySourceIds: ["stable-source"],
+		});
+		const dynamicOnlyChange = buildContextCachePlan({
+			prompt: makePrompt(),
+			contextSources: [
+				makeSource("stable-source", {
+					cacheVolatility: "stable",
+					content: "rendered stable instructions",
+					tokenCount: 9,
+					metadata: { lastSeenAt: "2026-05-06T00:01:00.000Z" },
+					relevanceScore: 0.1,
+				}),
+			],
+			promptBuildId: "prompt-stable-fields",
+			modelId: "deepseek-chat",
+			renderedCacheBoundarySourceIds: ["stable-source"],
+		});
+
+		expect(first.cacheBoundarySourceIds).toEqual(["stable-source"]);
+		expect(first.stablePrefixHash).toBe(dynamicOnlyChange.stablePrefixHash);
+		expect(first.eligiblePrefixTokens).not.toBe(
+			dynamicOnlyChange.eligiblePrefixTokens,
+		);
+		expect(first.cachePlanId).not.toBe(dynamicOnlyChange.cachePlanId);
+	});
+
+	it("keeps the cache plan hash stable when expected usage field order changes", () => {
+		const first = buildContextCachePlan({
+			prompt: makePrompt(),
+			contextSources: [],
+			promptBuildId: "prompt-3b",
+			modelId: "deepseek-chat",
+			expectedUsageFields: ["cache_read_tokens", "cache_write_tokens"],
+		});
+		const second = buildContextCachePlan({
+			prompt: makePrompt(),
+			contextSources: [],
+			promptBuildId: "prompt-3b",
+			modelId: "deepseek-chat",
+			expectedUsageFields: ["cache_write_tokens", "cache_read_tokens"],
+		});
+
+		expect(first.expectedUsageFields).toEqual([
+			"cache_read_tokens",
+			"cache_write_tokens",
+		]);
+		expect(second.expectedUsageFields).toEqual([
+			"cache_write_tokens",
+			"cache_read_tokens",
+		]);
+		expect(first.determinismKey).toBe(second.determinismKey);
+		expect(first.cachePlanId).toBe(second.cachePlanId);
+	});
+
 	it("snapshots provider options and expected usage fields before returning", () => {
 		const providerOptions = {
 			z: 1,

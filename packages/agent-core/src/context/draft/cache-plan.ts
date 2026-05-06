@@ -86,6 +86,12 @@ function stableRecordSnapshot(
 	return stableSnapshot(value) as Readonly<Record<string, unknown>>;
 }
 
+function normalizeExpectedUsageFields(
+	value: readonly string[],
+): readonly string[] {
+	return [...new Set(value)].toSorted();
+}
+
 function sourceDigest(source: ContextSource, sourceIdValue: string): string {
 	return sha256(
 		stableStringify({
@@ -108,6 +114,8 @@ export function buildContextCachePlan(
 	const expectedUsageFields = Object.freeze([
 		...(input.expectedUsageFields ?? DEFAULT_EXPECTED_USAGE_FIELDS),
 	]);
+	const normalizedExpectedUsageFields =
+		normalizeExpectedUsageFields(expectedUsageFields);
 	const sourcesWithIds = input.contextSources.map((source, index) => ({
 		source,
 		sourceId: sourceId(source, index),
@@ -170,7 +178,7 @@ export function buildContextCachePlan(
 		`cacheBoundarySourceIds=${cacheBoundarySourceIds.join(",")}`,
 		`excludedVolatileSourceIds=${excludedVolatileSourceIds.join(",")}`,
 		`providerOptionsHash=${sha256(stableStringify(providerOptions))}`,
-		`expectedUsageFields=${expectedUsageFields.join(",")}`,
+		`expectedUsageFields=${normalizedExpectedUsageFields.join(",")}`,
 	].join("|");
 
 	return {

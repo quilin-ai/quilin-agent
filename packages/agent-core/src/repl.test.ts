@@ -12,6 +12,7 @@ const mockClose = vi.fn();
 const mockCreateInterface = vi.fn(() => ({
 	question: mockQuestion,
 	close: mockClose,
+	prompt: vi.fn(),
 }));
 const mockRunAgentLoop = vi.fn();
 const mockLoggerError = vi.fn();
@@ -40,6 +41,25 @@ let capturedProviderControlPlaneInstance:
 const registryBuiltinTools: ToolWithMetadata[] = [];
 const registryServerTools: ToolWithMetadata[] = [];
 const registryChangeListeners: Array<() => void> = [];
+
+function setProcessTty(
+	stream: typeof process.stdin | typeof process.stderr,
+	value: boolean,
+): () => void {
+	const descriptor = Object.getOwnPropertyDescriptor(stream, "isTTY");
+	Object.defineProperty(stream, "isTTY", {
+		configurable: true,
+		value,
+	});
+
+	return () => {
+		if (descriptor == null) {
+			Reflect.deleteProperty(stream, "isTTY");
+			return;
+		}
+		Object.defineProperty(stream, "isTTY", descriptor);
+	};
+}
 
 function createToolWithMetadata(
 	name: string,
@@ -357,7 +377,7 @@ describe("startRepl", () => {
 			"Session: 00000000-0000-0000-0000-000000000000 (new)\n",
 		);
 		expect(stderrWriteSpy).toHaveBeenCalledWith(
-			"Type your message, or /exit to quit.\n\n",
+			"Type your message, or / to list commands. /exit to quit.\n\n",
 		);
 		expect(stderrWriteSpy).toHaveBeenCalledWith("\nBye! 🐉\n");
 		expect(stdoutWriteSpy).not.toHaveBeenCalled();
@@ -1068,6 +1088,169 @@ describe("startRepl", () => {
 			createdAt: expect.any(String),
 			lastActiveAt: expect.any(String),
 		});
+	});
+
+	it("shows slash command help on /", async () => {
+		mockQuestion.mockResolvedValueOnce("/").mockResolvedValueOnce("/exit");
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: createMockProvider(() => createMockLanguageModel()),
+			modelId: "deepseek-chat",
+		});
+
+		expect(stderrWriteSpy).toHaveBeenCalledWith(
+			expect.stringContaining("Slash commands:"),
+		);
+		expect(stderrWriteSpy).toHaveBeenCalledWith(
+			expect.stringContaining("/status"),
+		);
+		expect(stderrWriteSpy).toHaveBeenCalledWith(
+			expect.stringContaining("/help"),
+		);
+		expect(mockRunAgentLoop).not.toHaveBeenCalled();
+	});
+
+	it("filters submitted unknown slash command help by the typed prefix", async () => {
+		mockQuestion.mockResolvedValueOnce("/he").mockResolvedValueOnce("/exit");
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: createMockProvider(() => createMockLanguageModel()),
+			modelId: "deepseek-chat",
+		});
+
+		const writes = stderrWriteSpy.mock.calls
+			.map(([value]) => String(value))
+			.join("\n");
+		expect(writes).toContain("Unknown command: /he");
+		expect(writes).toContain("Slash commands:");
+		expect(writes).toContain("/help");
+		expect(writes).not.toContain("/status");
+		expect(writes).not.toContain("/think on|off|auto");
+		expect(mockRunAgentLoop).not.toHaveBeenCalled();
+	});
+
+	it("shows slash command help while / is typed without submitting input", async () => {
+		const restoreStdinTty = setProcessTty(process.stdin, true);
+		const restoreStderrTty = setProcessTty(process.stderr, true);
+		const readlineLineAccess = vi.fn(() => {
+			throw new Error("slash command help must not read readline.line");
+		});
+		const getCursorPos = vi.fn(() => {
+			throw new Error("slash command help must not read readline cursor state");
+		});
+		const mockInteractiveInterface = {
+			question: mockQuestion,
+			close: mockClose,
+			prompt: vi.fn(),
+			get line() {
+				return readlineLineAccess();
+			},
+			getCursorPos,
+		};
+		let resolvePrompt: (input: string) => void = () => undefined;
+		const pendingPrompt = new Promise<string>((resolve) => {
+			resolvePrompt = resolve;
+		});
+		mockCreateInterface.mockReturnValueOnce(mockInteractiveInterface);
+		mockQuestion
+			.mockReturnValueOnce(pendingPrompt)
+			.mockResolvedValueOnce("/exit");
+
+		try {
+			const { startRepl } = await import("./repl.js");
+
+			const replPromise = startRepl({
+				provider: createMockProvider(() => createMockLanguageModel()),
+				modelId: "deepseek-chat",
+			});
+			await new Promise((resolve) => setImmediate(resolve));
+			await new Promise((resolve) => setImmediate(resolve));
+
+			process.stdin.emit("keypress", "/", { sequence: "/" });
+			await new Promise((resolve) => setImmediate(resolve));
+
+			expect(mockQuestion).toHaveBeenCalledTimes(1);
+			expect(readlineLineAccess).not.toHaveBeenCalled();
+			expect(getCursorPos).not.toHaveBeenCalled();
+			expect(stderrWriteSpy).toHaveBeenCalledWith(
+				expect.stringContaining("Slash commands:"),
+			);
+			expect(stderrWriteSpy).toHaveBeenCalledWith(
+				expect.stringContaining("quilin> /"),
+			);
+			expect(mockInteractiveInterface.prompt).not.toHaveBeenCalled();
+			expect(mockRunAgentLoop).not.toHaveBeenCalled();
+
+			resolvePrompt("/");
+			await replPromise;
+		} finally {
+			restoreStderrTty();
+			restoreStdinTty();
+		}
+	});
+
+	it("filters slash command help by the typed prefix", async () => {
+		const restoreStdinTty = setProcessTty(process.stdin, true);
+		const restoreStderrTty = setProcessTty(process.stderr, true);
+		const readlineLineAccess = vi.fn(() => {
+			throw new Error("slash command help must not read readline.line");
+		});
+		const getCursorPos = vi.fn(() => {
+			throw new Error("slash command help must not read readline cursor state");
+		});
+		const mockInteractiveInterface = {
+			question: mockQuestion,
+			close: mockClose,
+			prompt: vi.fn(),
+			get line() {
+				return readlineLineAccess();
+			},
+			getCursorPos,
+		};
+		let resolvePrompt: (input: string) => void = () => undefined;
+		const pendingPrompt = new Promise<string>((resolve) => {
+			resolvePrompt = resolve;
+		});
+		mockCreateInterface.mockReturnValueOnce(mockInteractiveInterface);
+		mockQuestion
+			.mockReturnValueOnce(pendingPrompt)
+			.mockResolvedValueOnce("/exit");
+
+		try {
+			const { startRepl } = await import("./repl.js");
+
+			const replPromise = startRepl({
+				provider: createMockProvider(() => createMockLanguageModel()),
+				modelId: "deepseek-chat",
+			});
+			await new Promise((resolve) => setImmediate(resolve));
+			await new Promise((resolve) => setImmediate(resolve));
+
+			process.stdin.emit("keypress", "/", { sequence: "/" });
+			process.stdin.emit("keypress", "h", { sequence: "h" });
+			process.stdin.emit("keypress", "e", { sequence: "e" });
+			await new Promise((resolve) => setImmediate(resolve));
+
+			expect(readlineLineAccess).not.toHaveBeenCalled();
+			expect(getCursorPos).not.toHaveBeenCalled();
+			const writes = stderrWriteSpy.mock.calls
+				.map(([value]) => String(value))
+				.join("\n");
+			expect(writes).toContain("Slash commands:");
+			expect(writes).toContain("/help");
+			expect(writes).not.toContain("/status");
+			expect(writes).not.toContain("/think on|off|auto");
+
+			resolvePrompt("/");
+			await replPromise;
+		} finally {
+			restoreStderrTty();
+			restoreStdinTty();
+		}
 	});
 
 	it("applies /think on off auto to the per-session inference config", async () => {

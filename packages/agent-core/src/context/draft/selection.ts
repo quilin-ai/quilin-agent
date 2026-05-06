@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
 	ContextSelectionRejectReason,
 	ContextSelectionScore,
@@ -33,6 +34,10 @@ const DEFAULT_POLICY_VERSION = "context-selection-v1";
 const EXTERNAL_AUTHORITY_CEILING = 0.45;
 const PROTECTED_AUTHORITY_THRESHOLD = 0.95;
 
+function sha256(value: string): string {
+	return createHash("sha256").update(value).digest("hex");
+}
+
 function clamp01(value: number): number {
 	if (!Number.isFinite(value)) {
 		return 0;
@@ -43,6 +48,19 @@ function clamp01(value: number): number {
 
 function sourceId(source: ContextSource, index: number): string {
 	return source.sourceId ?? `${source.sourceType}:${source.timestamp}:${index}`;
+}
+
+function sourceContentHash(source: ContextSource): string {
+	if (source.contentHash != null && source.contentHash.length > 0) {
+		return source.contentHash;
+	}
+
+	const metadataHash = source.metadata.contentHash;
+	if (typeof metadataHash === "string" && metadataHash.length > 0) {
+		return metadataHash;
+	}
+
+	return sha256(source.content.trim());
 }
 
 function stableSourceIds(sources: readonly ContextSource[]): readonly string[] {
@@ -213,6 +231,74 @@ function preBudgetRejection(
 	return null;
 }
 
+function findLowerAuthorityDuplicates(
+	candidates: readonly {
+		readonly source: ContextSource;
+		readonly index: number;
+		readonly score: ContextSelectionScore;
+		readonly protectedRetain: boolean;
+	}[],
+): ReadonlyMap<number, ContextSelectionRejectReason> {
+	const groupsByContentHash = new Map<string, typeof candidates>();
+
+	for (const candidate of candidates) {
+		if (candidate.source.content.trim().length === 0) {
+			continue;
+		}
+
+		const contentHash = sourceContentHash(candidate.source);
+		groupsByContentHash.set(contentHash, [
+			...(groupsByContentHash.get(contentHash) ?? []),
+			candidate,
+		]);
+	}
+
+	const rejectionByIndex = new Map<number, ContextSelectionRejectReason>();
+	for (const group of groupsByContentHash.values()) {
+		if (group.length < 2) {
+			continue;
+		}
+
+		const winner = group.toSorted((left, right) => {
+			if (left.protectedRetain !== right.protectedRetain) {
+				return left.protectedRetain ? -1 : 1;
+			}
+
+			if (right.score.authority !== left.score.authority) {
+				return right.score.authority - left.score.authority;
+			}
+
+			if (right.score.finalScore !== left.score.finalScore) {
+				return right.score.finalScore - left.score.finalScore;
+			}
+
+			return (
+				right.source.timestamp - left.source.timestamp ||
+				left.index - right.index
+			);
+		})[0];
+
+		if (winner == null) {
+			continue;
+		}
+
+		for (const candidate of group) {
+			if (candidate.index === winner.index || candidate.protectedRetain) {
+				continue;
+			}
+
+			if (
+				winner.protectedRetain ||
+				winner.score.authority > candidate.score.authority
+			) {
+				rejectionByIndex.set(candidate.index, "lower_authority_duplicate");
+			}
+		}
+	}
+
+	return rejectionByIndex;
+}
+
 function rejectExplanation(reason: ContextSelectionRejectReason): string {
 	switch (reason) {
 		case "below_relevance_threshold":
@@ -228,7 +314,7 @@ function rejectExplanation(reason: ContextSelectionRejectReason): string {
 		case "permission_denied":
 			return "Rejected because the current run does not have permission to use this source.";
 		case "lower_authority_duplicate":
-			return "Rejected because a higher-authority duplicate source was preferred.";
+			return "Rejected because another source with matching content has higher authority for the current context build.";
 		case "cache_boundary_violation":
 			return "Rejected because this source cannot cross the selected cache boundary.";
 	}
@@ -260,6 +346,7 @@ function determinismKeyFor(
 		...candidates.map((candidate) =>
 			[
 				candidate.sourceId,
+				`contentHash=${sourceContentHash(candidate.source)}`,
 				`tokens=${candidate.source.tokenCount}`,
 				`relevance=${candidate.score.relevance}`,
 				`freshness=${candidate.score.freshness}`,
@@ -323,6 +410,8 @@ export function selectContextSources(
 	const selected: ContextSource[] = [];
 	const selectedTrace: SelectedContextSourceTrace[] = [];
 	const rejectedTrace: RejectedContextSourceTrace[] = [];
+	const lowerAuthorityDuplicateRejections =
+		findLowerAuthorityDuplicates(candidates);
 	let usedTokens = 0;
 
 	for (const candidate of orderedCandidates) {
@@ -337,6 +426,19 @@ export function selectContextSources(
 				reason: rejection,
 				score: candidate.score,
 				explanation: rejectExplanation(rejection),
+			});
+			continue;
+		}
+
+		const duplicateRejection = lowerAuthorityDuplicateRejections.get(
+			candidate.index,
+		);
+		if (duplicateRejection != null) {
+			rejectedTrace.push({
+				sourceId: candidate.sourceId,
+				reason: duplicateRejection,
+				score: candidate.score,
+				explanation: rejectExplanation(duplicateRejection),
 			});
 			continue;
 		}

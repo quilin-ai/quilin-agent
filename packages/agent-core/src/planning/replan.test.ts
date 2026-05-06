@@ -56,6 +56,11 @@ describe("applyLocalRearrange", () => {
 				}),
 			}),
 		]);
+		expect(toReplanEventPayload(patch)).toEqual({
+			plan: patch.plan,
+			currentLeafId: "search",
+			reason: "tool_failed:TOOL_TIMEOUT",
+		});
 		expect(patch.plan.subtasks.map((step) => step.id)).toEqual([
 			"search",
 			"summarize",
@@ -238,6 +243,9 @@ describe("applyLocalRedecompose", () => {
 		expect(replayed).toEqual(direct);
 		expect(replayed.plan).toEqual(patch.plan);
 		expect(replayed.currentLeafId).toBe("table.collect");
+		expect(replanEvent.payload).toMatchObject({
+			reason: "redecompose:table",
+		});
 	});
 });
 
@@ -333,6 +341,100 @@ describe("applyGlobalReplan", () => {
 				},
 			},
 		});
+	});
+
+	it("lets state preserve a live leaf when G-Replan omits currentLeafId", () => {
+		const previousPlan: LinearPlan = {
+			kind: "linear",
+			subtasks: [makeStep("search"), makeStep("draft")],
+		};
+		const nextPlan: LinearPlan = {
+			kind: "linear",
+			subtasks: [makeStep("draft"), makeStep("validate")],
+		};
+		const baseEvents: readonly PlanningEvent[] = [
+			{
+				seq: 1,
+				timestamp: 1_000,
+				kind: "task_decomposed",
+				payload: { plan: previousPlan },
+			},
+			{
+				seq: 2,
+				timestamp: 1_100,
+				kind: "subtask_started",
+				payload: { leafId: "draft" },
+			},
+		];
+		const baseState = baseEvents.reduce(
+			applyEvent,
+			createPlanningState("run-global-replan-keep-leaf"),
+		);
+		const patch = applyGlobalReplan(previousPlan, nextPlan, {
+			reason: "external_context_changed",
+			production: true,
+		});
+		const payload = toReplanEventPayload(patch);
+
+		const replanned = applyEvent(baseState, {
+			seq: 3,
+			timestamp: 1_200,
+			kind: "replan",
+			payload,
+		});
+
+		expect(patch.currentLeafId).toBeUndefined();
+		expect("currentLeafId" in payload).toBe(false);
+		expect(replanned.plan).toEqual(nextPlan);
+		expect(replanned.currentLeafId).toBe("draft");
+		expect(replanned.phase).toBe("replanning");
+	});
+
+	it("clears a live leaf when G-Replan explicitly sets currentLeafId to null", () => {
+		const previousPlan: LinearPlan = {
+			kind: "linear",
+			subtasks: [makeStep("search"), makeStep("draft")],
+		};
+		const nextPlan: LinearPlan = {
+			kind: "linear",
+			subtasks: [makeStep("draft"), makeStep("validate")],
+		};
+		const baseEvents: readonly PlanningEvent[] = [
+			{
+				seq: 1,
+				timestamp: 1_000,
+				kind: "task_decomposed",
+				payload: { plan: previousPlan },
+			},
+			{
+				seq: 2,
+				timestamp: 1_100,
+				kind: "subtask_started",
+				payload: { leafId: "draft" },
+			},
+		];
+		const baseState = baseEvents.reduce(
+			applyEvent,
+			createPlanningState("run-global-replan-clear-leaf"),
+		);
+		const patch = applyGlobalReplan(previousPlan, nextPlan, {
+			reason: "manual_request",
+			currentLeafId: null,
+		});
+		const payload = toReplanEventPayload(patch);
+
+		const replanned = applyEvent(baseState, {
+			seq: 3,
+			timestamp: 1_200,
+			kind: "replan",
+			payload,
+		});
+
+		expect(patch.currentLeafId).toBeNull();
+		expect(payload.currentLeafId).toBeNull();
+		expect(replanned.plan).toEqual(nextPlan);
+		expect(replanned.currentLeafId).toBeNull();
+		expect(replanned.phase).toBe("replanning");
 	});
 });
 

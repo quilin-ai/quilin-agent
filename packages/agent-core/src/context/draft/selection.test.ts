@@ -53,7 +53,8 @@ describe("selectContextSources", () => {
 			},
 		});
 		expect(result.trace.promptBuildId).toContain("prompt:policy=");
-		expect(result.trace.promptBuildId).toContain("relevant:tokens=10");
+		expect(result.trace.promptBuildId).toContain("relevant:contentHash=");
+		expect(result.trace.promptBuildId).toContain("tokens=10");
 		expect(result.trace.scoreBreakdown.relevant?.finalScore).toBeGreaterThan(
 			result.trace.scoreBreakdown.irrelevant?.finalScore ?? 0,
 		);
@@ -231,6 +232,65 @@ describe("selectContextSources", () => {
 				}),
 			]),
 		);
+	});
+
+	it("rejects lower-authority duplicate content before it can clutter context", () => {
+		const result = selectContextSources(
+			[
+				makeSource("external-copy", {
+					content: "same operational fact",
+					tokenCount: 1,
+					relevanceScore: 1,
+					trustTier: "external",
+					isExternal: true,
+					timestamp: 3,
+				}),
+				makeSource("workspace-copy", {
+					content: "same operational fact",
+					tokenCount: 1,
+					relevanceScore: 0.7,
+					trustTier: "workspace",
+					timestamp: 1,
+				}),
+			],
+			{ taskIntent: "deep_reasoning", budgetTokens: 10 },
+		);
+
+		expect(result.sources.map((source) => source.sourceId)).toEqual([
+			"workspace-copy",
+		]);
+		expect(result.trace.rejectedSources).toEqual([
+			expect.objectContaining({
+				sourceId: "external-copy",
+				reason: "lower_authority_duplicate",
+				explanation: expect.stringContaining("higher authority"),
+			}),
+		]);
+		expect(result.trace.determinismKey).toContain("contentHash=");
+	});
+
+	it("keeps dynamic metadata fields out of the determinism key", () => {
+		const first = selectContextSources(
+			[
+				makeSource("memory-a", {
+					content: "stable remembered fact",
+					metadata: { lastRetrievedAt: "2026-05-06T00:00:00.000Z" },
+				}),
+			],
+			{ taskIntent: "deep_reasoning", budgetTokens: 10 },
+		);
+		const second = selectContextSources(
+			[
+				makeSource("memory-a", {
+					content: "stable remembered fact",
+					metadata: { lastRetrievedAt: "2026-05-06T00:01:00.000Z" },
+				}),
+			],
+			{ taskIntent: "deep_reasoning", budgetTokens: 10 },
+		);
+
+		expect(first.trace.determinismKey).toBe(second.trace.determinismKey);
+		expect(first.trace.traceId).toBe(second.trace.traceId);
 	});
 
 	it("changes the determinism key when authority inputs change ordering", () => {
