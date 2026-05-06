@@ -1400,7 +1400,7 @@ class OutputValidatorImpl:
 class Quilin:
     def __init__(self, config: Config):
         # 现有组件
-        self.memory = OmniMem(config)
+        self.memory = QuilinMem(config)
         self.plugin_registry = PluginRegistry(config)
         self.mcp_bus = MCPBus(config)
         

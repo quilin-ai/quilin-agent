@@ -128,7 +128,7 @@ Agent 代码不应直接依赖任何一家供应商的格式。变更模型时�
 
   ──────────────── 与其他 Harness 组件的关系 ────────────────
 
-  OmniMem（记忆层）  ─── 构建 messages[] ──→  LLMClient.chat()
+  quilin-mem（记忆层）  ─── 构建 messages[] ──→  LLMClient.chat()
   ToolRouter（工具层）─── 注入 tools[] ────→  LLMClient.chat()
   MCPBus（协议总线）  ─── 分发响应 ────────→  LLMResponse
   Verifier（验证层）  ─── 消费 LLMResponse ─→  验证输出
@@ -259,7 +259,7 @@ usage = {
 ```
 
 `count_tokens()` 方法在发送请求前预估输入 token 数，用于：
-1. 上下文窗口溢出检测（超过阈值时触发 OmniMem 压缩）
+1. 上下文窗口溢出检测（超过阈值时触发 quilin-mem 压缩）
 2. 成本预算门控（超过每轮 token 上限时降级到 QUICK 配置）
 
 ### 2.6 工具调用格式归一化

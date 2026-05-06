@@ -180,7 +180,7 @@ Agent 应该不断微调对用户的假设（专业程度、情绪状态、今�
 刻意的不均匀记忆是人味。给情感/偏好类记忆高权重，给事务类记忆低权重。完美记忆让人毛骨悚然，什么都不记得让人觉得疏远。
 
 ```python
-# OmniMem 检索时的权重偏移
+# quilin-mem 检索时的权重偏移
 RETRIEVAL_WEIGHT_BIAS = {
     "emotional_preference": 1.5,    # "你去年随口提过喜欢某个乐队"
     "personal_detail": 1.3,         # "你家有两只猫"
@@ -383,7 +383,7 @@ class RelationshipModelProtocol(Protocol):
     └── 时间感知数据 → 第 5 层（间隔反思、状态漂移）
     └── DepartureContext → 生成"上次之后"的开场白
 
-03-Memory（OmniMem）
+03-Memory（quilin-mem）
     └── User Profile Store → 第 4 层（隐式关系建模）
     └── 记忆检索权重偏移 → 记住小事忘大事
     └── Episodic Memory → 跨会话的关系积累

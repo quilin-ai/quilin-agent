@@ -128,7 +128,7 @@ Quilin Agent 的核心本质是一个**上下文工程自动化流水线**，11 
 [中时记忆] Hindsight Reflect：把 100 条总结成 5 条关键点
      │
      ▼  Memory 层压缩
-[长时记忆] OmniMem：提炼成 KG 三元组/向量索引
+[长时记忆] quilin-mem：提炼成 KG 三元组/向量索引
      │
      ▼  Memory 层压缩
 [超长时记忆] gbrain：只留最核心的经验和模式
@@ -235,7 +235,7 @@ class ContextSource:
 **与 03-Memory 联动**：
 
 时间感知依赖 03-Memory 的 **Departure Context**（离开上下文）功能：
-- 每次检测到用户长时间未响应（> 30 分钟），OmniMem 自动记录当前上下文状态
+- 每次检测到用户长时间未响应（> 30 分钟），quilin-mem 自动记录当前上下文状态
 - 记录内容：最后讨论话题、未完成的用户承诺/动作、Agent 待确认事项
 - 新消息到达时，ContextManager 优先检索 Departure Context 并注入 system prompt
 
@@ -338,7 +338,7 @@ class SystemPromptBuilder(Protocol):
         self,
         role_persona: str,          # 角色定义（如 "你是一个专业的代码审查助手"）
         tool_descriptions: list[str],  # 当前可用工具的描述列表
-        memory_summary: str,        # 长时记忆的摘要（gbrain / OmniMem 提取）
+        memory_summary: str,        # 长时记忆的摘要（gbrain / quilin-mem 提取）
         constraint_rules: list[str],   # 安全约束 / 输出格式规则
         extra_context: str = "",    # 其他动态注入内容
     ) -> str:
@@ -875,7 +875,7 @@ Instructor 将 Pydantic 模型作为输出 schema，调用时通过 `response_mo
 
 ```
 Quilin（quilin/core/Harness.py）
-├── OmniMem                  ←→  ContextManager.gather()  [Memory 来源]
+├── quilin-mem              ←→  ContextManager.gather()  [Memory 来源]
 │                                ContextManager.compress() [4 层压缩管道]
 ├── PluginRegistry           ←→  SystemPromptBuilder（工具描述动态注入）
 ├── MCPBus                   ←→  ContextManager.gather()  [多 Agent 来源]
@@ -937,7 +937,7 @@ def build_context(self, state: HarnessState) -> AssembledContext:
 
 ### 5.5 MemoryBridge（D-05：02 ↔ 03 边界）
 
-**定位**：OmniMem（03）的 recall 结果到 ContextSource 的**薄适配层**，是 02-Context 与 03-Memory 之间唯一的数据转换点。
+**定位**：quilin-mem（03）的 recall 结果到 ContextSource 的**薄适配层**，是 02-Context 与 03-Memory 之间唯一的数据转换点。
 
 **权威实现**：[`packages/agent-core/src/context/draft/memory-bridge.ts`](../../packages/agent-core/src/context/draft/memory-bridge.ts)
 
@@ -958,18 +958,18 @@ export function recallResultsToSources(
 ```
 
 **设计原则**：
-- **不做关键词抽取**：查询字符串直接透传给 OmniMem，由 03 侧的检索器自己做 query expansion / CJK n-gram / vector encode（D-05 要求分层只在一侧做）。
+- **不做关键词抽取**：查询字符串直接透传给 quilin-mem，由 03 侧的检索器自己做 query expansion / CJK n-gram / vector encode（D-05 要求分层只在一侧做）。
 - **只做转换 + 阈值过滤**：score < threshold 的结果直接丢弃；其余按 `ContextSource` schema 打平，标记 `sourceType='memory'` / `isExternal=true` / `metadata.layer`。
 - **无状态**：不维护任何缓存；每次 `build_context()` 都现转，避免跨 turn 数据漂移。
 
-**与 03 的接口约定**（由 OmniMem MCP Server 返回）：
+**与 03 的接口约定**（由 quilin-mem MCP Server 返回）：
 - `layer` 字段用于下游的 layer_priority 权重计算（见 03 §混合检索）。
 - `score` 已在 03 侧做过综合评分（vector + time_decay + layer_priority + task_relevance），02 不二次加权，只做 cutoff。
 - `timestamp` 单位：Unix ms，供 ContextAssembler 排序使用。
 
 **反模式（禁止）**：
 - ❌ 在 MemoryBridge 里调用 embedding / 跑 rerank（这是 03 的事）。
-- ❌ 在 MemoryBridge 里写回 OmniMem（单向流，写入只能通过 03 自己的 `MemoryStore` API）。
+- ❌ 在 MemoryBridge 里写回 quilin-mem（单向流，写入只能通过 03 自己的 `MemoryStore` API）。
 - ❌ 把 `ContextSource` 反向转回 `MemoryRecallResult` 发回 03（单向流，只能 01 → 03 提交 `ProfileSignal` 或完整对话 turn）。
 
 ---

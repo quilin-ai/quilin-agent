@@ -14,7 +14,7 @@ Quilin Agent（麒麟）is a self-evolving Agent framework that tracks **curated
 - **Core Loop**: Custom minimal Agent Loop (< 200 lines TS), no LangGraph or external framework
 - **Runtime Languages**: TS (Agent core) + Python (ML providers as MCP servers) are active; Rust has an Iter D `crates/mesh-sdk` stub, with mesh/WASM runtime behavior deferred to Iter F.
 - **E-T-C-S-L-V**: Six capabilities exposed as LLM-callable tools, not fixed state graph nodes
-- **Layered Memory**: OmniMem 4-tier (working/episodic/semantic/skill) with auto-reflect + User Profile Store + Departure Context
+- **Layered Memory**: quilin-mem 4-tier (working/episodic/semantic/skill) with auto-reflect + User Profile Store + Departure Context
 - **Communication**: MCP stdio (TS↔Python). Agent Mesh (gRPC) and HTTP SSE streaming land in Iter D+.
 - **Temporal Awareness**: 3-layer time perception (intra-session gap, absolute time, cross-session timeline)
 - **Permission Model**: Default **READ-ONLY + ASK-ON-WRITE**. The `AUTO` tier that auto-approves non-CRITICAL ops is **opt-in per session** and gated by an explicit `--trust auto` flag; no global "max trust" default. All agent-initiated writes (shell_exec / file_write / scaffold patch / skill_create / idle evolution) route through a single **`WriteAuthority`** gate (07 §2.6.4, Task #90)—CRITICAL always confirms, `origin:"idle"` writes require explicit `--trust auto` opt-in. See 07-safety.
@@ -69,14 +69,14 @@ bash scripts/setup-cron.sh --status           # 检查 cron 状态
 
 # ===== Phase 0 开发命令（项目骨架落地后可用） =====
 just init          # 一键安装全部依赖（pnpm + uv + cargo）
-just start         # 一键启动全部服务（agent-core + omnimem）
+just start         # 一键启动全部服务（agent-core + quilin-mem）
 just stop          # 一键停止
 just restart       # 一键重启
 just test-all      # 一键测试（TS + Python + Rust）
 just check         # 一键 lint + format
 just clean         # 一键清理构建产物
 just dev           # TS 开发模式（前台 + watch）
-just dev-memory    # Python OmniMem 开发模式
+just dev-memory    # Python quilin-mem 开发模式
 just build         # TS 构建
 just build-rs      # Rust workspace check（Iter D mesh-sdk stub）
 just test-rs       # Rust workspace tests（Iter D mesh-sdk stub）
@@ -89,7 +89,7 @@ quilin-agent/
 ├── packages/                       # TS — pnpm workspace (Iter A+)
 │   └── agent-core/                 #   Agent Loop + LLM + Context + Tools
 ├── providers/                      # Python — uv workspace (Iter A+)
-│   └── memory/                     #   OmniMem MCP Server
+│   └── memory/                     #   quilin-mem MCP Server
 ├── crates/                         # Rust — cargo workspace (Iter D mesh-sdk stub; runtime deferred to Iter F)
 ├── upstreams/                      # ~100 git submodules (tracked, --depth 1)
 ├── docs/
@@ -119,7 +119,7 @@ quilin-agent/
 |---|--------|-----------|------|
 | 01 | LLM Integration | Single model + Vercel AI SDK v6, ThinkingMode, InferenceConfig | [01](docs/01-llm-integration/README.md) |
 | 02 | Context | System prompt assembly, token budget, compression, temporal awareness | [02](docs/02-context/README.md) |
-| 03 | Memory | OmniMem 4-tier, vector+KG retrieval, auto-reflect, User Profile Store | [03](docs/03-memory/README.md) |
+| 03 | Memory | quilin-mem 4-tier, vector+KG retrieval, auto-reflect, User Profile Store | [03](docs/03-memory/README.md) |
 | 04 | Planning | Intent recognition, task decomposition, strategy switching | [04](docs/04-planning/README.md) |
 | 05 | Tools | 4-type hybrid action space, MCP client, browser, CLI-Anything | [05](docs/05-tool/README.md) |
 | 06 | Multi-Agent | Homogeneous spawn + heterogeneous mesh, non-blocking supervisor | [06](docs/06-multi-agent/README.md) |

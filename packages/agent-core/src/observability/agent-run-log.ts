@@ -29,6 +29,7 @@ import type {
 export type AgentRunLogPhase =
 	| "repl.session_started"
 	| "turn.input_received"
+	| "turn.live_input_received"
 	| "loop.turn_started"
 	| "context.rebuild_skipped"
 	| "context.outbound_request_built"

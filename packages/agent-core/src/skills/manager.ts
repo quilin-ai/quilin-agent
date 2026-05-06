@@ -34,6 +34,29 @@ export interface SkillsCatalogChange {
 	readonly changed: readonly string[];
 }
 
+export interface SkillsReloadSuccessSnapshot {
+	readonly generation: number;
+	readonly completedAtEpochMs: number;
+	readonly catalogSize: number;
+	readonly change: SkillsCatalogChange;
+}
+
+export interface SkillsReloadFailureSnapshot {
+	readonly generation: number;
+	readonly completedAtEpochMs: number;
+	readonly errorName: string;
+	readonly errorMessage: string;
+}
+
+export interface SkillsReloadStatus {
+	readonly generation: number;
+	readonly watching: boolean;
+	readonly inFlight: boolean;
+	readonly inFlightGenerations: readonly number[];
+	readonly lastSuccess: SkillsReloadSuccessSnapshot | null;
+	readonly lastFailure: SkillsReloadFailureSnapshot | null;
+}
+
 interface LoadSkillOptions {
 	readonly maxBodyChars?: number;
 	readonly maxBodyBytes?: number;
@@ -69,6 +92,10 @@ export class SkillsManager {
 	private activeWatchers: FSWatcher[] = [];
 	private pendingRescanTimer: ReturnType<typeof setTimeout> | null = null;
 	private watching = false;
+	private reloadGeneration = 0;
+	private inFlightReloadGenerations = new Set<number>();
+	private lastSuccess: SkillsReloadSuccessSnapshot | null = null;
+	private lastFailure: SkillsReloadFailureSnapshot | null = null;
 
 	constructor(options: SkillsManagerOptions) {
 		const roots: RootEntry[] = [];
@@ -91,63 +118,86 @@ export class SkillsManager {
 	}
 
 	async discover(): Promise<readonly SkillDescriptor[]> {
+		const commitGeneration = this.reloadGeneration + 1;
+		this.reloadGeneration = commitGeneration;
+		this.inFlightReloadGenerations.add(commitGeneration);
 		const previousDescriptorsByName = this.descriptorByName;
-		const byName = new Map<string, SkillDescriptor>();
-		const order: string[] = [];
+		try {
+			const byName = new Map<string, SkillDescriptor>();
+			const order: string[] = [];
 
-		for (const { source, path } of this.roots) {
-			const entries = await safeReaddir(path);
-			for (const entry of entries) {
-				const skillPath = join(path, entry, "SKILL.md");
-				const content = await safeReadFile(skillPath);
-				if (content == null) {
-					continue;
+			for (const { source, path } of this.roots) {
+				const entries = await safeReaddir(path);
+				for (const entry of entries) {
+					const skillPath = join(path, entry, "SKILL.md");
+					const content = await safeReadFile(skillPath);
+					if (content == null) {
+						continue;
+					}
+
+					let descriptor: SkillDescriptor;
+					try {
+						const { frontmatter } = parseSkillMarkdown(content);
+						const normalizedFrontmatter = applySourceTrustDefault(
+							frontmatter,
+							source,
+						);
+						descriptor = {
+							name: normalizedFrontmatter.name,
+							description: normalizedFrontmatter.description,
+							path: skillPath,
+							source,
+							frontmatter: normalizedFrontmatter,
+						};
+					} catch {
+						continue;
+					}
+
+					if (byName.has(descriptor.name)) {
+						continue;
+					}
+
+					byName.set(descriptor.name, descriptor);
+					order.push(descriptor.name);
 				}
-
-				let descriptor: SkillDescriptor;
-				try {
-					const { frontmatter } = parseSkillMarkdown(content);
-					const normalizedFrontmatter = applySourceTrustDefault(
-						frontmatter,
-						source,
-					);
-					descriptor = {
-						name: normalizedFrontmatter.name,
-						description: normalizedFrontmatter.description,
-						path: skillPath,
-						source,
-						frontmatter: normalizedFrontmatter,
-					};
-				} catch {
-					continue;
-				}
-
-				if (byName.has(descriptor.name)) {
-					continue;
-				}
-
-				byName.set(descriptor.name, descriptor);
-				order.push(descriptor.name);
 			}
-		}
 
-		this.descriptorByName = byName;
-		this.discoveryOrder = order;
-		this.recentSkillNames = this.recentSkillNames.filter((name) =>
-			byName.has(name),
-		);
-		this.evictUnreferencedLoadedSkills();
-		const change = diffCatalog(previousDescriptorsByName, byName);
-		if (
-			change.added.length > 0 ||
-			change.removed.length > 0 ||
-			change.changed.length > 0
-		) {
-			for (const listener of this.changeListeners) {
-				listener(change);
+			this.descriptorByName = byName;
+			this.discoveryOrder = order;
+			this.recentSkillNames = this.recentSkillNames.filter((name) =>
+				byName.has(name),
+			);
+			this.evictUnreferencedLoadedSkills();
+			const change = diffCatalog(previousDescriptorsByName, byName);
+			this.lastSuccess = {
+				generation: commitGeneration,
+				completedAtEpochMs: Date.now(),
+				catalogSize: byName.size,
+				change,
+			};
+			if (
+				change.added.length > 0 ||
+				change.removed.length > 0 ||
+				change.changed.length > 0
+			) {
+				for (const listener of this.changeListeners) {
+					try {
+						listener(change);
+					} catch {
+						// Listener failures must not break automatic catalog reload.
+					}
+				}
 			}
+			return order.map((name) => byName.get(name) as SkillDescriptor);
+		} catch (error) {
+			this.lastFailure = buildSkillsReloadFailureSnapshot(
+				commitGeneration,
+				error,
+			);
+			throw error;
+		} finally {
+			this.inFlightReloadGenerations.delete(commitGeneration);
 		}
-		return order.map((name) => byName.get(name) as SkillDescriptor);
 	}
 
 	findByName(name: string): SkillDescriptor | undefined {
@@ -219,6 +269,30 @@ export class SkillsManager {
 		return this.recentSkillNames;
 	}
 
+	getReloadStatus(): SkillsReloadStatus {
+		const inFlightGenerations = Array.from(this.inFlightReloadGenerations).sort(
+			(left, right) => left - right,
+		);
+		return {
+			generation: this.reloadGeneration,
+			watching: this.watching,
+			inFlight: inFlightGenerations.length > 0,
+			inFlightGenerations,
+			lastSuccess:
+				this.lastSuccess == null
+					? null
+					: {
+							...this.lastSuccess,
+							change: {
+								added: [...this.lastSuccess.change.added],
+								removed: [...this.lastSuccess.change.removed],
+								changed: [...this.lastSuccess.change.changed],
+							},
+						},
+			lastFailure: this.lastFailure == null ? null : { ...this.lastFailure },
+		};
+	}
+
 	startWatching(paths?: readonly string[]): void {
 		if (!this.watcherEnabled || this.watching) {
 			return;
@@ -233,8 +307,19 @@ export class SkillsManager {
 			return;
 		}
 
-		this.activeWatchers = watchRoots.map((path) => this.createWatcher(path));
-		this.watching = true;
+		const watchers: FSWatcher[] = [];
+		for (const path of watchRoots) {
+			try {
+				watchers.push(this.createWatcher(path));
+			} catch (error) {
+				this.lastFailure = buildSkillsReloadFailureSnapshot(
+					this.reloadGeneration,
+					error,
+				);
+			}
+		}
+		this.activeWatchers = watchers;
+		this.watching = watchers.length > 0;
 	}
 
 	stopWatching(): void {
@@ -312,7 +397,7 @@ export class SkillsManager {
 		}
 		this.pendingRescanTimer = setTimeout(() => {
 			this.pendingRescanTimer = null;
-			void this.discover();
+			void this.discover().catch(() => undefined);
 		}, this.debounceMs);
 	}
 
@@ -335,6 +420,28 @@ export class SkillsManager {
 			return this.watchFactory(path, {}, onEvent);
 		}
 	}
+}
+
+function buildSkillsReloadFailureSnapshot(
+	generation: number,
+	error: unknown,
+): SkillsReloadFailureSnapshot {
+	return {
+		generation,
+		completedAtEpochMs: Date.now(),
+		errorName:
+			error instanceof Error
+				? error.name
+				: typeof error === "string"
+					? "Error"
+					: "UnknownError",
+		errorMessage:
+			error instanceof Error
+				? error.message
+				: typeof error === "string"
+					? error
+					: "Unknown skills reload failure",
+	};
 }
 
 function descriptorSignature(descriptor: SkillDescriptor): string {

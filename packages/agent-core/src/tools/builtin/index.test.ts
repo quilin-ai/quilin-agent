@@ -12,6 +12,7 @@ import type {
 	FileWriteToolOptions,
 	ShellExecToolOptions,
 	SkillManageToolOptions,
+	SkillSearchToolOptions,
 	SkillViewToolOptions,
 	WebFetchToolOptions,
 } from "./index.js";
@@ -22,6 +23,7 @@ import {
 	createFileWriteTool,
 	createShellExecTool,
 	createSkillManageTool,
+	createSkillSearchTool,
 	createSkillViewTool,
 	createWebFetchTool,
 } from "./index.js";
@@ -71,8 +73,10 @@ describe("builtin tool index", () => {
 			"file_list",
 			"shell_exec",
 			"web_fetch",
+			"skill_search",
 		]);
 		expect(tools.map((tool) => tool.category)).toEqual([
+			"programmatic",
 			"programmatic",
 			"programmatic",
 			"programmatic",
@@ -117,6 +121,11 @@ describe("builtin tool index", () => {
 			maxBodyBytes: 128,
 			maxBodyChars: 64,
 		};
+		const skillSearch: SkillSearchToolOptions = {
+			skillsManager,
+			defaultLimit: 5,
+			maxLimit: 20,
+		};
 		const skillManage: SkillManageToolOptions = {
 			skillsManager,
 			writeAuthority,
@@ -138,6 +147,10 @@ describe("builtin tool index", () => {
 			webFetch,
 			writeAuthority,
 			skillsManager,
+			skillSearch: {
+				defaultLimit: skillSearch.defaultLimit,
+				maxLimit: skillSearch.maxLimit,
+			},
 			skillView: {
 				maxBodyBytes: skillView.maxBodyBytes,
 				maxBodyChars: skillView.maxBodyChars,
@@ -155,6 +168,7 @@ describe("builtin tool index", () => {
 				"file_list",
 				"shell_exec",
 				"web_fetch",
+				"skill_search",
 				"skill_view",
 				"skill_manage",
 			],
@@ -165,6 +179,7 @@ describe("builtin tool index", () => {
 				createFileWriteTool(fileWrite),
 				createFileListTool(fileList),
 				createShellExecTool(shellExec),
+				createSkillSearchTool(skillSearch),
 				createSkillViewTool(skillView),
 				createSkillManageTool(skillManage),
 				createWebFetchTool(webFetch),
@@ -174,6 +189,7 @@ describe("builtin tool index", () => {
 			"file_write",
 			"file_list",
 			"shell_exec",
+			"skill_search",
 			"skill_view",
 			"skill_manage",
 			"web_fetch",
@@ -304,6 +320,122 @@ describe("builtin tool index", () => {
 		}
 	});
 
+	it("searches discovered skills by metadata before loading their bodies", async () => {
+		const userRoot = await mkdtemp(join(tmpdir(), "quilin-builtin-skills-"));
+		try {
+			await writeSkill(
+				userRoot,
+				"browser-research",
+				"Research pages with browser tools",
+				"Search web pages.",
+			);
+			await writeFile(
+				join(userRoot, "browser-research", "SKILL.md"),
+				[
+					"---",
+					"name: browser-research",
+					"description: Research pages with browser tools",
+					"whenToUse: Gather source material from websites",
+					"requiresTools: [web_fetch]",
+					"platforms: [darwin, linux]",
+					"---",
+					"Search web pages.",
+					"",
+				].join("\n"),
+				"utf8",
+			);
+			await writeSkill(
+				userRoot,
+				"spreadsheet-helper",
+				"Analyze spreadsheet data",
+				"Use tables.",
+			);
+			const skillsManager = new SkillsManager({ userRoots: [userRoot] });
+			await skillsManager.discover();
+			const skillSearchTool = getBuiltinTool(
+				createBuiltinTools({
+					skillsManager,
+					skillSearch: {
+						defaultLimit: 3,
+					},
+				}),
+				"skill_search",
+			);
+
+			const result = await skillSearchTool.execute({ query: "web_fetch" });
+
+			expect(result.isError).toBe(false);
+			expect(JSON.parse(result.content)).toMatchObject({
+				query: "web_fetch",
+				total: 1,
+				results: [
+					{
+						skill_id: "browser-research",
+						name: "browser-research",
+						matched_fields: ["requires_tools"],
+						metadata: {
+							requires_tools: ["web_fetch"],
+							platforms: ["darwin", "linux"],
+						},
+					},
+				],
+			});
+		} finally {
+			await rm(userRoot, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps skill_search callable without a skills manager", async () => {
+		const skillSearchTool = getBuiltinTool(
+			createBuiltinTools(),
+			"skill_search",
+		);
+
+		const result = await skillSearchTool.execute({ query: "web_fetch" });
+
+		expect(result.isError).toBe(false);
+		expect(JSON.parse(result.content)).toEqual({
+			query: "web_fetch",
+			skills_configured: false,
+			total: 0,
+			results: [],
+			message:
+				"Skills are not configured for this runtime; search results are empty.",
+		});
+	});
+
+	it("returns an empty skill_search result when no skill matches", async () => {
+		const userRoot = await mkdtemp(join(tmpdir(), "quilin-builtin-skills-"));
+		try {
+			await writeSkill(
+				userRoot,
+				"spreadsheet-helper",
+				"Analyze spreadsheet data",
+				"Use tables.",
+			);
+			const skillsManager = new SkillsManager({ userRoots: [userRoot] });
+			await skillsManager.discover();
+			const skillSearchTool = getBuiltinTool(
+				createBuiltinTools({ skillsManager }),
+				"skill_search",
+			);
+
+			const result = await skillSearchTool.execute({
+				query: "native-video-understanding",
+			});
+
+			expect(result.isError).toBe(false);
+			expect(JSON.parse(result.content)).toEqual({
+				query: "native-video-understanding",
+				skills_configured: true,
+				total: 0,
+				results: [],
+			});
+		} finally {
+			await rm(userRoot, { recursive: true, force: true });
+		}
+	});
+
 	it("passes skill manage roots through the builtin factory", async () => {
 		const userRoot = await mkdtemp(join(tmpdir(), "quilin-builtin-user-"));
 		const projectRoot = await mkdtemp(
@@ -366,11 +498,12 @@ describe("builtin tool index", () => {
 		}
 	});
 
-	it("adds skill_view when a skills manager is available", () => {
+	it("adds skill_search and skill_view when a skills manager is available", () => {
 		const tools = createBuiltinTools({
 			skillsManager: new SkillsManager({}),
 		});
 
+		expect(tools.map((tool) => tool.name)).toContain("skill_search");
 		expect(tools.map((tool) => tool.name)).toContain("skill_view");
 	});
 

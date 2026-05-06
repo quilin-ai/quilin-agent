@@ -46,7 +46,7 @@
 |---|------|---------|------|------|
 | 01 | LLM 接入 | Vercel AI SDK v6、ThinkingMode、InferenceConfig | A | [01](docs/01-llm-integration/README.md) |
 | 02 | 上下文 | System prompt 组装、token 预算、KV-cache 优化、三层时间感知 | A | [02](docs/02-context/README.md) |
-| 03 | 记忆 | OmniMem 4 层 + 向量+KG + 自反思 + User Profile Store | A-B | [03](docs/03-memory/README.md) |
+| 03 | 记忆 | quilin-mem 4 层 + 向量+KG + 自反思 + User Profile Store | A-B | [03](docs/03-memory/README.md) |
 | 04 | 规划 | 意图识别、任务分解、推理策略切换、动态重规划 | C | [04](docs/04-planning/README.md) |
 | 05 | 工具 | 4 类混合动作空间、MCP 客户端、浏览器（Zoom-In）、CLI-Anything | B | [05](docs/05-tool/README.md) |
 | 06 | 多 Agent | 同构 spawn + 异构 mesh + 非阻塞 Supervisor + 进度汇报协议 | D | [06](docs/06-multi-agent/README.md) |
@@ -64,7 +64,7 @@
 1. **Harness Engineering 顶层显式命名** —— 综合 18 篇行业文献的统一学科，把 12 领域组织成一等架构理念
 2. **融合 6 大模型架构精华** —— 7 个跨模型设计模式（分层记忆、混合动作空间、自进化闭环、两段式定位、成本感知、思考模式、内建验证）内化进框架
 3. **研究驱动的架构演进** —— 持续跟踪 Agent 框架前沿，提炼跨方案的共性模式与工程取舍，由团队评估后以原生方式纳入设计
-4. **OmniMem 4 层分级记忆** —— working/episodic/semantic/skill + 向量检索 + 知识图谱 + 自反思 + User Profile Store + Departure Context
+4. **quilin-mem 4 层分级记忆** —— working/episodic/semantic/skill + 向量检索 + 知识图谱 + 自反思 + User Profile Store + Departure Context
 5. **技能工程（第 13 领域）** —— Skill ≠ Tool 严格分离；SKILL.md + frontmatter 目录化；catalog 先行 + 按需 `skill_view` 加载；路径 / 大小 / symlink 多层安全；M0 → M1 → M2+ 分阶段落地
 6. **Agent Mesh 能力**（Iter D） —— AgentMesh SDK adapter 提供去中心化 Agent 通信
 7. **热更新 + 主动通知** —— 解决 OpenClaw / Hermes 更新断连痛点
@@ -95,7 +95,7 @@ quilin-agent/
 ├── packages/                       # TS — pnpm workspace
 │   └── agent-core/                 #   Agent Loop + LLM + Context + Tools
 ├── providers/                      # Python — uv workspace
-│   └── memory/                     #   OmniMem MCP Server（SQLite + FTS5 + 向量 + KG）
+│   └── memory/                     #   quilin-mem MCP Server（SQLite + FTS5 + 向量 + KG）
 # crates/                          # Rust — Iter D 引入（mesh-sdk）
 ├── upstreams/                      # ~100 git submodules（tracked, --depth 1）
 ├── docs/
@@ -119,9 +119,9 @@ quilin-agent/
 ```bash
 # ===== 一键开发（推荐） =====
 just init          # 安装全部依赖（pnpm + uv）
-just start         # 启动全部服务（agent-core + omnimem）
+just start         # 启动全部服务（agent-core + quilin-mem）
 just dev           # TS 开发模式（前台 + watch）
-just dev-memory    # Python OmniMem 开发模式
+just dev-memory    # Python quilin-mem 开发模式
 just test-all      # 一键测试（TS + Python）
 just check         # 一键 lint + format
 just build         # TS 构建

@@ -1,13 +1,13 @@
 # 记忆工程（Memory Engineering）
 
 > **实现状态（2026-04-30 校准）**
-> - ✅ **已实现**：`providers/memory/src/omnimem/` — OmniMem MCP server、working / episodic / semantic / skill 四层、SQLite + FTS5/BM25、KG 子图检索、vector retriever 接口、hybrid retriever + reranker、event log + trace context、ProfileStore / ProfileUpdater、scratchpad、idle_budget + consolidator dry-run、soul schema validator。
+> - ✅ **已实现**：`providers/memory/src/omnimem/` — quilin-mem MCP server、working / episodic / semantic / skill 四层、SQLite + FTS5/BM25、KG 子图检索、vector retriever 接口、hybrid retriever + reranker、event log + trace context、ProfileStore / ProfileUpdater、scratchpad、idle_budget + consolidator dry-run、soul schema validator。
 > - 🚧 **部分实现 / blocked**：L3a observer 当前资源 blocked/deferred；LongMemEval / live observer spike 需凭证或本地模型解锁后重跑。
 > - Linear 后续项：[QUI-16](https://linear.app/quilin-agent/issue/QUI-16/03-memory-observer-validation-archival-and-evaluation-pipeline)；Iter F memory depth 见 [QUI-11](https://linear.app/quilin-agent/issue/QUI-11/iter-f-deepen-memoryl3a-observer-and-longmemeval-path)。
 
-> OmniMem 4 层分级记忆系统详细规格
+> quilin-mem 4 层分级记忆系统详细规格
 >
-> **ADR-001 对齐说明**：核心语言已决策为 TypeScript，OmniMem 将封装为 Python MCP Server（ML 依赖），TS 核心通过 MCP stdio 调用。本文档中的 Python 代码示例仅表达设计意图。`quilin/` 路径为规划参考。详见 [Core Loop](../00-core-loop/README.md)。
+> **ADR-001 对齐说明**：核心语言已决策为 TypeScript，quilin-mem 将封装为 Python MCP Server（ML 依赖），TS 核心通过 MCP stdio 调用。本文档中的 Python 代码示例仅表达设计意图。`quilin/` 路径为规划参考。详见 [Core Loop](../00-core-loop/README.md)。
 >
 > **契约源**：Memory 跨语言契约（`MemoryItem` 字段 / layer 枚举 / metadata schema 版本 / `MemoryStore` Protocol / `store()`/`recall()`/`reflect()` / tier 语义 / 异步感知）以本 spec §A.5/§A.6 为当前规范源。新字段必须可选，删除/重命名字段须走计划修订。L3a 观察者当前状态见本文件 L3a 小节与 `l3a-observer/` 报告。
 
@@ -47,17 +47,17 @@
 
 Claude Code 的 CLAUDE.md 是一种创新——把项目级知识写成文件让 Agent 读取。这是文件级记忆，能跨会话持久化，但不是语义级的：它不能回答"最近 10 次类似任务的成功率如何"，也不能自动提炼新的项目规律并更新自身。
 
-真正强大的记忆系统需要的是：**分层存储 + 混合检索 + 主动反思 + 自动淘汰**。这正是 OmniMem 的设计目标。
+真正强大的记忆系统需要的是：**分层存储 + 混合检索 + 主动反思 + 自动淘汰**。这正是 quilin-mem 的设计目标。
 
 ---
 
 ## 二、设计方案
 
-> **D-20（2026-04-20） — OmniMem v2 融合架构（supersedes D-12）**
+> **D-20（2026-04-20） — quilin-mem v2 融合架构（supersedes D-12）**
 >
-> 本节的 §二·A "OmniMem v2 融合架构" 为 Iter C 目标设计，**取代 D-12**（默认 Graphiti）。下方 §二·B "Layer 1–4 基线 spec" 保留为 v1 参考，将在 D-20 M0/M1/M2 迭代中局部重写。
+> 本节的 §二·A "quilin-mem v2 融合架构" 为 Iter C 目标设计，**取代 D-12**（默认 Graphiti）。下方 §二·B "Layer 1–4 基线 spec" 保留为 v1 参考，将在 D-20 M0/M1/M2 迭代中局部重写。
 
-### 二·A  OmniMem v2 融合架构（D-20）
+### 二·A  quilin-mem v2 融合架构（D-20）
 
 #### A.1  问题重述：为什么推翻 D-12
 
@@ -69,7 +69,7 @@ D-12（2026-04-20 早期）定的 "默认 Graphiti 作为 KG 后端" 基于两�
 - **前提 2 存疑**：Hindsight/Vectorize 2026-03 提出 LongMemEval 本身已过时；"时序 KG" 只是记忆系统的一个**轴**，不是核心。真正的竞争维度变成 **accuracy / speed / cost / usability (AMB)** 四轴。
 - **工程阻塞**：Graphiti dependency spike（Task #93，2026-04-20 Codex 独立验证）证明 `graphiti-core==0.28.2` 在 Python 3.14 + embedded Kuzu 上不 zero-config（需源码编译 Kuzu + 手动 bootstrap FTS 索引），`Graphiti()` 默认需要 Neo4j URI。直接作为 Iter C 默认不成立。
 
-结论：**放弃"押注单一库"思路**，改为**融合 2026 开源 SOTA 的思想，构建多轴最优的 OmniMem v2**。
+结论：**放弃"押注单一库"思路**，改为**融合 2026 开源 SOTA 的思想，构建多轴最优的 quilin-mem v2**。
 
 #### A.2  设计原则
 
@@ -91,9 +91,9 @@ D-12（2026-04-20 早期）定的 "默认 Graphiti 作为 KG 后端" 基于两�
 
 **核心洞察**：五家在**不同轴上占优且轴互相正交** —— 融合不是堆叠，而是**分工**。
 
-#### A.4  五流派 → OmniMem v2 分层分工
+#### A.4  五流派 → quilin-mem v2 分层分工
 
-| OmniMem v2 组件 | 职责 | 灵感来源 |
+| quilin-mem v2 组件 | 职责 | 灵感来源 |
 |---------------|------|---------|
 | **Working Memory**（L1） | 最近 k 轮原文，零压缩 | 保留现有 |
 | **Verbatim Episodic Store**（L2） | 原文全留 + 冷热分层归档 | MemPalace + OpenViking |
@@ -287,7 +287,7 @@ docs/03-memory/memory-watchlist/
 
 ### 二·B  Layer 1–4 基线 spec（v1，将按 D-20 M0/M1/M2 局部重写）
 
-### OmniMem 4 层架构图
+### quilin-mem 4 层架构图
 
 ```
 用户对话 / Agent 执行轨迹
@@ -462,14 +462,14 @@ class UserProfile:
 
 ```python
 class ProfileUpdater:
-    """UserProfile 的唯一写入入口 — 供 OmniMem 内部调度，不对外直接暴露。"""
+    """UserProfile 的唯一写入入口 — 供 quilin-mem 内部调度，不对外直接暴露。"""
 
     def apply_signal(self, user_id: str, signal: ProfileSignal) -> UserProfile: ...
     def bulk_apply(self, user_id: str, signals: list[ProfileSignal]) -> UserProfile: ...
     def reset(self, user_id: str, reason: str) -> None: ...  # 审计日志必填
 ```
 
-- **对外接口**：其他领域通过 `OmniMemClient.emit_profile_signal(signal)` 发送**候选信号**，由 ProfileUpdater 聚合判决后才落盘。
+- **对外接口**：其他领域通过 `QuilinMemClient.emit_profile_signal(signal)` 发送**候选信号**，由 ProfileUpdater 聚合判决后才落盘。
 - **写入审计**：每次写入记录 `who(caller_domain) / when / why(signal) / diff`，写入 Semantic Memory 的 meta 层，供 08-Observability 消费。
 - **schema 版本化**：UserProfile 字段变更必须递增 `schema_version`，ProfileUpdater 持有向前迁移脚本，不允许字段级破坏性变更直接上线。
 
@@ -489,7 +489,7 @@ class ProfileUpdater:
 
 #### Departure Context（离开上下文）
 
-当检测到用户长时间未响应（> 30 分钟），OmniMem 自动记录当前上下文状态：
+当检测到用户长时间未响应（> 30 分钟），quilin-mem 自动记录当前上下文状态：
 
 ```python
 @dataclass
@@ -624,7 +624,7 @@ REFLECT_PROMPT = """
 
 ### ProjectMemory（项目记忆）
 
-受 Claude Code 的 CLAUDE.md 启发，OmniMem 实现了语义级的项目记忆：
+受 Claude Code 的 CLAUDE.md 启发，quilin-mem 实现了语义级的项目记忆：
 
 **MEMORY.md 文件**：
 - 位置：项目根目录（`{project_root}/MEMORY.md`）
@@ -788,7 +788,7 @@ memory:
 
 **性能基准**：相比 OpenAI Memory，响应质量高 26%，token 消耗低 90%——说明 Mem0 的检索精准度极高，不需要把大量无关记忆都塞进上下文。
 
-**适配启示**：OmniMem 的用户级/Agent 级/会话级隔离设计直接参考 Mem0，但在 Mem0 基础上增加了第四层（Skill Memory）和主动反思机制。
+**适配启示**：quilin-mem 的用户级/Agent 级/会话级隔离设计直接参考 Mem0，但在 Mem0 基础上增加了第四层（Skill Memory）和主动反思机制。
 
 #### 2. Graphiti — 时序知识图谱
 
@@ -802,7 +802,7 @@ memory:
 
 **双后端支持**：原生支持 Neo4j 和 FalkorDB 两个图数据库后端，通过统一接口抽象，用户可根据部署规模选择。
 
-**适配启示**：OmniMem Semantic Memory 的 KG 子系统的时序标注设计、Episode → 实体 → 关系的构建管线，直接参考 Graphiti。轻量部署时使用 NetworkX，生产规模时切换为 Neo4j + Graphiti 后端。
+**适配启示**：quilin-mem Semantic Memory 的 KG 子系统的时序标注设计、Episode → 实体 → 关系的构建管线，直接参考 Graphiti。轻量部署时使用 NetworkX，生产规模时切换为 Neo4j + Graphiti 后端。
 
 #### 3. Letta (MemGPT) — 虚拟上下文管理
 
@@ -816,7 +816,7 @@ memory:
 
 **Context Repositories**（2026 新特性）：基于 Git 的程序化上下文管理，为编码 Agent 提供版本化的记忆快照，可以 `git checkout` 到不同的记忆状态。
 
-**适配启示**：OmniMem Working Memory 的 k 轮保留策略借鉴了 Letta Core Memory 的显式管理思想，但采用自动 FIFO 而非手动管理，降低了 Agent 的认知负担。Episodic Memory 的压缩触发机制参考了 Letta 的分页逻辑。
+**适配启示**：quilin-mem Working Memory 的 k 轮保留策略借鉴了 Letta Core Memory 的显式管理思想，但采用自动 FIFO 而非手动管理，降低了 Agent 的认知负担。Episodic Memory 的压缩触发机制参考了 Letta 的分页逻辑。
 
 #### 4. LangMem — LangGraph 原生记忆集成
 
@@ -830,7 +830,7 @@ memory:
 
 **存储后端**：通过 LangGraph 的 `BaseStore` 抽象支持多种后端，生产环境推荐使用 PostgreSQL + pgvector（向量检索 + 关系数据库一体化）。
 
-**适配启示**：OmniMem 与 LangGraph 的集成方式参考 LangMem：记忆作为 `AgentState` 的一部分参与状态图流转，`reflect` 节点（State Graph 第 6 个节点）负责记忆更新，与 LangMem 的 Memory Manager 设计思路一致。程序性记忆（Agent 修改自身行为规则）的概念被纳入 OmniMem Skill Memory 和自进化模块（Phase 8）。
+**适配启示**：quilin-mem 与 LangGraph 的集成方式参考 LangMem：记忆作为 `AgentState` 的一部分参与状态图流转，`reflect` 节点（State Graph 第 6 个节点）负责记忆更新，与 LangMem 的 Memory Manager 设计思路一致。程序性记忆（Agent 修改自身行为规则）的概念被纳入 quilin-mem Skill Memory 和自进化模块（Phase 8）。
 
 #### 5. Cognee — 知识引擎 + 混合检索
 
@@ -844,7 +844,7 @@ memory:
 
 **MCP 原生支持**：Cognee 提供 MCP Server 接口，任何支持 MCP 的 Agent（包括 Claude Code）可以直接调用 Cognee 的记忆能力，无需深度集成。
 
-**适配启示**：OmniMem 的混合检索策略（向量 + KG 双路，融合后 reranking）参考 Cognee 的实现。ECL 管线的"先摄入，再结构化"思路也影响了 OmniMem 对 Working Memory → Semantic Memory 流转的设计。
+**适配启示**：quilin-mem 的混合检索策略（向量 + KG 双路，融合后 reranking）参考 Cognee 的实现。ECL 管线的"先摄入，再结构化"思路也影响了 quilin-mem 对 Working Memory → Semantic Memory 流转的设计。
 
 ---
 
@@ -854,41 +854,41 @@ memory:
 
 **GitHub**：`vectorize-io/hindsight`
 
-三核操作（retain/recall/reflect）+ 仿生数据结构（World/Experiences/Mental Models 三层）。Hindsight 的 LongMemEval SOTA 成绩证明了反思驱动（reflect 操作主动从记忆中生成新洞察）的有效性。OmniMem Reflector 的设计参考 Hindsight 的反思流程。
+三核操作（retain/recall/reflect）+ 仿生数据结构（World/Experiences/Mental Models 三层）。Hindsight 的 LongMemEval SOTA 成绩证明了反思驱动（reflect 操作主动从记忆中生成新洞察）的有效性。quilin-mem Reflector 的设计参考 Hindsight 的反思流程。
 
 #### 7. Zep — 会话记忆 + 自动事实提取
 
 **GitHub**：`getzep/zep`
 
-Zep 以"零 schema 自动事实提取"见长：发送一条对话消息，Zep 自动识别并结构化其中的实体、关系、事实，无需预定义数据模型。内部使用 Graphiti 构建时序知识图谱，商业化较成熟。OmniMem 的 Reflector 自动抽取三元组的能力参考了 Zep 的事实提取管线。
+Zep 以"零 schema 自动事实提取"见长：发送一条对话消息，Zep 自动识别并结构化其中的实体、关系、事实，无需预定义数据模型。内部使用 Graphiti 构建时序知识图谱，商业化较成熟。quilin-mem 的 Reflector 自动抽取三元组的能力参考了 Zep 的事实提取管线。
 
 #### 8. MemPalace — 空间记忆隐喻
 
 **GitHub**：`milla-jovovich/mempalace` | Stars：约 19,500（2026 年 4 月，发布 5 天爆发）
 
-基于古典记忆宫殿（Method of Loci）隐喻的层次化组织：Wing（人/项目）→ Hall（记忆类型）→ Room（主题）→ Closet（压缩摘要）→ Drawer（原文）。以 96.6% R@5 LongMemEval 成绩和仅 170 tokens 启动开销成为当前最轻量高效的记忆系统之一。OmniMem 的层次化命名和组织结构受到 MemPalace 的启发。
+基于古典记忆宫殿（Method of Loci）隐喻的层次化组织：Wing（人/项目）→ Hall（记忆类型）→ Room（主题）→ Closet（压缩摘要）→ Drawer（原文）。以 96.6% R@5 LongMemEval 成绩和仅 170 tokens 启动开销成为当前最轻量高效的记忆系统之一。quilin-mem 的层次化命名和组织结构受到 MemPalace 的启发。
 
 #### 9. SuperMemory — 统一记忆 API
 
 **GitHub**：`supermemoryai/supermemory` | Stars：约 20,000
 
-定位为记忆基础设施层，提供统一的 Memory API，任何 Agent（Claude Code、Cursor、OpenClaw 等）均可接入。浏览器扩展 + MCP Server 双模式部署，三大基准（LongMemEval、LoCoMo、ConvoMem）全部第一。OmniMem 的 MCP Server 对外接口设计参考 SuperMemory 的 API 形态。
+定位为记忆基础设施层，提供统一的 Memory API，任何 Agent（Claude Code、Cursor、OpenClaw 等）均可接入。浏览器扩展 + MCP Server 双模式部署，三大基准（LongMemEval、LoCoMo、ConvoMem）全部第一。quilin-mem 的 MCP Server 对外接口设计参考 SuperMemory 的 API 形态。
 
 #### 10. AgentMemory (JordanMcCann) — 轻量高精度记忆
 
 **GitHub**：`JordanMcCann/agentmemory`
 
-LongMemEval 96.2%（481/500），solo 16 天开发，定位为完整的记忆操作系统：检索引擎 + 知识图谱 + 整合管线 + 评估框架一体化。证明了精心设计的轻量系统可以超越复杂的工程化系统。OmniMem 的评估框架设计参考其测试方法论。
+LongMemEval 96.2%（481/500），solo 16 天开发，定位为完整的记忆操作系统：检索引擎 + 知识图谱 + 整合管线 + 评估框架一体化。证明了精心设计的轻量系统可以超越复杂的工程化系统。quilin-mem 的评估框架设计参考其测试方法论。
 
 ---
 
 ## 四、吸收内化方案
 
-### Mem0 → OmniMem 的自适应记忆层设计
+### Mem0 → quilin-mem 的自适应记忆层设计
 
 **吸收点**：三级记忆范围（用户级/Agent 级/会话级）独立管理。
 
-在 OmniMem 中，`MemoryItem` 的 `metadata` 字段携带 `scope` 信息：
+在 quilin-mem 中，`MemoryItem` 的 `metadata` 字段携带 `scope` 信息：
 ```python
 metadata = {
     "scope": "user",           # user | agent | session | project
@@ -906,7 +906,7 @@ metadata = {
 
 **吸收点**：Episode → 实体抽取 → 关系建立 → 时序标注的流水线设计。
 
-OmniMem 的 `KGBuilder` 组件实现这一管线：
+quilin-mem 的 `KGBuilder` 组件实现这一管线：
 
 ```python
 class KGBuilder:
@@ -943,7 +943,7 @@ class KGBuilder:
 
 **吸收点**：显式内存管理（Block 系统）+ 分页思想。
 
-OmniMem 没有直接实现 Letta 的 Block 系统（过于复杂，增加 Agent 认知负担），而是将其思想内化为自动 FIFO 策略：Working Memory 维护一个固定大小的 deque（`collections.deque(maxlen=k)`），满时自动弹出最老的元素并移交 Episodic Memory。
+quilin-mem 没有直接实现 Letta 的 Block 系统（过于复杂，增加 Agent 认知负担），而是将其思想内化为自动 FIFO 策略：Working Memory 维护一个固定大小的 deque（`collections.deque(maxlen=k)`），满时自动弹出最老的元素并移交 Episodic Memory。
 
 ```python
 from collections import deque
@@ -961,25 +961,25 @@ class WorkingMemory:
         self._buffer.append(turn)
 ```
 
-Letta 的 Archival Memory（通过工具调用主动查询）对应 OmniMem 的 Semantic Memory：Agent 在需要历史知识时可以通过 `search_memory` 工具显式查询，但更多情况下由 `ContextManager` 自动检索注入，无需 Agent 手动管理。
+Letta 的 Archival Memory（通过工具调用主动查询）对应 quilin-mem 的 Semantic Memory：Agent 在需要历史知识时可以通过 `search_memory` 工具显式查询，但更多情况下由 `ContextManager` 自动检索注入，无需 Agent 手动管理。
 
 ### LangMem → LangGraph 状态图的记忆集成方式
 
 **吸收点**：记忆作为状态图持久化 Checkpoint，Memory Manager 作为状态图节点。
 
-OmniMem 与 Quilin LangGraph 状态图的集成方式直接参考 LangMem：
+quilin-mem 与 Quilin LangGraph 状态图的集成方式直接参考 LangMem：
 
 1. `AgentState.variables["context"]` 携带本轮的记忆召回结果（`build_context` 节点产出）
 2. `reflect` 节点（第 6 个状态图节点）负责将本轮执行结果写入记忆，并触发 Reflector
 3. LangGraph 的 `Checkpoint` 机制确保 `AgentState` 在中断恢复时能找回上下文
 
-LangMem 的程序性记忆（Agent 修改自身系统指令）被纳入 Phase 8 的自进化模块，但 OmniMem 的 Skill Memory 已经实现了轻量版本：成功轨迹被模板化为技能，相当于 Agent 在运行时"学会了新的做事方法"。
+LangMem 的程序性记忆（Agent 修改自身系统指令）被纳入 Phase 8 的自进化模块，但 quilin-mem 的 Skill Memory 已经实现了轻量版本：成功轨迹被模板化为技能，相当于 Agent 在运行时"学会了新的做事方法"。
 
 ### Cognee → 混合检索策略
 
 **吸收点**：向量相似度 + KG 子图匹配 + Reranking 的三阶段混合检索。
 
-OmniMem 的 `MemoryRetriever` 实现三阶段检索：
+quilin-mem 的 `MemoryRetriever` 实现三阶段检索：
 
 ```python
 class MemoryRetriever:
@@ -1014,7 +1014,7 @@ class MemoryRetriever:
         return [item for item, _ in scored[:self._top_k]]
 ```
 
-Cognee 的 Memify 反馈回路（用户评分更新图边权重）对应 OmniMem 的 `access_count` 机制：每次记忆被检索命中，`access_count` +1，影响后续的重要性评分，常用知识自动获得更高权重。
+Cognee 的 Memify 反馈回路（用户评分更新图边权重）对应 quilin-mem 的 `access_count` 机制：每次记忆被检索命中，`access_count` +1，影响后续的重要性评分，常用知识自动获得更高权重。
 
 ---
 
@@ -1024,7 +1024,7 @@ Cognee 的 Memify 反馈回路（用户评分更新图边权重）对应 OmniMem
 
 | 组件 | 文件路径 | 主要接口 | 描述 |
 |------|---------|---------|------|
-| OmniMem | `quilin/memory/omnimem.py` | `store()`, `recall()`, `reflect()` | 4 层统一入口，对外暴露统一接口 |
+| quilin-mem | `quilin/memory/quilin_mem.py` | `store()`, `recall()`, `reflect()` | 4 层统一入口，对外暴露统一接口 |
 | WorkingMemory | `quilin/memory/working.py` | `push()`, `get_recent()`, `to_context()` | keep-recent-k，FIFO 淘汰到 Episodic |
 | EpisodicMemory | `quilin/memory/episodic.py` | `compress_and_add()`, `search()`, `discard_all()` | LLM 摘要压缩，阈值触发全清除 |
 | SemanticMemory | `quilin/memory/semantic.py` | `add()`, `search()`, `add_triple()` | 向量 + KG 双存储，跨会话持久化 |
@@ -1039,19 +1039,19 @@ Cognee 的 Memify 反馈回路（用户评分更新图边权重）对应 OmniMem
 
 ```
 Quilin.__init__()
-  └── self.memory = OmniMem(self.mcp_bus)       ← 初始化 4 层记忆
+  └── self.memory = QuilinMem(self.mcp_bus)    ← 初始化 4 层记忆
 
 ContextManager.build_context(task)
   ├── ProjectMemory.load()                       ← 读取 MEMORY.md
-  ├── OmniMem.recall(query=task)                 ← 触发 MemoryRetriever
+  ├── QuilinMem.recall(query=task)               ← 触发 MemoryRetriever
   │     ├── WorkingMemory.get_recent()           ← 直接取最近 k 轮
   │     ├── EpisodicMemory.search()              ← 关键词 + 时间过滤
   │     └── SemanticMemory.search()              ← 向量 + KG 双路检索
   └── 返回融合后的 context dict
 
 Quilin._node_reflect()
-  ├── OmniMem.store(turn_result)                 ← 写入 Working Memory
-  └── OmniMem.reflect()                          ← 触发 Reflector
+  ├── QuilinMem.store(turn_result)               ← 写入 Working Memory
+  └── QuilinMem.reflect()                        ← 触发 Reflector
         ├── 条件判断（是否满足触发条件）
         ├── Reflector.trigger(episodic_summaries) ← LLM 反思
         ├── 写入 SemanticMemory（向量 + KG）
@@ -1061,7 +1061,7 @@ Quilin._node_reflect()
 ### 完整 Protocol 伪代码
 
 ```python
-# quilin/memory/omnimem.py — 对外统一接口
+# quilin/memory/quilin_mem.py — 对外统一接口
 
 from typing import Any
 from dataclasses import dataclass, field
@@ -1069,7 +1069,7 @@ from datetime import datetime
 import uuid
 
 
-class OmniMem:
+class QuilinMem:
     """
     4 层分级记忆系统统一入口。
 
@@ -1233,15 +1233,15 @@ def test_hybrid_score_components():
 ```python
 @pytest.mark.integration
 async def test_four_layer_cascade():
-    omnimem = OmniMem(config={"working": {"k": 2}})
+    quilin_mem = QuilinMem(config={"working": {"k": 2}})
     # 推入 3 轮，触发第 1 轮淘汰
     for i in range(3):
-        await omnimem.store(f"conversation turn {i}", layer="working")
+        await quilin_mem.store(f"conversation turn {i}", layer="working")
     # Working 应只有 2 轮
-    working_items = await omnimem.working.get_recent()
+    working_items = await quilin_mem.working.get_recent()
     assert len(working_items) == 2
     # Episodic 应有 1 条压缩摘要
-    episodic_count = await omnimem.episodic.count()
+    episodic_count = await quilin_mem.episodic.count()
     assert episodic_count == 1
 ```
 
@@ -1249,16 +1249,16 @@ async def test_four_layer_cascade():
 ```python
 @pytest.mark.integration
 async def test_reflect_produces_semantic():
-    omnimem = OmniMem(config=test_config)
+    quilin_mem = QuilinMem(config=test_config)
     # 填充足够的 Episodic 记忆
     for i in range(5):
-        await omnimem.episodic.add(MemoryItem(
+        await quilin_mem.episodic.add(MemoryItem(
             content=f"Task {i}: used Python to process data, succeeded"
         ))
     # 模拟任务完成触发反思
-    await omnimem.reflect()
+    await quilin_mem.reflect()
     # Semantic Memory 应该有新增条目
-    semantic_count = await omnimem.semantic.count()
+    semantic_count = await quilin_mem.semantic.count()
     assert semantic_count > 0
 ```
 
@@ -1268,14 +1268,14 @@ async def test_reflect_produces_semantic():
 async def test_cross_session_persistence(tmp_path):
     config = {**test_config, "semantic": {"persist_dir": str(tmp_path)}}
     # 会话 1：存储记忆
-    omnimem_1 = OmniMem(config)
-    await omnimem_1.store("User prefers concise code style", layer="semantic")
-    await omnimem_1.save()
+    quilin_mem_1 = QuilinMem(config)
+    await quilin_mem_1.store("User prefers concise code style", layer="semantic")
+    await quilin_mem_1.save()
 
     # 会话 2：加载并检索
-    omnimem_2 = OmniMem(config)
-    await omnimem_2.load()
-    results = await omnimem_2.recall("code style preference")
+    quilin_mem_2 = QuilinMem(config)
+    await quilin_mem_2.load()
+    results = await quilin_mem_2.recall("code style preference")
     assert any("concise" in item.content for item in results)
 ```
 
@@ -1323,23 +1323,23 @@ async def test_episodic_retains_key_decisions(harness_factory):
 
 ```python
 @pytest.mark.benchmark
-async def test_recall_latency(benchmark, omnimem_with_1000_items):
+async def test_recall_latency(benchmark, quilin_mem_with_1000_items):
     """recall() 在 1000 条记忆下延迟应 < 100ms。"""
     async def recall():
-        return await omnimem_with_1000_items.recall("test query")
+        return await quilin_mem_with_1000_items.recall("test query")
 
     result = benchmark(asyncio.run, recall())
     assert benchmark.stats["mean"] < 0.1   # 100ms
 
 @pytest.mark.benchmark
-async def test_memory_size_per_session(omnimem):
+async def test_memory_size_per_session(quilin_mem):
     """单会话存储不超过 50MB。"""
     for i in range(1000):
-        await omnimem.store(f"memory content {i}" * 100)
-    size_mb = await omnimem.total_size_mb()
+        await quilin_mem.store(f"memory content {i}" * 100)
+    size_mb = await quilin_mem.total_size_mb()
     assert size_mb < 50
 ```
 
 ---
 
-*本文档涵盖 OmniMem 记忆系统的完整设计规格，从问题定义到验证标准。实现阶段为 Phase 3，依赖 Phase 0（LLM 接入）和 Phase 2（上下文管理）完成后启动。记忆系统是 Phase 7（多 Agent + 自进化）的基础，Skill Memory 和跨 Agent 记忆共享将在 Phase 7 扩展。*
+*本文档涵盖 quilin-mem 记忆系统的完整设计规格，从问题定义到验证标准。实现阶段为 Phase 3，依赖 Phase 0（LLM 接入）和 Phase 2（上下文管理）完成后启动。记忆系统是 Phase 7（多 Agent + 自进化）的基础，Skill Memory 和跨 Agent 记忆共享将在 Phase 7 扩展。*

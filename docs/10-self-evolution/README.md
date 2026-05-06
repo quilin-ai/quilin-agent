@@ -557,8 +557,8 @@ User Insight Engine 是自进化系统的一个子系统，专注于从用户行
 **核心理念**：好的 Agent 能帮用户觉察到自己都注意不到的事情。不是被动等待使用，而是主动理解用户、持续学习、在恰当时机给出让人惊喜的洞察。
 
 **数据来源**：
-- OmniMem Layer 3（Semantic Memory）中的用户相关知识
-- OmniMem Layer 4（Skill Memory）中用户常用技能模式
+- quilin-mem Layer 3（Semantic Memory）中的用户相关知识
+- quilin-mem Layer 4（Skill Memory）中用户常用技能模式
 - User Profile Store 中的用户画像
 - TrajectoryStore 中的用户交互轨迹
 - 02-Context 的时间感知数据（活跃时段、工作节奏）
@@ -577,7 +577,7 @@ User Insight Engine 是自进化系统的一个子系统，专注于从用户行
 **运行机制**：
 
 ```
-TrajectoryStore + User Profile + OmniMem
+TrajectoryStore + User Profile + quilin-mem
          │
          ▼
   InsightMiner（后台异步运行，不阻塞主 Loop）
@@ -979,7 +979,7 @@ class IdleBudgetState:
     └── DepartureContext.gap_minutes → 判断用户是否空闲
     └── AbsoluteTimeAwareness → 判断当前是否在允许时间窗口
 
-03-Memory（OmniMem）
+03-Memory（quilin-mem）
     └── 空闲时执行 Working → Episodic 归档、去重、KG 补充
 
 05-Tool（浏览器）
@@ -1135,9 +1135,9 @@ Quilin（主循环）
     │
     └── 定时触发（默认每 6 小时）：SelfEvolutionEngine.run_cycle()
 
-13-skills（SKILL.md 真源）+ OmniMem Layer 4（usage counter 镜像）
+13-skills（SKILL.md 真源）+ quilin-mem Layer 4（usage counter 镜像）
     └── SkillManager 只产出"草案" → 经 07 §2.6.4 WriteAuthority + 13-skills `skill_manage` 工具落盘 SKILL.md
-    └── SkillManager 查 13-skills 注册表获取可复用 skill；调用后仅更新 OmniMem Layer 4 的 usage counter（不写 body）
+    └── SkillManager 查 13-skills 注册表获取可复用 skill；调用后仅更新 quilin-mem Layer 4 的 usage counter（不写 body）
     └── 真源始终是 `~/.quilin/skills/**/SKILL.md`（D-11 2026-04-20 NEW-11 修复：03-memory 不再双写 skill body）
 
 Verifier（验证层）
@@ -1167,7 +1167,7 @@ Quilin.run()
     ├──[成功]──→ SkillManager.extract(trajectory)
     │                        │
     │                        └──→ 产出 skill 草案 → `skill_manage(create)` + WriteAuthority 落盘 SKILL.md（13-skills 真源）
-    │                             同步 upsert OmniMem Layer 4 的 usage counter（仅计数，不存 body）
+    │                             同步 upsert quilin-mem Layer 4 的 usage counter（仅计数，不存 body）
     │
     └──[失败]──→ FailureAnalyzer.analyze(trajectory) [异步]
                             │

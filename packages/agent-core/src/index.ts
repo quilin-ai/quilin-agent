@@ -1,11 +1,13 @@
+#!/usr/bin/env bun
+
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runConfigCommand } from "./cli/config-cmd.js";
 import {
-	buildCapabilitiesRuntime,
-	loadCapabilitiesConfig,
-} from "./config/loader.js";
+	type CapabilitiesHotReloadEvent,
+	createCapabilitiesHotReloadController,
+} from "./config/hot-reload.js";
 import {
 	bootstrapUserRuntime,
 	buildRuntimeInferenceConfig,
@@ -36,6 +38,7 @@ import { JsonFileSpanExporter } from "./observability/exporters/json-file.js";
 import { startRepl } from "./repl.js";
 import { SQLiteCheckpoint } from "./state/checkpoint.js";
 
+export * from "./config/hot-reload.js";
 export {
 	type BootstrapOptions,
 	bootstrapUserRuntime,
@@ -253,6 +256,7 @@ export {
 	createFileWriteTool,
 	createShellExecTool,
 	createSkillManageTool,
+	createSkillSearchTool,
 	createSkillViewTool,
 	createWebFetchTool,
 } from "./tools/builtin/index.js";
@@ -262,6 +266,7 @@ export type {
 	ShellRunnerOptions,
 } from "./tools/builtin/shell-exec.js";
 export type { SkillManageToolOptions } from "./tools/builtin/skill-manage.js";
+export type { SkillSearchToolOptions } from "./tools/builtin/skill-search.js";
 export type { SkillViewToolOptions } from "./tools/builtin/skill-view.js";
 export type { WebFetchToolOptions } from "./tools/builtin/web-fetch.js";
 export * from "./tools/docker-sandbox-router.js";
@@ -335,6 +340,19 @@ const STARTUP_VERIFICATION_CONFIG: InferenceConfig = {
 	maxTokens: 20,
 	thinkingMode: "disabled",
 };
+
+function logCapabilitiesHotReloadEvent(
+	event: CapabilitiesHotReloadEvent,
+): void {
+	logger.info(
+		{
+			event: event.event,
+			status: "status" in event ? event.status : "success",
+			snapshot: event.snapshot,
+		},
+		"Capabilities hot reload event",
+	);
+}
 
 export type RuntimeMode = "repl" | "service";
 
@@ -431,7 +449,7 @@ function createProviderRunRecordLogger(
 	};
 }
 
-function findWorkspaceRoot(startDir: string): string {
+function findNearestWorkspaceRoot(startDir: string): string | null {
 	let currentDir = startDir;
 
 	while (true) {
@@ -441,11 +459,19 @@ function findWorkspaceRoot(startDir: string): string {
 
 		const parentDir = dirname(currentDir);
 		if (parentDir === currentDir) {
-			throw new Error("Could not find workspace root");
+			return null;
 		}
 
 		currentDir = parentDir;
 	}
+}
+
+export function resolveWorkspaceRoot(startDir: string): string {
+	return (
+		findNearestWorkspaceRoot(startDir) ??
+		findNearestWorkspaceRoot(process.cwd()) ??
+		process.cwd()
+	);
 }
 
 function resolveRuntimeMode(runtimeMode?: RuntimeMode): RuntimeMode {
@@ -717,41 +743,44 @@ export async function main(options: MainOptions = {}): Promise<void> {
 	}
 
 	if (runtimeMode === "repl") {
-		const workspaceRoot = findWorkspaceRoot(
+		const workspaceRoot = resolveWorkspaceRoot(
 			dirname(fileURLToPath(import.meta.url)),
 		);
-		const loadedCapabilities = await loadCapabilitiesConfig({
+		const capabilitiesHotReload = createCapabilitiesHotReloadController({
 			workspaceRoot,
 			argv: process.argv.slice(2),
 			env: process.env,
+			logEvent: logCapabilitiesHotReloadEvent,
 		});
-		const capabilitiesRuntime = buildCapabilitiesRuntime(loadedCapabilities);
+		await capabilitiesHotReload.bootstrap();
 		const sessionId = await resolveReplSessionId();
 		let shouldExit = false;
 
 		logger.info({ mode: "repl" }, "Starting CLI REPL...");
 
-		await startRepl({
-			provider,
-			providerId: DEFAULT_PROVIDER_ID,
-			modelId,
-			...(sessionId == null ? {} : { sessionId }),
-			observability: {
-				spans: userRuntime.spanProvider,
+		try {
+			await startRepl({
+				provider,
+				providerId: DEFAULT_PROVIDER_ID,
+				modelId,
 				...(sessionId == null ? {} : { sessionId }),
-			},
-			spanExporter: new JsonFileSpanExporter(),
-			mcpServers: capabilitiesRuntime.mcpServers,
-			...(capabilitiesRuntime.skillsManager == null
-				? {}
-				: { skillsManager: capabilitiesRuntime.skillsManager }),
-			inferenceConfig: runtimeInferenceConfig,
-			tierRouting: runtimeTierRouting,
-			writeAuthorityMode: runtimeWriteAuthorityMode,
-			toolFilter: runtimeToolFilter,
-			onProviderRunRecord: createProviderRunRecordLogger("repl_turn"),
-		});
-		shouldExit = true;
+				observability: {
+					spans: userRuntime.spanProvider,
+					...(sessionId == null ? {} : { sessionId }),
+				},
+				spanExporter: new JsonFileSpanExporter(),
+				capabilitiesRuntime: () => capabilitiesHotReload.getRuntime(),
+				capabilitiesStatus: () => capabilitiesHotReload.getStatus(),
+				inferenceConfig: runtimeInferenceConfig,
+				tierRouting: runtimeTierRouting,
+				writeAuthorityMode: runtimeWriteAuthorityMode,
+				toolFilter: runtimeToolFilter,
+				onProviderRunRecord: createProviderRunRecordLogger("repl_turn"),
+			});
+			shouldExit = true;
+		} finally {
+			capabilitiesHotReload.dispose();
+		}
 
 		if (shouldExit) {
 			process.exit(0);

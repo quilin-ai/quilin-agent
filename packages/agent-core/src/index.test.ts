@@ -49,6 +49,7 @@ import type {
 	SkillManifestCatalogRawHealthInput,
 	SkillManifestCatalogReadinessStatus,
 	SkillManifestCatalogReadinessSummary,
+	SkillSearchToolOptions,
 	SkillViewToolOptions,
 	SpanAttributes,
 	SpanSnapshot,
@@ -183,6 +184,24 @@ describe("main", () => {
 		process.argv = ["bun", "packages/agent-core/src/index.ts"];
 	});
 
+	it("falls back to cwd when neither install path nor cwd has a workspace marker", async () => {
+		const installRoot = await mkdtemp(join(tmpdir(), "quilin-installed-"));
+		const cwdRoot = await mkdtemp(join(tmpdir(), "quilin-cwd-"));
+		const previousCwd = process.cwd();
+		try {
+			process.chdir(cwdRoot);
+			const { resolveWorkspaceRoot } = await import("./index.js");
+
+			expect(resolveWorkspaceRoot(join(installRoot, "dist"))).toBe(
+				process.cwd(),
+			);
+		} finally {
+			process.chdir(previousCwd);
+			await rm(installRoot, { recursive: true, force: true });
+			await rm(cwdRoot, { recursive: true, force: true });
+		}
+	});
+
 	it("starts the repl only in repl mode", async () => {
 		const model = createMockLanguageModel();
 		const provider = createMockProvider(() => model);
@@ -278,8 +297,17 @@ describe("main", () => {
 			},
 			"LLM connection verified",
 		);
-		expect(logger.info).toHaveBeenNthCalledWith(
-			10,
+		expect(logger.info).toHaveBeenCalledWith(
+			expect.objectContaining({
+				event: "capabilities_runtime_reload",
+				status: "success",
+				snapshot: expect.objectContaining({
+					operation: "bootstrap",
+				}),
+			}),
+			"Capabilities hot reload event",
+		);
+		expect(logger.info).toHaveBeenCalledWith(
 			{ mode: "repl" },
 			"Starting CLI REPL...",
 		);
@@ -292,7 +320,7 @@ describe("main", () => {
 					spans: expect.any(Object),
 				}),
 				spanExporter: expect.any(Object),
-				mcpServers: expectedBuiltinMcpServers(),
+				capabilitiesRuntime: expect.any(Function),
 				inferenceConfig: {
 					temperature: 0.7,
 					maxTokens: 8192,
@@ -313,6 +341,9 @@ describe("main", () => {
 			}),
 		);
 		const startReplOptions = vi.mocked(startRepl).mock.calls[0]?.[0];
+		expect(startReplOptions?.capabilitiesRuntime?.().mcpServers).toEqual(
+			expectedBuiltinMcpServers(),
+		);
 		const replRunRecord = {
 			route: {
 				provider: "deepseek",
@@ -780,7 +811,7 @@ describe("main", () => {
 					spans: expect.any(Object),
 				}),
 				spanExporter: expect.any(Object),
-				mcpServers: expectedBuiltinMcpServers(),
+				capabilitiesRuntime: expect.any(Function),
 			}),
 		);
 		expect(mockCheckpointList).not.toHaveBeenCalled();
@@ -848,7 +879,7 @@ describe("main", () => {
 					spans: expect.any(Object),
 				}),
 				spanExporter: expect.any(Object),
-				mcpServers: expectedBuiltinMcpServers(),
+				capabilitiesRuntime: expect.any(Function),
 			}),
 		);
 	});
@@ -991,6 +1022,7 @@ describe("package entrypoint tools public boundary exports", () => {
 			createFileWriteTool,
 			createShellExecTool,
 			createSkillManageTool,
+			createSkillSearchTool,
 			createSkillViewTool,
 			createWebFetchTool,
 		} = await import("./index.js");
@@ -1043,9 +1075,20 @@ describe("package entrypoint tools public boundary exports", () => {
 			skillsManager: skillManageOptions.skillsManager,
 			maxBodyChars: 128,
 		};
+		const skillSearchOptions: SkillSearchToolOptions = {
+			skillsManager: skillManageOptions.skillsManager,
+			defaultLimit: 5,
+		};
 
 		expect(createBuiltinTools(builtinOptions).map((tool) => tool.name)).toEqual(
-			["file_read", "file_write", "file_list", "shell_exec", "web_fetch"],
+			[
+				"file_read",
+				"file_write",
+				"file_list",
+				"shell_exec",
+				"web_fetch",
+				"skill_search",
+			],
 		);
 		expect(
 			[
@@ -1054,6 +1097,7 @@ describe("package entrypoint tools public boundary exports", () => {
 				createFileListTool(fileListOptions),
 				createShellExecTool(shellExecOptions),
 				createWebFetchTool(webFetchOptions),
+				createSkillSearchTool(skillSearchOptions),
 			].map((tool) => `${tool.name}:${tool.riskLevel}`),
 		).toEqual([
 			"file_read:read",
@@ -1061,6 +1105,7 @@ describe("package entrypoint tools public boundary exports", () => {
 			"file_list:read",
 			"shell_exec:exec",
 			"web_fetch:read",
+			"skill_search:read",
 		]);
 		expect(typeof createSkillManageTool).toBe("function");
 		expect(typeof createSkillViewTool).toBe("function");

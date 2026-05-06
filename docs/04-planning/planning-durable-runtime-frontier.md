@@ -135,9 +135,9 @@ Durable Runtime should accept envelopes and provide a small set of commands: `st
 
 Durable Runtime 应接收 envelope，并提供一组小命令：`start`、`checkpoint`、`resume`、`signal`、`cancel`、`retry`、`fail` 和 `complete`。它应在副作用之前持久化每次转换，并向 Observability（可观测系统）和 WebUI 暴露可回放事件。
 
-Memory should not be the live execution database. OmniMem（Quilin's four-tier memory system）can receive final plan reviews, failure summaries, and durable lessons after completion, but live run state should live in a runtime store with transactional semantics.
+Memory should not be the live execution database. quilin-mem（Quilin's four-tier memory system）can receive final plan reviews, failure summaries, and durable lessons after completion, but live run state should live in a runtime store with transactional semantics.
 
-Memory 不应成为实时执行数据库。OmniMem（Quilin 四层记忆系统）可以在任务完成后接收最终 plan review（计划复盘）、失败摘要和可沉淀经验，但 live run state（实时运行状态）应位于具备事务语义的 runtime store（运行时存储）中。
+Memory 不应成为实时执行数据库。quilin-mem（Quilin 四层记忆系统）可以在任务完成后接收最终 plan review（计划复盘）、失败摘要和可沉淀经验，但 live run state（实时运行状态）应位于具备事务语义的 runtime store（运行时存储）中。
 
 ## 风险 / Risks
 

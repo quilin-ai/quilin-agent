@@ -2,7 +2,7 @@
 
 - **上游**：MemPalace / mempalace（43k stars 8 天内涨成 —— 病毒式增长，2026-02）
 - **License**：Apache-2.0
-- **对应 OmniMem v2 层**：L2 Verbatim Episodic Store（§二·A.7）
+- **对应 quilin-mem v2 层**：L2 Verbatim Episodic Store（§二·A.7）
 
 ## 2026-04-20 baseline digest
 
@@ -21,7 +21,7 @@
 - 本质：在 context 窗口已经够大的 2026，verbatim 是**反直觉地便宜**（向量检索毫秒级、全原文不损失精度）；反而做压缩要烧 LLM，还可能丢信息
 - 96.6% 分数的真正意义：**证明对"压缩就是进步"的反共识** —— 不压缩反而更准
 
-**对 OmniMem v2 的启示**：
+**对 quilin-mem v2 的启示**：
 - ✅ **保留**：verbatim storage 作为 L2 的基础；FTS + 向量双检索
 - ⚠️ **升级**：无限增长 → Quilin 改为 **冷热分层归档**（> N 天的 verbatim 迁到冷区，用 zstd 字典压缩 ~8x，检索命中时解压）
 - ❌ **丢弃**：Palace metaphor（Wing/Hall/Room/...）—— 这是人类心智比喻，对检索没有工程收益；直接用 SQLite 表 + metadata index 按 `user_id / session_id / age_tier` 分区

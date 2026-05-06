@@ -4,7 +4,7 @@
 - **License**：Apache-2.0
 - **Stars**：53.5k（2026-04-20）—— 社区最大的开源记忆层
 - **主要语言**：Python 58.7% + TypeScript 31.0%
-- **对应 OmniMem v2 层**：L3c Hybrid Retrieval & Fusion（§二·A.7）
+- **对应 quilin-mem v2 层**：L3c Hybrid Retrieval & Fusion（§二·A.7）
 
 ## 2026-04-20 baseline digest
 
@@ -24,7 +24,7 @@
 - v1 → v2 的跳跃不是换架构，而是 retrieval 更智能 —— 证明**硬核在 rerank/召回策略**，不在存储。
 - single-pass extraction 是性能优化：从"每条 memory 都抽一次实体"变成"摄入时只抽一次就足够"。
 
-**对 OmniMem v2 的启示**：
+**对 quilin-mem v2 的启示**：
 - ✅ **保留**：vector + BM25 + entity linking 的 hybrid 召回路径；多 scope（user/session/agent）隔离；metadata 过滤
 - ⚠️ **升级**：Mem0 的 reranker 权重是固定的 → Quilin 改为 **Learnable reranker**，把 agent 实际引用过的召回条目作为正样本训练 logistic regression（feature: source/recency/semantic_sim/graph_distance）
 - ⚠️ **升级**：一套权重打天下 → Quilin 改为 **per-user weight profile**（某些用户更依赖 temporal 召回，某些依赖 semantic）

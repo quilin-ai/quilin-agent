@@ -1,8 +1,8 @@
 # Memory 前沿吸收决策 / Memory Frontier Assimilation Decision
 
-Evidence checked on 2026-05-02 Asia/Shanghai. This document records the `QUI-51` decision for OmniMem（Quilin 的四层记忆系统，包含 working / episodic / semantic / skill memory）after reviewing current high-signal memory systems, current project docs, and the existing [long-memory evaluation baseline](long-memory-evaluation-baseline.md).
+Evidence checked on 2026-05-02 Asia/Shanghai. This document records the `QUI-51` decision for quilin-mem（Quilin 的四层记忆系统，包含 working / episodic / semantic / skill memory）after reviewing current high-signal memory systems, current project docs, and the existing [long-memory evaluation baseline](long-memory-evaluation-baseline.md).
 
-证据已在 2026-05-02 Asia/Shanghai 校准。本文记录 `QUI-51` 对 OmniMem（Quilin 的四层记忆系统，包含 working / episodic / semantic / skill memory）的决策，输入包括当前高信号记忆系统、项目现有文档，以及已有的 [长期记忆评测基线](long-memory-evaluation-baseline.md)。
+证据已在 2026-05-02 Asia/Shanghai 校准。本文记录 `QUI-51` 对 quilin-mem（Quilin 的四层记忆系统，包含 working / episodic / semantic / skill memory）的决策，输入包括当前高信号记忆系统、项目现有文档，以及已有的 [长期记忆评测基线](long-memory-evaluation-baseline.md)。
 
 Benchmark（基准测试，用统一输入和评分比较系统能力）work is not the first priority here. The decision below is about making the Memory component strong enough first; LongMemEval（长期记忆能力评测）、LoCoMo（长对话记忆评测）and BEAM-style checks（借鉴百万级上下文记忆评测思想的本地检查）remain verification lanes after the component contract is clear.
 
@@ -10,9 +10,9 @@ Benchmark（基准测试，用统一输入和评分比较系统能力）work is 
 
 ## 结论 / Decision
 
-Quilin should keep the OmniMem direction, but update the F1（Linear 中的下一阶段实现迭代，用于把 F0 决策落成 runtime slices；runtime slices 是可独立实现和验收的运行时代码切片）implementation target: the center of the Memory component should be an append-only `FactEvent` stream（只追加事实事件流，用不可破坏的事件记录事实变化）, an asynchronous `MemoryObserver`（记忆观察器，从会话、工具结果和 agent 行为中提取可复用事实）, and retrieval that fuses vector similarity（向量相似度，用 embedding 表示语义接近度）, BM25（经典关键词排序算法，适合精确词匹配）, entity linking（实体链接，把同一个人、项目、文件或概念关联起来）, and a lazy temporal graph（按需时序图，只在时间推理或多跳推理需要时构建关系）.
+Quilin should keep the quilin-mem direction, but update the F1（Linear 中的下一阶段实现迭代，用于把 F0 决策落成 runtime slices；runtime slices 是可独立实现和验收的运行时代码切片）implementation target: the center of the Memory component should be an append-only `FactEvent` stream（只追加事实事件流，用不可破坏的事件记录事实变化）, an asynchronous `MemoryObserver`（记忆观察器，从会话、工具结果和 agent 行为中提取可复用事实）, and retrieval that fuses vector similarity（向量相似度，用 embedding 表示语义接近度）, BM25（经典关键词排序算法，适合精确词匹配）, entity linking（实体链接，把同一个人、项目、文件或概念关联起来）, and a lazy temporal graph（按需时序图，只在时间推理或多跳推理需要时构建关系）.
 
-Quilin 应保留 OmniMem 方向，但更新 F1（Linear 中的下一阶段实现迭代，用于把 F0 决策落成 runtime slices；runtime slices 是可独立实现和验收的运行时代码切片）实现目标：Memory 组件中心应是 append-only `FactEvent` stream（只追加事实事件流，用不可破坏的事件记录事实变化）、异步 `MemoryObserver`（记忆观察器，从会话、工具结果和 agent 行为中提取可复用事实），以及融合 vector similarity（向量相似度，用 embedding 表示语义接近度）、BM25（经典关键词排序算法，适合精确词匹配）、entity linking（实体链接，把同一个人、项目、文件或概念关联起来）和 lazy temporal graph（按需时序图，只在时间推理或多跳推理需要时构建关系）的检索层。
+Quilin 应保留 quilin-mem 方向，但更新 F1（Linear 中的下一阶段实现迭代，用于把 F0 决策落成 runtime slices；runtime slices 是可独立实现和验收的运行时代码切片）实现目标：Memory 组件中心应是 append-only `FactEvent` stream（只追加事实事件流，用不可破坏的事件记录事实变化）、异步 `MemoryObserver`（记忆观察器，从会话、工具结果和 agent 行为中提取可复用事实），以及融合 vector similarity（向量相似度，用 embedding 表示语义接近度）、BM25（经典关键词排序算法，适合精确词匹配）、entity linking（实体链接，把同一个人、项目、文件或概念关联起来）和 lazy temporal graph（按需时序图，只在时间推理或多跳推理需要时构建关系）的检索层。
 
 The previous "rule-first observer" direction should not be treated as sufficient. The current Memory README records that the L3a observer（会话后观察器，用于从对话中提取可复用事实）rule-first gate failed at 21.4% recall（召回率，应该提取的事实被提取出来的比例）on the 1039-sample dataset, so F1 must use deterministic extraction only for high-confidence structured cases and route uncertain cases to a model-backed or review-backed path.
 

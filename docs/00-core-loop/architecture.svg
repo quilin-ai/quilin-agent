@@ -97,7 +97,7 @@
   <text x="604" y="308" font-size="12" fill="#92400e" font-weight="700" text-anchor="middle">MCPBus</text>
   <text x="604" y="327" font-size="10" fill="#78350f" text-anchor="middle">内部组件消息总线 · 结构化传递</text>
   <text x="470" y="350" font-size="10" fill="#475569">▸ 内部组件直调，MCP 仅对接外部 Server</text>
-  <text x="470" y="366" font-size="10" fill="#475569">▸ OmniMem 4 层记忆注入上下文</text>
+  <text x="470" y="366" font-size="10" fill="#475569">▸ quilin-mem 4 层记忆注入上下文</text>
   <text x="470" y="382" font-size="10" fill="#475569">▸ 混合动作空间 (Code/UI/Shell/MCP)</text>
   <text x="470" y="398" font-size="10" fill="#475569">▸ 两段式浏览器定位 (MAI-UI 模式)</text>
   <text x="470" y="414" font-size="10" fill="#475569">▸ V 组件双向 Guardrails 拦截</text>
@@ -179,7 +179,7 @@
   <rect x="840" y="302" width="60" height="13" rx="3" fill="#ffffff" opacity="0.9"/>
   <text x="870" y="312" font-size="9" fill="#ea580c" text-anchor="middle">融合补丁同步</text>
   <rect x="20" y="492" width="980" height="110" rx="8" fill="#faf5ff" stroke="#c4b5fd" stroke-width="1.5"/>
-  <text x="510" y="512" font-size="12" fill="#7c3aed" font-weight="700" text-anchor="middle">03 · 记忆工程 · OmniMem 4 层分级存储 · 向量+KG 混合检索 · Dream Cycles 自动反思 · gbrain ultra-long</text>
+  <text x="510" y="512" font-size="12" fill="#7c3aed" font-weight="700" text-anchor="middle">03 · 记忆工程 · quilin-mem 4 层分级存储 · 向量+KG 混合检索 · Dream Cycles 自动反思 · gbrain ultra-long</text>
   <rect x="30" y="520" width="232" height="74" rx="6" fill="#fef3c7" stroke="#b45309" stroke-width="1.2"/>
   <text x="40" y="537" font-size="10" fill="#b45309" font-weight="600">Layer 1</text>
   <text x="40" y="553" font-size="12" fill="#b45309" font-weight="700">Working Memory</text>

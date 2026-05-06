@@ -3,7 +3,7 @@
 - **上游**：[mastra-ai/mastra](https://github.com/mastra-ai/mastra) —— `packages/memory/src/processors/observational-memory`
 - **License**：Apache-2.0（部分 `ee/` 目录为 Mastra Enterprise License）
 - **主要语言**：TypeScript 99.4%
-- **对应 OmniMem v2 层**：L3a Observation Layer（§二·A.7）
+- **对应 quilin-mem v2 层**：L3a Observation Layer（§二·A.7）
 
 ## 2026-04-20 baseline digest
 
@@ -23,7 +23,7 @@
 - 百万 token context 下 "dump everything" 其实能跑，但贵。Observer/Reflector 的本质是**把压缩从推理时挪到后台异步**，让推理时的 prompt 稳定又小。
 - prompt caching 是降本的另一根杠杆 —— 稳定前缀 = cache 命中率高 = 每轮节省 $$$。
 
-**对 OmniMem v2 的启示**：
+**对 quilin-mem v2 的启示**：
 - ✅ **保留**：两级 representation（observation + reflection）、append-only prompt 前缀、temporal anchoring（observation / referenced / relative 三种日期）
 - ⚠️ **升级**：每轮都烧 LLM observer 成本随轮数线性增长 → Quilin 改为 **rule-first two-tier observer**（Tier 1 规则零 LLM、Tier 2 LLM 兜底），判决门槛 Tier 1 hit rate ≥ 40% 且精度不降
 - ⚠️ **升级**：Reflector 按时间/数量阈值触发 → Quilin 改为 **信息增益门控**（Δentropy > ε 才触发）

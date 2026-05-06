@@ -559,6 +559,21 @@ describe("InProcessSupervisorRuntime", () => {
 			status: "cancel_requested",
 			summary: "user requested cancel",
 		});
+		expect(runtime.pause(first.runId, "pause after cancel")).toMatchObject({
+			status: "cancel_requested",
+			summary: "user requested cancel",
+		});
+		expect(runtime.resume(first.runId, "resume after cancel")).toMatchObject({
+			status: "cancel_requested",
+			summary: "user requested cancel",
+		});
+		expect(runtime.wake(first.runId, "wake after cancel")).toMatchObject({
+			status: "cancel_requested",
+			summary: "user requested cancel",
+		});
+		expect(() => runtime.sendInput(first.runId, "input after cancel")).toThrow(
+			"cancel-requested child run cannot receive input",
+		);
 		await expectPending(first.completion);
 
 		releases[0]?.resolve();
@@ -588,5 +603,399 @@ describe("InProcessSupervisorRuntime", () => {
 		expect(finalSnapshot.terminalRunIds).toEqual(
 			[first.runId, second.runId].sort(),
 		);
+	});
+
+	it("releases workers blocked on input waiters when cancellation is requested", async () => {
+		const started = createDeferred();
+		let observedInput: unknown = "unset";
+		const worker = {
+			workerId: "worker-cancel-waiting-input",
+			role: "research-worker",
+			capabilities: ["research"],
+			execute: vi.fn(async (_handoff, context) => {
+				context.heartbeat({
+					status: "active",
+					summary: "waiting for main-agent input",
+					currentStep: "waiting for input",
+				});
+				started.resolve();
+
+				observedInput = await context.waitForInput();
+				return { summary: "worker returned after input port closed" };
+			}),
+		} satisfies SupervisorWorker;
+		const runtime = new InProcessSupervisorRuntime({
+			workers: [worker],
+			now: createClock(),
+		});
+
+		const handle = runtime.dispatch(makeHandoff("delegated-cancel-waiter"));
+		await started.promise;
+		await expectPending(handle.completion);
+
+		const cancelRequested = runtime.cancel(
+			handle.runId,
+			"user cancelled waiting worker",
+		);
+
+		expect(cancelRequested).toMatchObject({
+			status: "cancel_requested",
+			summary: "user cancelled waiting worker",
+		});
+		await expect(handle.completion).resolves.toMatchObject({
+			status: "cancelled",
+			summary: "user cancelled waiting worker",
+		});
+		expect(observedInput).toBeNull();
+		expect(() => runtime.sendInput(handle.runId, "late input")).toThrow(
+			"terminal child run cannot receive input",
+		);
+	});
+
+	it("lets workers report needs-decision lifecycle escalation and get reclaimed", async () => {
+		const decisionRelease = createDeferred();
+		const secondRelease = createDeferred();
+		const { events: recordedEvents, sink } = createRecordingSink();
+		const worker = {
+			workerId: "worker-decision",
+			role: "research-worker",
+			capabilities: ["research"],
+			execute: vi.fn(async (_handoff, context) => {
+				if (context.taskId === "delegated-needs-decision") {
+					const escalation = context.needsDecision({
+						summary: "Need main agent to choose source policy",
+						blocker: "source policy decision required",
+						nextCheckpointAt: "2026-05-02T08:05:00.000Z",
+					});
+					expect(escalation).toMatchObject({
+						status: "blocked",
+						currentStep: "needs_decision",
+						blocker: "source policy decision required",
+					});
+					await context.waitUntilResumed();
+					await decisionRelease.promise;
+					return { summary: "decision handled" };
+				}
+
+				context.heartbeat({
+					status: "active",
+					summary: `running ${context.taskId}`,
+					currentStep: `running ${context.taskId}`,
+				});
+				await secondRelease.promise;
+				return { summary: `done ${context.taskId}` };
+			}),
+		} satisfies SupervisorWorker;
+		const runtime = new InProcessSupervisorRuntime({
+			workers: [worker],
+			maxActiveRuns: 1,
+			now: createClock(),
+			sink,
+		});
+
+		const first = runtime.dispatch(makeHandoff("delegated-needs-decision"));
+		const second = runtime.dispatch(makeHandoff("delegated-after-decision"));
+
+		expect(runtime.getRecord(first.runId)).toMatchObject({
+			status: "blocked",
+			currentStep: "needs_decision",
+			blocker: "source policy decision required",
+		});
+		expect(runtime.getRecord(second.runId)?.status).toBe("queued");
+		expect(
+			recordedEvents.some(
+				(event) =>
+					event.type === "child_heartbeat" &&
+					event.runId === first.runId &&
+					event.payload.status === "blocked" &&
+					event.payload.currentStep === "needs_decision" &&
+					event.payload.blocker === "source policy decision required",
+			),
+		).toBe(true);
+		await expectPending(first.completion);
+
+		runtime.resume(first.runId, "main agent selected source policy");
+		decisionRelease.resolve();
+		await expect(first.completion).resolves.toMatchObject({
+			status: "completed",
+			summary: "decision handled",
+		});
+		expect(worker.execute).toHaveBeenCalledTimes(2);
+		expect(runtime.getRecord(second.runId)).toMatchObject({
+			status: "active",
+			currentStep: "running delegated-after-decision",
+		});
+
+		secondRelease.resolve();
+		await expect(second.completion).resolves.toMatchObject({
+			status: "completed",
+			summary: "done delegated-after-decision",
+		});
+	});
+
+	it("delivers appended and sent input to running workers in order", async () => {
+		const started = createDeferred();
+		const receivedInputs: string[] = [];
+		const worker = {
+			workerId: "worker-input",
+			role: "research-worker",
+			capabilities: ["research"],
+			execute: vi.fn(async (_handoff, context) => {
+				context.heartbeat({
+					status: "active",
+					summary: "waiting for control input",
+					currentStep: "waiting for control input",
+				});
+				started.resolve();
+
+				const firstInput = await context.waitForInput();
+				const secondInput = await context.waitForInput();
+				for (const input of [firstInput, secondInput]) {
+					if (input != null) {
+						receivedInputs.push(`${input.kind}:${input.content}`);
+					}
+				}
+
+				return { summary: "handled control input" };
+			}),
+		} satisfies SupervisorWorker;
+		const runtime = new InProcessSupervisorRuntime({
+			workers: [worker],
+			now: createClock(),
+		});
+
+		const handle = runtime.dispatch(makeHandoff("delegated-input"));
+		await started.promise;
+
+		const appended = runtime.appendInput(handle.runId, "extra context");
+		const sent = runtime.sendInput(handle.runId, {
+			content: "correct course",
+			metadata: { priority: "high" },
+		});
+
+		expect(appended).toMatchObject({
+			runId: handle.runId,
+			taskId: handle.taskId,
+			kind: "append",
+			content: "extra context",
+		});
+		expect(sent).toMatchObject({
+			kind: "send",
+			content: "correct course",
+			metadata: { priority: "high" },
+		});
+		await expect(handle.completion).resolves.toMatchObject({
+			status: "completed",
+			summary: "handled control input",
+		});
+		expect(receivedInputs).toEqual([
+			"append:extra context",
+			"send:correct course",
+		]);
+	});
+
+	it("pauses active workers cooperatively and resumes them through wake", async () => {
+		const started = createDeferred();
+		const pauseObserved = createDeferred();
+		const release = createDeferred();
+		const worker = {
+			workerId: "worker-pause",
+			role: "research-worker",
+			capabilities: ["research"],
+			execute: vi.fn(async (_handoff, context) => {
+				context.heartbeat({
+					status: "active",
+					summary: "running before pause",
+					currentStep: "running before pause",
+				});
+				started.resolve();
+				await pauseObserved.promise;
+
+				expect(context.isPaused()).toBe(true);
+				await context.waitUntilResumed();
+				expect(context.isPaused()).toBe(false);
+				context.heartbeat({
+					status: "active",
+					summary: "running after wake",
+					currentStep: "running after wake",
+				});
+				await release.promise;
+				return { summary: "pause flow complete" };
+			}),
+		} satisfies SupervisorWorker;
+		const runtime = new InProcessSupervisorRuntime({
+			workers: [worker],
+			now: createClock(),
+		});
+
+		const handle = runtime.dispatch(makeHandoff("delegated-pause"));
+		await started.promise;
+
+		const paused = runtime.pause(handle.runId, "user paused run");
+		expect(paused).toMatchObject({
+			status: "blocked",
+			summary: "user paused run",
+			currentStep: "paused",
+			blocker: "user paused run",
+		});
+		expect(runtime.listRuns({ statuses: "blocked" })).toHaveLength(1);
+		expect(
+			runtime.queryRuns({ statuses: ["blocked"] }).projection.snapshot,
+		).toMatchObject({
+			band: "blocked",
+			blockedRunIds: [handle.runId],
+		});
+
+		pauseObserved.resolve();
+		await expectPending(handle.completion);
+
+		const woken = runtime.wake(handle.runId, "user resumed run");
+		expect(woken).toMatchObject({
+			status: "active",
+			summary: "user resumed run",
+			currentStep: "resuming",
+		});
+
+		release.resolve();
+		await expect(handle.completion).resolves.toMatchObject({
+			status: "completed",
+			summary: "pause flow complete",
+		});
+	});
+
+	it("interrupts active workers with control input without cancelling them", async () => {
+		const started = createDeferred();
+		const interruptObserved = createDeferred();
+		const worker = {
+			workerId: "worker-interrupt",
+			role: "research-worker",
+			capabilities: ["research"],
+			execute: vi.fn(async (_handoff, context) => {
+				context.heartbeat({
+					status: "active",
+					summary: "running before interrupt",
+					currentStep: "running before interrupt",
+				});
+				started.resolve();
+
+				const input = await context.waitForInput();
+				expect(input).toMatchObject({
+					kind: "interrupt",
+					content: "review correction needed",
+				});
+				interruptObserved.resolve();
+				await context.waitUntilResumed();
+				return { summary: "interrupt handled" };
+			}),
+		} satisfies SupervisorWorker;
+		const runtime = new InProcessSupervisorRuntime({
+			workers: [worker],
+			now: createClock(),
+		});
+
+		const handle = runtime.dispatch(makeHandoff("delegated-interrupt"));
+		await started.promise;
+
+		const interrupted = runtime.interrupt(
+			handle.runId,
+			"review correction needed",
+		);
+		expect(interrupted).toMatchObject({
+			status: "blocked",
+			summary: "review correction needed",
+			currentStep: "interrupted",
+			blocker: "review correction needed",
+		});
+		await interruptObserved.promise;
+		await expectPending(handle.completion);
+
+		runtime.resume(handle.runId, "correction accepted");
+		await expect(handle.completion).resolves.toMatchObject({
+			status: "completed",
+			summary: "interrupt handled",
+		});
+	});
+
+	it("wakes paused queued runs and reports filtered status projections", async () => {
+		const release = createDeferred();
+		const worker = {
+			workerId: "worker-wake-queued",
+			role: "research-worker",
+			capabilities: ["research"],
+			execute: vi.fn(async (_handoff, context) => {
+				context.heartbeat({
+					status: "active",
+					summary: `running ${context.taskId}`,
+					currentStep: `running ${context.taskId}`,
+				});
+				await release.promise;
+				return { summary: `done ${context.taskId}` };
+			}),
+		} satisfies SupervisorWorker;
+		const runtime = new InProcessSupervisorRuntime({
+			workers: [worker],
+			now: createClock(),
+		});
+		const admission = runtime.admitHandoff(makeHandoff("delegated-wake"));
+
+		runtime.pause(admission.runId, "hold until operator wakes run");
+		expect(worker.execute).not.toHaveBeenCalled();
+		expect(runtime.listRuns({ statuses: ["blocked"] })).toHaveLength(1);
+		expect(runtime.listRuns({ taskIds: "delegated-wake" })).toHaveLength(1);
+
+		const woken = runtime.wake(admission.runId, "operator woke run");
+		expect(woken).toMatchObject({
+			status: "active",
+			currentStep: "running delegated-wake",
+		});
+		expect(worker.execute).toHaveBeenCalledOnce();
+		expect(
+			runtime.queryRuns({ workerIds: "worker-wake-queued" }).records,
+		).toHaveLength(1);
+
+		release.resolve();
+		await expect(
+			runtime.dispatch(makeHandoff("delegated-wake")).completion,
+		).resolves.toMatchObject({
+			status: "completed",
+			summary: "done delegated-wake",
+		});
+	});
+
+	it("can defer child runs as terminal lifecycle records", async () => {
+		const release = createDeferred();
+		const worker = {
+			workerId: "worker-defer",
+			role: "research-worker",
+			capabilities: ["research"],
+			execute: vi.fn(async () => {
+				await release.promise;
+				return { summary: "unexpected completion" };
+			}),
+		} satisfies SupervisorWorker;
+		const runtime = new InProcessSupervisorRuntime({
+			workers: [worker],
+			now: createClock(),
+		});
+
+		const handle = runtime.dispatch(makeHandoff("delegated-defer"));
+		const deferred = runtime.defer(handle.runId, "waiting for later batch");
+
+		expect(deferred).toMatchObject({
+			status: "deferred",
+			summary: "waiting for later batch",
+		});
+		await expect(handle.completion).resolves.toMatchObject({
+			status: "deferred",
+			summary: "waiting for later batch",
+		});
+		expect(
+			runtime.queryRuns({ statuses: "deferred" }).projection.snapshot,
+		).toMatchObject({
+			band: "done",
+			terminalRunIds: [handle.runId],
+		});
+
+		release.resolve();
 	});
 });

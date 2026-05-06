@@ -86,6 +86,59 @@ export type ProviderLiveEvidenceStatus =
 	| "missing"
 	| "not-required";
 
+export type ProviderAuthMode = "api_key" | "oauth";
+
+export type ProviderCredentialSource =
+	| "env"
+	| "oauth_file"
+	| "oauth_cli"
+	| "keychain";
+
+export interface ProviderAuthStrategy {
+	readonly mode: ProviderAuthMode;
+	readonly source: ProviderCredentialSource;
+	readonly label: string;
+	readonly requiredEnv?: readonly string[];
+	readonly credentialPath?: string;
+	readonly credentialPathEnv?: string;
+	readonly refreshAfterDays?: number;
+}
+
+export type ProviderCredentialStatus =
+	| "configured"
+	| "missing"
+	| "not_required";
+
+export type ProviderQuotaAwarenessStatus =
+	| "available"
+	| "planned"
+	| "unsupported";
+
+export interface ProviderQuotaAwareness {
+	readonly status: ProviderQuotaAwarenessStatus;
+	readonly source:
+		| "api_balance"
+		| "oauth_usage_api"
+		| "cli_rpc"
+		| "web_dashboard"
+		| "none";
+	readonly label: string;
+	readonly requiresExternalApi: boolean;
+	readonly endpointHint?: string;
+}
+
+export interface ProviderLiveMatrixEntry {
+	readonly provider: LLMProviderId;
+	readonly status: LLMProviderStatus;
+	readonly transport: ProviderCatalogEntry["transport"];
+	readonly authModes: readonly ProviderAuthMode[];
+	readonly credentialStatus: ProviderCredentialStatus;
+	readonly configuredSources: readonly ProviderCredentialSource[];
+	readonly missingCredentials: readonly string[];
+	readonly liveEvidence: ProviderLiveEvidenceStatus;
+	readonly quotaAwareness: ProviderQuotaAwareness;
+}
+
 export type ReasoningStateAdapter =
 	| "none"
 	| "captured_not_replayed"
@@ -99,6 +152,8 @@ export interface ProviderCatalogEntry {
 	readonly models: readonly string[];
 	readonly allowCustomModels?: boolean;
 	readonly requiredEnv?: readonly string[];
+	readonly authStrategies?: readonly ProviderAuthStrategy[];
+	readonly quotaAwareness?: ProviderQuotaAwareness;
 	readonly liveEvidence: ProviderLiveEvidenceStatus;
 	readonly blockReason?: string;
 }

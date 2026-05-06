@@ -43,22 +43,22 @@ Linear 已同步这次冻结：`Iter E 基准冲刺 / Benchmark Ascent` project 
 
 | Iter | 状态 | 当前含义 | 证据 |
 |---|---:|---|---|
-| Phase 0 PoC | closed | Agent Loop + OmniMem MCP + REPL baseline，v0.0.3。 | `packages/agent-core/src/loop.ts` + `providers/memory/src/omnimem/server.py` |
+| Phase 0 PoC | closed | Agent Loop + quilin-mem MCP + REPL baseline，v0.0.3。 | `packages/agent-core/src/loop.ts` + `providers/memory/src/omnimem/server.py` |
 | Iter A Grounded Context | closed | Context assembly、prompt builder、temporal awareness、memory bridge，v0.1.0-iter-a。 | `docs/02-context/README.md` |
 | Iter B Tools + Skills + Safety | closed | Tool substrate、READ-ONLY default safety policy、Skills M0/M1 activation。 | `docs/05-tool/README.md` + `docs/13-skills/README.md` + `docs/07-safety-guardrails/README.md` |
 | Iter C Planning Core | closed | Planning + inference strategy，与 memory 抽离并行完成。 | `docs/04-planning/README.md` |
-| Iter M Memory | closed | OmniMem 主体切片完成；L3a observer 仍 blocked/deferred。 | `docs/03-memory/README.md` |
+| Iter M Memory | closed | quilin-mem 主体切片完成；L3a observer 仍 blocked/deferred。 | `docs/03-memory/README.md` |
 | Iter D Operability | closed | Observability、config、scratchpad、Rust `mesh-sdk` stub、CI 和 coverage gate。 | `docs/08-observability/README.md` + `crates/mesh-sdk/Cargo.toml` |
 | Iter E Benchmark Ascent | frozen / canceled | Existing code remains in-tree; all unfinished Benchmark planning and implementation work is canceled in Linear. | `docs/14-benchmark-harness/README.md` + `QUI-6` / `QUI-7` / `QUI-8` / `QUI-43` / `QUI-47` / `QUI-70` |
 | Iter F Scale-Out | governed by local runtime evidence | Supervisor、Agent Mesh、memory depth、self-evolution、Conversation Engineering must use local component gates first; no Benchmark code without explicit user request. | `docs/06-multi-agent/README.md` + `docs/11-agent-mesh/README.md` |
 
 | Iter | Status | Current Meaning | Evidence |
 |---|---:|---|---|
-| Phase 0 PoC | closed | Agent Loop + OmniMem MCP + REPL baseline, v0.0.3. | `packages/agent-core/src/loop.ts` + `providers/memory/src/omnimem/server.py` |
+| Phase 0 PoC | closed | Agent Loop + quilin-mem MCP + REPL baseline, v0.0.3. | `packages/agent-core/src/loop.ts` + `providers/memory/src/omnimem/server.py` |
 | Iter A Grounded Context | closed | Context assembly, prompt builder, temporal awareness, memory bridge, v0.1.0-iter-a. | `docs/02-context/README.md` |
 | Iter B Tools + Skills + Safety | closed | Tool substrate, READ-ONLY default safety policy, Skills M0/M1 activation. | `docs/05-tool/README.md` + `docs/13-skills/README.md` + `docs/07-safety-guardrails/README.md` |
 | Iter C Planning Core | closed | Planning + inference strategy, completed alongside memory decoupling. | `docs/04-planning/README.md` |
-| Iter M Memory | closed | Main OmniMem slices completed; L3a observer remains blocked/deferred. | `docs/03-memory/README.md` |
+| Iter M Memory | closed | Main quilin-mem slices completed; L3a observer remains blocked/deferred. | `docs/03-memory/README.md` |
 | Iter D Operability | closed | Observability, config, scratchpad, Rust `mesh-sdk` stub, CI, and coverage gate. | `docs/08-observability/README.md` + `crates/mesh-sdk/Cargo.toml` |
 | Iter E Benchmark Ascent | frozen / canceled | Existing code remains in-tree; all unfinished Benchmark planning and implementation work is canceled in Linear. | `docs/14-benchmark-harness/README.md` + `QUI-6` / `QUI-7` / `QUI-8` / `QUI-43` / `QUI-47` / `QUI-70` |
 | Iter F Scale-Out | governed by local runtime evidence | Supervisor, Agent Mesh, memory depth, self-evolution, and Conversation Engineering must use local component gates first; no Benchmark code without explicit user request. | `docs/06-multi-agent/README.md` + `docs/11-agent-mesh/README.md` |
@@ -102,7 +102,7 @@ The cross-review posture is now: benchmark（standardized capability evaluation�
 | [00 Core Loop](00-core-loop/README.md) | 自研 TS loop 继续守 <200 LOC 契约；TS core + Python ML providers + Rust stub 是当前运行时切分。 |
 | [01 LLM Integration](01-llm-integration/README.md) | AI SDK v6 client、`ThinkingMode`、provider-aware options、reasoning/tool stream extraction、cache usage basics 已实现；provider live matrix 与 carry-over deferred。 |
 | [02 Context](02-context/README.md) | Prompt/session assembly、token budgeting、temporal awareness、memory bridge、injection scanner、skills catalog/restore wiring 已实现；Conversation Engineering parked。 |
-| [03 Memory](03-memory/README.md) | OmniMem MCP、四层 memory、SQLite/FTS5、KG/vector retrieval hooks、profile store、scratchpad、dry-run consolidator 已实现；L3a observer blocked/deferred。 |
+| [03 Memory](03-memory/README.md) | quilin-mem MCP、四层 memory、SQLite/FTS5、KG/vector retrieval hooks、profile store、scratchpad、dry-run consolidator 已实现；L3a observer blocked/deferred。 |
 | [04 Planning](04-planning/README.md) | Main-LLM direct planning + audit/strategy contracts 已实现；tiny classifier 不是默认路径。 |
 | [05 Tool](05-tool/README.md) | Built-in tools、MCP bridge、tool routing、safety hooks active；Benchmark integration is frozen. |
 | [06 Multi-Agent](06-multi-agent/README.md) | Internal spawn/supervisor design 保持 Iter F depth 工作；mesh 边界在 11。 |

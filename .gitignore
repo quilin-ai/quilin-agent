@@ -60,6 +60,7 @@ data/
 *.swp
 # === Local agent config ===
 .agentbridge/
+.codex/
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
 

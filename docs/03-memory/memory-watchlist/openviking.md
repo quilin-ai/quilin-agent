@@ -4,7 +4,7 @@
 - **License**：Apache-2.0
 - **Stars**：21.9k（2026-04-20）
 - **主要语言**：Python ≥ 3.10 + Go ≥ 1.22 + C++（多语言基建）
-- **对应 OmniMem v2 层**：Filesystem Hierarchy（嵌入 L2 的冷热分层，§二·A.7）
+- **对应 quilin-mem v2 层**：Filesystem Hierarchy（嵌入 L2 的冷热分层，§二·A.7）
 
 ## 2026-04-20 baseline digest
 
@@ -21,7 +21,7 @@
 - 多语言基建（Python + Go + C++）暗示目标是**企业规模**：Go 处理并发文件 IO、C++ 处理序列化性能
 - 按 byte offset + 分层加载避免把整个记忆拉到内存，是 **scale-first** 设计
 
-**对 OmniMem v2 的启示**：
+**对 quilin-mem v2 的启示**：
 - ✅ **保留**：冷热分层思想、分层 loader 做 token 预算
 - ❌ **丢弃**：多语言基建（ADR-001 已定 TS + Python 双语言，不加 Go/C++）
 - ⚠️ **升级**：物理文件分层 → Quilin 在 **SQLite 内做分层**（热表常驻 WAL、冷表按访问熵分区到独立 file）

@@ -6,8 +6,11 @@ import type {
 	LLMProviderId,
 	LLMRouteDecision,
 	LLMRouteRequest,
+	ProviderAuthStrategy,
 	ProviderCatalog,
 	ProviderCatalogEntry,
+	ProviderLiveMatrixEntry,
+	ProviderQuotaAwareness,
 } from "./types.js";
 
 interface DeepSeekUsagePayload {
@@ -85,6 +88,50 @@ const metadataExtractorRegistry = {
 
 type EnvLookup = Readonly<Record<string, string | undefined>>;
 
+interface ProviderCredentialProbe {
+	readonly env?: EnvLookup;
+	readonly existingCredentialPaths?: readonly string[];
+}
+
+const unsupportedQuotaAwareness: ProviderQuotaAwareness = {
+	status: "unsupported",
+	source: "none",
+	label: "No quota probe configured",
+	requiresExternalApi: false,
+};
+
+const deepSeekQuotaAwareness: ProviderQuotaAwareness = {
+	status: "planned",
+	source: "api_balance",
+	label: "DeepSeek API balance endpoint",
+	requiresExternalApi: true,
+	endpointHint: "Provider account balance endpoint",
+};
+
+const openAiCodexOAuthQuotaAwareness: ProviderQuotaAwareness = {
+	status: "planned",
+	source: "oauth_usage_api",
+	label: "Codex OAuth usage snapshot",
+	requiresExternalApi: true,
+	endpointHint: "ChatGPT subscription usage endpoint",
+};
+
+const anthropicOAuthQuotaAwareness: ProviderQuotaAwareness = {
+	status: "planned",
+	source: "oauth_usage_api",
+	label: "Claude OAuth usage snapshot",
+	requiresExternalApi: true,
+	endpointHint: "Claude subscription usage endpoint",
+};
+
+const geminiOAuthQuotaAwareness: ProviderQuotaAwareness = {
+	status: "planned",
+	source: "oauth_usage_api",
+	label: "Gemini OAuth usage snapshot",
+	requiresExternalApi: true,
+	endpointHint: "Gemini CLI or Google account usage endpoint",
+};
+
 export const DEFAULT_PROVIDER_CATALOG: ProviderCatalog = {
 	entries: [
 		{
@@ -100,6 +147,15 @@ export const DEFAULT_PROVIDER_CATALOG: ProviderCatalog = {
 			],
 			allowCustomModels: true,
 			requiredEnv: ["DEEPSEEK_API_KEY"],
+			authStrategies: [
+				{
+					mode: "api_key",
+					source: "env",
+					label: "DEEPSEEK_API_KEY",
+					requiredEnv: ["DEEPSEEK_API_KEY"],
+				},
+			],
+			quotaAwareness: deepSeekQuotaAwareness,
 			liveEvidence: "verified",
 		},
 		{
@@ -108,6 +164,22 @@ export const DEFAULT_PROVIDER_CATALOG: ProviderCatalog = {
 			transport: "candidate",
 			models: [],
 			requiredEnv: ["OPENAI_API_KEY"],
+			authStrategies: [
+				{
+					mode: "api_key",
+					source: "env",
+					label: "OPENAI_API_KEY",
+					requiredEnv: ["OPENAI_API_KEY"],
+				},
+				{
+					mode: "oauth",
+					source: "oauth_file",
+					label: "Codex OAuth auth.json",
+					credentialPath: "~/.codex/auth.json",
+					refreshAfterDays: 8,
+				},
+			],
+			quotaAwareness: openAiCodexOAuthQuotaAwareness,
 			liveEvidence: "missing",
 			blockReason: "No current direct production integration evidence.",
 		},
@@ -117,6 +189,21 @@ export const DEFAULT_PROVIDER_CATALOG: ProviderCatalog = {
 			transport: "candidate",
 			models: [],
 			requiredEnv: ["ANTHROPIC_API_KEY"],
+			authStrategies: [
+				{
+					mode: "api_key",
+					source: "env",
+					label: "ANTHROPIC_API_KEY",
+					requiredEnv: ["ANTHROPIC_API_KEY"],
+				},
+				{
+					mode: "oauth",
+					source: "oauth_cli",
+					label: "Claude OAuth CLI session",
+					credentialPathEnv: "QUILIN_ANTHROPIC_OAUTH_SESSION",
+				},
+			],
+			quotaAwareness: anthropicOAuthQuotaAwareness,
 			liveEvidence: "missing",
 			blockReason: "No current direct production integration evidence.",
 		},
@@ -126,6 +213,21 @@ export const DEFAULT_PROVIDER_CATALOG: ProviderCatalog = {
 			transport: "candidate",
 			models: [],
 			requiredEnv: ["GOOGLE_GENERATIVE_AI_API_KEY"],
+			authStrategies: [
+				{
+					mode: "api_key",
+					source: "env",
+					label: "GOOGLE_GENERATIVE_AI_API_KEY",
+					requiredEnv: ["GOOGLE_GENERATIVE_AI_API_KEY"],
+				},
+				{
+					mode: "oauth",
+					source: "oauth_cli",
+					label: "Gemini CLI OAuth session",
+					credentialPathEnv: "QUILIN_GEMINI_OAUTH_SESSION",
+				},
+			],
+			quotaAwareness: geminiOAuthQuotaAwareness,
 			liveEvidence: "missing",
 			blockReason: "Candidate data only; no production adapter in this slice.",
 		},
@@ -144,6 +246,112 @@ function missingRequiredEnv(
 	env: EnvLookup,
 ): readonly string[] {
 	return (entry.requiredEnv ?? []).filter((name) => env[name] == null);
+}
+
+function inferLegacyApiKeyAuthStrategy(
+	entry: ProviderCatalogEntry,
+): readonly ProviderAuthStrategy[] {
+	if (entry.requiredEnv == null || entry.requiredEnv.length === 0) {
+		return [];
+	}
+
+	return [
+		{
+			mode: "api_key",
+			source: "env",
+			label: entry.requiredEnv.join(" or "),
+			requiredEnv: entry.requiredEnv,
+		},
+	];
+}
+
+function listAuthStrategies(
+	entry: ProviderCatalogEntry,
+): readonly ProviderAuthStrategy[] {
+	return entry.authStrategies ?? inferLegacyApiKeyAuthStrategy(entry);
+}
+
+function isStrategyConfigured(
+	strategy: ProviderAuthStrategy,
+	probe: ProviderCredentialProbe,
+): boolean {
+	const env = probe.env ?? process.env;
+	if (
+		strategy.requiredEnv?.some((name) => (env[name]?.trim().length ?? 0) > 0)
+	) {
+		return true;
+	}
+
+	if (strategy.credentialPathEnv != null) {
+		const credentialPath = env[strategy.credentialPathEnv]?.trim();
+		if (
+			credentialPath != null &&
+			credentialPath.length > 0 &&
+			(probe.existingCredentialPaths ?? []).includes(credentialPath)
+		) {
+			return true;
+		}
+	}
+
+	if (strategy.credentialPath == null) {
+		return false;
+	}
+
+	return (probe.existingCredentialPaths ?? []).includes(
+		strategy.credentialPath,
+	);
+}
+
+function describeMissingCredential(strategy: ProviderAuthStrategy): string {
+	if (strategy.requiredEnv != null && strategy.requiredEnv.length > 0) {
+		return `${strategy.mode}:${strategy.requiredEnv.join("|")}`;
+	}
+
+	if (strategy.credentialPathEnv != null) {
+		return `${strategy.mode}:${strategy.credentialPathEnv}`;
+	}
+
+	if (strategy.credentialPath != null) {
+		return `${strategy.mode}:${strategy.credentialPath}`;
+	}
+
+	return `${strategy.mode}:${strategy.label}`;
+}
+
+export function buildProviderLiveMatrix(
+	catalog: ProviderCatalog = DEFAULT_PROVIDER_CATALOG,
+	probe: ProviderCredentialProbe = {},
+): readonly ProviderLiveMatrixEntry[] {
+	return catalog.entries.map((entry) => {
+		const strategies = listAuthStrategies(entry);
+		const configuredStrategies = strategies.filter((strategy) =>
+			isStrategyConfigured(strategy, probe),
+		);
+		const missingCredentials = strategies
+			.filter((strategy) => !isStrategyConfigured(strategy, probe))
+			.map(describeMissingCredential);
+
+		return {
+			provider: entry.provider,
+			status: entry.status,
+			transport: entry.transport,
+			authModes: Array.from(
+				new Set(strategies.map((strategy) => strategy.mode)),
+			),
+			credentialStatus:
+				strategies.length === 0
+					? "not_required"
+					: configuredStrategies.length > 0
+						? "configured"
+						: "missing",
+			configuredSources: configuredStrategies.map(
+				(strategy) => strategy.source,
+			),
+			missingCredentials,
+			liveEvidence: entry.liveEvidence,
+			quotaAwareness: entry.quotaAwareness ?? unsupportedQuotaAwareness,
+		};
+	});
 }
 
 function getEnabledDefaultCatalogModels(): readonly string[] {

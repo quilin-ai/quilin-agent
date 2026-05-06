@@ -22,7 +22,7 @@
     </marker>
   </defs>
   <rect width="960" height="700" fill="#ffffff"/>
-  <text x="480" y="30" text-anchor="middle" font-size="20" font-weight="bold" fill="#111827">OmniMem 4-Tier Memory Architecture</text>
+  <text x="480" y="30" text-anchor="middle" font-size="20" font-weight="bold" fill="#111827">quilin-mem 4-Tier Memory Architecture</text>
   <text x="480" y="50" text-anchor="middle" font-size="13" fill="#4b5563">Quilin Agent — Layered Memory System</text>
   <rect x="49" y="71" width="370" height="90" rx="10" fill="#e5e7eb"/>
   <rect x="46" y="68" width="370" height="90" rx="10" fill="#ecfdf5" stroke="#10b981" stroke-width="2"/>

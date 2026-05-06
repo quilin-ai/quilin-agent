@@ -130,7 +130,7 @@ Agent Loop（< 200 行 TS）+ 12 个激活工程领域（01..11, 13）+ 1 parked
 | 维度 | Claude Code | Codex | LangChain | Manus | **Quilin** |
 |------|------------|-------|-----------|-------|-----------|
 | 架构 | 单线程主循环 | 协议优先 App Server | 中间件栈 | 单线程 + 文件外存 | 主循环 + 中间件 + checkpoint |
-| 记忆 | CLAUDE.md | AGENTS.md + docs/ | Agent State | 文件系统 + todo 复述 | 4 层 OmniMem + KG + 自反思 |
+| 记忆 | CLAUDE.md | AGENTS.md + docs/ | Agent State | 文件系统 + todo 复述 | 4 层 quilin-mem + KG + 自反思 |
 | 工具 | ACI 精心设计 | 最小集 | 可组合 hook | 删 80% 更好 | 4 类动作空间 + 自创 |
 | 安全 | 权限提示 | OS 沙箱 | 中间件 | — | 4 层验证 + Two-Strike + 步骤验证 |
 | 策略切换 | 固定 ReAct | 无 | Reasoning Sandwich | 无 | Direct/ReAct/Plan-Execute/Tree 动态切换 |

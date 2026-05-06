@@ -247,6 +247,15 @@ export class MCPRegistry {
 		this.emitChange();
 	}
 
+	clearBuiltinTools(): void {
+		if (this.builtinTools.size === 0) {
+			return;
+		}
+		this.builtinTools.clear();
+		this.rebuildShortNameIndex();
+		this.emitChange();
+	}
+
 	onChange(listener: () => void): () => void {
 		this.changeListeners.add(listener);
 		return () => {

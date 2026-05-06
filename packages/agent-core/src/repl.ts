@@ -1,6 +1,8 @@
 import { stderr, stdin } from "node:process";
 import { clearScreenDown, emitKeypressEvents, moveCursor } from "node:readline";
 import * as readline from "node:readline/promises";
+import type { CapabilitiesReloadStatus } from "./config/hot-reload.js";
+import type { CapabilitiesRuntime } from "./config/loader.js";
 import {
 	isRuntimeToolEnabled,
 	type RuntimeToolFilter,
@@ -31,6 +33,11 @@ import type {
 import { logger } from "./logger.js";
 import { runAgentLoop } from "./loop.js";
 import {
+	type ChildRunStatusRecord,
+	InProcessSupervisorRuntime,
+	type SupervisorRuntimeSnapshot,
+} from "./multi-agent/index.js";
+import {
 	type AgentRunLogSink,
 	createToolProvenanceEntry,
 	JsonlAgentRunLogger,
@@ -40,6 +47,7 @@ import {
 } from "./observability/agent-run-log.js";
 import type { SpanExporter } from "./observability/exporters/composite.js";
 import type { AgentLoopObservability } from "./observability/loop.js";
+import { LiveInputQueue, type QueuedLiveInput } from "./runtime/live-input.js";
 import {
 	type AuthorityMode,
 	WriteAuthority,
@@ -77,6 +85,11 @@ const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
 		name: "status",
 		signature: "/status",
 		description: "Show model, routing, and reasoning state",
+	},
+	{
+		name: "agents",
+		signature: "/agents",
+		description: "Show local subagent runtime state",
 	},
 	{
 		name: "think",
@@ -120,10 +133,13 @@ interface ReplOptions {
 	tools?: readonly Tool[];
 	mcpServers?: readonly MCPServerEntry[];
 	skillsManager?: SkillsManager;
+	capabilitiesRuntime?: () => CapabilitiesRuntime;
 	inferenceConfig?: InferenceConfig;
 	tierRouting?: LLMTierRoutingConfig;
 	writeAuthorityMode?: AuthorityMode;
 	toolFilter?: RuntimeToolFilter;
+	capabilitiesStatus?: () => CapabilitiesReloadStatus;
+	supervisorRuntime?: InProcessSupervisorRuntime;
 	agentRunLogger?: AgentRunLogSink;
 	onProviderRunRecord?: (record: ProviderRunRecord) => void;
 }
@@ -161,6 +177,11 @@ function createDefaultAgentRunLogger(
 	return new JsonlAgentRunLogger({ sessionId });
 }
 
+interface ReplPromptSession {
+	readonly assembler: PromptSessionAssembler;
+	dispose(): void;
+}
+
 function createPromptSessionAssembler(
 	modelId: string,
 	registry: MCPRegistry,
@@ -169,7 +190,7 @@ function createPromptSessionAssembler(
 	skillsManager?: SkillsManager,
 	toolFilter?: RuntimeToolFilter,
 	getToolProvenance?: () => readonly ToolProvenanceEntry[],
-): PromptSessionAssembler {
+): ReplPromptSession {
 	const promptBuilder = new PromptBuilder();
 	for (const section of createDefaultPromptSections()) {
 		promptBuilder.register(section);
@@ -203,14 +224,27 @@ function createPromptSessionAssembler(
 		}),
 	});
 
-	registry.onChange(() => {
-		assembler.invalidateSessionPrefix("tool-registry-changed");
-	});
-	skillsManager?.onCatalogChange(() => {
+	const disposers: Array<() => void> = [];
+	disposers.push(
+		registry.onChange(() => {
+			assembler.invalidateSessionPrefix("tool-registry-changed");
+		}),
+	);
+	const unsubscribeSkillsCatalog = skillsManager?.onCatalogChange(() => {
 		assembler.invalidateSessionPrefix("skills-catalog-changed");
 	});
+	if (unsubscribeSkillsCatalog != null) {
+		disposers.push(unsubscribeSkillsCatalog);
+	}
 
-	return assembler;
+	return {
+		assembler,
+		dispose: () => {
+			for (const dispose of disposers.splice(0)) {
+				dispose();
+			}
+		},
+	};
 }
 
 function withDefaultMetadata(tools: readonly Tool[]): ToolWithMetadata[] {
@@ -223,6 +257,220 @@ function withDefaultMetadata(tools: readonly Tool[]): ToolWithMetadata[] {
 
 function formatReplList(values: readonly string[]): string {
 	return values.length === 0 ? "none" : values.join(",");
+}
+
+function formatCapabilitiesMcpStatus(
+	status: CapabilitiesReloadStatus["mcpReconnect"],
+): string {
+	if (status == null) {
+		return "none";
+	}
+	const active = formatReplList(status.activeServerIds);
+	if (status.status !== "pending_repl_apply") {
+		return `${status.status}(active=${active})`;
+	}
+	return [
+		`${status.status}(active=${active}`,
+		`added=${formatReplList(status.change.added)}`,
+		`removed=${formatReplList(status.change.removed)}`,
+		`changed=${formatReplList(status.change.changed)})`,
+	].join(" ");
+}
+
+function formatCapabilitiesSkillsStatus(
+	status: CapabilitiesReloadStatus,
+): string {
+	if (status.skillsStatus == null) {
+		return "none";
+	}
+	const catalogSize = status.skillsStatus.lastSuccess?.catalogSize ?? "unknown";
+	return `catalog=${catalogSize},watching=${status.skillsStatus.watching ? "on" : "off"}`;
+}
+
+function renderCapabilitiesStatus(status: CapabilitiesReloadStatus): string {
+	const reload =
+		status.lastSuccess == null
+			? "none"
+			: `${status.lastSuccess.operation}/${status.lastSuccess.trigger}`;
+	const failure =
+		status.lastFailure == null
+			? "none"
+			: `${status.lastFailure.errorName}:${status.lastFailure.errorMessage}`;
+	return [
+		`Capabilities: generation=${status.generation}`,
+		`booted=${status.booted ? "yes" : "no"}`,
+		`watching=${status.watching ? "on" : "off"}`,
+		`in_flight=${status.inFlight ? "yes" : "no"}`,
+		`last_reload=${reload}`,
+		`last_failure=${failure}`,
+		`mcp=${formatCapabilitiesMcpStatus(status.mcpReconnect)}`,
+		`skills=${formatCapabilitiesSkillsStatus(status)}`,
+	].join(" | ");
+}
+
+function countRecords(
+	records: readonly ChildRunStatusRecord[],
+	predicate: (record: ChildRunStatusRecord) => boolean,
+): number {
+	return records.filter(predicate).length;
+}
+
+function isNeedsDecisionRecord(record: ChildRunStatusRecord): boolean {
+	return record.status === "blocked" && record.currentStep === "needs_decision";
+}
+
+function formatAgentsSummary(snapshot: SupervisorRuntimeSnapshot): string {
+	const { records } = snapshot;
+	if (records.length === 0) {
+		return "Agents: none";
+	}
+
+	const counts = snapshot.projection.snapshot.counts;
+	const needsDecision = countRecords(records, isNeedsDecisionRecord);
+	const blocked = Math.max(0, counts.blocked - needsDecision);
+	const active =
+		counts.active +
+		counts.waiting_for_review +
+		counts.aggregating +
+		counts.cancel_requested;
+	const queued = counts.queued + counts.assigned;
+
+	return [
+		`Agents: active=${active}`,
+		`blocked=${blocked}`,
+		`needs_decision=${needsDecision}`,
+		`completed=${counts.completed}`,
+		`failed=${counts.failed}`,
+		`queued=${queued}`,
+	].join(" | ");
+}
+
+function displayRunStatus(record: ChildRunStatusRecord): string {
+	return isNeedsDecisionRecord(record) ? "needs_decision" : record.status;
+}
+
+function childRunSortRank(record: ChildRunStatusRecord): number {
+	const status = displayRunStatus(record);
+	switch (status) {
+		case "needs_decision":
+			return 0;
+		case "blocked":
+			return 1;
+		case "active":
+		case "waiting_for_review":
+		case "aggregating":
+		case "cancel_requested":
+			return 2;
+		case "queued":
+		case "assigned":
+			return 3;
+		case "failed":
+		case "cancelled":
+			return 4;
+		case "deferred":
+			return 5;
+		case "completed":
+			return 6;
+		default:
+			return 7;
+	}
+}
+
+function quoteAgentField(value: string | undefined): string | undefined {
+	const trimmed = value?.replace(/\s+/gu, " ").trim();
+	if (trimmed == null || trimmed.length === 0) {
+		return undefined;
+	}
+	const shortened =
+		trimmed.length <= 120 ? trimmed : `${trimmed.slice(0, 117)}...`;
+	return `"${shortened.replaceAll('"', "'")}"`;
+}
+
+function formatAgentRecord(record: ChildRunStatusRecord): string {
+	const fields = [
+		`${displayRunStatus(record).padEnd(18)} run=${record.runId}`,
+		`task=${record.taskId}`,
+		record.workerId == null ? undefined : `worker=${record.workerId}`,
+		record.currentStep == null ? undefined : `step=${record.currentStep}`,
+		record.blocker == null
+			? undefined
+			: `blocker=${quoteAgentField(record.blocker)}`,
+		`summary=${quoteAgentField(record.summary) ?? '""'}`,
+		`confidence=${record.confidence}`,
+		`artifacts=${record.reviewedArtifactCount}`,
+		`updated=${record.updatedAt}`,
+	];
+
+	return fields.filter((field): field is string => field != null).join(" ");
+}
+
+function renderAgentsStatus(snapshot: SupervisorRuntimeSnapshot): string {
+	if (snapshot.records.length === 0) {
+		return `${formatAgentsSummary(snapshot)}\nNo local subagent runs yet.`;
+	}
+
+	const records = [...snapshot.records].sort((left, right) => {
+		const rankDelta = childRunSortRank(left) - childRunSortRank(right);
+		if (rankDelta !== 0) {
+			return rankDelta;
+		}
+		return right.updatedAt.localeCompare(left.updatedAt);
+	});
+
+	return [
+		formatAgentsSummary(snapshot),
+		"",
+		...records.map(formatAgentRecord),
+	].join("\n");
+}
+
+function mcpServerRuntimeSignature(entry: MCPServerEntry): string {
+	return JSON.stringify({
+		namespace: entry.namespace,
+		defaultRiskLevel: entry.defaultRiskLevel,
+		config: entry.config,
+	});
+}
+
+const runtimeIdentity = new WeakMap<object, number>();
+let nextRuntimeIdentity = 1;
+
+function getRuntimeIdentity(value: object | undefined): number {
+	if (value == null) {
+		return 0;
+	}
+	const existing = runtimeIdentity.get(value);
+	if (existing != null) {
+		return existing;
+	}
+	const assigned = nextRuntimeIdentity;
+	nextRuntimeIdentity += 1;
+	runtimeIdentity.set(value, assigned);
+	return assigned;
+}
+
+function buildRuntimeSurfaceKey(input: {
+	readonly runtime?: CapabilitiesRuntime;
+	readonly status?: CapabilitiesReloadStatus;
+	readonly mcpServers: readonly MCPServerEntry[];
+	readonly skillsManager?: SkillsManager;
+	readonly tools: readonly Tool[];
+}): string {
+	const generation =
+		input.status?.generation ?? getRuntimeIdentity(input.runtime);
+	const mcpSignature = input.mcpServers
+		.map((entry) => `${entry.id}:${mcpServerRuntimeSignature(entry)}`)
+		.join("|");
+	const toolSignature = input.tools
+		.map((tool) => `${tool.name}:${tool.description}`)
+		.join("|");
+	return [
+		`generation=${generation}`,
+		`runtime=${getRuntimeIdentity(input.runtime)}`,
+		`skills=${getRuntimeIdentity(input.skillsManager)}`,
+		`mcp=${mcpSignature}`,
+		`tools=${toolSignature}`,
+	].join(";");
 }
 
 function createSandboxApprovalPrompt(request: SandboxApprovalRequest): string {
@@ -832,19 +1080,27 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 		tools = [],
 		mcpServers = [],
 		skillsManager,
+		capabilitiesRuntime,
 		inferenceConfig: initialInferenceConfig,
 		tierRouting,
 		writeAuthorityMode = "ask",
 		toolFilter,
+		capabilitiesStatus,
+		supervisorRuntime: providedSupervisorRuntime,
 		agentRunLogger,
 		onProviderRunRecord,
 	} = options;
 	const context = new BasicContextManager();
-	if (skillsManager != null) {
+	const ownsStaticSkillsManager =
+		capabilitiesRuntime == null && skillsManager != null;
+	if (ownsStaticSkillsManager) {
 		await skillsManager.discover();
 		skillsManager.startWatching();
 	}
 	const registry = new MCPRegistry();
+	const supervisorRuntime =
+		providedSupervisorRuntime ??
+		new InProcessSupervisorRuntime({ maxActiveRuns: 6 });
 	const resolvedSessionId = sessionId ?? crypto.randomUUID();
 	const checkpoint = new SQLiteCheckpoint({ sessionId: resolvedSessionId });
 	const runLogger =
@@ -854,8 +1110,43 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 	let slashCommandHelpShownForPrompt = false;
 	let mainPromptActive = false;
 	const queuedCommands: string[] = [];
+	const liveInputQueue = new LiveInputQueue({
+		createId: () => crypto.randomUUID(),
+	});
 	const toolProvenance: ToolProvenanceEntry[] = [];
 	let activeTurnId: string | undefined;
+	const enqueueLiveInput = (entry: QueuedLiveInput): void => {
+		queuedCommands.push(entry.input);
+		if (entry.kind === "slash_command") {
+			stderr.write(`Command queued for current turn: ${entry.input}\n`);
+		} else {
+			stderr.write(
+				`Live input queued for current turn: ${entry.input.length} chars.\n`,
+			);
+		}
+		void recordAgentRunEvent(
+			runLogger,
+			"turn.live_input_received",
+			{
+				id: entry.id,
+				kind: entry.kind,
+				receivedAt: entry.receivedAt,
+				input: {
+					chars: entry.input.length,
+					previewRedacted: true,
+				},
+				queuedFor: "next_turn",
+				queuedCommandCount: queuedCommands.length,
+			},
+			{ turnId: entry.turnId },
+		);
+	};
+	const handleLiveInputLine = (line: string): void => {
+		const entry = liveInputQueue.append(line);
+		if (entry != null) {
+			enqueueLiveInput(entry);
+		}
+	};
 	const writeAuthority = new WriteAuthority({
 		actor: resolvedSessionId,
 		mode: writeAuthorityMode,
@@ -865,11 +1156,17 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 			}
 
 			while (true) {
-				const answer = (
-					await rl.question(
-						`[WriteAuthority] ${request.tool} (${request.riskLevel.toUpperCase()}): ${request.summary}\nAllow? [y/N/always-low/always-medium]: `,
-					)
-				).trim();
+				const resumeLiveInput = liveInputQueue.suspend();
+				let answer: string;
+				try {
+					answer = (
+						await rl.question(
+							`[WriteAuthority] ${request.tool} (${request.riskLevel.toUpperCase()}): ${request.summary}\nAllow? [y/N/always-low/always-medium]: `,
+						)
+					).trim();
+				} finally {
+					resumeLiveInput();
+				}
 
 				if (answer.startsWith("/")) {
 					queuedCommands.push(answer);
@@ -901,9 +1198,15 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 		}
 
 		while (true) {
-			const answer = (
-				await rl.question(createSandboxApprovalPrompt(request))
-			).trim();
+			const resumeLiveInput = liveInputQueue.suspend();
+			let answer: string;
+			try {
+				answer = (
+					await rl.question(createSandboxApprovalPrompt(request))
+				).trim();
+			} finally {
+				resumeLiveInput();
+			}
 
 			if (answer.startsWith("/")) {
 				queuedCommands.push(answer);
@@ -915,27 +1218,10 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 			return normalizedAnswer === "y" || normalizedAnswer === "yes";
 		}
 	};
+	let promptSession: ReplPromptSession | undefined;
+	let unsubscribeCatalogHints: (() => void) | undefined;
 
 	try {
-		registry.registerBuiltin(
-			filterToolsByRuntimeConfig(
-				createBuiltinTools({ writeAuthority, skillsManager }),
-				toolFilter,
-			),
-		);
-		for (const entry of mcpServers) {
-			await registry.register(entry);
-		}
-		if (tools.length > 0) {
-			registry.registerBuiltin(
-				filterToolsByRuntimeConfig(withDefaultMetadata(tools), toolFilter),
-			);
-		}
-
-		const allTools = filterToolsByRuntimeConfig(
-			registry.getAllTools(),
-			toolFilter,
-		);
 		const restoredState =
 			sessionId == null ? null : await checkpoint.load(resolvedSessionId);
 		const restoredMessages =
@@ -965,6 +1251,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 		});
 
 		rl = readline.createInterface({ input: stdin, output: stderr });
+		rl.on?.("line", handleLiveInputLine);
 		slashCommandHelpController = installSlashCommandHelp({
 			isActive: () => mainPromptActive,
 			onShown: () => {
@@ -972,33 +1259,145 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 			},
 		});
 
-		let state = restoredState;
-		if (state == null) {
+		let state: AgentState;
+		if (restoredState == null) {
 			state = createState([]);
 		} else {
 			state = createState(restoredMessages, {
-				...state,
+				...restoredState,
 				messages: restoredMessages,
 			});
 		}
 
 		const messages: Message[] = [...state.messages];
-		const baseModel = provider(modelId);
-		const sessionAssembler = createPromptSessionAssembler(
-			modelId,
-			registry,
-			state.createdAt,
-			restoredState?.lastActiveAt,
-			skillsManager,
-			toolFilter,
-			() => toolProvenance,
-		);
-		skillsManager?.onCatalogChange((change) => {
-			const hint = renderSkillsCatalogHint(change);
-			if (hint != null) {
-				stderr.write(hint);
+		interface RuntimeSurface {
+			readonly key: string;
+			readonly sessionAssembler: PromptSessionAssembler;
+			readonly tools: readonly ToolWithMetadata[];
+		}
+		let runtimeSurface: RuntimeSurface | undefined;
+		let catalogHintSkillsManager: SkillsManager | undefined;
+		const registeredMcpServerSignatures = new Map<string, string>();
+
+		const updateCatalogHintSubscription = (
+			currentSkillsManager: SkillsManager | undefined,
+		): void => {
+			if (catalogHintSkillsManager === currentSkillsManager) {
+				return;
 			}
-		});
+			unsubscribeCatalogHints?.();
+			unsubscribeCatalogHints = undefined;
+			catalogHintSkillsManager = currentSkillsManager;
+			if (currentSkillsManager == null) {
+				return;
+			}
+			unsubscribeCatalogHints = currentSkillsManager.onCatalogChange(
+				(change) => {
+					const hint = renderSkillsCatalogHint(change);
+					if (hint != null) {
+						stderr.write(hint);
+					}
+				},
+			);
+		};
+
+		const syncRuntimeSurface = async (): Promise<RuntimeSurface> => {
+			try {
+				const currentRuntime = capabilitiesRuntime?.();
+				const currentStatus = capabilitiesStatus?.();
+				const currentMcpServers = currentRuntime?.mcpServers ?? mcpServers;
+				const currentSkillsManager =
+					currentRuntime?.skillsManager ?? skillsManager;
+				const surfaceKey = buildRuntimeSurfaceKey({
+					runtime: currentRuntime,
+					status: currentStatus,
+					mcpServers: currentMcpServers,
+					skillsManager: currentSkillsManager,
+					tools,
+				});
+
+				if (runtimeSurface != null && runtimeSurface.key === surfaceKey) {
+					return runtimeSurface;
+				}
+
+				const nextBuiltinTools = filterToolsByRuntimeConfig(
+					createBuiltinTools({
+						writeAuthority,
+						skillsManager: currentSkillsManager,
+					}),
+					toolFilter,
+				);
+				const nextInjectedTools = filterToolsByRuntimeConfig(
+					withDefaultMetadata(tools),
+					toolFilter,
+				);
+				const nextMcpServerSignatures = new Map(
+					currentMcpServers.map((entry) => [
+						entry.id,
+						mcpServerRuntimeSignature(entry),
+					]),
+				);
+				const nextMcpServerIds = new Set(nextMcpServerSignatures.keys());
+				const removedMcpServerIds = [
+					...registeredMcpServerSignatures.keys(),
+				].filter((serverId) => !nextMcpServerIds.has(serverId));
+				const changedMcpServers = currentMcpServers.filter(
+					(entry) =>
+						registeredMcpServerSignatures.get(entry.id) !==
+						nextMcpServerSignatures.get(entry.id),
+				);
+
+				for (const entry of changedMcpServers) {
+					await registry.register(entry);
+				}
+				for (const serverId of removedMcpServerIds) {
+					await registry.unregister(serverId);
+				}
+
+				registry.clearBuiltinTools();
+				registry.registerBuiltin(nextBuiltinTools);
+				if (nextInjectedTools.length > 0) {
+					registry.registerBuiltin(nextInjectedTools);
+				}
+
+				registeredMcpServerSignatures.clear();
+				for (const [serverId, signature] of nextMcpServerSignatures) {
+					registeredMcpServerSignatures.set(serverId, signature);
+				}
+
+				const nextPromptSession = createPromptSessionAssembler(
+					modelId,
+					registry,
+					state.createdAt,
+					restoredState?.lastActiveAt,
+					currentSkillsManager,
+					toolFilter,
+					() => toolProvenance,
+				);
+				promptSession?.dispose();
+				promptSession = nextPromptSession;
+				updateCatalogHintSubscription(currentSkillsManager);
+
+				runtimeSurface = {
+					key: surfaceKey,
+					sessionAssembler: nextPromptSession.assembler,
+					tools: filterToolsByRuntimeConfig(registry.getAllTools(), toolFilter),
+				};
+				return runtimeSurface;
+			} catch (err) {
+				if (runtimeSurface != null) {
+					logger.warn(
+						{ error: providerErrorLogFields(err) },
+						"REPL: capabilities runtime sync failed; keeping previous surface",
+					);
+					return runtimeSurface;
+				}
+				throw err;
+			}
+		};
+
+		runtimeSurface = await syncRuntimeSurface();
+		const baseModel = provider(modelId);
 		let inferenceConfig: InferenceConfig = {
 			...DEFAULT_INFERENCE_CONFIG,
 			...initialInferenceConfig,
@@ -1069,7 +1468,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 			if (trimmed === "/clear") {
 				messages.length = 0;
 				streamRenderState = createStreamRenderState();
-				sessionAssembler.resetSession();
+				runtimeSurface.sessionAssembler.resetSession();
 				state = createState([...messages], {
 					...state,
 					messages: [...messages],
@@ -1102,6 +1501,18 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 						);
 					}
 				}
+				const capabilitiesReloadStatus = capabilitiesStatus?.();
+				if (capabilitiesReloadStatus != null) {
+					stderr.write(
+						`${renderCapabilitiesStatus(capabilitiesReloadStatus)}\n`,
+					);
+				}
+				stderr.write(`${formatAgentsSummary(supervisorRuntime.snapshot())}\n`);
+				continue;
+			}
+
+			if (trimmed === "/agents") {
+				stderr.write(`${renderAgentsStatus(supervisorRuntime.snapshot())}\n`);
 				continue;
 			}
 
@@ -1164,6 +1575,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 			const previousLastActiveAt = state.lastActiveAt;
 			const currentTurnId = crypto.randomUUID();
 			activeTurnId = currentTurnId;
+			liveInputQueue.beginTurn(currentTurnId);
 			await recordAgentRunEvent(
 				runLogger,
 				"turn.input_received",
@@ -1188,18 +1600,19 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 
 			try {
 				streamRenderState = createStreamRenderState();
+				runtimeSurface = await syncRuntimeSurface();
 				let latestAssistantMessage: Message | undefined;
 				let latestLoopMessages: readonly Message[] | undefined;
 				const response = await runAgentLoop(
 					{
 						llm,
 						context,
-						sessionAssembler,
+						sessionAssembler: runtimeSurface.sessionAssembler,
 						checkpoint,
 						state,
 						modelId,
 						lastMessageTime: previousLastActiveAt,
-						tools: allTools,
+						tools: runtimeSurface.tools,
 						toolRouterOptions: {
 							sandboxOrigin: "agent",
 							sandboxApproval: confirmSandboxApproval,
@@ -1283,14 +1696,20 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 					options.observability,
 					options.spanExporter,
 				);
+				liveInputQueue.finishTurn();
 				activeTurnId = undefined;
 			}
 		}
 	} finally {
 		await flushAgentRunLogger(runLogger);
+		promptSession?.dispose();
+		unsubscribeCatalogHints?.();
 		slashCommandHelpController?.dispose();
+		rl?.off?.("line", handleLiveInputLine);
 		rl?.close();
-		skillsManager?.stopWatching();
+		if (ownsStaticSkillsManager) {
+			skillsManager?.stopWatching();
+		}
 		await registry.disconnectAll();
 	}
 }

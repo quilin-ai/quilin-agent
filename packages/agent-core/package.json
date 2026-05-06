@@ -4,6 +4,9 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "bin": {
+    "quilin": "src/index.ts"
+  },
   "scripts": {
     "build": "bun build src/index.ts --outdir dist --target node",
     "test": "vitest run --configLoader runner",

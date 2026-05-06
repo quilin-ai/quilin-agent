@@ -1,6 +1,6 @@
 # Memory Watchlist
 
-> 跟 2026 开源 SOTA 记忆系统的**思想**，不跟它们的 git。支撑 [03-memory](../../03-memory/README.md) §二·A D-20 OmniMem v2 融合架构的持续迭代。
+> 跟 2026 开源 SOTA 记忆系统的**思想**，不跟它们的 git。支撑 [03-memory](../../03-memory/README.md) §二·A D-20 quilin-mem v2 融合架构的持续迭代。
 
 ## 运作原则
 
@@ -13,7 +13,7 @@
 
 ## Watchlist
 
-| 线程 | 上游项目 | License | 在 OmniMem v2 里的对应层 |
+| 线程 | 上游项目 | License | 在 quilin-mem v2 里的对应层 |
 |------|---------|---------|----------------------|
 | [mastra-om](./mastra-om.md) | [mastra-ai/mastra](https://github.com/mastra-ai/mastra) | Apache-2.0 (+ `ee/` 企业许可) | L3a Observation Layer |
 | [graphiti](./graphiti.md) | [getzep/graphiti](https://github.com/getzep/graphiti) | Apache-2.0 | L3b Temporal KG |
@@ -40,7 +40,7 @@
 
 **建议行动**：
 - [ ] 是否需要起 spec delta PR？（是 / 否 / 再观察）
-- [ ] 对应 OmniMem v2 的哪一层？
+- [ ] 对应 quilin-mem v2 的哪一层？
 ```
 
 ## 加入新 watchlist 线程的条件

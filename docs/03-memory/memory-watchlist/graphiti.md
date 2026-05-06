@@ -3,7 +3,7 @@
 - **上游**：[getzep/graphiti](https://github.com/getzep/graphiti) —— `graphiti-core`
 - **License**：Apache-2.0
 - **主要语言**：Python
-- **对应 OmniMem v2 层**：L3b Temporal KG（§二·A.7）
+- **对应 quilin-mem v2 层**：L3b Temporal KG（§二·A.7）
 - **相关 spike**：结论已合并到本 watchlist 条目 (Task #93, 2026-04-20)
 
 ## 2026-04-20 baseline digest
@@ -30,7 +30,7 @@
 - Graphiti 2024-2025 的论点是"时序是 agent 记忆的核心" —— 这个论点在 2026 被数据证伪：Mem0 v2 无时序 KG 照样拿 93.4%，Mastra OM 纯 observation 拿 94.87%。
 - 时序 KG 真正的价值不在**日常检索**，而在**少数 temporal intent 查询**（"X 在 T 时刻和 Y 的关系") —— 但 Graphiti eagerly 为每条 episode 抽三元组，90% 的工作被浪费。
 
-**对 OmniMem v2 的启示**：
+**对 quilin-mem v2 的启示**：
 - ✅ **保留**：bi-temporal edges 概念（valid_from / valid_to）、Episode 驱动的抽取管线
 - ⚠️ **升级**：eager 抽取 → Quilin 改为 **Lazy extraction**（仅在 intent classifier 判定 temporal 时才抽；抽取结果缓存）
 - ❌ **丢弃**：对 Graphiti / Kuzu / Neo4j 的**代码依赖**。我们自写 SQLite 实现（两列 `valid_from` / `valid_to` + 索引 + 递归 CTE 做 hop-N 遍历）

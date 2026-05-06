@@ -1,6 +1,7 @@
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	buildProviderLiveMatrix,
 	createProvider,
 	DEFAULT_PROVIDER_CATALOG,
 	decideLLMRoute,
@@ -211,6 +212,121 @@ describe("provider catalog", () => {
 				{ DEEPSEEK_API_KEY: "test-key" },
 			),
 		).toThrow(/verified live evidence/);
+	});
+});
+
+describe("buildProviderLiveMatrix", () => {
+	it("summarizes API-key and OAuth credential availability without leaking values", () => {
+		const matrix = buildProviderLiveMatrix(DEFAULT_PROVIDER_CATALOG, {
+			env: {
+				DEEPSEEK_API_KEY: "secret-deepseek-key",
+				QUILIN_GEMINI_OAUTH_SESSION: "/tmp/gemini-oauth.json",
+			},
+			existingCredentialPaths: ["~/.codex/auth.json"],
+		});
+
+		expect(matrix).toContainEqual(
+			expect.objectContaining({
+				provider: "deepseek",
+				authModes: ["api_key"],
+				credentialStatus: "configured",
+				configuredSources: ["env"],
+				missingCredentials: [],
+				quotaAwareness: expect.objectContaining({
+					status: "planned",
+					source: "api_balance",
+					requiresExternalApi: true,
+				}),
+			}),
+		);
+		expect(matrix).toContainEqual(
+			expect.objectContaining({
+				provider: "openai",
+				authModes: ["api_key", "oauth"],
+				credentialStatus: "configured",
+				configuredSources: ["oauth_file"],
+				missingCredentials: ["api_key:OPENAI_API_KEY"],
+				quotaAwareness: expect.objectContaining({
+					status: "planned",
+					source: "oauth_usage_api",
+				}),
+			}),
+		);
+		expect(matrix).toContainEqual(
+			expect.objectContaining({
+				provider: "gemini",
+				authModes: ["api_key", "oauth"],
+				credentialStatus: "missing",
+				configuredSources: [],
+				missingCredentials: [
+					"api_key:GOOGLE_GENERATIVE_AI_API_KEY",
+					"oauth:QUILIN_GEMINI_OAUTH_SESSION",
+				],
+			}),
+		);
+		expect(JSON.stringify(matrix)).not.toContain("secret-deepseek-key");
+	});
+
+	it("marks providers missing when no API-key or OAuth source is present", () => {
+		const matrix = buildProviderLiveMatrix(DEFAULT_PROVIDER_CATALOG, {
+			env: {},
+			existingCredentialPaths: [],
+		});
+
+		expect(matrix).toContainEqual(
+			expect.objectContaining({
+				provider: "deepseek",
+				credentialStatus: "missing",
+				missingCredentials: ["api_key:DEEPSEEK_API_KEY"],
+			}),
+		);
+		expect(matrix).toContainEqual(
+			expect.objectContaining({
+				provider: "openai",
+				credentialStatus: "missing",
+				missingCredentials: [
+					"api_key:OPENAI_API_KEY",
+					"oauth:~/.codex/auth.json",
+				],
+			}),
+		);
+	});
+
+	it("treats empty API keys and missing OAuth files as unavailable", () => {
+		const matrix = buildProviderLiveMatrix(DEFAULT_PROVIDER_CATALOG, {
+			env: {
+				DEEPSEEK_API_KEY: "   ",
+				OPENAI_API_KEY: "",
+				QUILIN_GEMINI_OAUTH_SESSION: "/does/not/exist",
+			},
+			existingCredentialPaths: ["~/.codex/auth.json"],
+		});
+
+		expect(matrix).toContainEqual(
+			expect.objectContaining({
+				provider: "deepseek",
+				credentialStatus: "missing",
+				missingCredentials: ["api_key:DEEPSEEK_API_KEY"],
+			}),
+		);
+		expect(matrix).toContainEqual(
+			expect.objectContaining({
+				provider: "openai",
+				credentialStatus: "configured",
+				configuredSources: ["oauth_file"],
+				missingCredentials: ["api_key:OPENAI_API_KEY"],
+			}),
+		);
+		expect(matrix).toContainEqual(
+			expect.objectContaining({
+				provider: "gemini",
+				credentialStatus: "missing",
+				missingCredentials: [
+					"api_key:GOOGLE_GENERATIVE_AI_API_KEY",
+					"oauth:QUILIN_GEMINI_OAUTH_SESSION",
+				],
+			}),
+		);
 	});
 });
 

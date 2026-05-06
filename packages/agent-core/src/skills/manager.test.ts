@@ -356,6 +356,31 @@ dependencies:
 		});
 	});
 
+	it("exposes reload status for successful discoveries", async () => {
+		const userRoot = await createTempDir();
+		await writeSkill(userRoot, "alpha", "Alpha", "# alpha");
+		const manager = new SkillsManager({ userRoots: [userRoot] });
+
+		await manager.discover();
+
+		expect(manager.getReloadStatus()).toMatchObject({
+			generation: 1,
+			watching: false,
+			inFlight: false,
+			inFlightGenerations: [],
+			lastFailure: null,
+			lastSuccess: {
+				generation: 1,
+				catalogSize: 1,
+				change: {
+					added: ["alpha"],
+					removed: [],
+					changed: [],
+				},
+			},
+		});
+	});
+
 	it("debounces watcher rescan and stopWatching prevents further refreshes", async () => {
 		vi.useFakeTimers();
 		try {
@@ -419,5 +444,24 @@ dependencies:
 
 		expect(disabledWatch).not.toHaveBeenCalled();
 		expect(pluginWatch).not.toHaveBeenCalled();
+	});
+
+	it("records watcher setup failures without throwing", async () => {
+		const userRoot = await createTempDir();
+		const manager = new SkillsManager({
+			userRoots: [userRoot],
+			watchFactory: (() => {
+				throw new Error("watch unavailable");
+			}) as never,
+		});
+
+		expect(() => manager.startWatching()).not.toThrow();
+		expect(manager.getReloadStatus()).toMatchObject({
+			watching: false,
+			lastFailure: {
+				errorName: "Error",
+				errorMessage: "watch unavailable",
+			},
+		});
 	});
 });

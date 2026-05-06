@@ -6,9 +6,9 @@ Scope: `QUI-65`（Linear 中的 Memory runtime 实现任务，负责把记忆观
 
 ## 目标 / Goals
 
-The goal is to make OmniMem（Quilin 的四层记忆系统，包含 working / episodic / semantic / skill memory）write, defend, retrieve, and score memory as a runtime component. The runtime must accept session and tool events, produce auditable `FactEvent` records（事实事件记录，用结构化事件表达可复用事实）, keep the stream append-only, quarantine unsafe candidates, retrieve through multiple signals, and hand stable memory blocks to Context.
+The goal is to make quilin-mem（Quilin 的四层记忆系统，包含 working / episodic / semantic / skill memory）write, defend, retrieve, and score memory as a runtime component. The runtime must accept session and tool events, produce auditable `FactEvent` records（事实事件记录，用结构化事件表达可复用事实）, keep the stream append-only, quarantine unsafe candidates, retrieve through multiple signals, and hand stable memory blocks to Context.
 
-目标是把 OmniMem（Quilin 的四层记忆系统，包含 working / episodic / semantic / skill memory）做成能写入、防御、检索和评分的运行时组件。运行时必须接收会话和工具事件，产出可审计的 `FactEvent` records（事实事件记录，用结构化事件表达可复用事实），保持只追加事实流，隔离不安全候选事实，通过多信号检索，并把稳定记忆块交给 Context。
+目标是把 quilin-mem（Quilin 的四层记忆系统，包含 working / episodic / semantic / skill memory）做成能写入、防御、检索和评分的运行时组件。运行时必须接收会话和工具事件，产出可审计的 `FactEvent` records（事实事件记录，用结构化事件表达可复用事实），保持只追加事实流，隔离不安全候选事实，通过多信号检索，并把稳定记忆块交给 Context。
 
 The first close condition is a deterministic local fixture scorer（本地样例评分器，用固定输入和固定规则评估结果）that proves write precision, write recall, provenance coverage, poisoning rejection, contradiction handling, abstention, and retrieval evidence quality. Public lanes such as LongMemEval（长期记忆能力评测，用于评估跨多会话记忆能力）and LoCoMo（长对话记忆评测，用于评估多会话对话记忆和归因）remain follow-up evidence, not the first implementation driver.
 

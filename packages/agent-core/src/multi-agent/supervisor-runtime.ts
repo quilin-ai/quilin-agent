@@ -1,6 +1,7 @@
 import type { DelegationHandoff } from "../planning/delegation.js";
 import {
 	type ChildRunHeartbeat,
+	type ChildRunStatus,
 	type ChildRunStatusRecord,
 	createBufferedSupervisorProgressSink,
 	createChildRunStatusRecord,
@@ -20,6 +21,47 @@ export interface SupervisorWorkerResult {
 	readonly summary?: string;
 	readonly confidence?: SupervisorConfidence;
 	readonly reviewedArtifactCount?: number;
+	readonly status?: Extract<ChildRunStatus, "completed" | "deferred">;
+}
+
+export type SupervisorRuntimeInputKind = "append" | "send" | "interrupt";
+
+export type SupervisorRuntimeInputMetadata = Readonly<
+	Record<string, string | number | boolean | null>
+>;
+
+export interface SupervisorRuntimeInputPayload {
+	readonly content: string;
+	readonly metadata?: SupervisorRuntimeInputMetadata;
+}
+
+export interface SupervisorRuntimeInput {
+	readonly id: string;
+	readonly runId: string;
+	readonly taskId: string;
+	readonly kind: SupervisorRuntimeInputKind;
+	readonly content: string;
+	readonly metadata?: SupervisorRuntimeInputMetadata;
+	readonly createdAt: string;
+}
+
+export interface SupervisorLifecycleEscalation {
+	readonly summary: string;
+	readonly blocker?: string;
+	readonly currentStep?: string;
+	readonly nextCheckpointAt?: string;
+	readonly confidence?: SupervisorConfidence;
+}
+
+export type SupervisorLifecycleEscalationInput =
+	| string
+	| SupervisorLifecycleEscalation;
+
+export interface SupervisorRuntimeRunQuery {
+	readonly runIds?: string | readonly string[];
+	readonly taskIds?: string | readonly string[];
+	readonly workerIds?: string | readonly string[];
+	readonly statuses?: ChildRunStatus | readonly ChildRunStatus[];
 }
 
 export interface SupervisorWorkerContext {
@@ -28,6 +70,17 @@ export interface SupervisorWorkerContext {
 	readonly cancelToken: string;
 	readonly signal: AbortSignal;
 	readonly heartbeat: (heartbeat: ChildRunHeartbeat) => ChildRunStatusRecord;
+	readonly reportBlocked: (
+		escalation: SupervisorLifecycleEscalationInput,
+	) => ChildRunStatusRecord;
+	readonly needsDecision: (
+		escalation: SupervisorLifecycleEscalationInput,
+	) => ChildRunStatusRecord;
+	readonly pendingInput: () => readonly SupervisorRuntimeInput[];
+	readonly drainInput: () => readonly SupervisorRuntimeInput[];
+	readonly waitForInput: () => Promise<SupervisorRuntimeInput | null>;
+	readonly isPaused: () => boolean;
+	readonly waitUntilResumed: () => Promise<void>;
 }
 
 export interface SupervisorWorker {
@@ -68,12 +121,16 @@ export interface SupervisorRuntimeSnapshot {
 
 interface ActiveRunState {
 	readonly controller: AbortController;
+	paused: boolean;
+	readonly resumeWaiters: Array<() => void>;
 }
 
 interface ChildRunDeferred {
 	readonly promise: Promise<ChildRunStatusRecord>;
 	readonly resolve: (record: ChildRunStatusRecord) => void;
 }
+
+type InputWaiter = (input: SupervisorRuntimeInput | null) => void;
 
 const WORKER_HEARTBEAT_STATUSES = new Set<ChildRunStatusRecord["status"]>([
 	"active",
@@ -91,8 +148,52 @@ function isTerminalStatus(status: ChildRunStatusRecord["status"]): boolean {
 	);
 }
 
+function isControlLockedStatus(
+	status: ChildRunStatusRecord["status"],
+): boolean {
+	return status === "cancel_requested" || isTerminalStatus(status);
+}
+
 function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
+}
+
+function normalizeInputPayload(
+	input: string | SupervisorRuntimeInputPayload,
+): SupervisorRuntimeInputPayload {
+	return typeof input === "string" ? { content: input } : input;
+}
+
+function normalizeLifecycleEscalation(
+	input: SupervisorLifecycleEscalationInput,
+	defaultCurrentStep: string,
+): ChildRunHeartbeat {
+	const payload = typeof input === "string" ? { summary: input } : input;
+	const summary = payload.summary.trim();
+	if (summary.length === 0) {
+		throw new RangeError("lifecycle escalation summary must be non-empty");
+	}
+
+	const blocker = payload.blocker?.trim() || summary;
+	const currentStep = payload.currentStep?.trim() || defaultCurrentStep;
+	return {
+		status: "blocked",
+		summary,
+		currentStep,
+		blocker,
+		nextCheckpointAt: payload.nextCheckpointAt,
+		confidence: payload.confidence ?? "low",
+	};
+}
+
+function normalizeQueryValues<T>(
+	value: T | readonly T[] | undefined,
+): ReadonlySet<T> | null {
+	if (value == null) {
+		return null;
+	}
+
+	return new Set(Array.isArray(value) ? value : [value]);
 }
 
 function assertNever(value: never): never {
@@ -251,7 +352,10 @@ export class InProcessSupervisorRuntime {
 	private readonly handoffs = new Map<string, DelegationHandoff>();
 	private readonly completions = new Map<string, ChildRunDeferred>();
 	private readonly activeRuns = new Map<string, ActiveRunState>();
+	private readonly pendingInputs = new Map<string, SupervisorRuntimeInput[]>();
+	private readonly inputWaiters = new Map<string, InputWaiter[]>();
 	private readonly emittedEventKeys = new Set<string>();
+	private nextInputSequence = 0;
 
 	constructor(options: InProcessSupervisorRuntimeOptions = {}) {
 		this.workers = options.workers ?? [];
@@ -341,17 +445,132 @@ export class InProcessSupervisorRuntime {
 				confidence: "low",
 			});
 			this.resolveCompletion(runId, record);
+			this.closeInputPort(runId);
 			this.startQueuedRuns();
 			return record;
 		}
 
 		state.controller.abort(reason);
+		this.releasePauseWaiters(state);
+		this.closeInputPort(runId);
 		return this.updateRuntimeRecord(runId, {
 			status: "cancel_requested",
 			summary: reason,
 			currentStep: "cancelling",
 			confidence: "low",
 		});
+	}
+
+	interrupt(runId: string, reason: string): ChildRunStatusRecord {
+		this.enqueueInput(runId, "interrupt", reason);
+		return this.pause(runId, reason, "interrupted");
+	}
+
+	pause(
+		runId: string,
+		reason = "child run paused",
+		currentStep = "paused",
+	): ChildRunStatusRecord {
+		const currentRecord = this.requireRecord(runId);
+		if (isControlLockedStatus(currentRecord.status)) {
+			return currentRecord;
+		}
+
+		const state = this.activeRuns.get(runId);
+		if (state != null) {
+			state.paused = true;
+		}
+
+		return this.updateRuntimeRecord(runId, {
+			status: "blocked",
+			summary: reason,
+			currentStep,
+			blocker: reason,
+			confidence: "low",
+		});
+	}
+
+	resume(runId: string, summary = "child run resumed"): ChildRunStatusRecord {
+		const currentRecord = this.requireRecord(runId);
+		if (isControlLockedStatus(currentRecord.status)) {
+			return currentRecord;
+		}
+
+		const state = this.activeRuns.get(runId);
+		if (state != null) {
+			if (!state.paused && currentRecord.status !== "blocked") {
+				return currentRecord;
+			}
+			this.releasePauseWaiters(state);
+			return this.updateRuntimeRecord(runId, {
+				status: "active",
+				summary,
+				currentStep: "resuming",
+				blocker: null,
+				confidence: "medium",
+			});
+		}
+
+		const record = this.updateRuntimeRecord(runId, {
+			status: "queued",
+			summary,
+			currentStep: null,
+			blocker: null,
+			confidence: "medium",
+		});
+		this.startQueuedRuns();
+		return this.requireRecord(record.runId);
+	}
+
+	wake(runId: string, summary = "child run woken"): ChildRunStatusRecord {
+		const currentRecord = this.requireRecord(runId);
+		if (isControlLockedStatus(currentRecord.status)) {
+			return currentRecord;
+		}
+		if (currentRecord.status === "blocked") {
+			return this.resume(runId, summary);
+		}
+
+		this.startQueuedRuns();
+		return this.requireRecord(runId);
+	}
+
+	defer(runId: string, reason: string): ChildRunStatusRecord {
+		const currentRecord = this.requireRecord(runId);
+		if (isControlLockedStatus(currentRecord.status)) {
+			return currentRecord;
+		}
+
+		const state = this.activeRuns.get(runId);
+		if (state != null) {
+			state.controller.abort(reason);
+			this.releasePauseWaiters(state);
+			this.activeRuns.delete(runId);
+		}
+
+		const record = this.writeTerminalRecord(runId, {
+			status: "deferred",
+			summary: reason,
+			confidence: "low",
+		});
+		this.resolveCompletion(runId, record);
+		this.closeInputPort(runId);
+		this.startQueuedRuns();
+		return record;
+	}
+
+	appendInput(
+		runId: string,
+		input: string | SupervisorRuntimeInputPayload,
+	): SupervisorRuntimeInput {
+		return this.enqueueInput(runId, "append", input);
+	}
+
+	sendInput(
+		runId: string,
+		input: string | SupervisorRuntimeInputPayload,
+	): SupervisorRuntimeInput {
+		return this.enqueueInput(runId, "send", input);
 	}
 
 	heartbeat(runId: string, heartbeat: ChildRunHeartbeat): ChildRunStatusRecord {
@@ -365,6 +584,23 @@ export class InProcessSupervisorRuntime {
 
 	listRecords(): readonly ChildRunStatusRecord[] {
 		return this.sortedRecords();
+	}
+
+	listRuns(
+		query: SupervisorRuntimeRunQuery = {},
+	): readonly ChildRunStatusRecord[] {
+		return this.filterRecords(this.sortedRecords(), query);
+	}
+
+	queryRuns(query: SupervisorRuntimeRunQuery = {}): SupervisorRuntimeSnapshot {
+		const records = this.listRuns(query);
+		return {
+			records,
+			projection: projectSupervisorProgressEvents(records, {
+				now: this.now(),
+				staleAfterMs: this.staleAfterMs,
+			}),
+		};
 	}
 
 	snapshot(): SupervisorRuntimeSnapshot {
@@ -398,6 +634,7 @@ export class InProcessSupervisorRuntime {
 				confidence: "low",
 			});
 			this.resolveCompletion(runId, failedRecord);
+			this.closeInputPort(runId);
 			return {
 				runId: failedRecord.runId,
 				taskId: failedRecord.taskId,
@@ -414,7 +651,11 @@ export class InProcessSupervisorRuntime {
 		});
 
 		const controller = new AbortController();
-		this.activeRuns.set(runId, { controller });
+		this.activeRuns.set(runId, {
+			controller,
+			paused: false,
+			resumeWaiters: [],
+		});
 		void this.runWorker(handoff, worker, controller);
 
 		return {
@@ -436,6 +677,23 @@ export class InProcessSupervisorRuntime {
 				cancelToken: handoff.cancelToken,
 				signal: controller.signal,
 				heartbeat: (heartbeat) => this.heartbeat(handoff.childRunId, heartbeat),
+				reportBlocked: (escalation) =>
+					this.reportLifecycleEscalation(
+						handoff.childRunId,
+						"blocked",
+						escalation,
+					),
+				needsDecision: (escalation) =>
+					this.reportLifecycleEscalation(
+						handoff.childRunId,
+						"needs_decision",
+						escalation,
+					),
+				pendingInput: () => this.pendingInput(handoff.childRunId),
+				drainInput: () => this.drainInput(handoff.childRunId),
+				waitForInput: () => this.waitForInput(handoff.childRunId),
+				isPaused: () => this.isPaused(handoff.childRunId),
+				waitUntilResumed: () => this.waitUntilResumed(handoff.childRunId),
 			});
 
 			const currentRecord = this.records.get(handoff.childRunId);
@@ -459,7 +717,7 @@ export class InProcessSupervisorRuntime {
 			}
 
 			return this.writeTerminalRecord(handoff.childRunId, {
-				status: "completed",
+				status: result?.status ?? "completed",
 				summary: result?.summary ?? `Worker ${worker.workerId} completed`,
 				confidence: result?.confidence ?? "high",
 				reviewedArtifactCount: result?.reviewedArtifactCount,
@@ -481,10 +739,15 @@ export class InProcessSupervisorRuntime {
 				confidence: "low",
 			});
 		} finally {
+			const state = this.activeRuns.get(handoff.childRunId);
+			if (state != null) {
+				this.releasePauseWaiters(state);
+			}
 			this.activeRuns.delete(handoff.childRunId);
 			const record = this.requireRecord(handoff.childRunId);
 			if (isTerminalStatus(record.status)) {
 				this.resolveCompletion(handoff.childRunId, record);
+				this.closeInputPort(handoff.childRunId);
 				this.startQueuedRuns();
 			}
 		}
@@ -516,12 +779,39 @@ export class InProcessSupervisorRuntime {
 		if (isTerminalStatus(currentRecord.status)) {
 			throw new RangeError("terminal child run cannot be updated");
 		}
-		assertWorkerHeartbeatTransition(
-			currentRecord,
-			heartbeat,
-			this.activeRuns.has(runId),
-		);
+		const state = this.activeRuns.get(runId);
+		if (
+			state?.paused === true &&
+			heartbeat.status != null &&
+			heartbeat.status !== "blocked"
+		) {
+			throw new RangeError(
+				"paused child run cannot receive a running heartbeat before resume",
+			);
+		}
+		assertWorkerHeartbeatTransition(currentRecord, heartbeat, state != null);
 		return this.writeRecord(runId, heartbeat);
+	}
+
+	private reportLifecycleEscalation(
+		runId: string,
+		defaultCurrentStep: string,
+		escalation: SupervisorLifecycleEscalationInput,
+	): ChildRunStatusRecord {
+		const currentRecord = this.requireRecord(runId);
+		if (isControlLockedStatus(currentRecord.status)) {
+			return currentRecord;
+		}
+
+		const state = this.activeRuns.get(runId);
+		if (state != null) {
+			state.paused = true;
+		}
+
+		return this.updateRuntimeRecord(
+			runId,
+			normalizeLifecycleEscalation(escalation, defaultCurrentStep),
+		);
 	}
 
 	private updateRuntimeRecord(
@@ -601,6 +891,143 @@ export class InProcessSupervisorRuntime {
 
 	private resolveCompletion(runId: string, record: ChildRunStatusRecord): void {
 		this.requireCompletion(runId).resolve(record);
+	}
+
+	private filterRecords(
+		records: readonly ChildRunStatusRecord[],
+		query: SupervisorRuntimeRunQuery,
+	): readonly ChildRunStatusRecord[] {
+		const runIds = normalizeQueryValues(query.runIds);
+		const taskIds = normalizeQueryValues(query.taskIds);
+		const workerIds = normalizeQueryValues(query.workerIds);
+		const statuses = normalizeQueryValues(query.statuses);
+
+		return records.filter(
+			(record) =>
+				(runIds == null || runIds.has(record.runId)) &&
+				(taskIds == null || taskIds.has(record.taskId)) &&
+				(workerIds == null ||
+					(record.workerId != null && workerIds.has(record.workerId))) &&
+				(statuses == null || statuses.has(record.status)),
+		);
+	}
+
+	private enqueueInput(
+		runId: string,
+		kind: SupervisorRuntimeInputKind,
+		input: string | SupervisorRuntimeInputPayload,
+	): SupervisorRuntimeInput {
+		const record = this.requireRecord(runId);
+		if (isTerminalStatus(record.status)) {
+			throw new RangeError("terminal child run cannot receive input");
+		}
+		if (record.status === "cancel_requested") {
+			throw new RangeError("cancel-requested child run cannot receive input");
+		}
+
+		const payload = normalizeInputPayload(input);
+		if (payload.content.trim().length === 0) {
+			throw new RangeError("input content must be a non-empty string");
+		}
+
+		this.nextInputSequence += 1;
+		const queuedInput: SupervisorRuntimeInput = {
+			id: `${runId}:input:${this.nextInputSequence}`,
+			runId,
+			taskId: record.taskId,
+			kind,
+			content: payload.content,
+			metadata: payload.metadata,
+			createdAt: this.now(),
+		};
+
+		const waiters = this.inputWaiters.get(runId);
+		const waiter = waiters?.shift();
+		if (waiter != null) {
+			waiter(queuedInput);
+			return queuedInput;
+		}
+
+		const inputs = this.pendingInputs.get(runId) ?? [];
+		inputs.push(queuedInput);
+		this.pendingInputs.set(runId, inputs);
+		return queuedInput;
+	}
+
+	private pendingInput(runId: string): readonly SupervisorRuntimeInput[] {
+		this.requireRecord(runId);
+		return [...(this.pendingInputs.get(runId) ?? [])];
+	}
+
+	private drainInput(runId: string): readonly SupervisorRuntimeInput[] {
+		this.requireRecord(runId);
+		const inputs = this.pendingInputs.get(runId) ?? [];
+		this.pendingInputs.delete(runId);
+		return [...inputs];
+	}
+
+	private waitForInput(runId: string): Promise<SupervisorRuntimeInput | null> {
+		const record = this.requireRecord(runId);
+		if (
+			record.status === "cancel_requested" ||
+			isTerminalStatus(record.status)
+		) {
+			return Promise.resolve(null);
+		}
+
+		const inputs = this.pendingInputs.get(runId) ?? [];
+		const input = inputs.shift();
+		if (input != null) {
+			if (inputs.length === 0) {
+				this.pendingInputs.delete(runId);
+			}
+			return Promise.resolve(input);
+		}
+
+		return new Promise((resolve) => {
+			const waiters = this.inputWaiters.get(runId) ?? [];
+			waiters.push(resolve);
+			this.inputWaiters.set(runId, waiters);
+		});
+	}
+
+	private resolveInputWaiters(
+		runId: string,
+		input: SupervisorRuntimeInput | null,
+	): void {
+		const waiters = this.inputWaiters.get(runId) ?? [];
+		this.inputWaiters.delete(runId);
+		for (const waiter of waiters) {
+			waiter(input);
+		}
+	}
+
+	private closeInputPort(runId: string): void {
+		this.pendingInputs.delete(runId);
+		this.resolveInputWaiters(runId, null);
+	}
+
+	private isPaused(runId: string): boolean {
+		return this.activeRuns.get(runId)?.paused === true;
+	}
+
+	private waitUntilResumed(runId: string): Promise<void> {
+		const state = this.activeRuns.get(runId);
+		if (state == null || !state.paused) {
+			return Promise.resolve();
+		}
+
+		return new Promise((resolve) => {
+			state.resumeWaiters.push(resolve);
+		});
+	}
+
+	private releasePauseWaiters(state: ActiveRunState): void {
+		state.paused = false;
+		const waiters = state.resumeWaiters.splice(0);
+		for (const waiter of waiters) {
+			waiter();
+		}
 	}
 }
 

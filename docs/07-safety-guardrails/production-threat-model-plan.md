@@ -46,9 +46,9 @@ English: Cloud Security Alliance（云安全联盟，面向云安全和零信任
 
 ## 资产与信任边界 / Assets And Trust Boundaries
 
-English: Production assets include user credentials, local repositories, OmniMem（Quilin 的分层记忆系统） records, skills, tool results, subagent outputs, trace logs, browser sessions, MCP sessions, future tenant data, and the runtime code that enforces safety. Each asset must have a trust boundary, a retention rule, and a redaction rule before it can enter a model prompt, trace event, memory store, or external sink（数据接收端：网络端点、同伴 Agent、日志后端或第三方服务）.
+English: Production assets include user credentials, local repositories, quilin-mem（Quilin 的分层记忆系统） records, skills, tool results, subagent outputs, trace logs, browser sessions, MCP sessions, future tenant data, and the runtime code that enforces safety. Each asset must have a trust boundary, a retention rule, and a redaction rule before it can enter a model prompt, trace event, memory store, or external sink（数据接收端：网络端点、同伴 Agent、日志后端或第三方服务）.
 
-中文：生产资产包括用户凭证、本地代码库、OmniMem（Quilin 的分层记忆系统）记录、技能、工具结果、subagent（子 Agent，用来分担主 Agent 工作的独立执行单元）输出、trace（轨迹，用来串联任务步骤的可观测记录）日志、浏览器 session（会话状态）、MCP session、未来租户数据，以及执行安全策略的运行时代码。每类资产在进入模型 prompt、trace event（轨迹事件）、记忆存储或外部 sink（数据接收端：网络端点、同伴 Agent、日志后端或第三方服务）前，都必须有信任边界、保留规则和脱敏规则。
+中文：生产资产包括用户凭证、本地代码库、quilin-mem（Quilin 的分层记忆系统）记录、技能、工具结果、subagent（子 Agent，用来分担主 Agent 工作的独立执行单元）输出、trace（轨迹，用来串联任务步骤的可观测记录）日志、浏览器 session（会话状态）、MCP session、未来租户数据，以及执行安全策略的运行时代码。每类资产在进入模型 prompt、trace event（轨迹事件）、记忆存储或外部 sink（数据接收端：网络端点、同伴 Agent、日志后端或第三方服务）前，都必须有信任边界、保留规则和脱敏规则。
 
 English: The minimum production trust labels are `trusted_instruction`, `user_instruction`, `untrusted_data`, `untrusted_tool_output`, `private_secret`, `private_pii`, `tenant_private`, and `audit_only`. The runtime must never allow untrusted data or tool output to be reclassified as an instruction without a user-confirmed authority transfer.
 

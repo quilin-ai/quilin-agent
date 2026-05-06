@@ -395,15 +395,18 @@ function buildMcpServers(
 export function createDefaultCapabilitiesConfig(
 	workspaceRoot: string,
 ): CapabilitiesConfig {
+	const memoryProviderCwd = join(workspaceRoot, "providers", "memory");
 	return {
 		schema_version: CAPABILITIES_SCHEMA_VERSION,
-		mcpServers: {
-			omnimem: {
-				command: "uv",
-				args: ["run", "python", "-m", "omnimem"],
-				cwd: join(workspaceRoot, "providers", "memory"),
-			},
-		},
+		mcpServers: existsSync(memoryProviderCwd)
+			? {
+					omnimem: {
+						command: "uv",
+						args: ["run", "python", "-m", "omnimem"],
+						cwd: memoryProviderCwd,
+					},
+				}
+			: {},
 		skills: {
 			enabled: false,
 		},

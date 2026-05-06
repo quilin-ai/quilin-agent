@@ -8,14 +8,15 @@ the glossary. Broad vocabulary policing would produce false positives
 in quoted text, code identifiers, and upstream excerpts.
 
 Checks:
-  G-01  OmniMem tier casing must be lowercase in prose (C-10)
+  G-01  quilin-mem tier vocabulary must be lowercase in prose (C-10)
   G-02  Skill load tool is `skill_view`, never `skill_load` (C-02)
   G-03  Project name: `Quilin` / `Quilin Agent`, not `Qilin Agent` (C-04)
   G-04  Auto-fusion narrative removed: `自动缝合` in prose (D-03)
-  G-05  OmniMem spelling: one word, not `Omni Memory` / `omni-mem` in prose
+  G-05  Public Memory OS name: `quilin-mem`; legacy names fail on user-visible surfaces
 
-Code blocks (```...```), inline code (`...`), URLs, paths containing
-`upstreams/`, and historical review docs are excluded.
+Markdown code blocks (```...```), inline code (`...`), URLs, paths containing
+`upstreams/`, and historical review docs are excluded. The scanner covers
+Markdown docs plus user-visible HTML/SVG site and architecture surfaces.
 
 Exit 0 when clean, exit 1 when violations found.
 """
@@ -44,6 +45,19 @@ IGNORE_PREFIXES = (
     "docs/superpowers/",
 )
 
+USER_VISIBLE_ROOT_DOCS = {
+    "readme.md",
+    "quilin.md",
+    "AGENTS.md",
+    "CLAUDE.md",
+}
+
+USER_VISIBLE_PREFIXES = (
+    "briefs/",
+    "docs/",
+    "site/",
+)
+
 
 @dataclass(frozen=True)
 class Check:
@@ -68,9 +82,9 @@ HISTORICAL_MARKERS = re.compile(
 CHECKS: tuple[Check, ...] = (
     Check(
         code="G-01",
-        # OmniMem tier casing: match "OmniMem" within 80 chars of SHORT/MID/LONG/ULTRA.
-        pattern=re.compile(r"OmniMem[^\n]{0,80}?\b(SHORT|MID|LONG|ULTRA)\b"),
-        reason="OmniMem tier 必须小写（short/mid/long/ultra） — glossary §一 C-10",
+        # quilin-mem tier vocabulary: reject old SHORT/MID/LONG/ULTRA tiers near the public name.
+        pattern=re.compile(r"quilin-mem[^\n]{0,80}?\b(SHORT|MID|LONG|ULTRA)\b"),
+        reason="quilin-mem tier 必须用 working/episodic/semantic/skill — glossary §一 C-10",
     ),
     Check(
         code="G-01b",
@@ -78,7 +92,7 @@ CHECKS: tuple[Check, ...] = (
         pattern=re.compile(
             r"\b(SHORT|MID|LONG|ULTRA)\s*[→/]\s*(SHORT|MID|LONG|ULTRA)\b"
         ),
-        reason="OmniMem tier 链式写法必须小写 — glossary §一 C-10",
+        reason="quilin-mem tier 链式写法必须用 working/episodic/semantic/skill — glossary §一 C-10",
     ),
     Check(
         code="G-02",
@@ -99,20 +113,47 @@ CHECKS: tuple[Check, ...] = (
     ),
     Check(
         code="G-05",
-        # OmniMem must be a single capitalized word; reject Omni Memory / omni-mem / OmniMemory
-        pattern=re.compile(r"\b(Omni Memory|OmniMemory|omni-mem|omni_mem)\b"),
-        reason="记忆系统名 `OmniMem`（单词、复合大小写） — glossary §一",
+        # Public prose must use quilin-mem; runtime identifiers remain a later QUI-88 phase.
+        pattern=re.compile(
+            r"\b(OmniMem|Omni Memory|OmniMemory|omnimem|omni-mem|omni_mem)\b",
+            re.IGNORECASE,
+        ),
+        reason="legacy memory OS term: 对外写作统一为 `quilin-mem` — glossary §一",
     ),
 )
+
+LEGACY_MEMORY_CHECK = next(check for check in CHECKS if check.code == "G-05")
 
 # Patterns for masking out code blocks, inline code, URLs, and link targets.
 CODE_FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
 INLINE_CODE_RE = re.compile(r"`[^`\n]+`")
-URL_RE = re.compile(r"https?://\S+")
+URL_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://\S+")
 # Markdown link target: `[text](target)` — mask target only
 LINK_TARGET_RE = re.compile(r"\]\(([^)]+)\)")
 # File paths with slashes or dots that look like identifiers
-PATH_RE = re.compile(r"[A-Za-z0-9_./-]+\.(ts|js|py|rs|md|json|yaml|yml|toml|sh)")
+PATH_RE = re.compile(
+    r"[A-Za-z0-9_./-]+\.(ts|js|py|rs|md|json|yaml|yml|toml|sh|html|svg)"
+)
+DIRECTORY_PATH_RE = re.compile(
+    r"(?<!\w)(?:\.{0,2}/)?(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]*/?"
+)
+ENV_IDENTIFIER_RE = re.compile(
+    r"\b[A-Z0-9_]*(?:OMNIMEM|OMNI_MEM|OMNI_MEMORY)[A-Z0-9_]*\b"
+)
+PYTHON_IMPORT_RE = re.compile(
+    r"\b(?:from\s+omnimem(?:\.[A-Za-z_]\w*)*\s+import|import\s+omnimem(?:\.[A-Za-z_]\w*)*)\b"
+)
+PYTHON_MODULE_CMD_RE = re.compile(r"\bpython(?:3)?\s+-m\s+omnimem\b")
+PACKAGE_IDENTIFIER_RE = re.compile(
+    r"\b(?:[a-z0-9]+[-_])+(?:omnimem|omni-mem|omni_mem)\b"
+    r"|\b(?:omnimem|omni-mem|omni_mem)(?:[-_][a-z0-9]+)+\b",
+    re.IGNORECASE,
+)
+
+
+def blank_match(match: re.Match[str]) -> str:
+    span = match.group(0)
+    return "".join("\n" if ch == "\n" else " " for ch in span)
 
 
 def mask_non_prose(text: str) -> str:
@@ -120,21 +161,55 @@ def mask_non_prose(text: str) -> str:
     numbers stay aligned but their content won't trigger matches. Newlines
     inside multi-line fences are preserved so line numbering is accurate."""
 
-    def blank(match: re.Match[str]) -> str:
-        span = match.group(0)
-        return "".join("\n" if ch == "\n" else " " for ch in span)
-
     for regex in (CODE_FENCE_RE, INLINE_CODE_RE, URL_RE, LINK_TARGET_RE, PATH_RE):
-        text = regex.sub(blank, text)
+        text = regex.sub(blank_match, text)
     return text
 
 
-def iter_markdown_files(root: Path) -> Iterable[Path]:
-    for p in root.rglob("*.md"):
+def mask_legacy_memory_implementation_spans(text: str) -> str:
+    """Mask compatibility identifiers while keeping rendered Markdown text visible.
+
+    G-05 intentionally scans code fences and inline code because prompts,
+    diagrams, tables, and command examples are visible after Markdown render.
+    These masks keep runtime compatibility names from becoming false positives.
+    """
+
+    for regex in (
+        URL_RE,
+        LINK_TARGET_RE,
+        PATH_RE,
+        DIRECTORY_PATH_RE,
+        ENV_IDENTIFIER_RE,
+        PYTHON_IMPORT_RE,
+        PYTHON_MODULE_CMD_RE,
+        PACKAGE_IDENTIFIER_RE,
+    ):
+        text = regex.sub(blank_match, text)
+    return text
+
+
+def iter_lint_files(root: Path) -> Iterable[Path]:
+    for p in root.rglob("*"):
+        if p.suffix not in {".md", ".html", ".svg"}:
+            continue
         rel = p.relative_to(root).as_posix()
         if any(rel.startswith(prefix) for prefix in IGNORE_PREFIXES):
             continue
         yield p
+
+
+def is_user_visible_surface(path: Path) -> bool:
+    rel = path.relative_to(REPO_ROOT).as_posix()
+    return rel in USER_VISIBLE_ROOT_DOCS or any(
+        rel.startswith(prefix) for prefix in USER_VISIBLE_PREFIXES
+    )
+
+
+def format_snippet(line: str, check: Check) -> str:
+    text = line.strip()
+    if check.code == "G-05":
+        text = check.pattern.sub("[legacy memory OS term]", text)
+    return text[:80] + ("…" if len(text) > 80 else "")
 
 
 def scan(path: Path) -> list[tuple[int, str, str, str]]:
@@ -148,16 +223,36 @@ def scan(path: Path) -> list[tuple[int, str, str, str]]:
     raw_lines = raw.splitlines()
     violations: list[tuple[int, str, str, str]] = []
     for check in CHECKS:
+        if check.code == "G-05":
+            continue
         for i, mline in enumerate(masked_lines, 1):
             if not check.pattern.search(mline):
                 continue
             orig_line = raw_lines[i - 1]
             if any(p.search(orig_line) for p in check.exempt_line_patterns):
                 continue
-            snippet = orig_line.strip()[:80] + (
-                "…" if len(orig_line.strip()) > 80 else ""
-            )
+            snippet = format_snippet(orig_line, check)
             violations.append((i, check.code, snippet, check.reason))
+    if is_user_visible_surface(path):
+        visible_text = mask_legacy_memory_implementation_spans(raw)
+        for i, mline in enumerate(visible_text.splitlines(), 1):
+            if not LEGACY_MEMORY_CHECK.pattern.search(mline):
+                continue
+            orig_line = raw_lines[i - 1]
+            if any(
+                p.search(orig_line)
+                for p in LEGACY_MEMORY_CHECK.exempt_line_patterns
+            ):
+                continue
+            snippet = format_snippet(orig_line, LEGACY_MEMORY_CHECK)
+            violations.append(
+                (
+                    i,
+                    LEGACY_MEMORY_CHECK.code,
+                    snippet,
+                    LEGACY_MEMORY_CHECK.reason,
+                )
+            )
     return violations
 
 
@@ -167,11 +262,11 @@ def main() -> int:
         return 2
 
     total = 0
-    for md in sorted(iter_markdown_files(REPO_ROOT)):
-        violations = scan(md)
+    for scanned_file in sorted(iter_lint_files(REPO_ROOT)):
+        violations = scan(scanned_file)
         if not violations:
             continue
-        rel = md.relative_to(REPO_ROOT).as_posix()
+        rel = scanned_file.relative_to(REPO_ROOT).as_posix()
         for line_no, code, snippet, reason in violations:
             print(f"{rel}:{line_no} [{code}] {snippet}\n    → {reason}")
             total += 1

@@ -1,6 +1,6 @@
 # Rule-first Observer — Evaluation Fixtures
 
-Reusable labeled dataset for D-20 OmniMem v2 L3a Observation layer evaluation.
+Reusable labeled dataset for D-20 quilin-mem v2 L3a Observation layer evaluation.
 
 ## Purpose
 

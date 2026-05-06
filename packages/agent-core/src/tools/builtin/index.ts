@@ -18,6 +18,10 @@ import {
 	type SkillManageToolOptions,
 } from "./skill-manage.js";
 import {
+	createSkillSearchTool,
+	type SkillSearchToolOptions,
+} from "./skill-search.js";
+import {
 	createSkillViewTool,
 	type SkillViewToolOptions,
 } from "./skill-view.js";
@@ -31,6 +35,7 @@ export interface BuiltinToolOptions {
 	readonly webFetch?: WebFetchToolOptions;
 	readonly writeAuthority?: WriteAuthority;
 	readonly skillsManager?: SkillsManager;
+	readonly skillSearch?: Omit<SkillSearchToolOptions, "skillsManager">;
 	readonly skillView?: Omit<SkillViewToolOptions, "skillsManager">;
 	readonly skillManage?: Omit<
 		SkillManageToolOptions,
@@ -53,6 +58,10 @@ export function createBuiltinTools(
 			authority: options.writeAuthority ?? options.shellExec?.authority,
 		}),
 		createWebFetchTool(options.webFetch),
+		createSkillSearchTool({
+			skillsManager: options.skillsManager,
+			...options.skillSearch,
+		}),
 	];
 
 	if (options.skillsManager != null) {
@@ -82,6 +91,7 @@ export type {
 	FileWriteToolOptions,
 	ShellExecToolOptions,
 	SkillManageToolOptions,
+	SkillSearchToolOptions,
 	SkillViewToolOptions,
 	WebFetchToolOptions,
 };
@@ -92,6 +102,7 @@ export {
 	createFileWriteTool,
 	createShellExecTool,
 	createSkillManageTool,
+	createSkillSearchTool,
 	createSkillViewTool,
 	createWebFetchTool,
 };

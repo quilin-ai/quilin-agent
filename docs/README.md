@@ -20,7 +20,7 @@ This directory only carries current project facts.
 | [00-core-loop](00-core-loop/README.md) | Core Loop、运行时切分、Harness 原则、术语表 |
 | [01-llm-integration](01-llm-integration/README.md) | AI SDK v6、模型/provider 抽象、thinking/reasoning 控制 |
 | [02-context](02-context/README.md) | Prompt assembly、token budgets、temporal awareness、parked conversation engineering |
-| [03-memory](03-memory/README.md) | OmniMem、profiles、scratchpad、L3a observer reports |
+| [03-memory](03-memory/README.md) | quilin-mem、profiles、scratchpad、L3a observer reports |
 | [04-planning](04-planning/README.md) | Intent、task decomposition、strategy/audit contracts |
 | [05-tool](05-tool/README.md) | Built-in tools、MCP、browser/CLI tool surfaces |
 | [06-multi-agent](06-multi-agent/README.md) | 内部 sub-agent orchestration 和 supervisor model |

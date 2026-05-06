@@ -104,9 +104,9 @@ Observability（可观测性）会出现在 Linear 映射中，但它不是本�
 
 **中文。** 信号：Hermes Agent 在记忆架构和自我改进质量上有强烈聚类：[#6323 mempalace external memory support](https://github.com/NousResearch/hermes-agent/issues/6323) 有 16 条评论和 25 个 reaction，相关 open issues 包括 [#8457 持久会话记忆](https://github.com/NousResearch/hermes-agent/issues/8457)、[#346 结构化记忆系统](https://github.com/NousResearch/hermes-agent/issues/346)、[#509 认知记忆操作](https://github.com/NousResearch/hermes-agent/issues/509)、[#11590 UnifiedContextEngine 插件](https://github.com/NousResearch/hermes-agent/issues/11590)、[#11692 自改进 Agent 的 receipts（可追溯凭据）](https://github.com/NousResearch/hermes-agent/issues/11692)、[#2670 memory flush 覆盖实时记忆](https://github.com/NousResearch/hermes-agent/issues/2670)、[#5563 生产使用中的记忆持久化问题](https://github.com/NousResearch/hermes-agent/issues/5563)、[#14192 SessionDB search 丢失周边上下文](https://github.com/NousResearch/hermes-agent/issues/14192) 和 [#13265 Skills 系统架构缺陷](https://github.com/NousResearch/hermes-agent/issues/13265)。
 
-**English.** Classification: architecture, product, safety. Quilin is already directionally aligned through OmniMem（Quilin 的四层记忆系统）, but should explicitly add contradiction handling, provenance receipts for learned skills/facts, and memory evaluation gates before enabling broader idle evolution.
+**English.** Classification: architecture, product, safety. Quilin is already directionally aligned through quilin-mem（Quilin 的四层记忆系统）, but should explicitly add contradiction handling, provenance receipts for learned skills/facts, and memory evaluation gates before enabling broader idle evolution.
 
-**中文。** 分类：architecture、product、safety。Quilin 通过 OmniMem（Quilin 的四层记忆系统）方向上已经对齐，但应显式加入 contradiction handling（矛盾处理）、learned skills/facts（学到的技能与事实）的 provenance receipts（来源凭据），并在更广泛 idle evolution（空闲自进化）前加入记忆评测门禁。
+**中文。** 分类：architecture、product、safety。Quilin 通过 quilin-mem（Quilin 的四层记忆系统）方向上已经对齐，但应显式加入 contradiction handling（矛盾处理）、learned skills/facts（学到的技能与事实）的 provenance receipts（来源凭据），并在更广泛 idle evolution（空闲自进化）前加入记忆评测门禁。
 
 **English.** Linear mapping: map to QUI-51 and QUI-65 for memory observer and fact stream, QUI-73 for long-memory evaluation, and QUI-56 plus QUI-67 for skill provenance and quality gates.
 

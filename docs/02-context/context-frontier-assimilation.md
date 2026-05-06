@@ -132,9 +132,9 @@ QUI-60 owns the implementation of relevance selection, token-aware compression, 
 
 QUI-60 负责实现相关性选择、按 token 预算压缩、运行时增量通道和缓存评测。它的验收应要求产出 `CachePlan`、`ContextSelectionTrace`、`CompressionTrace` 和 `DeltaStreamTrace` 产物。
 
-QUI-51 and QUI-65 own Memory integration. Context selection must consume OmniMem recall results with source authority, freshness, contradiction status, and user-profile stability fields; Context must not hide memory poisoning or provenance failure.
+QUI-51 and QUI-65 own Memory integration. Context selection must consume quilin-mem recall results with source authority, freshness, contradiction status, and user-profile stability fields; Context must not hide memory poisoning or provenance failure.
 
-QUI-51 和 QUI-65 负责 Memory 集成。Context selection 必须消费带有来源权威度、时效性、矛盾状态和用户画像稳定性字段的 OmniMem 召回结果；Context 不得掩盖 memory poisoning（记忆投毒）或 provenance failure（来源追踪失败）。
+QUI-51 和 QUI-65 负责 Memory 集成。Context selection 必须消费带有来源权威度、时效性、矛盾状态和用户画像稳定性字段的 quilin-mem 召回结果；Context 不得掩盖 memory poisoning（记忆投毒）或 provenance failure（来源追踪失败）。
 
 QUI-73 already defines the long-memory evaluation baseline. QUI-60 should reuse its local fixture（固定测试样例集，用于可重复验证）lane to test whether selected context contains the right recalled facts without overloading the active prompt.
 

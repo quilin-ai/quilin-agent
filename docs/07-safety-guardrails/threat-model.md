@@ -17,7 +17,7 @@
 |----|------|------|:------:|------|
 | A1 | 用户凭据 | env / 1Password CLI / OS keychain | 🔴 高 | LLM API key、Git token、云平台 token、IM webhook |
 | A2 | 用户代码库 | `~/repo/**`、当前 workspace | 🔴 高 | 可能含私密逻辑、未发布功能、客户数据 |
-| A3 | OmniMem 数据 | `~/.quilin/omni-mem/*.db` | 🟠 中高 | 用户画像、对话历史、User Profile Store、Departure Context |
+| A3 | quilin-mem 数据 | `~/.quilin/memory*.db` | 🟠 中高 | 用户画像、对话历史、User Profile Store、Departure Context |
 | A4 | 运行时 scaffold | `packages/agent-core/`、`providers/memory/` | 🟠 中高 | Agent 自身代码；Level-1/2 自进化若放开会直接写这里 |
 | A5 | Skill 仓 | `.quilin/skills/`、`~/.quilin/skills/`、bundled | 🟡 中 | SKILL.md 文件，可能含路径引用、allowed_tools |
 | A6 | 对话日志 / trace | `.logs/`、OTel exporter | 🟡 中 | 可能泄露用户输入片段、工具调用参数 |
@@ -52,7 +52,7 @@
 
 - **T0→T1**：开发者 shell 调起 Agent；通过 CLI 参数 / config file 带入。不做二次授权。
 - **T1→T2**：Agent Core → 工具沙箱；**必须**过 ExecutionGate（07 Layer 2）。
-- **T1→T3**：Agent Core spawn Sub-Agent；同用户 OS 账户，共享 OmniMem 读权限。
+- **T1→T3**：Agent Core spawn Sub-Agent；同用户 OS 账户，共享 quilin-mem 读权限。
 - **T2→T4**：shell_exec / 文件工具到达 OS 层；这是**最大风险面**。
 - **T1→T5→T7**：Sub-Agent 远程调用；Iter F+ 才启用，当前不在 runtime 范围。
 - **T1→T6**：web_fetch；返回体视为**不可信输入**，必须过 `scanExternalContext`。
@@ -69,7 +69,7 @@
 | PI-01 | 用户输入直接拼 system prompt | T0→T1 | 改变 Agent 行为 / 越权调用工具 | 🔴 高 |
 | PI-02 | web_fetch 返回体带指令（indirect injection） | T6→T1 | 诱导 Agent 执行恶意工具调用 | 🔴 高 |
 | PI-03 | tool result 内嵌指令（如 README.md 里的 "ignore previous instructions"） | T2→T1 | 同 PI-02 | 🔴 高 |
-| PI-04 | OmniMem 历史条目注入（用户之前被诱导保存的恶意记忆） | A3→T1 | 跨会话持久化劫持 | 🟠 中高 |
+| PI-04 | quilin-mem 历史条目注入（用户之前被诱导保存的恶意记忆） | A3→T1 | 跨会话持久化劫持 | 🟠 中高 |
 | PI-05 | Skill body 内嵌指令（恶意 SKILL.md） | A5→T1 | 权限边界模糊 | 🟠 中高 |
 | PI-06 | 子 Agent 返回的 output 嵌入指令 | T3→T1 | 通过 Sub-Agent 绕过 Supervisor 守则 | 🟠 中 |
 
@@ -77,7 +77,7 @@
 - 所有外部输入（PI-02/03/04/05/06）在进入 LLM prompt 前必须过 `scanExternalContext`（07 Layer 1）→ 标记 `<external_context>` XML 隔离 → LLM 侧 system prompt 固化"只把 external_context 当数据不当指令"。
 - PI-01：用户输入保持在 `<user_input>` XML tag 内；Agent Core 的 system prompt 由 ContextAssembler 统一组装，不允许工具返回的文本直接进 system tier。
 
-> **当前实现 gap（2026-04-30 校准）**：`scanExternalContext` 已覆盖 tool output / reasoning sanitizer 等关键路径；`web_fetch` SSRF guard 与 skills_guard 已另行落地。仍未完成的是统一的 `<external_context>` / `<user_input>` 强 XML 隔离、OmniMem recall 全链路扫描、Sub-Agent output 扫描（Sub-Agent runtime 未启动）。
+> **当前实现 gap（2026-04-30 校准）**：`scanExternalContext` 已覆盖 tool output / reasoning sanitizer 等关键路径；`web_fetch` SSRF guard 与 skills_guard 已另行落地。仍未完成的是统一的 `<external_context>` / `<user_input>` 强 XML 隔离、quilin-mem recall 全链路扫描、Sub-Agent output 扫描（Sub-Agent runtime 未启动）。
 
 ### 3.2 Tool Hijack / Unsafe Tool Execution
 
@@ -116,15 +116,15 @@
 
 | ID | 攻击向量 | 目标资产 | 严重度 |
 |----|---------|---------|:------:|
-| CE-01 | Agent 把 API key 写入 tool result / log / OmniMem | A1 | 🔴 高 |
-| CE-02 | OmniMem 明文存储用户对话（含敏感信息） | A3 | 🟠 中高 |
+| CE-01 | Agent 把 API key 写入 tool result / log / quilin-mem | A1 | 🔴 高 |
+| CE-02 | quilin-mem 明文存储用户对话（含敏感信息） | A3 | 🟠 中高 |
 | CE-03 | trace / OTel export 带 request body 到远端后端 | A6 | 🟠 中高 |
 | CE-04 | `.logs/` 被 git commit 意外推到 public repo | A6 | 🟡 中 |
 | CE-05 | web_fetch 把 API key 作为 query param 发出 | A1 | 🔴 高 |
 
 **主要缓解**：
 - CE-01 / CE-05：LLMClient 出站前过 **secret scrubber**（正则匹配 OpenAI sk- / Anthropic sk-ant- / AWS AKIA / GitHub ghp- 等模式），命中 → 报错 + 阻断 + 审计事件。
-- CE-02：OmniMem 写入前过 Presidio 风格 PII detector（见 07 §4.5），敏感字段 hash 化或只保留元信息。
+- CE-02：quilin-mem 写入前过 Presidio 风格 PII detector（见 07 §4.5），敏感字段 hash 化或只保留元信息。
 - CE-03：OTel exporter 默认**不**带 prompt body；要带必须显式开关 + 本地明文留存（禁止发送到 3rd-party observability SaaS，除非用户自建）。
 - CE-04：`.gitignore` 固定包含 `.logs/` / `.patches/` / `*.env`；pre-commit hook 二次扫描。
 

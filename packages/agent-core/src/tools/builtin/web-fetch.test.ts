@@ -213,7 +213,7 @@ describe("builtin web_fetch tool", () => {
 			expect.objectContaining({
 				method: "POST",
 				body: "ping",
-				headers: { "x-test": "1" },
+				headers: expect.objectContaining({ "x-test": "1" }),
 				redirect: "manual",
 				signal: expect.any(AbortSignal),
 			}),
@@ -224,6 +224,43 @@ describe("builtin web_fetch tool", () => {
 			contentType: "text/plain",
 			body: "hello world",
 			truncated: false,
+		});
+	});
+
+	it("adds browser-compatible default headers without overriding caller headers", async () => {
+		const fetcher = vi.fn(
+			async (_url: string | URL | Request, _init?: RequestInit) =>
+				new Response("ok", {
+					status: 200,
+					headers: {
+						"content-type": "application/rss+xml; charset=utf-8",
+					},
+				}),
+		);
+		const tool = createWebFetchTool({ fetcher });
+
+		const result = await tool.execute({
+			url: "https://example.com/feed.xml",
+			headers: {
+				"User-Agent": "custom-agent",
+				Accept: "application/rss+xml",
+			},
+		});
+
+		expect(result.isError).toBe(false);
+		expect(fetcher).toHaveBeenCalledWith(
+			"https://example.com/feed.xml",
+			expect.objectContaining({
+				headers: expect.objectContaining({
+					"User-Agent": "custom-agent",
+					Accept: "application/rss+xml",
+					"accept-language": expect.stringContaining("en-US"),
+				}),
+			}),
+		);
+		expect(JSON.parse(result.content)).toMatchObject({
+			contentType: "application/rss+xml; charset=utf-8",
+			body: "ok",
 		});
 	});
 
@@ -626,9 +663,23 @@ describe("builtin web_fetch tool", () => {
 		expect(fetcher).toHaveBeenCalledWith(
 			"https://evil.example/data",
 			expect.objectContaining({
-				headers: {
+				headers: expect.not.objectContaining({
+					Authorization: expect.any(String),
+					Cookie: expect.any(String),
+					"Proxy-Authorization": expect.any(String),
+					"X-API-Key": expect.any(String),
+					"X-Auth-Token": expect.any(String),
+					"Api-Key": expect.any(String),
+				}),
+			}),
+		);
+		expect(fetcher).toHaveBeenCalledWith(
+			"https://evil.example/data",
+			expect.objectContaining({
+				headers: expect.objectContaining({
 					"x-test": "1",
-				},
+					"user-agent": expect.stringContaining("QuilinAgent"),
+				}),
 			}),
 		);
 		expect(resolver).toHaveBeenCalledWith("evil.example");
@@ -664,12 +715,13 @@ describe("builtin web_fetch tool", () => {
 		expect(fetcher).toHaveBeenCalledWith(
 			"https://api.example.com/data",
 			expect.objectContaining({
-				headers: {
+				headers: expect.objectContaining({
 					Authorization: "Bearer top-secret",
 					Cookie: "session=abc",
 					"X-API-Key": "api-secret",
 					"x-test": "1",
-				},
+					"user-agent": expect.stringContaining("QuilinAgent"),
+				}),
 			}),
 		);
 	});

@@ -11,6 +11,13 @@ const DEFAULT_MAX_BODY_CHARS = 16_384;
 const DEFAULT_MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_REDIRECTS = 3;
+const DEFAULT_REQUEST_HEADERS = {
+	accept:
+		"text/html,application/xhtml+xml,application/xml;q=0.9,application/json;q=0.8,text/plain;q=0.7,*/*;q=0.5",
+	"accept-language": "en-US,en;q=0.9",
+	"user-agent":
+		"Mozilla/5.0 (compatible; QuilinAgent/0.0.3; +https://github.com/quilin-agent/quilin-agent)",
+} as const;
 const ALLOWED_DNS_HOSTNAME = /^[a-z][a-z0-9.-]*$/i;
 const SENSITIVE_HEADER_NAMES = new Set([
 	"api-key",
@@ -383,24 +390,21 @@ function sanitizeHeaders(
 	url: URL,
 	allowedAuthHosts: readonly string[] | undefined,
 ): Record<string, string> | undefined {
-	if (headers == null) {
-		return undefined;
-	}
-
 	const normalizedAllowedHosts = new Set(
 		(allowedAuthHosts ?? []).map((hostname) => normalizeAuthHost(hostname)),
 	);
 	const requestHost = normalizeAuthHost(url.hostname);
 	const shouldStripSensitiveHeaders = !normalizedAllowedHosts.has(requestHost);
+	const effectiveHeaders = mergeDefaultHeaders(headers);
 
 	if (!shouldStripSensitiveHeaders) {
-		return { ...headers };
+		return effectiveHeaders;
 	}
 
 	const sanitizedHeaders: Record<string, string> = {};
 	let strippedHeader = false;
 
-	for (const [name, value] of Object.entries(headers)) {
+	for (const [name, value] of Object.entries(effectiveHeaders)) {
 		if (SENSITIVE_HEADER_NAMES.has(name.toLowerCase())) {
 			strippedHeader = true;
 			continue;
@@ -419,15 +423,41 @@ function sanitizeHeaders(
 	return sanitizedHeaders;
 }
 
+function mergeDefaultHeaders(
+	headers: Record<string, string> | undefined,
+): Record<string, string> {
+	const merged: Record<string, string> = { ...headers };
+	const existingHeaderNames = new Set(
+		Object.keys(merged).map((name) => name.toLowerCase()),
+	);
+
+	for (const [name, value] of Object.entries(DEFAULT_REQUEST_HEADERS)) {
+		if (!existingHeaderNames.has(name)) {
+			merged[name] = value;
+		}
+	}
+
+	return merged;
+}
+
 function validateResponseContentType(response: Response): string {
 	const contentType = response.headers.get("content-type") ?? "";
 	const normalizedContentType =
 		contentType.split(";")[0]?.trim().toLowerCase() ?? "";
 
+	const isReadableApplicationType =
+		normalizedContentType === "application/json" ||
+		normalizedContentType === "application/xml" ||
+		normalizedContentType === "application/xhtml+xml" ||
+		normalizedContentType === "application/rss+xml" ||
+		normalizedContentType === "application/atom+xml" ||
+		normalizedContentType.endsWith("+json") ||
+		normalizedContentType.endsWith("+xml");
+
 	if (
 		normalizedContentType === "" ||
 		normalizedContentType.startsWith("text/") ||
-		normalizedContentType === "application/json"
+		isReadableApplicationType
 	) {
 		return contentType;
 	}

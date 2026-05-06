@@ -1,8 +1,8 @@
 # 长期记忆评测基线 / Long-Memory Evaluation Baseline
 
-Evidence checked on 2026-05-02 Asia/Shanghai. This document defines the first measurable long-memory baseline for OmniMem（Quilin 的四层记忆系统，包含 working / episodic / semantic / skill memory）before QUI-65（Memory observer、fact stream 与长期记忆评测实现任务；observer 是观察器，用于从会话中提取可复用事实；fact stream 是事实事件流；vector backend 是向量检索后端）lands the real observer and vector backend.
+Evidence checked on 2026-05-02 Asia/Shanghai. This document defines the first measurable long-memory baseline for quilin-mem（Quilin 的四层记忆系统，包含 working / episodic / semantic / skill memory）before QUI-65（Memory observer、fact stream 与长期记忆评测实现任务；observer 是观察器，用于从会话中提取可复用事实；fact stream 是事实事件流；vector backend 是向量检索后端）lands the real observer and vector backend.
 
-证据已在 2026-05-02 Asia/Shanghai 校准。本文定义 OmniMem（Quilin 的四层记忆系统，包含 working / episodic / semantic / skill memory）在 QUI-65（Memory observer、fact stream 与长期记忆评测实现任务；observer 是观察器，用于从会话中提取可复用事实；fact stream 是事实事件流；vector backend 是向量检索后端）落地真实 observer 和 vector backend 前的第一条可测长期记忆基线。
+证据已在 2026-05-02 Asia/Shanghai 校准。本文定义 quilin-mem（Quilin 的四层记忆系统，包含 working / episodic / semantic / skill memory）在 QUI-65（Memory observer、fact stream 与长期记忆评测实现任务；observer 是观察器，用于从会话中提取可复用事实；fact stream 是事实事件流；vector backend 是向量检索后端）落地真实 observer 和 vector backend 前的第一条可测长期记忆基线。
 
 Benchmark freeze note: public LongMemEval（长期记忆能力评测，用于评估聊天助手跨多会话保存和使用信息的公开 benchmark；benchmark 是基准评测，用统一输入和评分比较系统能力）, LoCoMo（Long-term Conversational Memory，一个用长对话、多会话和多模态线索评估长期记忆的 benchmark）, and BEAM（Beyond a Million Tokens，一个把对话长度扩到 128K 到 10M tokens 的长期记忆 benchmark）lanes are historical references only unless the user explicitly asks for Benchmark work. The active baseline is the local fixture set（固定样例集，一组可重复运行的小型本地样例）and local memory evidence.
 

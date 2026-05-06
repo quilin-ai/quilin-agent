@@ -1,7 +1,7 @@
 # 可观测性工程（Observability Engineering）
 
 > **实现状态（2026-04-30 校准）**
-> - ✅ **已实现**：JSON structured logger、`packages/agent-core/src/observability/` in-memory span provider、loop span instrumentation、JSON file span exporter、trace/log context、Python OmniMem event_log traceparent ingest + retrieval event dual-emit、benchmark cost/result wire integration。
+> - ✅ **已实现**：JSON structured logger、`packages/agent-core/src/observability/` in-memory span provider、loop span instrumentation、JSON file span exporter、trace/log context、Python quilin-mem event_log traceparent ingest + retrieval event dual-emit、benchmark cost/result wire integration。
 > - 🚧 **部分实现 / 延期**：OTel-compatible schema 与 exporter 基础已落地，但不是完整 OpenTelemetry SDK 接入；WebUI Dashboard 未实现。
 > - Linear 后续项：[QUI-20](https://linear.app/quilin-agent/issue/QUI-20/08-observability-metrics-exporter-dashboard-and-trace-backend)。
 
@@ -140,7 +140,7 @@ Logs（日志）        →  结构化 JSON 日志（携带 trace_id/span_id 关
           ┌────────────────────────────────────────────────────────┐
           │              Quilin WebUI Dashboard                     │
           │                                                        │
-          │  数据源：OTel Metrics/Traces + OmniMem + TaskState     │
+          │  数据源：OTel Metrics/Traces + quilin-mem + TaskState  │
           │                                                        │
           │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ │
           │  │ 任务面板  │ │ 记忆面板  │ │ 工具面板  │ │ 指标面板  │ │
@@ -162,7 +162,7 @@ Logs（日志）        →  结构化 JSON 日志（携带 trace_id/span_id 关
 | 面板 | 数据源 | 核心指标 | 刷新策略 |
 |------|--------|---------|---------|
 | **任务面板** | TaskState + OTel Session Spans | 任务状态分布（进行中/完成/失败）、任务耗时分布、步骤效率 | 实时（WebSocket） |
-| **记忆面板** | OmniMem 4 层存储 | 各层记忆条数、存储大小、最近访问时间、检索命中率 | 按需刷新 |
+| **记忆面板** | quilin-mem 4 层存储 | 各层记忆条数、存储大小、最近访问时间、检索命中率 | 按需刷新 |
 | **工具面板** | OTel Tool Spans | 工具调用频率 Top 10、成功率、平均延迟、成本分摊 | 5s 轮询 |
 | **指标面板** | OTel Metrics + Prometheus | Token 消耗趋势（input/output/thinking）、成本累计、Prompt Cache 命中率 | 5s 轮询 |
 | **Sub-Agent 进度面板** | ProgressAggregator (06-multi-agent) | 各 Sub-Agent 实时状态、进度百分比、当前步骤、预估剩余时间；整体任务进度总览 | 实时（WebSocket） |
@@ -759,7 +759,7 @@ Quilin.run()               →  Session Span 开启/关闭
 LangGraph 状态机                →  Node Span（每个节点自动埋点）
 LLMClient.chat()                →  LLM Span + Token/Cost 记录
 ToolRouter.execute()            →  Tool Span + 工具健康指标
-OmniMem.retrieve/store()        →  Tool Span（内存操作）
+quilin-mem retrieve/store       →  Tool Span（内存操作）
 MCPBus.send/receive()           →  Tool Span（MCP 通信）
 PluginRegistry.get_provider()   →  Gauge（已注册 Provider 数量）
 ```
@@ -804,7 +804,7 @@ class Quilin:
 | 层 | 集成点 | 可观测性动作 |
 |----|-------|------------|
 | **LLM Brain** | `LLMClient.chat()` 返回后 | 记录 LLM Span：model/tokens/cost/latency |
-| **Memory** | `OmniMem.retrieve()` 前后 | 记录 Tool Span：检索延迟/命中数 |
+| **Memory** | quilin-mem retrieve/store 前后 | 记录 Tool Span：检索延迟/命中数 |
 | **Memory Tier Transition**（D-18 2026-04-20 NEW-12） | FIFO Working→Episodic / Discard-all / Reflector 抽取触发时 | 记录 `memory_tier_transition` Span，attrs `{from_tier, to_tier, items_affected, tokens_before, tokens_after, trigger: fifo\|discard_all\|reflect}`；Counter `memory.tier_transitions_total{from,to,trigger}`；Histogram `memory.compression_ratio`。用于 debug "agent 突然忘了上下文" 回归。 |
 | **Planning** | `plan` 节点执行后 | 记录规划质量评分（StepEvaluator）|
 | **Tools** | `ToolRouter.execute()` 前后 | 记录 Tool Span：工具名/参数/耗时/成功率 |

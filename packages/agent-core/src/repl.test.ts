@@ -9,11 +9,43 @@ import type { ToolWithMetadata } from "./tools/tool-metadata.js";
 
 const mockQuestion = vi.fn();
 const mockClose = vi.fn();
-const mockCreateInterface = vi.fn(() => ({
-	question: mockQuestion,
-	close: mockClose,
-	prompt: vi.fn(),
-}));
+const mockPrompt = vi.fn();
+type MockReadlineListener = (...args: readonly unknown[]) => void;
+const mockReadlineListeners = new Map<string, Set<MockReadlineListener>>();
+type MockReadlineInterface = {
+	readonly question: typeof mockQuestion;
+	readonly close: typeof mockClose;
+	readonly prompt: typeof mockPrompt;
+	readonly on?: (event: string, listener: MockReadlineListener) => unknown;
+	readonly off?: (event: string, listener: MockReadlineListener) => unknown;
+	readonly line?: string;
+	readonly getCursorPos?: () => unknown;
+};
+let mockReadlineInterface: MockReadlineInterface;
+const mockReadlineOn = vi.fn(
+	(event: string, listener: MockReadlineListener) => {
+		const listeners = mockReadlineListeners.get(event) ?? new Set();
+		listeners.add(listener);
+		mockReadlineListeners.set(event, listeners);
+		return mockReadlineInterface;
+	},
+);
+const mockReadlineOff = vi.fn(
+	(event: string, listener: MockReadlineListener) => {
+		mockReadlineListeners.get(event)?.delete(listener);
+		return mockReadlineInterface;
+	},
+);
+const mockCreateInterface = vi.fn((): MockReadlineInterface => {
+	mockReadlineInterface = {
+		question: mockQuestion,
+		close: mockClose,
+		prompt: mockPrompt,
+		on: mockReadlineOn,
+		off: mockReadlineOff,
+	};
+	return mockReadlineInterface;
+});
 const mockRunAgentLoop = vi.fn();
 const mockLoggerError = vi.fn();
 const mockLoggerWarn = vi.fn();
@@ -24,8 +56,10 @@ const mockCheckpointSave = vi.fn();
 const mockCheckpointConstructor = vi.fn();
 const mockCreateBuiltinTools = vi.fn();
 const mockRegistryRegisterBuiltin = vi.fn();
+const mockRegistryClearBuiltinTools = vi.fn();
 const mockRegistryRegisterImplementation = vi.fn();
 const mockRegistryRegister = vi.fn();
+const mockRegistryUnregister = vi.fn();
 const mockRegistryGetAllTools = vi.fn();
 const mockRegistryGetToolDescriptors = vi.fn();
 const mockRegistryDisconnectAll = vi.fn();
@@ -39,7 +73,7 @@ let capturedProviderControlPlaneInstance:
 	| undefined;
 
 const registryBuiltinTools: ToolWithMetadata[] = [];
-const registryServerTools: ToolWithMetadata[] = [];
+const registryServerToolsById = new Map<string, ToolWithMetadata[]>();
 const registryChangeListeners: Array<() => void> = [];
 
 function setProcessTty(
@@ -59,6 +93,15 @@ function setProcessTty(
 		}
 		Object.defineProperty(stream, "isTTY", descriptor);
 	};
+}
+
+function emitMockReadlineEvent(
+	event: string,
+	...args: readonly unknown[]
+): void {
+	for (const listener of [...(mockReadlineListeners.get(event) ?? [])]) {
+		listener(...args);
+	}
 }
 
 function createToolWithMetadata(
@@ -85,6 +128,34 @@ function createSecretProviderError(messagePrefix = "provider failed"): Error {
 	});
 	error.stack = `ProviderAuthError: ${secretMessage}\n    at providerSecretFrame`;
 	return error;
+}
+
+function createSupervisorSnapshot(records: readonly Record<string, unknown>[]) {
+	const counts = {
+		queued: 0,
+		assigned: 0,
+		active: 0,
+		blocked: 0,
+		waiting_for_review: 0,
+		aggregating: 0,
+		cancel_requested: 0,
+		completed: 0,
+		failed: 0,
+		cancelled: 0,
+		deferred: 0,
+	};
+	for (const record of records) {
+		const status = record.status as keyof typeof counts;
+		counts[status] += 1;
+	}
+
+	return {
+		records,
+		projection: {
+			snapshot: { counts },
+			events: [],
+		},
+	};
 }
 
 class MockStreamingLLMClient {
@@ -224,7 +295,9 @@ class MockSQLiteCheckpoint {
 
 class MockMCPRegistry {
 	registerBuiltin = mockRegistryRegisterBuiltin;
+	clearBuiltinTools = mockRegistryClearBuiltinTools;
 	register = mockRegistryRegister;
+	unregister = mockRegistryUnregister;
 	getAllTools = mockRegistryGetAllTools;
 	getToolDescriptors = mockRegistryGetToolDescriptors;
 	disconnectAll = mockRegistryDisconnectAll;
@@ -294,8 +367,9 @@ describe("startRepl", () => {
 		capturedProviderControlPlaneInstance = undefined;
 		capturedMessages.length = 0;
 		registryBuiltinTools.length = 0;
-		registryServerTools.length = 0;
+		registryServerToolsById.clear();
 		registryChangeListeners.length = 0;
+		mockReadlineListeners.clear();
 		randomUUIDSpy.mockReturnValue("00000000-0000-0000-0000-000000000000");
 		mockCheckpointLoad.mockResolvedValue(null);
 		mockCheckpointSave.mockResolvedValue(undefined);
@@ -310,18 +384,26 @@ describe("startRepl", () => {
 				registryBuiltinTools.push(...tools);
 			},
 		);
+		mockRegistryClearBuiltinTools.mockImplementation(() => {
+			registryBuiltinTools.length = 0;
+		});
 		mockRegistryRegister.mockImplementation(async (entry: unknown) => {
 			const tools = await mockRegistryRegisterImplementation(entry);
-			registryServerTools.push(...tools);
+			registryServerToolsById.set((entry as { id?: string }).id ?? "unknown", [
+				...tools,
+			]);
 			return tools;
+		});
+		mockRegistryUnregister.mockImplementation(async (serverId: string) => {
+			registryServerToolsById.delete(serverId);
 		});
 		mockRegistryRegisterImplementation.mockResolvedValue([]);
 		mockRegistryGetAllTools.mockImplementation(() => [
 			...registryBuiltinTools,
-			...registryServerTools,
+			...[...registryServerToolsById.values()].flat(),
 		]);
 		mockRegistryGetToolDescriptors.mockImplementation(() =>
-			[...registryBuiltinTools, ...registryServerTools]
+			[...registryBuiltinTools, ...[...registryServerToolsById.values()].flat()]
 				.map((tool) => ({
 					name: tool.name,
 					description: tool.description,
@@ -618,6 +700,68 @@ describe("startRepl", () => {
 			auditOutcome: "usable_evidence",
 			usableEvidence: true,
 		});
+		expect(agentRunLogger.flush).toHaveBeenCalledTimes(1);
+	});
+
+	it("queues live input entered during an active turn as the next user turn", async () => {
+		const runLogRecords: Array<{
+			phase: string;
+			payload?: Record<string, unknown>;
+			context?: { turnId?: string };
+		}> = [];
+		const agentRunLogger = {
+			record: vi.fn(async (input) => {
+				runLogRecords.push(input);
+			}),
+			flush: vi.fn(async () => undefined),
+		};
+		let secondTurnMessages: unknown;
+		mockQuestion
+			.mockResolvedValueOnce("start work")
+			.mockResolvedValueOnce("/exit");
+		mockRunAgentLoop
+			.mockImplementationOnce(async () => {
+				emitMockReadlineEvent("line", "follow up while running");
+				return "first reply";
+			})
+			.mockImplementationOnce(async (_config, messages) => {
+				secondTurnMessages = [...messages];
+				return "second reply";
+			});
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: createMockProvider(() => createMockLanguageModel()),
+			modelId: "deepseek-chat",
+			agentRunLogger,
+		});
+
+		expect(stderrWriteSpy).toHaveBeenCalledWith(
+			"Live input queued for current turn: 23 chars.\n",
+		);
+		expect(mockRunAgentLoop).toHaveBeenCalledTimes(2);
+		expect(secondTurnMessages).toEqual([
+			{ role: "user", content: "start work" },
+			{ role: "assistant", content: "first reply" },
+			{ role: "user", content: "follow up while running" },
+		]);
+		expect(runLogRecords).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					phase: "turn.live_input_received",
+					turnId: "00000000-0000-0000-0000-000000000000",
+					payload: expect.objectContaining({
+						kind: "message",
+						queuedFor: "next_turn",
+						input: {
+							chars: 23,
+							previewRedacted: true,
+						},
+					}),
+				}),
+			]),
+		);
 		expect(agentRunLogger.flush).toHaveBeenCalledTimes(1);
 	});
 
@@ -1146,6 +1290,8 @@ describe("startRepl", () => {
 			question: mockQuestion,
 			close: mockClose,
 			prompt: vi.fn(),
+			on: mockReadlineOn,
+			off: mockReadlineOff,
 			get line() {
 				return readlineLineAccess();
 			},
@@ -1206,6 +1352,8 @@ describe("startRepl", () => {
 			question: mockQuestion,
 			close: mockClose,
 			prompt: vi.fn(),
+			on: mockReadlineOn,
+			off: mockReadlineOff,
 			get line() {
 				return readlineLineAccess();
 			},
@@ -1463,6 +1611,83 @@ describe("startRepl", () => {
 		);
 	});
 
+	it("applies refreshed MCP tools from capabilities runtime on the next turn", async () => {
+		mockQuestion
+			.mockResolvedValueOnce("first turn")
+			.mockResolvedValueOnce("second turn")
+			.mockResolvedValueOnce("/exit");
+		const oldMcpServer = {
+			id: "old-memory",
+			namespace: "old-memory",
+			config: { command: "old-memory", args: [] },
+		};
+		const newMcpServer = {
+			id: "new-browser",
+			namespace: "new-browser",
+			config: { command: "new-browser", args: [] },
+		};
+		const firstRuntime = {
+			config: {},
+			source: { kind: "builtin" },
+			mcpServers: [oldMcpServer],
+		};
+		const secondRuntime = {
+			config: {},
+			source: { kind: "project", path: "/tmp/quilin/capabilities.json" },
+			mcpServers: [newMcpServer],
+		};
+		let currentRuntime = firstRuntime;
+		let generation = 1;
+		mockRegistryRegisterImplementation.mockImplementation(async (entry) => {
+			const id = (entry as { id: string }).id;
+			return id === "old-memory"
+				? [createToolWithMetadata("old-memory/recall", "Old recall")]
+				: [createToolWithMetadata("new-browser/search", "New search")];
+		});
+		mockRunAgentLoop
+			.mockImplementationOnce(async (config) => {
+				expect(config.tools).toEqual(
+					expect.arrayContaining([
+						expect.objectContaining({ name: "old-memory/recall" }),
+					]),
+				);
+				expect(config.tools).not.toEqual(
+					expect.arrayContaining([
+						expect.objectContaining({ name: "new-browser/search" }),
+					]),
+				);
+				currentRuntime = secondRuntime;
+				generation = 2;
+				return "first";
+			})
+			.mockImplementationOnce(async (config) => {
+				expect(config.tools).toEqual(
+					expect.arrayContaining([
+						expect.objectContaining({ name: "new-browser/search" }),
+					]),
+				);
+				expect(config.tools).not.toEqual(
+					expect.arrayContaining([
+						expect.objectContaining({ name: "old-memory/recall" }),
+					]),
+				);
+				return "second";
+			});
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: createMockProvider(() => createMockLanguageModel()),
+			modelId: "deepseek-chat",
+			capabilitiesRuntime: () => currentRuntime as never,
+			capabilitiesStatus: () => ({ generation }) as never,
+		});
+
+		expect(mockRegistryRegister).toHaveBeenCalledTimes(2);
+		expect(mockRegistryUnregister).toHaveBeenCalledWith("old-memory");
+		expect(mockRunAgentLoop).toHaveBeenCalledTimes(2);
+	});
+
 	it("shows base and effective model in /status", async () => {
 		mockQuestion
 			.mockResolvedValueOnce("/think on")
@@ -1507,6 +1732,168 @@ describe("startRepl", () => {
 
 		expect(stderrWriteSpy).toHaveBeenCalledWith(
 			"Status: model=gpt-test | effective=gpt-test | thinking=enabled | routing=fixed | reasoning=collapsed\n",
+		);
+	});
+
+	it("shows capabilities hot reload state in /status when available", async () => {
+		mockQuestion
+			.mockResolvedValueOnce("/status")
+			.mockResolvedValueOnce("/exit");
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: createMockProvider((requestedModelId: string) =>
+				createMockLanguageModel({
+					provider: "deepseek",
+					modelId: requestedModelId,
+				}),
+			),
+			modelId: "deepseek-chat",
+			capabilitiesStatus: () => ({
+				generation: 3,
+				booted: true,
+				watching: true,
+				watchedPaths: ["/tmp/quilin/capabilities.json"],
+				inFlight: false,
+				inFlightGenerations: [],
+				lastSuccess: {
+					generation: 3,
+					operation: "reload",
+					trigger: "watch",
+					completedAtEpochMs: 1_234,
+					source: { kind: "project", path: "/tmp/quilin/capabilities.json" },
+					configPath: "/tmp/quilin/capabilities.json",
+					mcpReconnect: {
+						status: "pending_repl_apply",
+						reason: "applied_at_repl_turn_boundary",
+						activeServerIds: ["browser"],
+						change: {
+							added: ["browser"],
+							removed: [],
+							changed: [],
+						},
+					},
+				},
+				lastFailure: null,
+				lastSkillsChange: null,
+				skillsStatus: {
+					generation: 2,
+					watching: true,
+					inFlight: false,
+					inFlightGenerations: [],
+					lastSuccess: {
+						generation: 2,
+						completedAtEpochMs: 1_200,
+						catalogSize: 7,
+						change: {
+							added: ["research-helper"],
+							removed: [],
+							changed: [],
+						},
+					},
+					lastFailure: null,
+				},
+				mcpReconnect: {
+					status: "pending_repl_apply",
+					reason: "applied_at_repl_turn_boundary",
+					activeServerIds: ["browser"],
+					change: {
+						added: ["browser"],
+						removed: [],
+						changed: [],
+					},
+				},
+			}),
+		});
+
+		expect(stderrWriteSpy).toHaveBeenCalledWith(
+			"Capabilities: generation=3 | booted=yes | watching=on | in_flight=no | last_reload=reload/watch | last_failure=none | mcp=pending_repl_apply(active=browser added=browser removed=none changed=none) | skills=catalog=7,watching=on\n",
+		);
+	});
+
+	it("shows local subagent runtime summary in /status and details in /agents", async () => {
+		mockQuestion
+			.mockResolvedValueOnce("/status")
+			.mockResolvedValueOnce("/agents")
+			.mockResolvedValueOnce("/exit");
+		const supervisorRuntime = {
+			snapshot: vi.fn(() =>
+				createSupervisorSnapshot([
+					{
+						runId: "run-active",
+						taskId: "task-build",
+						workerId: "builder",
+						status: "active",
+						summary: "Implementing runtime hooks",
+						currentStep: "coding",
+						confidence: "medium",
+						reviewedArtifactCount: 0,
+						updatedAt: "2026-05-06T00:00:01.000Z",
+					},
+					{
+						runId: "run-decision",
+						taskId: "task-plan",
+						workerId: "planner",
+						status: "blocked",
+						summary: "Need user choice",
+						currentStep: "needs_decision",
+						blocker: "Choose provider strategy",
+						confidence: "low",
+						reviewedArtifactCount: 1,
+						updatedAt: "2026-05-06T00:00:02.000Z",
+					},
+					{
+						runId: "run-done",
+						taskId: "task-review",
+						workerId: "reviewer",
+						status: "completed",
+						summary: "Review complete",
+						confidence: "high",
+						reviewedArtifactCount: 2,
+						updatedAt: "2026-05-06T00:00:00.000Z",
+					},
+				]),
+			),
+		};
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: createMockProvider(() => createMockLanguageModel()),
+			modelId: "deepseek-chat",
+			supervisorRuntime: supervisorRuntime as never,
+		});
+
+		expect(stderrWriteSpy).toHaveBeenCalledWith(
+			"Agents: active=1 | blocked=0 | needs_decision=1 | completed=1 | failed=0 | queued=0\n",
+		);
+		const writes = stderrWriteSpy.mock.calls
+			.map((call) => String(call[0]))
+			.join("");
+		expect(writes).toContain("needs_decision");
+		expect(writes).toContain("run=run-decision");
+		expect(writes).toContain('blocker="Choose provider strategy"');
+		expect(writes).toContain("completed");
+	});
+
+	it("shows an empty local subagent runtime in /agents", async () => {
+		mockQuestion
+			.mockResolvedValueOnce("/agents")
+			.mockResolvedValueOnce("/exit");
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: createMockProvider(() => createMockLanguageModel()),
+			modelId: "deepseek-chat",
+			supervisorRuntime: {
+				snapshot: vi.fn(() => createSupervisorSnapshot([])),
+			} as never,
+		});
+
+		expect(stderrWriteSpy).toHaveBeenCalledWith(
+			"Agents: none\nNo local subagent runs yet.\n",
 		);
 	});
 

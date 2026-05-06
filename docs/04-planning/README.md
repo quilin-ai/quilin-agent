@@ -502,14 +502,14 @@ export interface Checkpoint {
   readonly id: string;
   readonly atEventSeq: number;
   readonly stateSnapshot: PlanningState;
-  readonly storageRef: string;        // OmniMem episodic tier
+  readonly storageRef: string;        // quilin-mem episodic tier
 }
 ```
 
 **不可变性约定**：
 - State transitions 通过纯函数 `applyEvent(state, event) → newState`
 - 历史回放：`events.reduce(applyEvent, initialState)` 重建任意时刻 state
-- Checkpoint = `{ atEventSeq, stateSnapshot }`，存 OmniMem episodic tier
+- Checkpoint = `{ atEventSeq, stateSnapshot }`，存 quilin-mem episodic tier
 
 ---
 
@@ -521,7 +521,7 @@ export interface Checkpoint {
 export interface PlanContext {
   readonly task: string;
   readonly conversationHistory: ReadonlyArray<Message>;
-  readonly memoryRecall: ReadonlyArray<MemoryItem>;      // 从 OmniMem 拉
+  readonly memoryRecall: ReadonlyArray<MemoryItem>;      // 从 quilin-mem 拉
   readonly skillCatalog: ReadonlyArray<SkillDescriptor>; // 从 SkillsManager 拉（Gateway 注入）
   readonly budget: BudgetLedger;
   readonly iteration: number;
@@ -660,7 +660,7 @@ export interface SkillsManager {
 2. `02-Context` 的 assembler 把 catalog 渲染为 `<available_skills>` XML 注入 system prompt（`packages/agent-core/src/skills/catalog-renderer.ts` 已落地）
 3. 主 LLM 在 `deliberate()` 过程中自己判断需要时调用 `skill_view({ name })` tool
 4. `skill_view` tool 背后调用 `SkillsManager.load(name)` 返回全文
-5. Subtask 完成后，skill 用量（命中/未命中）→ OmniMem episodic tier（跨 session 观察哪些 skill 有效）
+5. Subtask 完成后，skill 用量（命中/未命中）→ quilin-mem episodic tier（跨 session 观察哪些 skill 有效）
 
 **关键**：
 - ❌ Planner **不做** embedding similarity + rule 的 skill-to-subtask 匹配（v1.0 的做法）

@@ -1,6 +1,6 @@
 # Memory Benchmark 数据目录规范
 
-本目录存放 OmniMem / memory provider 的 benchmark harness、输入数据说明与运行产物约定。目录规则以区分 **input dataset** 与 **output artifact** 为核心，避免数据集、manifest、测评输出混存。
+本目录存放 quilin-mem / memory provider 的 benchmark harness、输入数据说明与运行产物约定。目录规则以区分 **input dataset** 与 **output artifact** 为核心，避免数据集、manifest、测评输出混存。
 
 ## 目录约定
 

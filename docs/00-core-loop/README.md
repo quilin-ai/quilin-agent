@@ -14,7 +14,7 @@ The current runtime split is:
 当前运行时切分是：
 
 - **TypeScript**：agent core、loop、context、tools、planning、skills、safety；existing benchmark adapters are frozen code facts, not active roadmap scope.
-- **Python**：ML-heavy providers，例如 OmniMem MCP；existing benchmark worker scripts are frozen code facts, not active roadmap scope.
+- **Python**：ML-heavy providers，例如 quilin-mem MCP；existing benchmark worker scripts are frozen code facts, not active roadmap scope.
 - **Rust**：仅 Iter D `crates/mesh-sdk` stub；mesh/WASM runtime 延期到 Iter F。
 
 ## 架构 / Architecture

@@ -204,24 +204,30 @@ describe("config loader integration", () => {
 			expect.objectContaining({
 				provider: expect.any(Function),
 				modelId: "deepseek-chat",
-				mcpServers: [
-					{
-						id: "stub-json",
-						namespace: "stub-json",
-						defaultRiskLevel: "read",
-						config: {
-							command: "node",
-							args: ["stub-server.js"],
-							cwd: fixtureDir,
-						},
-					},
-				],
-				skillsManager: expect.objectContaining(mockSkillsManagerInstance),
+				capabilitiesRuntime: expect.any(Function),
 				observability: expect.objectContaining({
 					spans: expect.any(Object),
 				}),
 				spanExporter: expect.any(Object),
 			}),
+		);
+		const runtime = vi
+			.mocked(startRepl)
+			.mock.calls[0]?.[0]?.capabilitiesRuntime?.();
+		expect(runtime?.mcpServers).toEqual([
+			{
+				id: "stub-json",
+				namespace: "stub-json",
+				defaultRiskLevel: "read",
+				config: {
+					command: "node",
+					args: ["stub-server.js"],
+					cwd: fixtureDir,
+				},
+			},
+		]);
+		expect(runtime?.skillsManager).toEqual(
+			expect.objectContaining(mockSkillsManagerInstance),
 		);
 		expect(mockValidateMcpServerConfig).toHaveBeenCalledWith({
 			command: "node",
@@ -299,24 +305,30 @@ describe("config loader integration", () => {
 			expect.objectContaining({
 				provider: expect.any(Function),
 				modelId: "deepseek-chat",
-				mcpServers: [
-					{
-						id: "stub-yaml",
-						namespace: "stub-yaml",
-						defaultRiskLevel: "exec",
-						config: {
-							command: "node",
-							args: ["stub-server.js"],
-							cwd: fixtureDir,
-						},
-					},
-				],
-				skillsManager: expect.objectContaining(mockSkillsManagerInstance),
+				capabilitiesRuntime: expect.any(Function),
 				observability: expect.objectContaining({
 					spans: expect.any(Object),
 				}),
 				spanExporter: expect.any(Object),
 			}),
+		);
+		const runtime = vi
+			.mocked(startRepl)
+			.mock.calls[0]?.[0]?.capabilitiesRuntime?.();
+		expect(runtime?.mcpServers).toEqual([
+			{
+				id: "stub-yaml",
+				namespace: "stub-yaml",
+				defaultRiskLevel: "exec",
+				config: {
+					command: "node",
+					args: ["stub-server.js"],
+					cwd: fixtureDir,
+				},
+			},
+		]);
+		expect(runtime?.skillsManager).toEqual(
+			expect.objectContaining(mockSkillsManagerInstance),
 		);
 		expect(mockValidateMcpServerConfig).toHaveBeenCalledWith({
 			command: "node",
@@ -403,20 +415,26 @@ describe("config loader integration", () => {
 		});
 		expect(startRepl).toHaveBeenCalledWith(
 			expect.objectContaining({
-				skillsManager: expect.objectContaining(mockSkillsManagerInstance),
-				mcpServers: [
-					{
-						id: "stub",
-						namespace: "stub",
-						config: {
-							command: "node",
-							args: ["stub-server.js"],
-							cwd: fixtureDir,
-						},
-					},
-				],
+				capabilitiesRuntime: expect.any(Function),
 			}),
 		);
+		const runtime = vi
+			.mocked(startRepl)
+			.mock.calls[0]?.[0]?.capabilitiesRuntime?.();
+		expect(runtime?.skillsManager).toEqual(
+			expect.objectContaining(mockSkillsManagerInstance),
+		);
+		expect(runtime?.mcpServers).toEqual([
+			{
+				id: "stub",
+				namespace: "stub",
+				config: {
+					command: "node",
+					args: ["stub-server.js"],
+					cwd: fixtureDir,
+				},
+			},
+		]);
 	});
 
 	it("lets explicit watcherEnabled disable watch mode even when reloadStrategy requests it", async () => {
@@ -494,8 +512,14 @@ describe("config loader integration", () => {
 		});
 		expect(startRepl).toHaveBeenCalledWith(
 			expect.objectContaining({
-				skillsManager: expect.objectContaining(mockSkillsManagerInstance),
+				capabilitiesRuntime: expect.any(Function),
 			}),
+		);
+		const runtime = vi
+			.mocked(startRepl)
+			.mock.calls[0]?.[0]?.capabilitiesRuntime?.();
+		expect(runtime?.skillsManager).toEqual(
+			expect.objectContaining(mockSkillsManagerInstance),
 		);
 		expect(exitSpy).toHaveBeenCalledWith(0);
 	});

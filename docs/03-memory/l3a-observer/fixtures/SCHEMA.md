@@ -1,6 +1,6 @@
 # Rule-first Observer — Dataset Schema
 
-**目标**: 为 D-20 OmniMem v2 L3a Observation 层的 rule-first 两级架构提供可复用的评估数据集。第一用途是 Task #97 spike v2 重跑（≥1000 样本替代 Codex 自造的 70 样本）；第二用途是 M0 Sprint 1 实现后的回归测试集。
+**目标**: 为 D-20 quilin-mem v2 L3a Observation 层的 rule-first 两级架构提供可复用的评估数据集。第一用途是 Task #97 spike v2 重跑（≥1000 样本替代 Codex 自造的 70 样本）；第二用途是 M0 Sprint 1 实现后的回归测试集。
 
 ## 职责分离
 
