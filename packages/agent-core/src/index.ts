@@ -8,6 +8,7 @@ import { formatFirstRunWelcome } from "./cli/first-run-welcome.js";
 import { runServiceCommand } from "./cli/service-cmd.js";
 import { buildFirstRunOnboardingPlan } from "./config/first-run.js";
 import { ensureMemoryBackend } from "./config/memory-setup.js";
+import { startQuilinMemMcp } from "./config/mcp-launcher.js";
 import {
 	type CapabilitiesHotReloadEvent,
 	createCapabilitiesHotReloadController,
@@ -561,7 +562,7 @@ function resolveRuntimeTierRoutingConfig(
 		if (!isEnabledDefaultCatalogModel(modelSelection.modelId)) {
 			throw new Error(
 				`llm.default_model ${modelSelection.modelId} is providerless and not enabled in DEFAULT_PROVIDER_CATALOG; configure custom model ids under llm.tiers.<flash|lite|pro>.provider/model.`,
-			);
+		);
 		}
 	}
 
@@ -690,6 +691,10 @@ export async function main(options: MainOptions = {}): Promise<void> {
 	// Guard against test-mode runs so index.test.ts call-index assertions stay stable.
 	if (process.env.NODE_ENV !== "test") {
 		ensureMemoryBackend();
+		const workspaceRoot = resolveWorkspaceRoot(
+			dirname(fileURLToPath(import.meta.url)),
+		);
+		startQuilinMemMcp(workspaceRoot);
 	}
 
 	const envTrustMode = process.env.QUILIN_TRUST_MODE;
@@ -738,7 +743,7 @@ export async function main(options: MainOptions = {}): Promise<void> {
 					})),
 				},
 				"First run detected — onboarding plan built",
-			);
+		);
 		}
 	}
 
