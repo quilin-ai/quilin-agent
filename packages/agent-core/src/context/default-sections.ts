@@ -1,3 +1,8 @@
+import { readSoulConfig } from "../config/soul-profile.js";
+import {
+	applyStyleToPrompt,
+	resolveStylePreset,
+} from "./conversation-style.js";
 import type { BuildContext, PromptSection } from "./prompt-types.js";
 
 function describeTools(availableTools: readonly string[]): string {

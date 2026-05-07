@@ -7,6 +7,7 @@ import { runConfigCommand } from "./cli/config-cmd.js";
 import { formatFirstRunWelcome } from "./cli/first-run-welcome.js";
 import { runServiceCommand } from "./cli/service-cmd.js";
 import { buildFirstRunOnboardingPlan } from "./config/first-run.js";
+import { startControlPlaneServer } from "./control-plane/handler.js";
 import { ensureMemoryBackend } from "./config/memory-setup.js";
 import { startQuilinMemMcp } from "./config/mcp-launcher.js";
 import {
@@ -820,6 +821,18 @@ export async function main(options: MainOptions = {}): Promise<void> {
 		await capabilitiesHotReload.bootstrap();
 		const sessionId = await resolveReplSessionId();
 		let shouldExit = false;
+
+		// Start web control plane / dashboard (test env skips)
+		if (process.env.NODE_ENV !== "test") {
+			try {
+				const cpServer = await startControlPlaneServer({
+					port: Number.parseInt(process.env.QUILIN_DASHBOARD_PORT ?? "0", 10),
+				});
+				logger.info({ url: cpServer.url }, "Web dashboard started");
+			} catch (err) {
+				logger.warn({ error: providerErrorLogFields(err) }, "Web dashboard failed to start");
+			}
+		}
 
 		logger.info({ mode: "repl" }, "Starting CLI REPL...");
 
