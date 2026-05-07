@@ -234,7 +234,8 @@ export function renderTable<T>(
 
 	// Data rows — each logical row may span multiple visual lines via word-wrap
 	const rowBlocks: string[] = [];
-	for (const row of rows) {
+	for (let r = 0; r < rows.length; r++) {
+		const row = rows[r] as T;
 		const multi = columns.map((col, idx) =>
 			wordWrap(
 				String(row[col.key] ?? ""),
@@ -252,6 +253,10 @@ export function renderTable<T>(
 			rowBlocks.push(
 				`${border.vertical} ${cells.join(` ${border.vertical} `)} ${border.vertical}`,
 			);
+		}
+		// Separator between logical rows (but not after the last one)
+		if (r < rows.length - 1) {
+			rowBlocks.push(bars.mid);
 		}
 	}
 

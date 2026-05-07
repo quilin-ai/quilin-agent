@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 from .idle_budget import IdleBudgetProvider, IdleBudgetResult
@@ -13,6 +13,14 @@ DEFAULT_CONSOLIDATION_TASK = "quilin_mem.consolidator.propose"
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+_CONSOLIDATION_PRIOR_MAP: dict[tuple[ConsolidationActionKind, str], dict[str, float]] = {
+    ("reflect", "semantic"): {"kg_subgraph": +0.08, "direct_recall": -0.05},
+    ("reflect", "skill"): {"hybrid_rrf": +0.06, "vector_semantic": +0.04},
+    ("prune_kg", "episodic"): {"direct_recall": +0.05, "kg_subgraph": -0.06},
+    ("recompress_verbatim", "episodic"): {"bm25_fts": +0.06, "working_direct": -0.04},
+}
 
 
 @dataclass(slots=True, frozen=True)
@@ -37,12 +45,24 @@ class ConsolidationProposal:
     schema_version: int = CONSOLIDATOR_SCHEMA_VERSION
 
 
+@dataclass(slots=True, frozen=True)
+class RecallWeightsUpdate:
+    source_prior_key: str
+    prior_delta: float
+    reason: str
+
+
 class Consolidator:
     def __init__(
         self,
         budget_provider: IdleBudgetProvider | None = None,
+        *,
+        reranker: object | None = None,
     ) -> None:
         self._budget_provider = budget_provider or IdleBudgetProvider()
+        self._reranker = reranker
+        self._last_consolidation: datetime | None = None
+        self._consolidation_count = 0
 
     def propose(
         self,
@@ -91,6 +111,78 @@ class Consolidator:
             ),
         ]
 
+    def auto_schedule(
+        self,
+        *,
+        interval_hours: int = 24,
+        now: datetime | None = None,
+    ) -> ConsolidationProposal | None:
+        current_time = now or _utcnow()
+
+        if self._last_consolidation is not None:
+            elapsed = current_time - self._last_consolidation
+            if elapsed < timedelta(hours=interval_hours):
+                return None
+
+        proposal = self.propose(
+            task=f"{DEFAULT_CONSOLIDATION_TASK}.auto",
+            now=current_time,
+        )
+
+        object.__setattr__(self, "_last_consolidation", current_time)
+        object.__setattr__(self, "_consolidation_count", self._consolidation_count + 1)
+
+        self._update_recall_weights(proposal)
+
+        return proposal
+
+    def _update_recall_weights(
+        self,
+        proposal: ConsolidationProposal,
+    ) -> list[RecallWeightsUpdate]:
+        budget_granted = proposal.budget.granted
+        scaling = 1.0 if budget_granted else 0.3
+
+        updates: list[RecallWeightsUpdate] = []
+        for action in proposal.actions:
+            action_deltas = _CONSOLIDATION_PRIOR_MAP.get(
+                (action.kind, action.target_layer)
+            )
+            if action_deltas is None:
+                continue
+
+            for source_key, raw_delta in action_deltas.items():
+                scaled_delta = round(raw_delta * scaling, 4)
+                updates.append(
+                    RecallWeightsUpdate(
+                        source_prior_key=source_key,
+                        prior_delta=scaled_delta,
+                        reason=(
+                            f"consolidation action '{action.kind}' "
+                            f"targeting '{action.target_layer}' layer"
+                        ),
+                    )
+                )
+
+        self._apply_recall_priors(updates)
+        return updates
+
+    def _apply_recall_priors(self, updates: list[RecallWeightsUpdate]) -> None:
+        if self._reranker is None:
+            return
+
+        source_priors: dict[str, float] | None = getattr(
+            self._reranker, "_source_priors", None
+        )
+        if not isinstance(source_priors, dict):
+            return
+
+        for update in updates:
+            key = update.source_prior_key
+            current = source_priors.get(key, 0.2)
+            adjusted = max(0.05, min(0.95, round(current + update.prior_delta, 4)))
+            source_priors[key] = adjusted
+
 
 def propose(
     *,
@@ -107,5 +199,6 @@ __all__ = [
     "ConsolidationActionKind",
     "ConsolidationProposal",
     "Consolidator",
+    "RecallWeightsUpdate",
     "propose",
 ]

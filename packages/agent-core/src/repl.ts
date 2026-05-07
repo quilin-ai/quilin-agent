@@ -36,7 +36,7 @@ import type {
 	ProviderRunRecord,
 } from "./llm/types.js";
 import { logger } from "./logger.js";
-import { renderTable, type TableColumn } from "./tui/renderer.js";
+import { renderPanel, renderTable, type TableColumn } from "./tui/renderer.js";
 import { runAgentLoop } from "./loop.js";
 import {
 	type ChildRunStatusRecord,
@@ -311,9 +311,9 @@ function renderResumeSessionsTable(
 	sessions: readonly ResumeSessionSummary[],
 ): string {
 	const columns: TableColumn<ResumeSessionRow>[] = [
-		{ header: " #", key: "num", width: 4, align: "left" },
-		{ header: " 时间", key: "time", width: 20 },
-		{ header: " 最后输入", key: "message", width: 34 },
+		{ header: " #", key: "num", align: "left" },
+		{ header: " 时间", key: "time" },
+		{ header: " 最后输入", key: "message" },
 	];
 
 	const rows: ResumeSessionRow[] = sessions.map((session, index) => ({
@@ -372,6 +372,40 @@ function renderCapabilitiesStatus(status: CapabilitiesReloadStatus): string {
 		`mcp=${formatCapabilitiesMcpStatus(status.mcpReconnect)}`,
 		`skills=${formatCapabilitiesSkillsStatus(status)}`,
 	].join(" | ");
+}
+
+interface CapabilityTableRow {
+	readonly field: string;
+	readonly value: string;
+}
+
+function renderCapabilitiesTable(status: CapabilitiesReloadStatus): string {
+	const reload =
+		status.lastSuccess == null
+			? "none"
+			: `${status.lastSuccess.operation}/${status.lastSuccess.trigger}`;
+	const failure =
+		status.lastFailure == null
+			? "none"
+			: `${status.lastFailure.errorName}:${status.lastFailure.errorMessage}`;
+
+	const columns: TableColumn<CapabilityTableRow>[] = [
+		{ header: "Field", key: "field" },
+		{ header: "Value", key: "value" },
+	];
+
+	const rows: CapabilityTableRow[] = [
+		{ field: "Generation", value: String(status.generation) },
+		{ field: "Booted", value: status.booted ? "yes" : "no" },
+		{ field: "Watching", value: status.watching ? "on" : "off" },
+		{ field: "In Flight", value: status.inFlight ? "yes" : "no" },
+		{ field: "Last Reload", value: reload },
+		{ field: "Last Failure", value: failure },
+		{ field: "MCP Reconnect", value: formatCapabilitiesMcpStatus(status.mcpReconnect) },
+		{ field: "Skills", value: formatCapabilitiesSkillsStatus(status) },
+	];
+
+	return renderTable(columns, rows);
 }
 
 interface McpServerDisplayEntry {
@@ -472,6 +506,40 @@ function renderMcpServerList(
 	].join("\n");
 }
 
+interface McpServerTableRow {
+	readonly id: string;
+	readonly tools: string;
+	readonly connection: string;
+	readonly reload: string;
+	readonly error: string;
+}
+
+function renderMcpServerTable(
+	entries: readonly McpServerDisplayEntry[],
+): string {
+	if (entries.length === 0) {
+		return "No MCP servers registered.";
+	}
+
+	const columns: TableColumn<McpServerTableRow>[] = [
+		{ header: "ID", key: "id" },
+		{ header: "Tools", key: "tools", align: "right" },
+		{ header: "Connection", key: "connection" },
+		{ header: "Reload", key: "reload" },
+		{ header: "Error", key: "error" },
+	];
+
+	const rows: McpServerTableRow[] = entries.map((entry) => ({
+		id: entry.id,
+		tools: String(entry.toolCount),
+		connection: entry.connectionState,
+		reload: entry.reloadState,
+		error: entry.error ?? "-",
+	}));
+
+	return renderTable(columns, rows);
+}
+
 function renderTokenBudget(
 	messages: readonly Message[],
 	budget: TokenBudget = DEFAULT_CONTEXT_BUDGET,
@@ -553,6 +621,54 @@ function formatAgentsSummary(snapshot: SupervisorRuntimeSnapshot): string {
 		`failed=${counts.failed}`,
 		`queued=${queued}`,
 	].join(" | ");
+}
+
+interface AgentCountTableRow {
+	readonly active: string;
+	readonly blocked: string;
+	readonly needsDecision: string;
+	readonly completed: string;
+	readonly failed: string;
+	readonly queued: string;
+}
+
+function renderAgentsSummaryTable(snapshot: SupervisorRuntimeSnapshot): string {
+	const { records } = snapshot;
+	if (records.length === 0) {
+		return "";
+	}
+
+	const counts = snapshot.projection.snapshot.counts;
+	const needsDecision = countRecords(records, isNeedsDecisionRecord);
+	const blocked = Math.max(0, counts.blocked - needsDecision);
+	const active =
+		counts.active +
+		counts.waiting_for_review +
+		counts.aggregating +
+		counts.cancel_requested;
+	const queued = counts.queued + counts.assigned;
+
+	const columns: TableColumn<AgentCountTableRow>[] = [
+		{ header: "Active", key: "active", align: "right" },
+		{ header: "Blocked", key: "blocked", align: "right" },
+		{ header: "Needs Decision", key: "needsDecision", align: "right" },
+		{ header: "Completed", key: "completed", align: "right" },
+		{ header: "Failed", key: "failed", align: "right" },
+		{ header: "Queued", key: "queued", align: "right" },
+	];
+
+	const rows: AgentCountTableRow[] = [
+		{
+			active: String(active),
+			blocked: String(blocked),
+			needsDecision: String(needsDecision),
+			completed: String(counts.completed),
+			failed: String(counts.failed),
+			queued: String(queued),
+		},
+	];
+
+	return renderTable(columns, rows);
 }
 
 function displayRunStatus(record: ChildRunStatusRecord): string {
@@ -1079,6 +1195,7 @@ function renderAgentsStatus(snapshot: SupervisorRuntimeSnapshot): string {
 
 	return [
 		formatAgentsSummary(snapshot),
+		renderAgentsSummaryTable(snapshot),
 		formatAgentProgressSummary(snapshot),
 		renderRecentAgentEvents(snapshot),
 		"",

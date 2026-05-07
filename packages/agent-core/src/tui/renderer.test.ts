@@ -70,7 +70,7 @@ describe("renderTable", () => {
 	it("renders table with rows", () => {
 		const rows = [{ id: "1", name: "Alice" }, { id: "2", name: "Bob" }];
 		const r = renderTable(cols, rows);
-		expect(r.split("\n").length).toBe(6);
+		expect(r.split("\n").length).toBe(7);
 		expect(stripAnsi(r)).toContain("ID");
 		expect(stripAnsi(r)).toContain("Alice");
 	});

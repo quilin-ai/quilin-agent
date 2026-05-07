@@ -1,14 +1,16 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from quilin_mem.consolidator import (
     CONSOLIDATOR_SCHEMA_VERSION,
     DEFAULT_CONSOLIDATION_TASK,
     Consolidator,
+    RecallWeightsUpdate,
     propose,
 )
 from quilin_mem.idle_budget import IdleBudgetLease, IdleBudgetProvider
+from quilin_mem.reranker import LearnableReranker
 
 
 def test_default_consolidator_proposes_dry_run_actions_without_writes() -> None:
