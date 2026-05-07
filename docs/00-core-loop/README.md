@@ -2,6 +2,8 @@
 
 > Quilin 全局架构、运行时切分和 docs 规则的当前真相源。全局进度见
 > [STATUS.md](../STATUS.md)。
+>
+> **关联 Linear**：[QUI-100](https://linear.app/quilin-agent/issue/QUI-100/main-loop主-agent-实时追加输入与运行中重定向)（main loop 实时追加输入，✅ 已实现）、[QUI-83](https://linear.app/quilin-agent/issue/QUI-83/梳理-quilin-agent-能力边界与热更新记忆mcp-统一规划)（能力边界与统一规划）。
 
 ## 当前状态 / Current State
 

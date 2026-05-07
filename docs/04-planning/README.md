@@ -3,7 +3,7 @@
 > **实现状态（2026-04-30 校准）**
 > - ✅ **已实现**：`packages/agent-core/src/planning/` — intent structural dispatch、audit、linear decomposition + DAG upgrade、strategy selection、planning state / event replay、local/global replan、goal drift detection、termination、executor、budget/context integration、delegation policy、memory-writer、planner tests / integration tests。
 > - 🚧 **部分实现 / 延期**：主 LLM direct planner contract 已有 TS scaffold 与测试；本地 tiny classifier 仍不是 Iter C gate，继续作为低成本/离线模式研究题。
-> - Linear 后续项：[QUI-17](https://linear.app/quilin-agent/issue/QUI-17/04-planning-production-planner-routing-and-supervisor-handoff)；multi-agent runtime 见 [QUI-9](https://linear.app/quilin-agent/issue/QUI-9/iter-f-implement-multi-agent-supervisor-runtime)。
+> - Linear 后续项：[QUI-17](https://linear.app/quilin-agent/issue/QUI-17/04-planning-production-planner-routing-and-supervisor-handoff)（生产路由/Supervisor 移交）、[QUI-96](https://linear.app/quilin-agent/issue/QUI-96/m2-支持-8-小时以上可靠长任务运行与目标保持)（长任务可靠性）；multi-agent runtime 见 [QUI-9](https://linear.app/quilin-agent/issue/QUI-9/iter-f-implement-multi-agent-supervisor-runtime)。
 >
 > **v1.1 本次修订要点**（基于 2026-04-20 "意图识别 Top 10 方案" 调研，对齐 Claude Code / Cursor / OpenHands / Anthropic Agent SDK 主流做法）：
 > - ✘ **废弃 Tier-1 规则前筛 + Tier-2 tiny classifier 默认方案** —— 开放域 Agent 的 intent 不是闭集分类，主 LLM 直接推理就是 SOTA

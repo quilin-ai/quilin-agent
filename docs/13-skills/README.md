@@ -10,7 +10,7 @@
 > | **M0.5 — `skill_view` tool 按需加载 body** | ✅ 已实现 | commit `0464377`。文件：`packages/agent-core/src/tools/builtin/skill-view.ts`（60 LOC）+ `skill-view.test.ts`（143 LOC）。测试覆盖 happy-path / missing-args / root-escape / size-limit。 |
 > | **M0.5 契约缺口** | ✅ 已收口 | B3b Phase 1 落地 `<hot_skills>` 条件激活 + REPL/assembler 稳定前缀注入（`a9ef022` / `86f4512` / `338c607`）；B3b Phase 3 `skills_guard` 在 `skill_view` 读入 body 时做 4×4 策略矩阵扫描（`35886f3`）。outbound decoration 由 assembler 的 dynamic suffix 承担，不再落在 tool 层（Codex 独立判断已成立）。 |
 > | **M1 — 条件激活 / CRUD / 安全扫描 / 恢复 + 热发现** | ✅ Phase 0-4 | Phase 0 `bc93f42` frontmatter schema v2；Phase 1 `a9ef022` / `86f4512` / `338c607` 条件激活 + 稳定前缀；Phase 2 `b5a9474` / `a5140da` / `29d6c18` `skill_manage` CRUD + WriteAuthority（R-01 critical）；Phase 3 `c2954f6` / `35886f3` / `0fae827` skills_guard + 4 级信任策略 × 4 级严重度；Phase 4 `1f74adb`(P4-a post-compact 恢复 ≤5/≤5K/≤25K) + `93141c5`(P4-b file watcher 生命周期 + 200ms debounce + catalog diff + cache eviction)。 |
-> | **M2+ — 平台化 / Background nudge / ToolSearch 延迟加载** | Linear [QUI-22](https://linear.app/quilin-agent/issue/QUI-22/13-skills-m2-platformization-toolsearch-and-background-nudge) | 依赖 10-self-evolution / Plugin 平台 / 工具数 >100。 |
+> | **M2+ — 平台化 / Background nudge / ToolSearch 延迟加载 / Skill 融合** | Linear [QUI-22](https://linear.app/quilin-agent/issue/QUI-22/13-skills-m2-platformization-toolsearch-and-background-nudge)、[QUI-98](https://linear.app/quilin-agent/issue/QUI-98/m4-实现-skill-融合将多个相似-skill-自动合并优化)（skill 融合/去重） | 依赖 10-self-evolution / Plugin 平台 / 工具数 >100。 |
 
 > **ADR-001 对齐说明**：技能系统（Skill Loading）用 TS 实现，作为 Agent Core 内的独立子系统。Skill 与 Tool 严格分离：Tool 是运行时可执行动作，Skill 是可被 LLM 读取的知识/指令资产。本文档中的 Python 代码示例仅表达设计意图，实施时以 TS 落地。
 

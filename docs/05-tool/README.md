@@ -7,8 +7,8 @@
 > - ✅ **已实现**：`SandboxRouter` 合同与 agent-core `DockerSandboxRouter` adapter 已落地；adapter 使用可注入 Docker CLI runner，覆盖 Docker create/execute/install/destroy 路径、mount / network / resource / output policy 映射、LocalSandbox dev-only 防线，以及 structured failure output。实证：`src/tools/docker-sandbox-router.test.ts` + `src/tools/sandbox-router.test.ts` + barrel/root export tests 通过。
 > - 🚧 **Partial / deferred**: Durable Docker snapshot/resume currently fail closed in the adapter; allowlist/debug-bridge networking still lacks a production-grade implementation; CloudSandbox family, BrowserProvider, Computer Use, and MCP over TCP / mesh transport remain deferred to later Linear work.
 > - 🚧 **部分实现 / 延期**：Docker durable snapshot/resume 目前在 adapter 中 fail-closed；allowlist/debug-bridge network 仍未提供生产级实现；CloudSandbox family、BrowserProvider、Computer Use、MCP over TCP / mesh transport 延期到后续 Linear 项。
-> - Linear follow-up: [QUI-18](https://linear.app/quilin-agent/issue/QUI-18/05-tools-generic-sandbox-browser-openapi-and-computer-use).
-> - Linear 后续项：[QUI-18](https://linear.app/quilin-agent/issue/QUI-18/05-tools-generic-sandbox-browser-openapi-and-computer-use)。
+> - Linear follow-up: [QUI-18](https://linear.app/quilin-agent/issue/QUI-18/05-tools-generic-sandbox-browser-openapi-and-computer-use)（通用 sandbox/browser）、[QUI-62](https://linear.app/quilin-agent/issue/QUI-62/f1-实现-sandboxrouter-与-production-dockersandbox)（DockerSandbox 默认集成，adapter 已有）、[QUI-97](https://linear.app/quilin-agent/issue/QUI-97/m3-实现-sandbox-触发策略与自动激活)（sandbox 触发策略，deferred）。
+> - Linear 后续项：[QUI-18](https://linear.app/quilin-agent/issue/QUI-18/05-tools-generic-sandbox-browser-openapi-and-computer-use)（通用 sandbox/browser）、[QUI-62](https://linear.app/quilin-agent/issue/QUI-62/f1-实现-sandboxrouter-与-production-dockersandbox)（DockerSandbox 默认集成，adapter 已有）、[QUI-97](https://linear.app/quilin-agent/issue/QUI-97/m3-实现-sandbox-触发策略与自动激活)（sandbox 触发策略，deferred）。
 
 > **ADR-001 对齐说明**：工具系统用 TS 实现（MCP Client Manager），Python ML 工具封装为独立 MCP Server。本文档中的 Python 代码示例仅表达设计意图，实施时将以 TS 重写。`quilin/` 路径为规划参考。详见 [Core Loop](../00-core-loop/README.md)。
 

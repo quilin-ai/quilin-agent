@@ -3,7 +3,7 @@
 > **实现状态（2026-04-30 校准）**
 > - ✅ **已实现**：`packages/agent-core/src/llm/` — AI SDK v6 `LLMClient`、`InferenceConfig`、`ThinkingMode`、provider-aware thinking options、`fullStream` reasoning/tool events、provider-tagged `ReasoningPart` 提取、token usage/cache usage 基础、Anthropic prompt-cache breakpoint adapter。
 > - 🚧 **部分实现 / 延期**：provider 能力矩阵已有 Anthropic / OpenAI / DeepSeek 等代码路径与 mock 测试，但未做全 provider live 验收；reasoning replay / carry-over adapter 仍 deferred。全局进度见 [`docs/STATUS.md`](../STATUS.md)。
-> - Linear 后续项：[QUI-14](https://linear.app/quilin-agent/issue/QUI-14/01-llm-production-provider-matrix-fallback-and-reasoning-support)。
+> - Linear 后续项：[QUI-14](https://linear.app/quilin-agent/issue/QUI-14/01-llm-production-provider-matrix-fallback-and-reasoning-support)（provider matrix）、[QUI-91](https://linear.app/quilin-agent/issue/QUI-91/m5-实现-provider-credentials-oauth-管理与-quota-感知)（凭证/OAuth 管理，API 骨架已完成）、[QUI-93](https://linear.app/quilin-agent/issue/QUI-93/m7-实现原生多模态图片音频视频理解)（多模态理解，deferred）。
 
 > 本文档是 Quilin Agent 工程规格系列的第 1 篇，定义 LLM 接入层的设计方案、参考来源与验证标准。
 >

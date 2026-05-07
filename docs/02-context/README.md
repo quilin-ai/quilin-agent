@@ -3,7 +3,7 @@
 > **实现状态（2026-04-30 校准）**
 > - ✅ **已实现**：`packages/agent-core/src/context/` — PromptBuilder / PromptSessionAssembler、ContextManager、TokenBudgetAllocator、cache stability metadata、TemporalAwareness、MemoryBridge、InjectionScanner、skills catalog / hot_skills / post-compact skills restore 接线。
 > - 🚧 **部分实现 / 延期**：完整相关性选择、token-aware compressor、runtime delta channel 仍未作为独立模块落地；reasoning sanitizer 已独立落地。
-> - Linear 后续项：[QUI-15](https://linear.app/quilin-agent/issue/QUI-15/02-context-relevance-selection-compression-and-runtime-delta-channel)；Conversation Engineering parked scope 见 [QUI-13](https://linear.app/quilin-agent/issue/QUI-13/iter-f-unpark-conversation-engineering-after-core-loop-stability)。
+> - Linear 后续项：[QUI-15](https://linear.app/quilin-agent/issue/QUI-15/02-context-relevance-selection-compression-and-runtime-delta-channel)（相关性选择/压缩）、[QUI-90](https://linear.app/quilin-agent/issue/QUI-90/m2-接入-context-budget-到-repl-使-token-预算可视化且可联动)（context budget REPL 可视化）；Conversation Engineering parked scope 见 [QUI-13](https://linear.app/quilin-agent/issue/QUI-13/iter-f-unpark-conversation-engineering-after-core-loop-stability)。
 
 > **ADR-001 对齐说明**：核心语言已决策为 TypeScript（见 [Core Loop](../00-core-loop/README.md)）。本文档中的 Python 代码示例仅表达设计意图，实施时将以 TS 重写。`quilin/` 路径为规划参考，最终目录结构以实施时为准。
 >

@@ -3,7 +3,7 @@
 > **实现状态（2026-04-30 校准）**
 > - ✅ **已实现**：`providers/memory/src/quilin_mem/` — quilin-mem MCP server、working / episodic / semantic / skill 四层、SQLite + FTS5/BM25、KG 子图检索、vector retriever 接口、hybrid retriever + reranker、event log + trace context、ProfileStore / ProfileUpdater、scratchpad、idle_budget + consolidator dry-run、soul schema validator。
 > - 🚧 **部分实现 / blocked**：L3a observer 当前资源 blocked/deferred；LongMemEval / live observer spike 需凭证或本地模型解锁后重跑。
-> - Linear 后续项：[QUI-16](https://linear.app/quilin-agent/issue/QUI-16/03-memory-observer-validation-archival-and-evaluation-pipeline)；Iter F memory depth 见 [QUI-11](https://linear.app/quilin-agent/issue/QUI-11/iter-f-deepen-memoryl3a-observer-and-longmemeval-path)。
+> - Linear 后续项：[QUI-16](https://linear.app/quilin-agent/issue/QUI-16/03-memory-observer-validation-archival-and-evaluation-pipeline)（observer 验证）、[QUI-95](https://linear.app/quilin-agent/issue/QUI-95/m3-实现长期记忆写入-召回-归档自动闭环)（长期记忆自动闭环）；Iter F memory depth 见 [QUI-11](https://linear.app/quilin-agent/issue/QUI-11/iter-f-deepen-memoryl3a-observer-and-longmemeval-path)。
 
 > quilin-mem 4 层分级记忆系统详细规格
 >
