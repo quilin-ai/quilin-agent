@@ -336,6 +336,8 @@ export function truncateVisible(
 	// Simple strategy: strip all ANSI, truncate the plain text, re-apply.
 	// A full ANSI-aware truncation would be more involved; for most TUI use
 	// cases (labels, table cells) plain truncation is sufficient.
+	// Preserve leading ANSI codes so truncated text keeps its colour.
+	const ansiPrefix = text.match(/^(\x1b\[[0-9;]*m)+/)?.[0] ?? "";
 	const visible = plain.slice(0, Math.max(0, maxWidth - ellipsis.length));
-	return `${visible}${ellipsis}`;
+	return `${ansiPrefix}${visible}${ellipsis}${ANSI.reset}`;
 }

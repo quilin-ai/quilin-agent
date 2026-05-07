@@ -153,6 +153,9 @@ export interface TableColumn<T> {
 
 export interface TableOptions {
 	readonly borderStyle?: BorderStyle;
+	/** Maximum total table width in visible columns. When the natural table width
+	 *  exceeds this limit, columns are shrunk proportionally (minimum 3 cols each).
+	 *  Default: no limit. */
 	readonly maxWidth?: number;
 }
 
@@ -163,6 +166,12 @@ export interface TableOptions {
  * 1. Explicit `width` on the column definition, or
  * 2. The visible width of the header, or
  * 3. The visible width of the widest cell in that column.
+ *
+ * When `options.maxWidth` is set and the total table would exceed it,
+ * columns are shrunk proportionally.
+ *
+ * Empty rows produce only the header with no data rows.
+ * Single-column tables omit internal separators.
  *
  * ```text
  * ┌────┬──────────┬──────────────┐
@@ -183,36 +192,56 @@ export function renderTable<T>(
 		return "";
 	}
 
-	// Compute column widths — capped to prevent runaway columns
-	const maxColWidth = options.maxWidth != null ? Math.floor(options.maxWidth / columns.length) : 60;
+	// Compute natural column widths
 	const colWidths: number[] = columns.map((col) => {
 		if (col.width != null) {
-			return Math.min(col.width, maxColWidth);
+			return col.width;
 		}
-		let max = Math.min(visibleWidth(col.header), maxColWidth);
+		let max = visibleWidth(col.header);
 		for (const row of rows) {
 			const cellValue = String(row[col.key] ?? "");
-			const cellWidth = visibleWidth(stripAnsi(cellValue));
-			max = Math.max(max, Math.min(cellWidth, maxColWidth));
+			const cellWidth = visibleWidth(cellValue);
+			if (cellWidth > max) {
+				max = cellWidth;
+			}
 		}
 		return max;
 	});
 
+	// Clamp to maxWidth when specified
+	if (options.maxWidth != null && options.maxWidth > 0) {
+		const totalInnerWidth =
+			colWidths.reduce((sum, w) => sum + w, 0) +
+			(columns.length - 1) * 3 +
+			2;
+		if (totalInnerWidth > options.maxWidth) {
+			const available = options.maxWidth - (columns.length - 1) * 3 - 2;
+			const totalColWidth = colWidths.reduce((sum, w) => sum + w, 0);
+			const scale = available / totalColWidth;
+			for (let i = 0; i < colWidths.length; i++) {
+				colWidths[i] = Math.max(3, Math.floor((colWidths[i] ?? 0) * scale));
+			}
+		}
+	}
+
 	const bars = buildTableBars(colWidths, border);
 
+	// Header row
 	const headerCells = columns.map((col, idx) =>
-		truncateVisible(col.header, colWidths[idx] ?? 0),
+		padCell(applyColor(col.header, Theme.dim), colWidths[idx] ?? 0, col.align ?? "left"),
 	);
 	const headerRow = `${border.vertical} ${headerCells.join(` ${border.vertical} `)} ${border.vertical}`;
 
-	// Build row output — each logical row may span multiple visual lines
+	// Data rows — each logical row may span multiple visual lines via word-wrap
 	const rowBlocks: string[] = [];
 	for (const row of rows) {
 		const multi = columns.map((col, idx) =>
 			wordWrap(
 				String(row[col.key] ?? ""),
 				colWidths[idx] ?? 0,
-			).map((line) => padCellLine(line, colWidths[idx] ?? 0, col.align ?? "left")),
+			).map((line) =>
+				padCellLine(line, colWidths[idx] ?? 0, col.align ?? "left"),
+			),
 		);
 		const maxLines = Math.max(...multi.map((l) => l.length), 1);
 		for (let lineIdx = 0; lineIdx < maxLines; lineIdx++) {
@@ -271,14 +300,18 @@ function padCell(text: string, width: number, align: "left" | "right" | "center"
 		case "right":
 			return `${" ".repeat(remaining)}${text}`;
 		case "center": {
-			const left = Math.floor(remaining / 2);
-			const right = remaining - left;
-			return `${" ".repeat(left)}${text}${" ".repeat(right)}`;
+			const leftLen = Math.floor(remaining / 2);
+			const rightLen = remaining - leftLen;
+			return `${" ".repeat(leftLen)}${text}${" ".repeat(rightLen)}`;
 		}
 		default:
 			return `${text}${" ".repeat(remaining)}`;
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Word-wrap
+// ---------------------------------------------------------------------------
 
 /**
  * Split `text` into lines, each no wider than `maxWidth` visual columns.
@@ -291,7 +324,6 @@ function wordWrap(text: string, maxWidth: number): string[] {
 	if (visibleWidth(plain) <= maxWidth) return [text];
 
 	const lines: string[] = [];
-	// Walk the original text tracking visual width of plain segments
 	let lineStart = 0;
 	let lineWidth = 0;
 	let lastBreak = 0; // byte offset of last word boundary in current line
@@ -357,17 +389,23 @@ function wordWrap(text: string, maxWidth: number): string[] {
  * Pad a single cell line (used after word-wrapping).
  * Does NOT truncate — the caller already ensured it fits.
  */
-function padCellLine(line: string, width: number, align: "left" | "right" | "center"): string {
+function padCellLine(
+	line: string,
+	width: number,
+	align: "left" | "right" | "center",
+): string {
 	const w = visibleWidth(stripAnsi(line));
 	if (w >= width) return line;
 	const pad = width - w;
 	switch (align) {
-		case "right": return `${" ".repeat(pad)}${line}`;
+		case "right":
+			return `${" ".repeat(pad)}${line}`;
 		case "center": {
-			const left = Math.floor(pad / 2);
-			return `${" ".repeat(left)}${line}${" ".repeat(pad - left)}`;
+			const leftLen = Math.floor(pad / 2);
+			return `${" ".repeat(leftLen)}${line}${" ".repeat(pad - leftLen)}`;
 		}
-		default: return `${line}${" ".repeat(pad)}`;
+		default:
+			return `${line}${" ".repeat(pad)}`;
 	}
 }
 
@@ -423,6 +461,9 @@ export interface StatusLineOptions {
 /**
  * Render a single-line status bar with left- and right-aligned text.
  *
+ * ANSI escape codes in both `left` and `right` are measured transparently
+ * (stripped before width calculation) so alignment is never broken by colour.
+ *
  * ```text
  * Left content                  Right content
  * ```
@@ -432,6 +473,12 @@ export function renderStatusLine(options: StatusLineOptions): string {
 	const leftVisible = visibleWidth(options.left);
 	const rightVisible = visibleWidth(options.right);
 	const gap = Math.max(0, width - leftVisible - rightVisible);
+
+	// If the combined visible text is wider than the available width,
+	// render side-by-side with no gap rather than breaking layout.
+	if (gap <= 0 && leftVisible + rightVisible > 0) {
+		return `${options.left}${options.right}`;
+	}
 
 	return `${options.left}${" ".repeat(gap)}${options.right}`;
 }
