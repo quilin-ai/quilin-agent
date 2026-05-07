@@ -62,6 +62,8 @@ import {
 import type { SkillsCatalogChange, SkillsManager } from "./skills/manager.js";
 import { SQLiteCheckpoint } from "./state/checkpoint.js";
 import type { AgentState, Message } from "./state/types.js";
+import type { JsonlTrajectoryStore } from "./self-evolution/trajectory-store.js";
+import type { TrajectoryRecordInput } from "./self-evolution/types.js";
 import { createBuiltinTools } from "./tools/builtin/index.js";
 import { MCPRegistry, type MCPServerEntry } from "./tools/registry.js";
 import type { SandboxApprovalRequest } from "./tools/router.js";
@@ -158,6 +160,8 @@ interface ReplOptions {
 	capabilitiesStatus?: () => CapabilitiesReloadStatus;
 	supervisorRuntime?: SupervisorRuntimeControlPlane;
 	agentRunLogger?: AgentRunLogSink;
+		trajectoryStore?: JsonlTrajectoryStore;
+		onIdle?: () => Promise<void>;
 	onProviderRunRecord?: (record: ProviderRunRecord) => void;
 	onMcpReconnectApplied?: () => void;
 }
@@ -1872,6 +1876,8 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 		capabilitiesStatus,
 		supervisorRuntime: providedSupervisorRuntime,
 		agentRunLogger,
+		trajectoryStore,
+		onIdle,
 		onProviderRunRecord,
 		onMcpReconnectApplied,
 	} = options;
@@ -2133,9 +2139,24 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 						nextMcpServerSignatures.get(entry.id),
 				);
 
+				// Force re-registration for previously-registered servers whose
+				// transport has disconnected (e.g. ERR_USE_AFTER_CLOSE catch-up).
+				// This enables auto-reconnect on the next turn without waiting for
+				// a capabilities config change.
+				const disconnectedMcpServers = currentMcpServers.filter(
+					(entry) =>
+						registeredMcpServerSignatures.has(entry.id) &&
+						!registry.isServerConnected(entry.id),
+				);
+				for (const entry of disconnectedMcpServers) {
+					if (!changedMcpServers.includes(entry)) {
+						changedMcpServers.push(entry);
+					}
+				}
+
 				for (const entry of changedMcpServers) { try {
 					const registeredTools = await registry.register(entry);
-					mcpServerToolCounts.set(entry.id, registeredTools.length); } catch (err) { logger.warn({ err, serverId: entry.id }, "MCP register failed"); }
+					mcpServerToolCounts.set(entry.id, registeredTools.length); } catch (err) { logger.warn({ err, serverId: entry.id }, "MCP register failed"); mcpServerToolCounts.delete(entry.id); }
 				}
 				for (const serverId of removedMcpServerIds) {
 					await registry.unregister(serverId);
@@ -2552,6 +2573,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 							onMessagesUpdated: (loopMessages) => {
 								latestLoopMessages = [...loopMessages];
 							},
+							onIdle,
 							onToolResult: async (event) => {
 								const provenance = createToolProvenanceEntry({
 									toolCall: event.toolCall,
@@ -2597,6 +2619,23 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 					isTerminal: false,
 					lastActiveAt: new Date().toISOString(),
 				});
+				if (trajectoryStore != null) {
+					try {
+						const turnInput: TrajectoryRecordInput = {
+							runId: `${resolvedSessionId}-${state.turnCount}`,
+							outcome: "success",
+							steps: [
+								{ index: 0, kind: "model", label: "user-turn" },
+							],
+						};
+						await trajectoryStore.append(turnInput);
+					} catch (trajErr) {
+						logger.warn(
+							{ error: providerErrorLogFields(trajErr) },
+							"REPL: trajectory save failed",
+						);
+					}
+				}
 				stderr.write("\n\n");
 			} catch (err) {
 				logger.error(

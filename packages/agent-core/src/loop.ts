@@ -343,6 +343,7 @@ export async function runAgentLoop(
 					turnCount,
 					[...workingMessages, assistantMessage],
 				);
+				await config.hooks?.onIdle?.();
 				await recordAgentRunEvent(
 					runLogger,
 					"turn.completed",

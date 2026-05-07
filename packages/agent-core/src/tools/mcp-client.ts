@@ -270,12 +270,17 @@ function formatCallToolResult(result: CallToolResult): MCPToolCallResult {
 export class MCPClientManager {
 	private client?: Client;
 	private transport?: StdioClientTransport;
-	private isConnected = false;
+	private _connected = false;
 	private connectionState: MCPConnectionState = "idle";
 	private connectInProgress?: Promise<Tool[]>;
 	private disconnectReason = "MCP client is not connected";
 	private lifecycleQueue: Promise<unknown> = Promise.resolve();
 	private readonly pendingCalls = new Set<Promise<CallToolResult>>();
+
+	/** Public read-only connection state for external queries (REPL /status, etc.) */
+	get isConnected(): boolean {
+		return this._connected;
+	}
 
 	async connect(config: MCPServerConfig): Promise<Tool[]> {
 		if (this.connectInProgress != null) {
@@ -303,7 +308,7 @@ export class MCPClientManager {
 				logger.error({ err: error }, "MCP transport error");
 			};
 			transport.onclose = () => {
-				this.isConnected = false;
+				this._connected = false;
 				this.connectionState = "idle";
 				this.disconnectReason = "MCP server disconnected";
 				writeReplLogSeparatorIfNeeded();
@@ -337,7 +342,7 @@ export class MCPClientManager {
 
 				this.client = client;
 				this.transport = transport;
-				this.isConnected = true;
+				this._connected = true;
 				this.connectionState = "connected";
 				this.disconnectReason = "MCP client is not connected";
 
@@ -367,7 +372,7 @@ export class MCPClientManager {
 				try { await transport.close(); } catch { /* already closed */ }
 				this.client = undefined;
 				this.transport = undefined;
-				this.isConnected = false;
+				this._connected = false;
 				this.connectionState = "idle";
 				throw error;
 			}
@@ -398,7 +403,7 @@ export class MCPClientManager {
 
 	private async disconnectInternal(): Promise<void> {
 		this.connectionState = "disconnecting";
-		this.isConnected = false;
+		this._connected = false;
 		this.disconnectReason = "MCP server disconnected";
 
 		if (this.pendingCalls.size > 0) {
@@ -429,7 +434,7 @@ export class MCPClientManager {
 	): Promise<MCPToolCallResult> {
 		const isOperational =
 			this.connectionState === "connected" ||
-			(this.connectionState === "idle" && this.isConnected);
+			(this.connectionState === "idle" && this._connected);
 		if (!isOperational || this.client == null) {
 			return createDisconnectedResult(this.disconnectReason);
 		}
@@ -450,8 +455,11 @@ export class MCPClientManager {
 			const result = await pendingCall;
 			return formatCallToolResult(result);
 		} catch (error) {
+			// NEVER throw from this method — all errors (including timeouts and
+			// ERR_USE_AFTER_CLOSE from a closed transport) become safe MCPToolCallResult
+			// values so they never propagate up to dispatchCli() and kill the REPL.
 			if (error instanceof MCPTimeoutError) {
-				throw error;
+				return createDisconnectedResult(error.message);
 			}
 
 			const message =

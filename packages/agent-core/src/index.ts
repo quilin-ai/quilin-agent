@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runConfigCommand } from "./cli/config-cmd.js";
@@ -44,6 +45,13 @@ import type {
 import { configureLogger, logger } from "./logger.js";
 import { JsonFileSpanExporter } from "./observability/exporters/json-file.js";
 import { startRepl } from "./repl.js";
+import {
+	DEFAULT_IDLE_DAILY_TOKEN_QUOTA,
+	IdleEvolutionRunner,
+} from "./self-evolution/idle-runner.js";
+import { JsonlProposalStore } from "./self-evolution/proposal-store.js";
+import { JsonlTrajectoryStore } from "./self-evolution/trajectory-store.js";
+import { analyzeTrajectoryFailures } from "./self-evolution/failure-analyzer.js";
 import { SQLiteCheckpoint } from "./state/checkpoint.js";
 
 export * from "./config/first-run.js";
@@ -861,6 +869,25 @@ export async function main(options: MainOptions = {}): Promise<void> {
 		}
 
 		logger.info({ mode: "repl" }, "Starting CLI REPL...");
+
+		// Self-evolution engine: trajectory store, proposal store, idle runner
+		// 自我演进引擎：轨迹存储、提案存储、闲置运行器
+		const selfEvolutionDataRoot = join(homedir(), ".quilin", "self-evolution");
+		const trajectoryStore = new JsonlTrajectoryStore({
+			dataRoot: selfEvolutionDataRoot,
+			filePath: "trajectories.jsonl",
+		});
+		const proposalStore = new JsonlProposalStore({
+			dataRoot: selfEvolutionDataRoot,
+			filePath: "proposals.jsonl",
+		});
+		const idleRunner = new IdleEvolutionRunner({
+			idleBudget: { dailyTokenQuota: DEFAULT_IDLE_DAILY_TOKEN_QUOTA },
+			trajectoryStore,
+			failureAnalyzer: analyzeTrajectoryFailures,
+			proposalStore,
+		});
+		logger.info("Self-evolution engine online");
 
 		if (isFirstRun && firstRunPlan != null) {
 			process.stderr.write(formatFirstRunWelcome(firstRunPlan));

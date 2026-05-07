@@ -1,5 +1,6 @@
 import { analyzeTrajectoryFailures } from "./failure-analyzer.js";
 import { LocalNoopOfflineOptimizer } from "./offline-optimizer.js";
+import { logger } from "../logger.js";
 import type {
   FailureAnalysis,
   OptimizationProposalDraft,
@@ -78,6 +79,7 @@ export class IdleEvolutionRunner {
 
   private tokensUsedToday = 0;
   private lastResetDate = "";
+  private initialized = false;
 
   constructor(options: IdleEvolutionRunnerOptions) {
     this.dailyTokenQuota = options.idleBudget.dailyTokenQuota;
@@ -97,6 +99,14 @@ export class IdleEvolutionRunner {
    */
   async tryRun(): Promise<void> {
     this.resetDailyQuotaIfNeeded();
+
+    if (!this.initialized) {
+      this.initialized = true;
+      logger.info(
+        { dailyTokenQuota: this.dailyTokenQuota },
+        "IdleEvolutionRunner: first run — self-evolution engine active",
+      );
+    }
 
     if (this.dailyTokenQuota === 0) {
       return;
@@ -130,6 +140,17 @@ export class IdleEvolutionRunner {
     // 粗略 token 估计：每条轨迹分析消耗约 100 token。
     const estimatedTokens = trajectories.length * 100;
     this.tokensUsedToday += estimatedTokens;
+
+    logger.info(
+      {
+        trajectoryCount: trajectories.length,
+        proposalCount: result.proposals.length,
+        noProposalReasonCount: result.noProposalReasons.length,
+        tokensUsedToday: this.tokensUsedToday,
+        dailyTokenQuota: this.dailyTokenQuota,
+      },
+      "IdleEvolutionRunner: cycle complete",
+    );
   }
 
   /**

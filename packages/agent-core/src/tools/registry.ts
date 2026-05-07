@@ -12,6 +12,7 @@ import {
 import type { Tool } from "./types.js";
 
 interface MCPClientConnection {
+	readonly isConnected: boolean;
 	connect(config: MCPServerConfig): Promise<Tool[]>;
 	disconnect(): Promise<void>;
 }
@@ -286,6 +287,10 @@ export class MCPRegistry {
 		}
 
 		return this.shortNameIndex.get(name) ?? undefined;
+	}
+
+	isServerConnected(serverId: string): boolean {
+		return this.connections.get(serverId)?.isConnected === true;
 	}
 
 	async disconnectAll(): Promise<void> {
