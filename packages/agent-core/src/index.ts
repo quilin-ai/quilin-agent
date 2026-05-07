@@ -7,6 +7,7 @@ import { runConfigCommand } from "./cli/config-cmd.js";
 import { formatFirstRunWelcome } from "./cli/first-run-welcome.js";
 import { runServiceCommand } from "./cli/service-cmd.js";
 import { buildFirstRunOnboardingPlan } from "./config/first-run.js";
+import { LocalMemoryBackend } from "./memory/local-backend.js";
 import { startControlPlaneServer } from "./control-plane/handler.js";
 import { ensureMemoryBackend } from "./config/memory-setup.js";
 import { startQuilinMemMcp } from "./config/mcp-launcher.js";
@@ -827,17 +828,31 @@ export async function main(options: MainOptions = {}): Promise<void> {
 			try {
 				const cpServer = await startControlPlaneServer({ checkpoint: new SQLiteCheckpoint(),
 					port: Number.parseInt(process.env.QUILIN_DASHBOARD_PORT ?? "0", 10),
-					onChat: async (message: string) => {
-						try {
-							const chatModel = provider(modelId);
-							const r = await new VercelLLMClient({ model: chatModel }).chat(
-								[{ role: "user", content: message }],
-								[],
-								{ temperature: 0.7, maxTokens: 2048, thinkingMode: "disabled" },
-							);
-							return r.content;
-						} catch (err) { return `Chat error: ${String(err)}`; }
-					},
+					onChat: (() => {
+						const history: { role: "user" | "assistant"; content: string }[] = [];
+						return async (message: string) => {
+							try {
+								let memoryCtx = "";
+								try {
+									const be = new LocalMemoryBackend();
+									const mems = be.recall(message, { limit: 3 });
+									if (mems.length > 0) memoryCtx = "\n[Memories]\n" + mems.map(m => "- " + m.content).join("\n") + "\n[/Memories]\n";
+									be.close();
+								} catch { /* memory offline */ }
+								history.push({ role: "user", content: message });
+								const chatModel = provider(modelId);
+								const sys = `You are Quilin, a local AI agent with memory. You remember past chats. Be concise, personal, and warm.${memoryCtx}`;
+								const r = await new VercelLLMClient({ model: chatModel }).chat(
+									[{ role: "system", content: sys }, ...history.slice(-10)],
+									[],
+									{ temperature: 0.7, maxTokens: 2048, thinkingMode: "disabled" },
+								);
+								history.push({ role: "assistant", content: r.content });
+								if (history.length > 20) history.splice(0, 2);
+								return r.content;
+							} catch (err) { return `Chat error: ${String(err)}`; }
+						};
+					})(),
 				});
 				logger.info({ url: cpServer.url }, "Web dashboard started");
 			} catch (err) {
