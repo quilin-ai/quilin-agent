@@ -8,6 +8,7 @@
 // Raw ANSI escape codes
 // ---------------------------------------------------------------------------
 
+// biome-ignore lint: terminal control sequences with escape chars are required for ANSI colour output
 export const ANSI = {
 	reset: "\x1b[0m",
 	bold: "\x1b[1m",
@@ -212,10 +213,47 @@ export const LOGO = [
 export const BRAND_MARK = "🐉 Quilin Agent";
 
 // ---------------------------------------------------------------------------
-// Colour utilities
+// Format helpers — convenience functions that wrap text in ANSI
+// sequences with automatic reset.  Consumers should prefer these over
+// raw `ANSI.*` / `Theme.*` concatenation.
+// ---------------------------------------------------------------------------
+
+/** Bold text. */
+export function bold(text: string): string {
+	return applyColor(text, ANSI.bold);
+}
+
+/** Dimmed text. */
+export function dim(text: string): string {
+	return applyColor(text, ANSI.dim);
+}
+
+/** Highlighted text (bold bright-cyan). */
+export function highlight(text: string): string {
+	return applyColor(text, Theme.highlight);
+}
+
+/** Success / positive indicator (green). */
+export function success(text: string): string {
+	return applyColor(text, ANSI.green);
+}
+
+/** Error / danger indicator (red). */
+export function error(text: string): string {
+	return applyColor(text, ANSI.red);
+}
+
+/** Warning / caution indicator (yellow). */
+export function warn(text: string): string {
+	return applyColor(text, ANSI.yellow);
+}
+
+// ---------------------------------------------------------------------------
+// Measurement utilities
 // ---------------------------------------------------------------------------
 
 /** Regex matching any ANSI escape sequence (CSI). */
+// biome-ignore lint: regex must match literal ESC control character
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
 
 /**

@@ -36,6 +36,7 @@ import type {
 	ProviderRunRecord,
 } from "./llm/types.js";
 import { logger } from "./logger.js";
+import { renderTable, type TableColumn } from "./tui/renderer.js";
 import { runAgentLoop } from "./loop.js";
 import {
 	type ChildRunStatusRecord,
@@ -300,41 +301,28 @@ function formatResumeTime(isoTimestamp: string): string {
 	return `${month}-${day} ${hour}:${minute}`;
 }
 
+interface ResumeSessionRow {
+	readonly num: string;
+	readonly time: string;
+	readonly message: string;
+}
+
 function renderResumeSessionsTable(
 	sessions: readonly ResumeSessionSummary[],
 ): string {
-	const NUM_COL_WIDTH = 4;
-	const TIME_COL_WIDTH = 20;
-	const MSG_COL_WIDTH = 34;
-	const SEPARATOR_TOP = `┌${"─".repeat(NUM_COL_WIDTH)}┬${"─".repeat(TIME_COL_WIDTH)}┬${"─".repeat(MSG_COL_WIDTH)}┐`;
-	const SEPARATOR_MID = `├${"─".repeat(NUM_COL_WIDTH)}┼${"─".repeat(TIME_COL_WIDTH)}┼${"─".repeat(MSG_COL_WIDTH)}┤`;
-	const SEPARATOR_BOT = `└${"─".repeat(NUM_COL_WIDTH)}┴${"─".repeat(TIME_COL_WIDTH)}┴${"─".repeat(MSG_COL_WIDTH)}┘`;
+	const columns: TableColumn<ResumeSessionRow>[] = [
+		{ header: " #", key: "num", width: 4, align: "left" },
+		{ header: " 时间", key: "time", width: 20 },
+		{ header: " 最后输入", key: "message", width: 34 },
+	];
 
-	const headerNum = " #";
-	const headerTime = " 时间";
-	const headerMsg = " 最后输入";
+	const rows: ResumeSessionRow[] = sessions.map((session, index) => ({
+		num: String(index + 1),
+		time: formatResumeTime(session.lastActiveAt),
+		message: session.lastMessage,
+	}));
 
-	const lines: string[] = [SEPARATOR_TOP];
-	lines.push(
-		`│ ${headerNum.padEnd(NUM_COL_WIDTH - 1)}│ ${headerTime.padEnd(TIME_COL_WIDTH - 1)}│ ${headerMsg.padEnd(MSG_COL_WIDTH - 1)}│`,
-	);
-	lines.push(SEPARATOR_MID);
-
-	for (let index = 0; index < sessions.length; index++) {
-		const session = sessions[index] as ResumeSessionSummary;
-		const num = String(index + 1);
-		const time = formatResumeTime(session.lastActiveAt);
-		const message = session.lastMessage;
-
-		lines.push(
-			`│ ${num.padEnd(NUM_COL_WIDTH - 1)}│ ${time.padEnd(TIME_COL_WIDTH - 1)}│ ${message.padEnd(MSG_COL_WIDTH - 1)}│`,
-		);
-	}
-
-	lines.push(SEPARATOR_BOT);
-	lines.push("输入 /resume <编号> 恢复会话");
-
-	return lines.join("\n");
+	return `${renderTable(columns, rows)}\n输入 /resume <编号> 恢复会话`;
 }
 
 function formatCapabilitiesMcpStatus(
@@ -619,28 +607,6 @@ function formatAgentProgress(record: ChildRunStatusRecord): string | undefined {
 	]
 		.filter((field): field is string => field != null)
 		.join(" ");
-}
-
-function formatAgentRecord(record: ChildRunStatusRecord): string {
-	const fields = [
-		`${displayRunStatus(record).padEnd(18)} run=${record.runId}`,
-		`task=${record.taskId}`,
-		record.workerId == null ? undefined : `worker=${record.workerId}`,
-		record.currentStep == null ? undefined : `step=${record.currentStep}`,
-		formatAgentProgress(record),
-		record.blocker == null
-			? undefined
-			: `blocker=${quoteAgentField(record.blocker)}`,
-		`summary=${quoteAgentField(record.summary) ?? '""'}`,
-		`confidence=${record.confidence}`,
-		`artifacts=${record.reviewedArtifactCount}`,
-		record.lastHeartbeatAt == null
-			? undefined
-			: `heartbeat=${record.lastHeartbeatAt}`,
-		record.updatedAt == null ? undefined : `updated=${record.updatedAt}`,
-	];
-
-	return fields.filter((field): field is string => field != null).join(" ");
 }
 
 function progressSnapshot(snapshot: SupervisorRuntimeSnapshot) {
@@ -1033,6 +999,66 @@ function formatAgentNotificationStatus(
 	return `Agent notifications: ${[...statusFields, ...derivedFields].join(" | ")}`;
 }
 
+interface AgentRecordRow {
+	readonly status: string;
+	readonly run: string;
+	readonly task: string;
+	readonly worker: string;
+	readonly step: string;
+	readonly progress: string;
+	readonly blocker: string;
+	readonly summary: string;
+	readonly confidence: string;
+	readonly artifacts: string;
+}
+
+function formatAgentRecordRow(record: ChildRunStatusRecord): AgentRecordRow {
+	return {
+		status: displayRunStatus(record),
+		run: `run=${record.runId}`,
+		task: `task=${record.taskId}`,
+		worker: record.workerId == null ? "-" : `worker=${record.workerId}`,
+		step: record.currentStep == null ? "-" : `step=${record.currentStep}`,
+		progress: formatAgentProgress(record) ?? "-",
+		blocker:
+			record.blocker == null
+				? "-"
+				: `blocker=${quoteAgentField(record.blocker)}`,
+		summary: `summary=${quoteAgentField(record.summary) ?? '""'}`,
+		confidence: `confidence=${record.confidence}`,
+		artifacts: `artifacts=${record.reviewedArtifactCount}`,
+	};
+}
+
+function renderAgentRecordsTable(
+	records: readonly ChildRunStatusRecord[],
+): string {
+	const sorted = [...records].sort((left, right) => {
+		const rankDelta = childRunSortRank(left) - childRunSortRank(right);
+		if (rankDelta !== 0) {
+			return rankDelta;
+		}
+		return right.updatedAt.localeCompare(left.updatedAt);
+	});
+
+	const columns: TableColumn<AgentRecordRow>[] = [
+		{ header: "Status", key: "status" },
+		{ header: "Run", key: "run" },
+		{ header: "Task", key: "task" },
+		{ header: "Worker", key: "worker" },
+		{ header: "Step", key: "step" },
+		{ header: "Progress", key: "progress" },
+		{ header: "Blocker", key: "blocker" },
+		{ header: "Summary", key: "summary" },
+		{ header: "Confidence", key: "confidence" },
+		{ header: "Artifacts", key: "artifacts" },
+	];
+
+	const rows = sorted.map(formatAgentRecordRow);
+
+	return renderTable(columns, rows);
+}
+
 function renderAgentsStatus(snapshot: SupervisorRuntimeSnapshot): string {
 	if (snapshot.records.length === 0) {
 		return [
@@ -1056,7 +1082,7 @@ function renderAgentsStatus(snapshot: SupervisorRuntimeSnapshot): string {
 		formatAgentProgressSummary(snapshot),
 		renderRecentAgentEvents(snapshot),
 		"",
-		...records.map(formatAgentRecord),
+		renderAgentRecordsTable(records),
 	].join("\n");
 }
 
@@ -1986,10 +2012,12 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 				);
 
 				for (const entry of changedMcpServers) {
-					await registry.register(entry);
+					const registeredTools = await registry.register(entry);
+						mcpServerToolCounts.set(entry.id, registeredTools.length);
 				}
 				for (const serverId of removedMcpServerIds) {
 					await registry.unregister(serverId);
+						mcpServerToolCounts.delete(serverId);
 				}
 
 				registry.clearBuiltinTools();

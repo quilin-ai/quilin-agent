@@ -22,6 +22,7 @@ import {
 	LOGO,
 	padVisible,
 	stripAnsi,
+	truncateVisible,
 	visibleWidth,
 } from "./theme.js";
 
@@ -110,24 +111,26 @@ function renderPanelTopBar(
 		return `${border.topLeft}${repeat(border.horizontal, innerWidth)}${border.topRight}`;
 	}
 
+	// Measure visible width without ANSI codes; use the original for display
+	// so that any colour applied to the title is rendered inside the border.
 	const plainTitle = stripAnsi(title);
-	const visibleTitleLen = visibleWidth(plainTitle);
-	const titleSegment = ` ${plainTitle} `;
-	const titleLen = titleSegment.length;
+	const titleVisibleWidth = visibleWidth(plainTitle);
+	const decoratedTitle = ` ${title} `;
+	const segmentVisibleWidth = titleVisibleWidth + 2; // +2 for surrounding spaces
 
-	if (titleLen + 2 > innerWidth) {
-		// Title too long — truncate
-		const truncated = `${plainTitle.slice(0, Math.max(0, innerWidth - 5))}…`;
-		return `${border.topLeft}${truncated}${repeat(border.horizontal, Math.max(0, innerWidth - truncated.length))}${border.topRight}`;
+	if (segmentVisibleWidth > innerWidth) {
+		// Title too long — truncate to fit
+		const truncated = `${plainTitle.slice(0, Math.max(0, innerWidth - 3))}…`;
+		return `${border.topLeft} ${truncated}${repeat(border.horizontal, Math.max(0, innerWidth - truncated.length - 3))}${border.topRight}`;
 	}
 
-	const leftLen = Math.floor((innerWidth - titleLen) / 2);
-	const rightLen = innerWidth - titleLen - leftLen;
+	const leftLen = Math.floor((innerWidth - segmentVisibleWidth) / 2);
+	const rightLen = innerWidth - segmentVisibleWidth - leftLen;
 
 	return [
 		border.topLeft,
 		repeat(border.horizontal, leftLen),
-		titleSegment,
+		decoratedTitle,
 		repeat(border.horizontal, rightLen),
 		border.topRight,
 	].join("");
@@ -137,7 +140,7 @@ function renderPanelTopBar(
 // Table
 // ---------------------------------------------------------------------------
 
-export interface TableColumn<T extends Record<string, string | undefined>> {
+export interface TableColumn<T> {
 	/** Column header text. */
 	readonly header: string;
 	/** Key into the row object. */
@@ -150,6 +153,7 @@ export interface TableColumn<T extends Record<string, string | undefined>> {
 
 export interface TableOptions {
 	readonly borderStyle?: BorderStyle;
+	readonly maxWidth?: number;
 }
 
 /**
@@ -168,7 +172,7 @@ export interface TableOptions {
  * └────┴──────────┴──────────────┘
  * ```
  */
-export function renderTable<T extends Record<string, string | undefined>>(
+export function renderTable<T>(
 	columns: readonly TableColumn<T>[],
 	rows: readonly T[],
 	options: TableOptions = {},
@@ -179,44 +183,54 @@ export function renderTable<T extends Record<string, string | undefined>>(
 		return "";
 	}
 
-	// Compute column widths
+	// Compute column widths — capped to prevent runaway columns
+	const maxColWidth = options.maxWidth != null ? Math.floor(options.maxWidth / columns.length) : 60;
 	const colWidths: number[] = columns.map((col) => {
 		if (col.width != null) {
-			return col.width;
+			return Math.min(col.width, maxColWidth);
 		}
-		let max = visibleWidth(col.header);
+		let max = Math.min(visibleWidth(col.header), maxColWidth);
 		for (const row of rows) {
-			const cellValue = row[col.key] ?? "";
-			const cellWidth = visibleWidth(cellValue);
-			if (cellWidth > max) {
-				max = cellWidth;
-			}
+			const cellValue = String(row[col.key] ?? "");
+			const cellWidth = visibleWidth(stripAnsi(cellValue));
+			max = Math.max(max, Math.min(cellWidth, maxColWidth));
 		}
 		return max;
 	});
 
-	const totalInnerWidth =
-		colWidths.reduce((sum, w) => sum + w, 0) + (columns.length - 1) * 3 + 2;
 	const bars = buildTableBars(colWidths, border);
 
 	const headerCells = columns.map((col, idx) =>
-		padCell(col.header, colWidths[idx] ?? 0, col.align ?? "left"),
+		truncateVisible(col.header, colWidths[idx] ?? 0),
 	);
 	const headerRow = `${border.vertical} ${headerCells.join(` ${border.vertical} `)} ${border.vertical}`;
 
-	const rowLines = rows.map((row) => {
-		const cells = columns.map((col, idx) => {
-			const value = row[col.key] ?? "";
-			return padCell(value, colWidths[idx] ?? 0, col.align ?? "left");
-		});
-		return `${border.vertical} ${cells.join(` ${border.vertical} `)} ${border.vertical}`;
-	});
+	// Build row output — each logical row may span multiple visual lines
+	const rowBlocks: string[] = [];
+	for (const row of rows) {
+		const multi = columns.map((col, idx) =>
+			wordWrap(
+				String(row[col.key] ?? ""),
+				colWidths[idx] ?? 0,
+			).map((line) => padCellLine(line, colWidths[idx] ?? 0, col.align ?? "left")),
+		);
+		const maxLines = Math.max(...multi.map((l) => l.length), 1);
+		for (let lineIdx = 0; lineIdx < maxLines; lineIdx++) {
+			const cells = columns.map((_col, cIdx) => {
+				const lines = multi[cIdx] ?? [];
+				return lines[lineIdx] ?? " ".repeat(colWidths[cIdx] ?? 0);
+			});
+			rowBlocks.push(
+				`${border.vertical} ${cells.join(` ${border.vertical} `)} ${border.vertical}`,
+			);
+		}
+	}
 
 	let result = bars.top;
 	result += `\n${headerRow}`;
 	if (rows.length > 0) {
 		result += `\n${bars.mid}`;
-		result += `\n${rowLines.join("\n")}`;
+		result += `\n${rowBlocks.join("\n")}`;
 	}
 	result += `\n${bars.bottom}`;
 
@@ -243,7 +257,11 @@ function padCell(text: string, width: number, align: "left" | "right" | "center"
 	const plain = stripAnsi(text);
 	const textWidth = visibleWidth(plain);
 
-	if (textWidth >= width) {
+	if (textWidth > width) {
+		return truncateVisible(text, width, "…");
+	}
+
+	if (textWidth === width) {
 		return text;
 	}
 
@@ -257,8 +275,99 @@ function padCell(text: string, width: number, align: "left" | "right" | "center"
 			const right = remaining - left;
 			return `${" ".repeat(left)}${text}${" ".repeat(right)}`;
 		}
-		default: // left
+		default:
 			return `${text}${" ".repeat(remaining)}`;
+	}
+}
+
+/**
+ * Split `text` into lines, each no wider than `maxWidth` visual columns.
+ * Breaks on word boundaries where possible; falls back to hard-break for
+ * words that are themselves too long. ANSI escapes are preserved.
+ */
+function wordWrap(text: string, maxWidth: number): string[] {
+	if (maxWidth <= 0) return [text];
+	const plain = stripAnsi(text);
+	if (visibleWidth(plain) <= maxWidth) return [text];
+
+	const lines: string[] = [];
+	// Walk the original text tracking visual width of plain segments
+	let lineStart = 0;
+	let lineWidth = 0;
+	let lastBreak = 0; // byte offset of last word boundary in current line
+
+	for (let i = 0; i < text.length; ) {
+		const ch = text[i] ?? "";
+		const plainCh = plain[i] ?? "";
+		const chWidth = plainCh ? visibleWidth(plainCh) : 0;
+
+		if (chWidth === 0 && ch === "\x1b") {
+			// Skip ANSI escape sequence
+			const end = text.indexOf("m", i);
+			i = end === -1 ? i + 1 : end + 1;
+			continue;
+		}
+
+		// Word boundary
+		if (plainCh === " " || plainCh === "\t" || plainCh === "\n") {
+			lastBreak = i;
+		}
+
+		if (plainCh === "\n") {
+			lines.push(text.slice(lineStart, i));
+			lineStart = i + 1;
+			lineWidth = 0;
+			lastBreak = 0;
+			i++;
+			continue;
+		}
+
+		lineWidth += chWidth;
+
+		if (lineWidth > maxWidth) {
+			if (lastBreak > lineStart) {
+				lines.push(text.slice(lineStart, lastBreak));
+				lineStart = lastBreak + 1; // skip the space
+				lineWidth = 0;
+				// Re-measure from after the break
+				for (let j = lineStart; j <= i; j++) {
+					const pj = plain[j] ?? "";
+					lineWidth += pj ? visibleWidth(pj) : 0;
+				}
+				lastBreak = 0;
+			} else {
+				// No word boundary found — hard break at current position
+				lines.push(text.slice(lineStart, i));
+				lineStart = i;
+				lineWidth = chWidth;
+			}
+		}
+
+		i++;
+	}
+
+	if (lineStart < text.length) {
+		lines.push(text.slice(lineStart));
+	}
+
+	return lines.length > 0 ? lines : [text];
+}
+
+/**
+ * Pad a single cell line (used after word-wrapping).
+ * Does NOT truncate — the caller already ensured it fits.
+ */
+function padCellLine(line: string, width: number, align: "left" | "right" | "center"): string {
+	const w = visibleWidth(stripAnsi(line));
+	if (w >= width) return line;
+	const pad = width - w;
+	switch (align) {
+		case "right": return `${" ".repeat(pad)}${line}`;
+		case "center": {
+			const left = Math.floor(pad / 2);
+			return `${" ".repeat(left)}${line}${" ".repeat(pad - left)}`;
+		}
+		default: return `${line}${" ".repeat(pad)}`;
 	}
 }
 

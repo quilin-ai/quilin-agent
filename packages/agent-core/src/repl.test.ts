@@ -3087,4 +3087,170 @@ describe("startRepl", () => {
 				"Invalid session number: abc\n",
 			);
 		});
+
+
+	it("/status shows MCP server details when capabilitiesStatus is available", async () => {
+		mockQuestion
+			.mockResolvedValueOnce("/status")
+			.mockResolvedValueOnce("/exit");
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: createMockProvider((requestedModelId: string) =>
+				createMockLanguageModel({
+					provider: "deepseek",
+					modelId: requestedModelId,
+				}),
+			),
+			modelId: "deepseek-chat",
+			capabilitiesStatus: () =>
+				({
+					generation: 3,
+					booted: true,
+					watching: true,
+					watchedPaths: [],
+					inFlight: false,
+					inFlightGenerations: [],
+					lastSuccess: null,
+					lastFailure: null,
+					lastSkillsChange: null,
+					skillsStatus: null,
+					mcpReconnect: {
+						status: "pending_repl_apply",
+						reason: "applied_at_repl_turn_boundary",
+						applyState: "pending",
+						appliesAt: "repl_turn_boundary",
+						pendingReason: "waiting_for_repl_turn_boundary",
+						generation: 3,
+						requestedAtEpochMs: 1_700_000_000_000,
+						activeServerIds: ["browser"],
+						change: {
+							added: ["browser"],
+							removed: [],
+							changed: [],
+						},
+					},
+					management: {
+						config: {
+							domain: "config",
+							generation: 3,
+							inFlight: false,
+							applyState: "applied",
+							added: [],
+							removed: [],
+							changed: [],
+							error: null,
+							lastApplied: null,
+						},
+						mcp: {
+							domain: "mcp",
+							generation: 3,
+							inFlight: false,
+							applyState: "pending_repl_turn_boundary",
+							added: ["browser"],
+							removed: [],
+							changed: [],
+							error: null,
+							lastApplied: null,
+						},
+						skills: {
+							domain: "skills",
+							generation: 2,
+							inFlight: false,
+							applyState: "unchanged",
+							added: [],
+							removed: [],
+							changed: [],
+							error: null,
+							lastApplied: null,
+						},
+					},
+				}) as never,
+		});
+
+		const writes = stderrWriteSpy.mock.calls
+			.map((call) => String(call[0]))
+			.join("");
+		expect(writes).toContain("MCP Servers (1):");
+		expect(writes).toContain("browser");
+		expect(writes).toContain("Token Budget:");
+		expect(writes).toContain("system=0/1024(0%)");
+	});
+
+	it("/status shows token budget without capabilitiesStatus", async () => {
+		mockQuestion
+			.mockResolvedValueOnce("/status")
+			.mockResolvedValueOnce("/exit");
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: createMockProvider(() => createMockLanguageModel()),
+			modelId: "deepseek-chat",
+		});
+
+		const writes = stderrWriteSpy.mock.calls
+			.map((call) => String(call[0]))
+			.join("");
+		expect(writes).toContain("Token Budget: used=0/4096");
+		expect(writes).not.toContain("MCP Servers");
+	});
+
+	it("/mcp lists registered MCP servers with tool counts", async () => {
+		mockRegistryRegisterImplementation.mockResolvedValueOnce([
+			createToolWithMetadata(
+				"quilin-mem/memory_store",
+				"Store memory in the MCP server.",
+			),
+			createToolWithMetadata(
+				"quilin-mem/memory_recall",
+				"Recall memory from the MCP server.",
+			),
+		]);
+		mockQuestion
+			.mockResolvedValueOnce("/mcp")
+			.mockResolvedValueOnce("/exit");
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: createMockProvider(() => createMockLanguageModel()),
+			modelId: "deepseek-chat",
+			mcpServers: [
+				{
+					id: "quilin-mem",
+					namespace: "quilin-mem",
+					config: {
+						command: "uv",
+						args: ["run", "python", "-m", "quilin_mem"],
+					},
+				},
+			],
+		});
+
+		const writes = stderrWriteSpy.mock.calls
+			.map((call) => String(call[0]))
+			.join("");
+		expect(writes).toContain("MCP Servers (1):");
+		expect(writes).toContain("quilin-mem");
+		expect(writes).toContain("tools=2");
+	});
+
+	it("/mcp shows empty message when no servers registered", async () => {
+		mockQuestion
+			.mockResolvedValueOnce("/mcp")
+			.mockResolvedValueOnce("/exit");
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: createMockProvider(() => createMockLanguageModel()),
+			modelId: "deepseek-chat",
+		});
+
+		expect(stderrWriteSpy).toHaveBeenCalledWith(
+			"No MCP servers registered.\n",
+		);
+	});
 	});
