@@ -91,7 +91,6 @@ export async function runAgentLoop(
 		);
 	}
 	try {
-		await config.hooks?.onIdle?.();
 		while (true) {
 			if (turnCount >= maxTurns) {
 				throw new AgentLoopError(`Agent loop exceeded maxTurns=${maxTurns}`);

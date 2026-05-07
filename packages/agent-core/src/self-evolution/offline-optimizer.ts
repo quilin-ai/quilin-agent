@@ -28,6 +28,7 @@ import {
 	type ProposalRiskPreview,
 	SELF_EVOLUTION_SCHEMA_VERSION,
 	type StoredProposalRecord,
+	type StoredTrajectoryRecord,
 } from "./types.js";
 
 export interface LocalNoopOfflineOptimizerOptions {

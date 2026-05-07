@@ -20,6 +20,7 @@ function createServerEntry(id: string, namespace: string): MCPServerEntry {
 
 function createFakeClient(tools: readonly Tool[]) {
 	return {
+		isConnected: true,
 		connect: vi.fn(async () => [...tools]),
 		disconnect: vi.fn(async () => {}),
 	};

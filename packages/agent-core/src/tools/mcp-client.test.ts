@@ -149,7 +149,7 @@ describe.sequential("MCPClientManager", () => {
 		expect(queuedConnect).not.toHaveBeenCalled();
 	});
 
-	it("times out slow MCP tool calls", async () => {
+	it("times out slow MCP tool calls and returns error result instead of throwing", async () => {
 		vi.useFakeTimers();
 		const manager = new MCPClientManager();
 		const slowClient = {
@@ -158,26 +158,27 @@ describe.sequential("MCPClientManager", () => {
 
 		Object.assign(manager as object, {
 			client: slowClient,
-			isConnected: true,
+			_connected: true,
 		});
 
-		const pendingCall = (
+		const resultPromise = (
 			manager as unknown as {
 				callToolWithMetadata: (
 					name: string,
 					args: Record<string, unknown>,
-				) => Promise<unknown>;
+				) => Promise<{ content: string; isError: boolean }>;
 			}
 		).callToolWithMetadata("memory_recall", { query: "hello" });
-		const errorPromise = pendingCall.catch((reason) => reason);
 
 		await vi.advanceTimersByTimeAsync(30_001);
-		const error = await errorPromise;
-		expect(error).toBeInstanceOf(MCPTimeoutError);
-		expect(error).toBeInstanceOf(Error);
-		expect((error as Error).message).toMatch(/timed out/i);
+		const result = await resultPromise;
+		expect(result.isError).toBe(true);
+		expect(result.content).toEqual(
+			expect.stringContaining("timed out"),
+		);
 		vi.useRealTimers();
 	});
+
 
 	it("forwards ambient traceparent and request_id through MCP request metadata", async () => {
 		const manager = new MCPClientManager();
@@ -190,7 +191,7 @@ describe.sequential("MCPClientManager", () => {
 
 		Object.assign(manager as object, {
 			client,
-			isConnected: true,
+			_connected: true,
 		});
 
 		await runWithObservabilityContext(
@@ -231,7 +232,7 @@ describe.sequential("MCPClientManager", () => {
 
 		Object.assign(manager as object, {
 			client,
-			isConnected: true,
+			_connected: true,
 		});
 
 		const result = await (
@@ -273,7 +274,7 @@ describe.sequential("MCPClientManager", () => {
 		Object.assign(manager as object, {
 			client,
 			transport,
-			isConnected: true,
+			_connected: true,
 		});
 
 		const callPromise = manager.callTool("memory_recall", { query: "hello" });
@@ -318,7 +319,7 @@ describe.sequential("MCPClientManager", () => {
 
 		Object.assign(manager as object, {
 			client,
-			isConnected: true,
+			_connected: true,
 		});
 
 		const result = await (
@@ -355,7 +356,7 @@ describe.sequential("MCPClientManager", () => {
 
 		Object.assign(manager as object, {
 			client,
-			isConnected: true,
+			_connected: true,
 		});
 
 		const result = await (
@@ -386,7 +387,7 @@ describe.sequential("MCPClientManager", () => {
 
 		Object.assign(manager as object, {
 			client,
-			isConnected: true,
+			_connected: true,
 		});
 
 		const result = await (
@@ -439,7 +440,7 @@ describe.sequential("MCPClientManager", () => {
 
 		Object.assign(manager as object, {
 			client,
-			isConnected: true,
+			_connected: true,
 		});
 
 		const callToolWithMetadata = (
@@ -475,7 +476,7 @@ describe.sequential("MCPClientManager", () => {
 
 		Object.assign(manager as object, {
 			client,
-			isConnected: true,
+			_connected: true,
 		});
 
 		const result = await (

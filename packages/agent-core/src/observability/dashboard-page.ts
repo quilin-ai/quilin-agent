@@ -272,7 +272,7 @@ function renderProvidersSection(
 			(entry) => `
 		<tr>
 			<td><code>${htmlEscape(entry.provider)}</code></td>
-			<td><span class="badge ${entry.status === "available" ? "badge-ok" : "badge-err"}">${htmlEscape(entry.status)}</span></td>
+			<td><span class="badge ${entry.status === "enabled" ? "badge-ok" : "badge-err"}">${htmlEscape(entry.status)}</span></td>
 			<td>${entry.configuredSources.length > 0 ? entry.configuredSources.map((s) => htmlEscape(s)).join(", ") : "-"}</td>
 			<td>${entry.credentialStatus ?? "-"}</td>
 		</tr>`,

@@ -49,6 +49,7 @@ function createBuiltinTool(name: string): ToolWithMetadata {
 
 function createFakeClient(tools: readonly Tool[]) {
 	return {
+		isConnected: true,
 		connect: vi.fn(async (_config: MCPServerConfig) => [...tools]),
 		disconnect: vi.fn(async () => {}),
 	};
@@ -290,6 +291,7 @@ describe("MCPRegistry", () => {
 	it("keeps the existing server state when replacement connect fails", async () => {
 		const existingClient = createFakeClient([createTool("memory_recall")]);
 		const replacementClient = {
+			isConnected: true,
 			connect: vi.fn(async () => {
 				throw new Error("connect failed");
 			}),
@@ -362,6 +364,7 @@ describe("MCPRegistry", () => {
 	it("cleans registry state even when disconnect throws during unregister", async () => {
 		const disconnectError = new Error("disconnect failed");
 		const failingClient = {
+			isConnected: true,
 			connect: vi.fn(async (_config: MCPServerConfig) => [
 				createTool("memory_recall"),
 			]),
@@ -431,10 +434,12 @@ describe("MCPRegistry", () => {
 		const firstConnect = createDeferred<Tool[]>();
 		const secondConnect = createDeferred<Tool[]>();
 		const firstClient = {
+			isConnected: true,
 			connect: vi.fn(async () => firstConnect.promise),
 			disconnect: vi.fn(async () => {}),
 		};
 		const secondClient = {
+			isConnected: true,
 			connect: vi.fn(async () => secondConnect.promise),
 			disconnect: vi.fn(async () => {}),
 		};
