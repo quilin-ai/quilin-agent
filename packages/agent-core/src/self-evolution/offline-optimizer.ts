@@ -8,6 +8,7 @@ import {
 	createBeforeAfterEvaluation,
 	createGeneratedPatchProposal,
 } from "./patch-proposal.js";
+import type { JsonlProposalStore } from "./proposal-store.js";
 import {
 	normalizeEvidenceRefs,
 	sanitizeForSelfEvolution,
@@ -26,7 +27,7 @@ import {
 	type OptimizationProposalDraft,
 	type ProposalRiskPreview,
 	SELF_EVOLUTION_SCHEMA_VERSION,
-	type StoredTrajectoryRecord,
+	type StoredProposalRecord,
 } from "./types.js";
 
 export interface LocalNoopOfflineOptimizerOptions {
@@ -485,5 +486,18 @@ export class LocalNoopOfflineOptimizer {
 				),
 			noProposalReasons,
 		};
+	}
+
+	async runOptimizationCycle(
+		input: OfflineOptimizerInput,
+		proposalStore: JsonlProposalStore,
+	): Promise<readonly StoredProposalRecord[]> {
+		const result = this.optimize(input);
+		const storedProposals: StoredProposalRecord[] = [];
+		for (const proposal of result.proposals) {
+			const stored = await proposalStore.append(proposal);
+			storedProposals.push(stored);
+		}
+		return storedProposals;
 	}
 }

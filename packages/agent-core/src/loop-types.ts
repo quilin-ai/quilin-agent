@@ -41,6 +41,7 @@ export interface LoopHooks {
 		turnCount: number,
 		messages: readonly Message[],
 	) => void | Promise<void>;
+	readonly onIdle?: () => Promise<void>;
 }
 
 export async function recordLoopSpan(

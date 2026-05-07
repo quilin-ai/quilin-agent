@@ -855,4 +855,35 @@ export class JsonlProposalStore {
 			return transitioned;
 		});
 	}
+
+	async listPending(): Promise<readonly StoredProposalRecord[]> {
+		return this.query({ reviewState: "pending_review" });
+	}
+
+	async approve(
+		proposalId: string,
+		reviewer = "system",
+	): Promise<StoredProposalRecord> {
+		return this.transitionReviewState(proposalId, {
+			status: "approved",
+			reviewer,
+			reason: "Approved via review workflow.",
+		});
+	}
+
+	async reject(
+		proposalId: string,
+		reason: string,
+		reviewer = "system",
+	): Promise<StoredProposalRecord> {
+		return this.transitionReviewState(proposalId, {
+			status: "rejected",
+			reviewer,
+			reason,
+		});
+	}
+
+	async applyApproved(): Promise<readonly StoredProposalRecord[]> {
+		return this.query({ reviewState: "approved" });
+	}
 }

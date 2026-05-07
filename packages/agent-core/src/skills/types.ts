@@ -141,6 +141,13 @@ export interface LoadedSkill {
 	readonly tokenEstimate: number;
 }
 
+export interface MergeCandidate {
+	readonly skillA: SkillDescriptor;
+	readonly skillB: SkillDescriptor;
+	readonly similarity: number;
+	readonly overlapFields: readonly string[];
+}
+
 export interface PostCompactRestoreEntry {
 	readonly name: string;
 	readonly source: SkillSource;
@@ -170,6 +177,12 @@ export type SkillManageAction =
 			readonly action: "delete";
 			readonly name: string;
 			readonly reason: string;
+	  }
+	| {
+			readonly action: "merge";
+			readonly sourceName: string;
+			readonly targetName: string;
+			readonly strategy: "keep_source" | "keep_target" | "combine";
 	  };
 
 export type SkillDescriptorPatch = Omit<

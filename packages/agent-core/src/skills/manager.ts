@@ -5,6 +5,7 @@ import { estimateTokens } from "../context/tokens.js";
 import { parseSkillMarkdown } from "./frontmatter.js";
 import type {
 	LoadedSkill,
+	MergeCandidate,
 	PostCompactRestoreEntry,
 	PostCompactRestoreResult,
 	SkillDescriptor,

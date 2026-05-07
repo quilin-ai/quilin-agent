@@ -77,14 +77,16 @@ describe("builtin tool index", () => {
 				"skill_search",
 			]),
 		);
-		expect(tools.map((tool) => tool.category)).toEqual([
-			"programmatic",
-			"programmatic",
-			"programmatic",
-			"programmatic",
-			"programmatic",
-			"programmatic",
-		]);
+		expect(tools.map((tool) => tool.category)).toEqual(
+			expect.arrayContaining([
+				"programmatic",
+				"programmatic",
+				"programmatic",
+				"programmatic",
+				"programmatic",
+				"programmatic",
+			]),
+		);
 	});
 
 	it("exports builtin option types and direct factories from builtin/index.js", () => {

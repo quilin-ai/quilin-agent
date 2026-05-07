@@ -6,6 +6,10 @@ import {
 	type WriteOrigin,
 } from "../../safety/write-authority.js";
 import type { SandboxPolicy, SandboxRequest } from "../sandbox.js";
+import type {
+	SandboxCommandResult,
+	SandboxRouter,
+} from "../sandbox-router.js";
 import type { ToolWithMetadata } from "../tool-metadata.js";
 import type { ToolResult } from "../types.js";
 
@@ -509,6 +513,7 @@ export interface ShellExecToolOptions {
 	readonly env?: NodeJS.ProcessEnv;
 	readonly authority?: WriteAuthority;
 	readonly origin?: WriteOrigin;
+	readonly sandboxRouter?: SandboxRouter;
 }
 
 function buildShellExecEnv(overrides?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -520,6 +525,106 @@ function buildShellExecEnv(overrides?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 		...Object.fromEntries(baseEntries),
 		...overrides,
 	};
+}
+
+interface SandboxExecOptions {
+	readonly cwd?: string;
+	readonly timeoutMs?: number;
+	readonly origin?: WriteOrigin;
+	readonly sandboxRouter?: SandboxRouter;
+}
+
+const DEFAULT_SANDBOX_IMAGE = "docker.io/library/alpine:latest";
+const DEFAULT_SANDBOX_TTL_MS = 120_000;
+
+async function executeInSandbox(
+	command: string,
+	options: SandboxExecOptions,
+): Promise<ToolResult> {
+	if (options.sandboxRouter == null) {
+		return createErrorResult("builtin-shell-exec", {
+			error: "Sandbox execution requested but no sandbox router is configured",
+		});
+	}
+
+	const createRequest = {
+		owner: {
+			agentId: "shell_exec",
+			...(options.origin == null ? {} : { runId: `shell_exec:${options.origin}` }),
+		},
+		purpose: "tool-worker" as const,
+		image: { reference: DEFAULT_SANDBOX_IMAGE },
+		mounts: [],
+		networkPolicy: { mode: "none" as const },
+		resourcePolicy: {
+			wallClockTimeoutMs:
+				clampTimeoutMs(
+					options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+				),
+		},
+		outputPolicy: {
+			artifactsPath: "/tmp/sandbox-output",
+			maxArtifactBytes: 0,
+			includeHiddenFiles: false,
+			promotePatterns: [],
+			exposePartialOutputOnFailure: false,
+		},
+		permissionManifest: {
+			identity: { role: "worker" as const },
+			filesystem: {
+				readonly: [],
+				readwrite: ["/workspace"],
+				execute: [],
+			},
+			sessionSharing: "isolated" as const,
+			allowSecretMounts: false,
+		},
+		ttlMs: DEFAULT_SANDBOX_TTL_MS,
+	};
+
+	let session: Awaited<ReturnType<SandboxRouter["createSession"]>> | undefined;
+	try {
+		session = await options.sandboxRouter.createSession(createRequest);
+		const result: SandboxCommandResult = await session.execute({
+			argv: ["/bin/sh", "-c", command],
+			cwd: options.cwd,
+			timeoutMs: options.timeoutMs,
+		});
+
+		if (result.timedOut) {
+			return createErrorResult("builtin-shell-exec", {
+				error: `Sandbox command timed out: ${command}`,
+			});
+		}
+
+		if (result.failure != null || (result.exitCode != null && result.exitCode !== 0)) {
+			return createErrorResult("builtin-shell-exec", {
+				error: result.stderr || result.failure?.message || `Sandbox command failed: ${command}`,
+				exitCode: result.exitCode ?? 1,
+			});
+		}
+
+		return createSuccessResult("builtin-shell-exec", {
+			command,
+			exitCode: result.exitCode ?? 0,
+			stdout: result.stdout,
+			stderr: result.stderr,
+			truncated: result.outputTruncated,
+			sandbox: true,
+			sessionId: result.sessionId,
+		});
+	} catch (error) {
+		return createErrorResult("builtin-shell-exec", {
+			error:
+				error instanceof Error
+					? `Sandbox execution failed: ${error.message}`
+					: "Sandbox execution failed",
+		});
+	} finally {
+		if (session != null) {
+			await options.sandboxRouter.destroySession(session.id, "completed");
+		}
+	}
 }
 
 export function createShellExecTool(
@@ -534,6 +639,7 @@ export function createShellExecTool(
 			command: z.string(),
 			cwd: z.string().optional(),
 			timeoutMs: z.number().int().min(1).optional(),
+			sandbox: z.boolean().optional(),
 		}),
 		category: "programmatic",
 		riskLevel: "exec",
@@ -541,11 +647,23 @@ export function createShellExecTool(
 		sandboxPolicy: shellExecSandboxPolicy,
 		timeoutMs: options.defaultTimeoutMs ?? DEFAULT_TIMEOUT_MS,
 		execute: async (args) => {
-			const { command, cwd, timeoutMs } = args as {
+			const { command, cwd, timeoutMs, sandbox } = args as {
 				command: string;
 				cwd?: string;
 				timeoutMs?: number;
+				sandbox?: boolean;
 			};
+
+			const sandboxRequested =
+				sandbox === true || process.env.QUILIN_SANDBOX === "always";
+			if (sandboxRequested) {
+				return executeInSandbox(command, {
+					cwd,
+					timeoutMs,
+					origin: options.origin,
+					sandboxRouter: options.sandboxRouter,
+				});
+			}
 
 			let executable: string;
 			let argv: string[];

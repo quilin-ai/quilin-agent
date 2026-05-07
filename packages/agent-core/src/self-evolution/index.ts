@@ -1,4 +1,5 @@
 export * from "./failure-analyzer.js";
+export * from "./idle-runner.js";
 export * from "./offline-optimizer.js";
 export * from "./patch-proposal.js";
 export * from "./proposal-store.js";

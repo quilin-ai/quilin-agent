@@ -129,6 +129,11 @@ const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
 		description: "List or resume saved sessions",
 	},
 	{
+		name: "mcp",
+		signature: "/mcp",
+		description: "List registered MCP servers",
+	},
+	{
 		name: "quit",
 		signature: "/quit",
 		description: "Save and quit",
@@ -1484,7 +1489,6 @@ function matchesSlashCommandQuery(
 	return query === "" || command.name.startsWith(query);
 }
 
-function formatSlashCommandEntry(command: SlashCommandEntry): string {
 function renderSlashCommandHelp(line = ""): string {
 	const query = parseSlashCommandQuery(line);
 	const matchingCommands = SLASH_COMMANDS.filter((command) =>
@@ -1506,6 +1510,7 @@ function renderSlashCommandHelp(line = ""): string {
 		"Tip: type /help to show this list again.",
 	].join("\n");
 }
+
 interface SlashCommandHelpRenderState {
 	renderedLine: string | undefined;
 	renderedCursorPos: ReadlineDisplayPosition | undefined;
@@ -2379,7 +2384,42 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 					stderr.write("No saved sessions found.\n");
 				} else {
 					stderr.write(`${renderResumeSessionsTable(sessions)}\n`);
+					stderr.write("输入 /resume <编号> 恢复, 或 /resume latest\n");
 				}
+				continue;
+			}
+
+			if (trimmed === "/resume latest") {
+				const sessions = await checkpoint.listSessions();
+				if (sessions.length === 0) {
+					stderr.write("No saved sessions found.\n");
+					continue;
+				}
+				const latest = sessions[0] as ResumeSessionSummary;
+				const restoredState = await checkpoint.load(latest.sessionId);
+				if (restoredState == null) {
+					stderr.write(`Session could not be loaded.\n`);
+					continue;
+				}
+				state = createState([...messages], {
+					...state,
+					isTerminal: true,
+					lastActiveAt: new Date().toISOString(),
+				});
+				await checkpoint.save(state);
+				const restoredMessages =
+					restoredState.messages[0]?.role === "system"
+						? restoredState.messages.slice(1)
+						: [...restoredState.messages];
+				messages.splice(0, messages.length, ...restoredMessages);
+				streamRenderState = createStreamRenderState();
+				runtimeSurface.sessionAssembler.resetSession();
+				state = createState([...messages], {
+					...restoredState,
+					messages: [...messages],
+					isTerminal: false,
+					lastActiveAt: new Date().toISOString(),
+				});
 				continue;
 			}
 

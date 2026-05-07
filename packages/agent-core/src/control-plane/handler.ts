@@ -4,6 +4,7 @@ import {
 	type ServerResponse,
 } from "node:http";
 import type { AddressInfo } from "node:net";
+import { renderControlPlaneDashboardHtml } from "../observability/dashboard-page.js";
 import {
 	type BuildControlPlaneSnapshotOptions,
 	buildControlPlaneSnapshot,
