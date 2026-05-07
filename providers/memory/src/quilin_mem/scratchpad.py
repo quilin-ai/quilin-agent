@@ -25,7 +25,7 @@ def _resolve_db_path(db_path: str | None) -> str:
         return ":memory:"
 
     return os.environ.get(
-        "OMNIMEM_SCRATCHPAD_PATH",
+        "QUILIN_MEM_SCRATCHPAD_PATH",
         str(Path.home() / ".quilin" / "memory-scratchpad.db"),
     )
 

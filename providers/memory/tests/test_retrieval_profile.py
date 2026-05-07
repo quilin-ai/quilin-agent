@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from omnimem.retrieval_profile import (
+from quilin_mem.retrieval_profile import (
     DEFAULT_RETRIEVAL_WEIGHTS,
     RetrievalProfileHealthComparison,
     RetrievalProfileHealthSnapshot,
@@ -22,7 +22,7 @@ from omnimem.retrieval_profile import (
     retrieval_profile_health_snapshot,
     summarize_retrieval_profile_health_comparisons,
 )
-from omnimem.types import MemoryItem
+from quilin_mem.types import MemoryItem
 
 RetrievalProfileHealthSnapshotPairInput = (
     RetrievalProfileHealthSnapshotPair

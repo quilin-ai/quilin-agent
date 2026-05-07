@@ -1344,7 +1344,7 @@ describe("startRepl", () => {
 		mockQuestion.mockResolvedValueOnce("/exit");
 		mockRegistryRegisterImplementation.mockResolvedValueOnce([
 			createToolWithMetadata(
-				"omnimem/memory_store",
+				"quilin-mem/memory_store",
 				"Store memory in the MCP server.",
 			),
 		]);
@@ -1356,22 +1356,22 @@ describe("startRepl", () => {
 			modelId: "deepseek-chat",
 			mcpServers: [
 				{
-					id: "omnimem",
-					namespace: "omnimem",
+					id: "quilin-mem",
+					namespace: "quilin-mem",
 					config: {
 						command: "uv",
-						args: ["run", "python", "-m", "omnimem"],
+						args: ["run", "python", "-m", "quilin_mem"],
 					},
 				},
 			],
 		});
 
 		expect(mockRegistryRegister).toHaveBeenCalledWith({
-			id: "omnimem",
-			namespace: "omnimem",
+			id: "quilin-mem",
+			namespace: "quilin-mem",
 			config: {
 				command: "uv",
-				args: ["run", "python", "-m", "omnimem"],
+				args: ["run", "python", "-m", "quilin_mem"],
 			},
 		});
 		expect(mockCheckpointSave).toHaveBeenCalledWith({
@@ -1720,8 +1720,8 @@ describe("startRepl", () => {
 			.mockResolvedValueOnce("/exit");
 		mockRunAgentLoop.mockResolvedValue("ok");
 		mockRegistryRegisterImplementation.mockResolvedValueOnce([
-			createToolWithMetadata("omnimem/memory_recall", "Recall memory"),
-			createToolWithMetadata("omnimem/memory_store", "Store memory"),
+			createToolWithMetadata("quilin-mem/memory_recall", "Recall memory"),
+			createToolWithMetadata("quilin-mem/memory_store", "Store memory"),
 		]);
 
 		const { startRepl } = await import("./repl.js");
@@ -1731,8 +1731,8 @@ describe("startRepl", () => {
 			modelId: "deepseek-chat",
 			mcpServers: [
 				{
-					id: "omnimem",
-					namespace: "omnimem",
+					id: "quilin-mem",
+					namespace: "quilin-mem",
 					config: { command: "memory", args: [] },
 				},
 			],
@@ -1747,14 +1747,14 @@ describe("startRepl", () => {
 			expect.objectContaining({
 				tools: [
 					expect.objectContaining({ name: "file_read" }),
-					expect.objectContaining({ name: "omnimem/memory_recall" }),
+					expect.objectContaining({ name: "quilin-mem/memory_recall" }),
 				],
 			}),
 			expect.any(Array),
 		);
 		expect(mockRunAgentLoop.mock.calls[0]?.[0]?.tools).not.toEqual(
 			expect.arrayContaining([
-				expect.objectContaining({ name: "omnimem/memory_store" }),
+				expect.objectContaining({ name: "quilin-mem/memory_store" }),
 				expect.objectContaining({ name: "shell_exec" }),
 			]),
 		);

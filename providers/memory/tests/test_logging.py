@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from omnimem import logging as logging_module
+from quilin_mem import logging as logging_module
 
 
 def test_configure_once_returns_when_structlog_already_configured(monkeypatch) -> None:

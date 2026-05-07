@@ -7,10 +7,10 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from omnimem.retriever import MemoryRetriever
-from omnimem.store import OmniMemStore
-from omnimem.types import MemoryItem
-from omnimem.working import WorkingMemory
+from quilin_mem.retriever import MemoryRetriever
+from quilin_mem.store import quilin-memStore
+from quilin_mem.types import MemoryItem
+from quilin_mem.working import WorkingMemory
 
 LONGMEMEVAL_BLOCKED_REASON = (
     "LongMemEval is not vendored in this repository and this M0.10 harness must "
@@ -85,7 +85,7 @@ async def run_baseline(
     if iterations < 1:
         raise ValueError("iterations must be at least 1")
 
-    store = OmniMemStore(db_path=":memory:")
+    store = quilin-memStore(db_path=":memory:")
     working = WorkingMemory(k=5)
     await _seed(store, working, sample_size=sample_size)
     retriever = MemoryRetriever(store, working=working)
@@ -120,7 +120,7 @@ async def run_baseline(
 
 
 async def _seed(
-    store: OmniMemStore,
+    store: quilin-memStore,
     working: WorkingMemory,
     *,
     sample_size: int,

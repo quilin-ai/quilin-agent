@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from omnimem.idle_budget import (
+from quilin_mem.idle_budget import (
     DEFAULT_IDLE_LEASE_TTL_SECONDS,
     IDLE_EVOLUTION_DEFERRED_REASON,
     IdleBudgetDenied,

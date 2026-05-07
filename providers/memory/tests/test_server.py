@@ -9,10 +9,10 @@ from collections.abc import AsyncIterator
 import pytest
 from mcp.types import CallToolRequest, CallToolRequestParams
 
-from omnimem import server as server_module
-from omnimem.scratchpad import ScratchpadStore
-from omnimem.server import create_server
-from omnimem.store import OmniMemStore
+from quilin_mem import server as server_module
+from quilin_mem.scratchpad import ScratchpadStore
+from quilin_mem.server import create_server
+from quilin_mem.store import QuilinMemStore
 
 SEMANTIC_METADATA = {
     "schema_version": 1,
@@ -92,8 +92,8 @@ async def _call_tool_request(
 
 
 @pytest.fixture
-async def store() -> AsyncIterator[OmniMemStore]:
-    async with OmniMemStore(db_path=":memory:") as bound_store:
+async def store() -> AsyncIterator[QuilinMemStore]:
+    async with QuilinMemStore(db_path=":memory:") as bound_store:
         yield bound_store
 
 
@@ -104,7 +104,7 @@ async def scratchpad_store() -> AsyncIterator[ScratchpadStore]:
 
 
 @pytest.fixture
-def server(store: OmniMemStore, scratchpad_store: ScratchpadStore):
+def server(store: QuilinMemStore, scratchpad_store: ScratchpadStore):
     return create_server(store, scratchpad_store)
 
 
@@ -310,7 +310,7 @@ class _RawContext:
 
 
 async def test_memory_recall_parses_traceparent_metadata(
-    store: OmniMemStore,
+    store: QuilinMemStore,
 ) -> None:
     await server_module._memory_store_with_store(store, "trace me")
     trace_context = server_module._trace_context_from_context(
@@ -340,7 +340,7 @@ async def test_memory_recall_parses_traceparent_metadata(
 
 
 async def test_memory_store_returns_child_traceparent(
-    store: OmniMemStore,
+    store: QuilinMemStore,
 ) -> None:
     parent = server_module.parse_traceparent(
         f"00-{'e' * 32}-{'f' * 16}-01",
@@ -520,7 +520,7 @@ def test_memory_store_metadata_validation_boundaries() -> None:
         server_module._validate_tool_metadata({"source_layers": ["x" * 512] * 9})
 
 
-def test_request_metadata_and_context_store_edge_cases(store: OmniMemStore) -> None:
+def test_request_metadata_and_context_store_edge_cases(store: QuilinMemStore) -> None:
     assert server_module._request_meta_to_dict(_RawContext(None)) == {}
     assert server_module._request_meta_to_dict(_RawContext({"traceparent": "tp"})) == {
         "traceparent": "tp"
@@ -539,7 +539,7 @@ def test_request_metadata_and_context_store_edge_cases(store: OmniMemStore) -> N
     )
 
 
-async def test_store_lifespan_yields_injected_store(store: OmniMemStore) -> None:
+async def test_store_lifespan_yields_injected_store(store: QuilinMemStore) -> None:
     lifespan = server_module._build_store_lifespan(store)
 
     async with lifespan(object()) as context:
@@ -557,7 +557,7 @@ async def test_legacy_helpers_use_ephemeral_test_store(monkeypatch: pytest.Monke
 
 
 async def test_create_server_lazily_creates_scratchpad_store(
-    store: OmniMemStore,
+    store: QuilinMemStore,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     created: list[str] = []
@@ -607,7 +607,7 @@ def test_main_configures_logging_and_runs_stdio(monkeypatch: pytest.MonkeyPatch)
 
     assert calls == [
         ("configure", None),
-        ("omnimem server starting", {"transport": "stdio"}),
+        ("quilin-mem server starting", {"transport": "stdio"}),
         ("run", "stdio"),
     ]
 
@@ -662,7 +662,7 @@ async def test_memory_recall_tool_adds_retrieval_envelope_and_preserves_memory_s
 
 
 async def test_memory_recall_applies_user_retrieval_profile(
-    store: OmniMemStore,
+    store: QuilinMemStore,
 ) -> None:
     await server_module._memory_store_with_store(
         store,
@@ -690,7 +690,7 @@ async def test_memory_recall_applies_user_retrieval_profile(
 
 
 async def test_memory_recall_filters_user_records_before_profile_weighting(
-    store: OmniMemStore,
+    store: QuilinMemStore,
 ) -> None:
     await server_module._memory_store_with_store(
         store,
@@ -719,7 +719,7 @@ async def test_memory_recall_filters_user_records_before_profile_weighting(
 
 
 async def test_memory_recall_filters_user_and_session_records_before_profile_weighting(
-    store: OmniMemStore,
+    store: QuilinMemStore,
 ) -> None:
     await server_module._memory_store_with_store(
         store,
@@ -755,14 +755,14 @@ async def test_memory_recall_filters_user_and_session_records_before_profile_wei
 
 
 async def test_memory_recall_error_path(
-    store: OmniMemStore,
+    store: QuilinMemStore,
     server: object,
     monkeypatch: object,
 ) -> None:
     """memory_recall should surface a sanitized MCP error result."""
 
     async def _raise_on_recall(query: str) -> list:
-        raise sqlite3.OperationalError("no such table: memories at /tmp/omnimem.db")
+        raise sqlite3.OperationalError("no such table: memories at /tmp/quilin-mem.db")
 
     monkeypatch.setattr(store, "recall", _raise_on_recall)  # type: ignore[attr-defined]
 
@@ -770,11 +770,11 @@ async def test_memory_recall_error_path(
     assert result.root.isError is True
     assert "memory_recall failed" in result.root.content[0].text
     assert "memories" not in result.root.content[0].text
-    assert "/tmp/omnimem.db" not in result.root.content[0].text
+    assert "/tmp/quilin-mem.db" not in result.root.content[0].text
 
 
 async def test_memory_store_error_path(
-    store: OmniMemStore,
+    store: QuilinMemStore,
     server: object,
     monkeypatch: object,
 ) -> None:
@@ -801,8 +801,8 @@ async def test_memory_store_error_path(
 
 
 async def test_create_server_uses_injected_store_isolation() -> None:
-    left_server = create_server(OmniMemStore(db_path=":memory:"))
-    right_server = create_server(OmniMemStore(db_path=":memory:"))
+    left_server = create_server(QuilinMemStore(db_path=":memory:"))
+    right_server = create_server(QuilinMemStore(db_path=":memory:"))
 
     await left_server.call_tool(
         "memory_store",
@@ -827,12 +827,12 @@ async def test_create_server_uses_injected_store_isolation() -> None:
 
 
 async def test_store_lifespan_initializes_store_off_event_loop(monkeypatch: object) -> None:
-    class SlowStore(OmniMemStore):
+    class SlowStore(QuilinMemStore):
         def __init__(self) -> None:
             time.sleep(0.05)
             super().__init__(db_path=":memory:")
 
-    monkeypatch.setattr(server_module, "OmniMemStore", SlowStore)
+    monkeypatch.setattr(server_module, "QuilinMemStore", SlowStore)
     lifespan = server_module._build_store_lifespan(None)  # type: ignore[attr-defined]
     observed: list[str] = []
 
@@ -851,7 +851,7 @@ async def test_store_lifespan_initializes_store_off_event_loop(monkeypatch: obje
 
 @pytest.mark.parametrize("legacy_tier", ["short", "long"])
 async def test_create_server_rejects_invalid_tier_enum(legacy_tier: str) -> None:
-    server = create_server(OmniMemStore(db_path=":memory:"))
+    server = create_server(QuilinMemStore(db_path=":memory:"))
 
     with pytest.raises(Exception, match="tier"):
         await server.call_tool(

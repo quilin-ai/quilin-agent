@@ -400,9 +400,9 @@ export function createDefaultCapabilitiesConfig(
 		schema_version: CAPABILITIES_SCHEMA_VERSION,
 		mcpServers: existsSync(memoryProviderCwd)
 			? {
-					omnimem: {
+					"quilin-mem": {
 						command: "uv",
-						args: ["run", "python", "-m", "omnimem"],
+						args: ["run", "python", "-m", "quilin_mem"],
 						cwd: memoryProviderCwd,
 					},
 				}

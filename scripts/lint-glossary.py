@@ -115,10 +115,10 @@ CHECKS: tuple[Check, ...] = (
         code="G-05",
         # Public prose must use quilin-mem; runtime identifiers remain a later QUI-88 phase.
         pattern=re.compile(
-            r"\b(OmniMem|Omni Memory|OmniMemory|omnimem|omni-mem|omni_mem)\b",
+            r"\b(?:quilin-mem|quilin_mem)\b"  # memory OS: correct forms only,
             re.IGNORECASE,
         ),
-        reason="legacy memory OS term: 对外写作统一为 `quilin-mem` — glossary §一",
+        reason="memory OS naming: use `quilin-mem` (prose) or `quilin_mem` (code) — glossary §一",
     ),
 )
 
@@ -138,15 +138,15 @@ DIRECTORY_PATH_RE = re.compile(
     r"(?<!\w)(?:\.{0,2}/)?(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]*/?"
 )
 ENV_IDENTIFIER_RE = re.compile(
-    r"\b[A-Z0-9_]*(?:OMNIMEM|OMNI_MEM|OMNI_MEMORY)[A-Z0-9_]*\b"
+    r"\b[A-Z0-9_]*(?:QUILIN_MEM|QUILIN_MEMORY)[A-Z0-9_]*\b"
 )
 PYTHON_IMPORT_RE = re.compile(
-    r"\b(?:from\s+omnimem(?:\.[A-Za-z_]\w*)*\s+import|import\s+omnimem(?:\.[A-Za-z_]\w*)*)\b"
+    r"\b(?:from\s+quilin_mem(?:\.[A-Za-z_]\w*)*\s+import|import\s+quilin_mem(?:\.[A-Za-z_]\w*)*)\b"
 )
-PYTHON_MODULE_CMD_RE = re.compile(r"\bpython(?:3)?\s+-m\s+omnimem\b")
+PYTHON_MODULE_CMD_RE = re.compile(r"\bpython(?:3)?\s+-m\s+quilin_mem\b")
 PACKAGE_IDENTIFIER_RE = re.compile(
-    r"\b(?:[a-z0-9]+[-_])+(?:omnimem|omni-mem|omni_mem)\b"
-    r"|\b(?:omnimem|omni-mem|omni_mem)(?:[-_][a-z0-9]+)+\b",
+    r"\b(?:[a-z0-9]+[-_])+(?:quilin-mem|quilin_mem)\b"
+    r"|\b(?:quilin-mem|quilin_mem)(?:[-_][a-z0-9]+)+\b",
     re.IGNORECASE,
 )
 

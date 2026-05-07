@@ -392,7 +392,7 @@ CLI 参数（--model gpt-4o）
 - 示例：
   - `OMNI_LLM_DEFAULT_MODEL` → `config.llm.default_model`
   - `OMNI_SANDBOX_TYPE` → `config.sandbox.type`
-  - `OMNI_MEMORY_MID_TERM_BACKEND` → `config.memory.mid_term.backend`
+  - `QUILIN_MEM_MID_TERM_BACKEND` → `config.memory.mid_term.backend`
 - API Key 专用环境变量（不遵循前缀约定）：
   - `ANTHROPIC_API_KEY`、`OPENAI_API_KEY`、`E2B_API_KEY`
 

@@ -3,16 +3,16 @@ from __future__ import annotations
 import time
 from datetime import UTC, datetime
 
-from omnimem.kg import TemporalKnowledgeGraph
-from omnimem.kg_validation import KGSearchResult
-from omnimem.retriever import MemoryRetriever
-from omnimem.store import OmniMemStore
-from omnimem.types import MemoryItem
-from omnimem.working import WorkingMemory
+from quilin_mem.kg import TemporalKnowledgeGraph
+from quilin_mem.kg_validation import KGSearchResult
+from quilin_mem.retriever import MemoryRetriever
+from quilin_mem.store import QuilinMemStore
+from quilin_mem.types import MemoryItem
+from quilin_mem.working import WorkingMemory
 
 
 async def test_bm25_fts_retriever_returns_episodic_without_vectors() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     await store.add(
         MemoryItem(
             content="Decision: use SQLite FTS5 BM25 for local memory recall",
@@ -50,7 +50,7 @@ async def test_bm25_fts_retriever_returns_episodic_without_vectors() -> None:
 
 
 async def test_bm25_fts_retriever_respects_layer_and_metadata_filters() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     await store.add(
         MemoryItem(
             content="checkpoint alpha database migration",
@@ -75,7 +75,7 @@ async def test_bm25_fts_retriever_respects_layer_and_metadata_filters() -> None:
 
 
 async def test_bm25_fts_retriever_p95_under_100ms_with_1000_items() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     for index in range(1_000):
         marker = "target_quilin_latency" if index == 777 else "filler"
         await store.add(
@@ -101,7 +101,7 @@ async def test_bm25_fts_retriever_p95_under_100ms_with_1000_items() -> None:
 
 
 async def test_fused_retrieval_prepends_working_then_ranked_episodic() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     await store.add(
         MemoryItem(
             content="episodic decision quilin_m0_database use Postgres",
@@ -147,7 +147,7 @@ async def test_fused_retrieval_prepends_working_then_ranked_episodic() -> None:
 
 
 async def test_fused_retrieval_applies_task_context_filters_to_episodic() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     await store.add(
         MemoryItem(
             content="checkpoint alpha replay target",
@@ -177,7 +177,7 @@ async def test_fused_retrieval_applies_task_context_filters_to_episodic() -> Non
 
 
 async def test_fused_retrieval_applies_user_filters_to_working_memory() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     working = WorkingMemory(k=3)
     await working.push(
         MemoryItem(
@@ -300,7 +300,7 @@ class InjectingReranker:
 
 
 async def test_hybrid_retrieval_fuses_bm25_vector_and_kg_results() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     now = datetime(2026, 4, 24, tzinfo=UTC)
     episodic = MemoryItem(
         id="memory-episodic-1",
@@ -370,7 +370,7 @@ async def test_hybrid_retrieval_fuses_bm25_vector_and_kg_results() -> None:
 
 
 async def test_hybrid_retrieval_applies_user_retrieval_profile() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     await store.add(
         MemoryItem(
             id="bm25",
@@ -406,7 +406,7 @@ async def test_hybrid_retrieval_applies_user_retrieval_profile() -> None:
 
 
 async def test_hybrid_retrieval_filters_vector_items_by_user_context() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     vector = StubVectorStore(
         [
             MemoryItem(
@@ -446,7 +446,7 @@ async def test_hybrid_retrieval_filters_vector_items_by_user_context() -> None:
 
 
 async def test_hybrid_retrieval_filters_kg_items_by_user_context() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     now = datetime(2026, 4, 24, tzinfo=UTC)
     kg = StubKnowledgeGraph(
         [
@@ -495,7 +495,7 @@ async def test_hybrid_retrieval_filters_kg_items_by_user_context() -> None:
 
 
 async def test_hybrid_retrieval_filters_kg_source_before_limit() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     now = datetime(2026, 4, 24, tzinfo=UTC)
     kg = TemporalKnowledgeGraph(db_path=":memory:")
     for index in range(20):
@@ -530,7 +530,7 @@ async def test_hybrid_retrieval_filters_kg_source_before_limit() -> None:
 
 
 async def test_hybrid_retrieval_filters_reranker_output_by_user_context() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     await store.add(
         MemoryItem(
             id="bm25-user-1",
@@ -552,7 +552,7 @@ async def test_hybrid_retrieval_filters_reranker_output_by_user_context() -> Non
 
 
 async def test_hybrid_retrieval_degrades_when_vector_kg_and_reranker_fail() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     await store.add(
         MemoryItem(
             content="episodic decision quilin_m0_database use Postgres",

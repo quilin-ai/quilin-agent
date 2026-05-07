@@ -21,13 +21,13 @@ describe("createToolGuidanceSection", () => {
 			...baseContext,
 			availableToolDescriptors: [
 				{
-					name: "omnimem/memory_recall",
+					name: "quilin-mem/memory_recall",
 					description: "Recall memory.",
 					category: "programmatic",
 					riskLevel: "read",
 				},
 				{
-					name: "omnimem/memory_store",
+					name: "quilin-mem/memory_store",
 					description: "Store memory.",
 					category: "programmatic",
 					riskLevel: "write",
@@ -54,20 +54,26 @@ describe("createToolGuidanceSection", () => {
 		});
 
 		expect(content).toContain("Memory guidelines:");
-		expect(content).toContain("call omnimem/memory_store immediately");
+		expect(content).toContain("call quilin-mem/memory_store immediately");
 		expect(content).toContain(
 			'first-person words ("I", "me", "my", "我", "我的")',
 		);
 		expect(content).toContain('If the user says "你是小明，我是孟哥"');
 		expect(content).toContain('do not store "用户叫小明"');
 		expect(content).toContain("metadata.source and metadata.stability_reason");
-		expect(content).toContain("call omnimem/memory_recall with a broad query");
+		expect(content).toContain(
+			"call quilin-mem/memory_recall with a broad query",
+		);
 		expect(content).toContain("## Programmatic Tools");
 		expect(content).toContain(
 			"- file_read (read): Read a file with numbered lines.",
 		);
-		expect(content).toContain("- omnimem/memory_recall (read): Recall memory.");
-		expect(content).toContain("- omnimem/memory_store (write): Store memory.");
+		expect(content).toContain(
+			"- quilin-mem/memory_recall (read): Recall memory.",
+		);
+		expect(content).toContain(
+			"- quilin-mem/memory_store (write): Store memory.",
+		);
 		expect(content).toContain("- shell_exec (exec): Execute a shell command.");
 		expect(content).toContain("## Interactive Tools");
 		expect(content).toContain(

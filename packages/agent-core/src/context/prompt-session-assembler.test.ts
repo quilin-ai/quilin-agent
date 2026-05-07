@@ -155,18 +155,18 @@ describe("PromptSessionAssembler", () => {
 			sessionStartedAt: "2026-04-21T09:00:00.000Z",
 			now: () => new Date("2026-04-21T10:00:00.000Z"),
 			getAvailableTools: () => [
-				"omnimem/memory_recall",
-				"omnimem/memory_store",
+				"quilin-mem/memory_recall",
+				"quilin-mem/memory_store",
 			],
 			getAvailableToolDescriptors: () => [
 				{
-					name: "omnimem/memory_recall",
+					name: "quilin-mem/memory_recall",
 					description: "Recall memory.",
 					category: "programmatic",
 					riskLevel: "read",
 				},
 				{
-					name: "omnimem/memory_store",
+					name: "quilin-mem/memory_store",
 					description: "Store memory.",
 					category: "programmatic",
 					riskLevel: "write",
@@ -187,7 +187,7 @@ describe("PromptSessionAssembler", () => {
 			'do not store "用户叫小明"',
 		);
 		expect(outbound.messages[0]?.content).toContain(
-			"call omnimem/memory_store immediately",
+			"call quilin-mem/memory_store immediately",
 		);
 		expect(outbound.messages.at(-1)?.content).toContain(
 			"你是小明！我是孟哥！记住",

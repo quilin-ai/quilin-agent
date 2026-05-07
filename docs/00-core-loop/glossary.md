@@ -8,7 +8,7 @@
 |------|---------|---------------|------|
 | 项目名 | **Quilin Agent** / **Quilin** | quilin-agent（code id 除外）、Qilin Agent、麒麟 Agent（非项目名） | 中文「麒麟」仅作文化释义；项目标识一律用 `Quilin` |
 | 项目词源 | `Quilt` + `Qilin` = **Quilin** | — | readme §「命名由来」 |
-| 核心记忆系统 | **quilin-mem** | OmniMem、Omni Memory、OmniMemory、omnimem、omni-mem | 对外 prose / docs / site 一律用 `quilin-mem`；legacy Python package/import、MCP module name、env prefix 兼容项留到 QUI-88 后续阶段迁移 |
+| 核心记忆系统 | **quilin-mem** | （旧名已于 2026-05-07 全部迁移） | 全项目统一使用 `quilin-mem` / `quilin_mem`；命名统一已全部完成 |
 | 记忆层级 | **working / episodic / semantic / skill**（小写） | short / mid / long / ultra、Working / Episodic / Semantic / Skill | FEA-04 收敛：quilin-mem tier 词表统一为 working/episodic/semantic/skill；config key 也用小写 |
 | Skill 按需加载工具 | **`skill_view`** | `skill_load`、`skill_read`、`loadSkill` | C-02 收敛；Skill 通过名字触发加载 |
 | Skill 管理工具 | **`skill_manage`** | `skill_cud`、`skills_guard` | `skills_guard` 专指 B3b 安全校验层，不是工具名 |
@@ -52,7 +52,7 @@
 
 | 标签 | 含义 | 证据口径 |
 |------|------|------|
-| ✅ 已实现 | 代码已合入 `packages/` 或 `providers/` | 以 `packages/agent-core/src/index.ts` 或 `providers/memory/src/omnimem/server.py` 等当前代码路径为准 |
+| ✅ 已实现 | 代码已合入 `packages/` 或 `providers/` | 以 `packages/agent-core/src/index.ts` 或 `providers/memory/src/quilin_mem/server.py` 等当前代码路径为准 |
 | 🚧 进行中 | 有活跃 Iter 票据且代码部分落地 | 以 Linear `QUI-` 记录加当前代码路径为准 |
 | 💭 未开始 | 仅 spec，无代码 | 以对应 `docs/<component>/README.md` 当前说明为准 |
 

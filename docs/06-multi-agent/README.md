@@ -1,8 +1,8 @@
 # 多 Agent 工程（Multi-Agent Engineering）
 
-> **实现状态（2026-04-30 校准）**
-> - ✅ **已实现**：Planning delegation policy / long-task integration 的规则层已在 Iter C 落地；同进程 Supervisor/Sub-Agent runtime 尚未落地。
-> - 🚧 **部分实现 / 延期**：Supervisor 规则与进度协议仍是 spec；mesh 依赖 11-agent-mesh，Iter D 只落 Rust stub，不启用跨进程通信。
+> **实现状态（2026-05-07 校准）**
+> - ✅ **已实现**：`InProcessSupervisorRuntime` 已落地（`supervisor-runtime.ts` + `supervisor-progress.ts`），支持子 Agent 生命周期（append/send/interrupt/pause/resume/cancel/wake/defer/list/query）、heartbeat/stale 检测、recovery context 保留、`needsDecision()`/`reportBlocked()` 主动上报；Control Plane API 提供 `snapshot()`；REPL `/agents` 命令展示 completed/blocked/needs_decision 状态。
+> - 🚧 **部分实现 / 延期**：跨进程/跨网络 remote supervisor 尚未实现；Agent 发现/注册机制未实现；mesh 依赖 11-agent-mesh，Iter D 只落 Rust stub，不启用跨进程通信。
 > - Linear 后续项：[QUI-9](https://linear.app/quilin-agent/issue/QUI-9/iter-f-implement-multi-agent-supervisor-runtime)；Agent Mesh runtime 见 [QUI-10](https://linear.app/quilin-agent/issue/QUI-10/iter-f-land-agent-mesh-runtime-path)。
 
 > **ADR-001 对齐说明**：同构 Agent 在 TS 进程内 spawn；异构 Agent 通过 Agent Mesh 通信（见 [11-agent-mesh](../11-agent-mesh/README.md)）。mesh 上怎么做事情由用户决定，Quilin 不设计编排策略。本文档中的 Python 代码示例仅表达设计意图。`quilin/` 路径为规划参考。详见 [Core Loop](../00-core-loop/README.md)。

@@ -700,7 +700,7 @@ describe("VercelLLMClient", () => {
 				toolCalls: [
 					{
 						toolCallId: "call-1",
-						toolName: "omnimem_memory_recall",
+						toolName: "quilin-mem_memory_recall",
 						input: { query: "我是谁" },
 					},
 				],
@@ -709,7 +709,7 @@ describe("VercelLLMClient", () => {
 
 		const client = new VercelLLMClient(model);
 		const namespacedTool = {
-			name: "omnimem/memory_recall",
+			name: "quilin-mem/memory_recall",
 			description: "Recall memory",
 			parameters: z.object({ query: z.string() }),
 			execute: vi.fn(),
@@ -728,7 +728,7 @@ describe("VercelLLMClient", () => {
 		expect(generateText).toHaveBeenCalledWith(
 			expect.objectContaining({
 				tools: {
-					omnimem_memory_recall: {
+					"quilin-mem_memory_recall": {
 						description: "Recall memory",
 						inputSchema: namespacedTool.parameters,
 					},
@@ -738,7 +738,7 @@ describe("VercelLLMClient", () => {
 		expect(result.toolCalls).toEqual([
 			{
 				id: "call-1",
-				name: "omnimem/memory_recall",
+				name: "quilin-mem/memory_recall",
 				arguments: { query: "我是谁" },
 			},
 		]);
@@ -844,7 +844,7 @@ describe("VercelLLMClient", () => {
 
 		const client = new VercelLLMClient(model);
 		const namespacedTool = {
-			name: "omnimem/memory_recall",
+			name: "quilin-mem/memory_recall",
 			description: "Recall memory",
 			parameters: z.object({ query: z.string() }),
 			execute: vi.fn(),
@@ -859,7 +859,7 @@ describe("VercelLLMClient", () => {
 					toolCalls: [
 						{
 							id: "call-1",
-							name: "omnimem/memory_recall",
+							name: "quilin-mem/memory_recall",
 							arguments: { query: "identity" },
 						},
 					],
@@ -867,7 +867,7 @@ describe("VercelLLMClient", () => {
 				{
 					role: "tool",
 					toolCallId: "call-1",
-					name: "omnimem/memory_recall",
+					name: "quilin-mem/memory_recall",
 					content: JSON.stringify({
 						records: [{ id: "mem-1", content: "我是麒麟" }],
 					}),
@@ -891,7 +891,7 @@ describe("VercelLLMClient", () => {
 							{
 								type: "tool-call",
 								toolCallId: "call-1",
-								toolName: "omnimem_memory_recall",
+								toolName: "quilin-mem_memory_recall",
 								input: { query: "identity" },
 							},
 						],
@@ -902,7 +902,7 @@ describe("VercelLLMClient", () => {
 							{
 								type: "tool-result",
 								toolCallId: "call-1",
-								toolName: "omnimem_memory_recall",
+								toolName: "quilin-mem_memory_recall",
 								output: {
 									type: "json",
 									value: {
@@ -914,7 +914,7 @@ describe("VercelLLMClient", () => {
 					},
 				],
 				tools: {
-					omnimem_memory_recall: {
+					"quilin-mem_memory_recall": {
 						description: "Recall memory",
 						inputSchema: namespacedTool.parameters,
 					},
@@ -945,7 +945,7 @@ describe("VercelLLMClient", () => {
 					toolCalls: [
 						{
 							id: "call-1",
-							name: "omnimem/memory_recall",
+							name: "quilin-mem/memory_recall",
 							arguments: { query: "identity" },
 						},
 					],
@@ -953,7 +953,7 @@ describe("VercelLLMClient", () => {
 				{
 					role: "tool",
 					toolCallId: "call-1",
-					name: "omnimem/memory_recall",
+					name: "quilin-mem/memory_recall",
 					content: JSON.stringify({ records: [] }),
 				},
 				{ role: "user", content: "继续" },
@@ -975,7 +975,7 @@ describe("VercelLLMClient", () => {
 							{
 								type: "tool-call",
 								toolCallId: "call-1",
-								toolName: "omnimem_memory_recall",
+								toolName: "quilin-mem_memory_recall",
 								input: { query: "identity" },
 							},
 						],
@@ -986,7 +986,7 @@ describe("VercelLLMClient", () => {
 							{
 								type: "tool-result",
 								toolCallId: "call-1",
-								toolName: "omnimem_memory_recall",
+								toolName: "quilin-mem_memory_recall",
 								output: { type: "json", value: { records: [] } },
 							},
 						],
@@ -1938,18 +1938,18 @@ describe("StreamingLLMClient", () => {
 					yield {
 						type: "tool-input-start",
 						id: "call-1",
-						toolName: "omnimem_memory_recall",
+						toolName: "quilin-mem_memory_recall",
 					};
 					yield {
 						type: "tool-call",
 						toolCallId: "call-1",
-						toolName: "omnimem_memory_recall",
+						toolName: "quilin-mem_memory_recall",
 						input: { query: "我是谁" },
 					};
 					yield {
 						type: "tool-result",
 						toolCallId: "call-1",
-						toolName: "omnimem_memory_recall",
+						toolName: "quilin-mem_memory_recall",
 						output: { records: [] },
 					};
 				})(),
@@ -1961,7 +1961,7 @@ describe("StreamingLLMClient", () => {
 				toolCalls: Promise.resolve([
 					{
 						toolCallId: "call-1",
-						toolName: "omnimem_memory_recall",
+						toolName: "quilin-mem_memory_recall",
 						input: { query: "我是谁" },
 					},
 				]),
@@ -1969,7 +1969,7 @@ describe("StreamingLLMClient", () => {
 		);
 
 		const namespacedTool = {
-			name: "omnimem/memory_recall",
+			name: "quilin-mem/memory_recall",
 			description: "Recall memory",
 			parameters: z.object({ query: z.string() }),
 			execute: vi.fn(),
@@ -1991,7 +1991,7 @@ describe("StreamingLLMClient", () => {
 		expect(streamText).toHaveBeenCalledWith(
 			expect.objectContaining({
 				tools: {
-					omnimem_memory_recall: {
+					"quilin-mem_memory_recall": {
 						description: "Recall memory",
 						inputSchema: namespacedTool.parameters,
 					},
@@ -2002,26 +2002,26 @@ describe("StreamingLLMClient", () => {
 			{
 				type: "tool-call-start",
 				toolCallId: "call-1",
-				toolName: "omnimem/memory_recall",
+				toolName: "quilin-mem/memory_recall",
 			},
 			{
 				type: "tool-call-end",
 				toolCallId: "call-1",
-				toolName: "omnimem/memory_recall",
+				toolName: "quilin-mem/memory_recall",
 				inputText: '{"query":"我是谁"}',
 				input: { query: "我是谁" },
 			},
 			{
 				type: "tool-result",
 				toolCallId: "call-1",
-				toolName: "omnimem/memory_recall",
+				toolName: "quilin-mem/memory_recall",
 				output: { records: [] },
 			},
 		]);
 		expect(result.toolCalls).toEqual([
 			{
 				id: "call-1",
-				name: "omnimem/memory_recall",
+				name: "quilin-mem/memory_recall",
 				arguments: { query: "我是谁" },
 			},
 		]);

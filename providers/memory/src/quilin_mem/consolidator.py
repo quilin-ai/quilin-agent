@@ -8,7 +8,7 @@ from .idle_budget import IdleBudgetProvider, IdleBudgetResult
 
 ConsolidationActionKind = Literal["reflect", "prune_kg", "recompress_verbatim"]
 CONSOLIDATOR_SCHEMA_VERSION = 1
-DEFAULT_CONSOLIDATION_TASK = "omnimem.consolidator.propose"
+DEFAULT_CONSOLIDATION_TASK = "quilin_mem.consolidator.propose"
 
 
 def _utcnow() -> datetime:

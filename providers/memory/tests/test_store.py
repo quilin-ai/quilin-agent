@@ -8,10 +8,10 @@ from pathlib import Path
 
 import pytest
 
-from omnimem import store as store_module
-from omnimem.store import MemoryStore, OmniMemStore
-from omnimem.store_search import MAX_EXPANDED_QUERY_TERMS, expand_query_terms
-from omnimem.types import MemoryItem
+from quilin_mem import store as store_module
+from quilin_mem.store import MemoryStore, QuilinMemStore
+from quilin_mem.store_search import MAX_EXPANDED_QUERY_TERMS, expand_query_terms
+from quilin_mem.types import MemoryItem
 
 SEMANTIC_METADATA = {
     "schema_version": 1,
@@ -21,7 +21,7 @@ SEMANTIC_METADATA = {
 
 
 async def test_store_returns_record_with_uuid() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     record = await store.store("hello world")
     assert record.content == "hello world"
     assert record.tier == "working"
@@ -30,7 +30,7 @@ async def test_store_returns_record_with_uuid() -> None:
 
 
 async def test_store_with_custom_tier() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     record = await store.store(
         "important fact",
         tier="semantic",
@@ -42,19 +42,19 @@ async def test_store_with_custom_tier() -> None:
 
 
 async def test_store_generates_unique_ids() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     r1 = await store.store("first")
     r2 = await store.store("second")
     assert r1.id != r2.id
 
 
-async def test_omnimem_store_implements_memory_store_protocol() -> None:
-    store = OmniMemStore(db_path=":memory:")
+async def test_quilin_mem_store_implements_memory_store_protocol() -> None:
+    store = QuilinMemStore(db_path=":memory:")
     assert isinstance(store, MemoryStore)
 
 
 async def test_add_get_update_delete_and_count_contract() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     memory = MemoryItem(
         content="remember this",
         layer="episodic",
@@ -83,7 +83,7 @@ async def test_add_get_update_delete_and_count_contract() -> None:
 
 
 async def test_delete_is_soft_and_removes_deleted_rows_from_queries() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     memory = MemoryItem(
         content="checkpoint result",
         layer="episodic",
@@ -113,7 +113,7 @@ async def test_delete_is_soft_and_removes_deleted_rows_from_queries() -> None:
 
 
 async def test_search_list_by_layer_and_clear_layer() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     await store.store("working note", tier="working")
     await store.store(
         "semantic insight",
@@ -145,7 +145,7 @@ async def test_search_list_by_layer_and_clear_layer() -> None:
 
 
 async def test_search_supports_layer_alias_metadata_and_content_type_filters() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     await store.store(
         "checkpoint alpha",
         tier="episodic",
@@ -181,7 +181,7 @@ async def test_search_supports_layer_alias_metadata_and_content_type_filters() -
 
 
 async def test_search_updates_access_signals_for_returned_items() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     record = await store.store("checkpoint alpha", tier="episodic")
 
     results = await store.search("checkpoint", filters={"layer": "episodic"})
@@ -196,7 +196,7 @@ async def test_search_updates_access_signals_for_returned_items() -> None:
 
 
 async def test_list_by_layer_supports_pagination_in_row_order() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     for index in range(5):
         await store.store(
             f"semantic-{index}",
@@ -218,7 +218,7 @@ async def test_list_by_layer_supports_pagination_in_row_order() -> None:
 
 
 async def test_count_respects_layer_metadata_and_content_type_filters() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     await store.store(
         "session one json",
         tier="episodic",
@@ -267,7 +267,7 @@ async def test_count_respects_layer_metadata_and_content_type_filters() -> None:
 
 
 async def test_count_uses_sql_filters_without_materializing_search(monkeypatch: object) -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     await store.store(
         "checkpoint alpha",
         tier="episodic",
@@ -299,7 +299,7 @@ async def test_count_uses_sql_filters_without_materializing_search(monkeypatch: 
 
 
 async def test_recall_empty_query_returns_all() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     await store.store("alpha")
     await store.store("beta")
     await store.store("gamma")
@@ -308,7 +308,7 @@ async def test_recall_empty_query_returns_all() -> None:
 
 
 async def test_recall_substring_match() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     await store.store("The quick brown fox")
     await store.store("A lazy dog")
     await store.store("Quick thinking")
@@ -320,7 +320,7 @@ async def test_recall_substring_match() -> None:
 
 
 async def test_recall_case_insensitive() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     await store.store("Hello World")
     await store.store("HELLO THERE")
     await store.store("goodbye")
@@ -332,7 +332,7 @@ async def test_recall_case_insensitive() -> None:
 
 
 async def test_recall_no_match_returns_empty() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     await store.store("apple")
     await store.store("banana")
     results = await store.recall("cherry")
@@ -340,14 +340,14 @@ async def test_recall_no_match_returns_empty() -> None:
 
 
 async def test_recall_empty_store() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     results = await store.recall("anything")
     assert len(results) == 0
 
 
 async def test_recall_returns_copies() -> None:
     """Recall should return a new list, not a reference to the internal list."""
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     await store.store("item")
     results = await store.recall("")
     results.clear()
@@ -358,7 +358,7 @@ async def test_recall_returns_copies() -> None:
 
 async def test_reset_clears_all_records() -> None:
     """reset() should clear all stored records."""
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     await store.store("alpha")
     await store.store("beta")
     results = await store.recall("")
@@ -373,7 +373,7 @@ async def test_recall_records_are_immutable() -> None:
     """Returned records should be frozen — mutation raises AttributeError."""
     import pytest
 
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     await store.store("test content")
     results = await store.recall("test")
     assert len(results) == 1
@@ -382,16 +382,16 @@ async def test_recall_records_are_immutable() -> None:
 
 
 async def test_store_persists_records_across_instances(tmp_path: Path) -> None:
-    db_path = tmp_path / "omnimem.db"
+    db_path = tmp_path / "quilin-mem.db"
 
-    writer = OmniMemStore(db_path=str(db_path))
+    writer = QuilinMemStore(db_path=str(db_path))
     await writer.store(
         "remember me",
         tier="semantic",
         metadata=dict(SEMANTIC_METADATA),
     )
 
-    reader = OmniMemStore(db_path=str(db_path))
+    reader = QuilinMemStore(db_path=str(db_path))
     results = await reader.recall("remember")
 
     assert results == [
@@ -402,7 +402,7 @@ async def test_store_persists_records_across_instances(tmp_path: Path) -> None:
 
 
 async def test_store_creates_fts_table() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
 
     table_names = {
         row[0]
@@ -419,7 +419,7 @@ async def test_store_creates_fts_table() -> None:
 
 
 async def test_recall_uses_fts_for_cjk_tokens() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     await store.store("用户的名字是老孟")
 
     results = await store.recall("名字")
@@ -428,7 +428,7 @@ async def test_recall_uses_fts_for_cjk_tokens() -> None:
 
 
 async def test_recall_expands_generic_memory_queries_for_fts() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     await store.store("用户的名字是老孟")
 
     results = await store.recall("记得")
@@ -437,7 +437,7 @@ async def test_recall_expands_generic_memory_queries_for_fts() -> None:
 
 
 async def test_update_revalidates_semantic_contracts() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     run_id = "run-semantic-update"
     record = await store.store(
         """
@@ -476,7 +476,7 @@ async def test_expand_query_terms_caps_the_match_term_count() -> None:
 
 
 async def test_recall_falls_back_to_like_when_fts_returns_no_results() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     await store.store("用户的名字是老孟")
 
     results = await store.recall("孟")
@@ -490,9 +490,9 @@ async def test_store_defaults_to_quilin_home_db(
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))  # type: ignore[attr-defined]
     monkeypatch.setenv("QUILIN_ENV", "dev")  # type: ignore[attr-defined]
-    monkeypatch.delenv("OMNIMEM_DB_PATH", raising=False)  # type: ignore[attr-defined]
+    monkeypatch.delenv("QUILIN_MEM_DB_PATH", raising=False)  # type: ignore[attr-defined]
 
-    store = OmniMemStore()
+    store = QuilinMemStore()
     await store.store("home default path")
 
     assert (tmp_path / ".quilin" / "memory.db").exists()
@@ -500,7 +500,7 @@ async def test_store_defaults_to_quilin_home_db(
 
 @pytest.mark.parametrize("legacy_tier", ["short", "long"])
 async def test_store_rejects_invalid_tier(legacy_tier: str) -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
 
     with pytest.raises(ValueError, match="Invalid memory tier"):
         await store.store("bad tier", tier=legacy_tier)  # type: ignore[arg-type]
@@ -509,7 +509,7 @@ async def test_store_rejects_invalid_tier(legacy_tier: str) -> None:
 async def test_store_offloads_blocking_db_work_from_event_loop(
     monkeypatch: object,
 ) -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     original_build_keywords = store_module._build_keywords
 
     def slow_build_keywords(content: str) -> str:
@@ -534,7 +534,7 @@ async def test_store_closes_via_async_context_manager() -> None:
 
     import pytest
 
-    async with OmniMemStore(db_path=":memory:") as store:
+    async with QuilinMemStore(db_path=":memory:") as store:
         await store.store("alpha")
 
     with pytest.raises(sqlite3.ProgrammingError):
@@ -544,7 +544,7 @@ async def test_store_closes_via_async_context_manager() -> None:
 async def test_reset_offloads_blocking_db_work_from_event_loop(
     monkeypatch: object,
 ) -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     original_reset_sync = store._reset_sync  # type: ignore[attr-defined]
 
     def slow_reset_sync() -> None:
@@ -565,7 +565,7 @@ async def test_reset_offloads_blocking_db_work_from_event_loop(
 
 
 async def test_store_keeps_main_and_fts_counts_aligned_under_concurrency() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
 
     await asyncio.gather(*[store.store(f"concurrent-{index}") for index in range(100)])
 
@@ -615,15 +615,15 @@ async def test_store_rebuilds_fts_once_for_legacy_db_without_schema_version(
     legacy.close()
 
     rebuild_calls: list[str] = []
-    original_rebuild = store_module.OmniMemStore._rebuild_fts_index
+    original_rebuild = store_module.QuilinMemStore._rebuild_fts_index
 
-    def tracking_rebuild(self: OmniMemStore) -> None:
+    def tracking_rebuild(self: QuilinMemStore) -> None:
         rebuild_calls.append("rebuild")
         original_rebuild(self)
 
-    monkeypatch.setattr(store_module.OmniMemStore, "_rebuild_fts_index", tracking_rebuild)  # type: ignore[attr-defined]
+    monkeypatch.setattr(store_module.QuilinMemStore, "_rebuild_fts_index", tracking_rebuild)  # type: ignore[attr-defined]
 
-    first = OmniMemStore(db_path=str(db_path))
+    first = QuilinMemStore(db_path=str(db_path))
     version_row = first._conn.execute(  # type: ignore[attr-defined]
         "SELECT version FROM schema_version WHERE component = ?",
         (store_module.FTS_SCHEMA_COMPONENT,),
@@ -631,7 +631,7 @@ async def test_store_rebuilds_fts_once_for_legacy_db_without_schema_version(
     assert version_row[0] == store_module.FTS_SCHEMA_VERSION
     await first.close()
 
-    second = OmniMemStore(db_path=str(db_path))
+    second = QuilinMemStore(db_path=str(db_path))
     await second.close()
 
     assert rebuild_calls == ["rebuild"]
@@ -639,7 +639,7 @@ async def test_store_rebuilds_fts_once_for_legacy_db_without_schema_version(
 
 async def test_close_commits_before_closing_connection(tmp_path: Path) -> None:
     db_path = tmp_path / "close-commit.db"
-    store = OmniMemStore(db_path=str(db_path))
+    store = QuilinMemStore(db_path=str(db_path))
     await store.store("persist me")
     real_conn = store._conn  # type: ignore[attr-defined]
 

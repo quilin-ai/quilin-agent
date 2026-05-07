@@ -95,7 +95,7 @@ def _candidate_limit(limit: int, filters: dict[str, Any] | None) -> int | None:
     return None if non_layer_filters else limit
 
 
-class OmniMemStore:
+class QuilinMemStore:
     def __init__(
         self,
         db_path: str | None = None,
@@ -107,7 +107,7 @@ class OmniMemStore:
                 db_path = ":memory:"
             else:
                 db_path = os.environ.get(
-                    "OMNIMEM_DB_PATH",
+                    "QUILIN_MEM_DB_PATH",
                     str(Path.home() / ".quilin" / "memory.db"),
                 )
 
@@ -137,7 +137,7 @@ class OmniMemStore:
             self._retrieval_profiles = RetrievalProfileStore(self._db_path)
         return self._retrieval_profiles
 
-    async def __aenter__(self) -> OmniMemStore:
+    async def __aenter__(self) -> QuilinMemStore:
         return self
 
     async def __aexit__(self, *_args: object) -> None:

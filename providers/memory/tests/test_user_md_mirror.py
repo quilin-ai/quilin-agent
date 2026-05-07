@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from omnimem.profile_store import ProfileStore, UserProfile
-from omnimem.profile_updater import ProfileUpdater
+from quilin_mem.profile_store import ProfileStore, UserProfile
+from quilin_mem.profile_updater import ProfileUpdater
 
 
 def test_user_profile_exports_stable_markdown_without_sensitive_fields(tmp_path: Path) -> None:

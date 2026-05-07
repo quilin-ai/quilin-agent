@@ -16,7 +16,7 @@ init:
 start:
     mkdir -p .logs
     @echo '{"ts":"'"$(date -Iseconds)"'","level":"info","service":"quilin","msg":"Starting all services..."}'
-    @nohup sh -c 'cd providers/memory && LOG_LEVEL=debug QUILIN_ENV=dev uv run python -m omnimem' > .logs/omnimem.log 2>&1 &
+    @nohup sh -c 'cd providers/memory && LOG_LEVEL=debug QUILIN_ENV=dev uv run python -m quilin_mem' > .logs/quilin-mem.log 2>&1 &
     @sleep 2
     @nohup env LOG_LEVEL=debug QUILIN_ENV=dev QUILIN_RUNTIME_MODE=service bun run packages/agent-core/src/index.ts > .logs/agent-core.log 2>&1 &
     @echo '{"ts":"'"$(date -Iseconds)"'","level":"info","service":"quilin","msg":"All services started. Use Monitor to watch."}'
@@ -24,7 +24,7 @@ start:
 # 一键停止全部
 stop:
     @pkill -f "bun run.*agent-core" || true
-    @pkill -f "python -m omnimem" || true
+    @pkill -f "python -m quilin_mem" || true
     @echo '{"ts":"'"$(date -Iseconds)"'","level":"info","service":"quilin","msg":"All services stopped."}'
 
 # 一键重启
@@ -78,7 +78,7 @@ build:
 # ============ Python (providers/) ============
 
 dev-memory:
-    cd providers/memory && LOG_LEVEL=debug QUILIN_ENV=dev uv run python -m omnimem
+    cd providers/memory && LOG_LEVEL=debug QUILIN_ENV=dev uv run python -m quilin_mem
 
 test-py:
     cd providers/memory && QUILIN_ENV=test uv run pytest
@@ -112,4 +112,4 @@ _start-core:
     LOG_LEVEL=debug QUILIN_ENV=dev QUILIN_RUNTIME_MODE=service bun run packages/agent-core/src/index.ts
 
 _start-memory:
-    cd providers/memory && LOG_LEVEL=debug QUILIN_ENV=dev uv run python -m omnimem
+    cd providers/memory && LOG_LEVEL=debug QUILIN_ENV=dev uv run python -m quilin_mem

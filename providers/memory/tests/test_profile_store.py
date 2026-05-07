@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from omnimem.profile_store import ProfileStore, UserProfile, emit_profile_signal
-from omnimem.profile_updater import ProfileUpdater
+from quilin_mem.profile_store import ProfileStore, UserProfile, emit_profile_signal
+from quilin_mem.profile_updater import ProfileUpdater
 
 
 def test_profile_updater_is_single_write_entrypoint(tmp_path: Path) -> None:

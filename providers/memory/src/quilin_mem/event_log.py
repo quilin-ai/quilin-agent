@@ -35,7 +35,7 @@ def _resolve_db_path(db_path: str | None) -> str:
         return ":memory:"
 
     return os.environ.get(
-        "OMNIMEM_EVENT_LOG_PATH",
+        "QUILIN_MEM_EVENT_LOG_PATH",
         str(Path.home() / ".quilin" / "memory-events.db"),
     )
 

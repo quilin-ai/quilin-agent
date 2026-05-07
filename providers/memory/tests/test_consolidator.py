@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from omnimem.consolidator import (
+from quilin_mem.consolidator import (
     CONSOLIDATOR_SCHEMA_VERSION,
     DEFAULT_CONSOLIDATION_TASK,
     Consolidator,
     propose,
 )
-from omnimem.idle_budget import IdleBudgetLease, IdleBudgetProvider
+from quilin_mem.idle_budget import IdleBudgetLease, IdleBudgetProvider
 
 
 def test_default_consolidator_proposes_dry_run_actions_without_writes() -> None:

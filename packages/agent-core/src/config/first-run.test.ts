@@ -28,7 +28,7 @@ describe("buildFirstRunOnboardingPlan", () => {
 			mcpServers: {
 				memory: {
 					command: "uv",
-					args: ["run", "python", "-m", "quilin-mem"],
+					args: ["run", "python", "-m", "quilin_mem"],
 					namespace: "quilin-mem",
 				},
 			},

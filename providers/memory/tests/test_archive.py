@@ -5,14 +5,14 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from omnimem.archive import (
+from quilin_mem.archive import (
     ARCHIVE_SCHEMA_COMPONENT,
     ARCHIVE_SCHEMA_VERSION,
     ArchiveManifestStore,
     ArchivePolicy,
     build_archive_manifest_entry,
 )
-from omnimem.types import MemoryItem
+from quilin_mem.types import MemoryItem
 
 
 def _memory(

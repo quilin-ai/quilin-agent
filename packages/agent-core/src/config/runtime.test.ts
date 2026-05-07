@@ -1116,11 +1116,11 @@ describe("runtime config adapters", () => {
 			disabled: ["shell_exec"],
 		});
 		expect(isRuntimeToolEnabled("file_read", toolFilter)).toBe(true);
-		expect(isRuntimeToolEnabled("omnimem/memory_recall", toolFilter)).toBe(
+		expect(isRuntimeToolEnabled("quilin-mem/memory_recall", toolFilter)).toBe(
 			true,
 		);
 		expect(isRuntimeToolEnabled("memory_store", toolFilter)).toBe(false);
-		expect(isRuntimeToolEnabled("omnimem/memory_store", toolFilter)).toBe(
+		expect(isRuntimeToolEnabled("quilin-mem/memory_store", toolFilter)).toBe(
 			false,
 		);
 		expect(isRuntimeToolEnabled("shell_exec", toolFilter)).toBe(false);

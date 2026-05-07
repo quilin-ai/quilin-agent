@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from omnimem.event_log import RetrievalEventLog
-from omnimem.reranker import DEFAULT_SOURCE_PRIORS, LearnableReranker
-from omnimem.types import MemoryItem
+from quilin_mem.event_log import RetrievalEventLog
+from quilin_mem.reranker import DEFAULT_SOURCE_PRIORS, LearnableReranker
+from quilin_mem.types import MemoryItem
 
 
 def _candidate(

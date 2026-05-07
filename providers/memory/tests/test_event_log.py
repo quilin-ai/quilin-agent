@@ -5,14 +5,14 @@ from pathlib import Path
 
 import pytest
 
-from omnimem.event_log import (
+from quilin_mem.event_log import (
     CitationStats,
     RetrievalEventLog,
     TraceContext,
     hash_query,
     parse_traceparent,
 )
-from omnimem.types import MemoryItem
+from quilin_mem.types import MemoryItem
 
 
 def _retrieved_item(
@@ -182,7 +182,7 @@ async def test_event_log_lifecycle_and_empty_boundaries(monkeypatch, tmp_path: P
 
     db_path = tmp_path / "nested" / "events.db"
     monkeypatch.delenv("QUILIN_ENV", raising=False)
-    monkeypatch.setenv("OMNIMEM_EVENT_LOG_PATH", str(db_path))
+    monkeypatch.setenv("QUILIN_MEM_EVENT_LOG_PATH", str(db_path))
     file_event_log = RetrievalEventLog()
     await file_event_log.close()
 

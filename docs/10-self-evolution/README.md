@@ -1,8 +1,8 @@
 # 自进化工程（Self-Evolution Engineering）
 
-> **实现状态（2026-04-30 校准）**
-> - ✅ **已实现的前置能力**：`skill_manage` + WriteAuthority + skills_guard、ProfileStore / ProfileUpdater、soul schema validator、idle_budget + consolidator dry-run、benchmark harness trace/cost 基础。
-> - 🚧 **部分实现 / 延期**：真正的 trajectory → failure analysis → propose patch → human review 闭环尚未落地；GEPA/DSPy wrapper 已在 roadmap reassessment 中列为 Iter F Day 0 spike 候选。
+> **实现状态（2026-05-07 校准）**
+> - ✅ **已实现**：`self-evolution/` 目录 14 个 TS 文件已落地：`trajectory-store.ts`（JSONL 轨迹持久化）、`failure-analyzer.ts`（失败分类：tool_error/schema_violation/budget_exhaustion 等）、`patch-proposal.ts`（基于失败分析的补丁建议）、`proposal-store.ts`（提案去重存储）、`offline-optimizer.ts`（离线优化器，当前 local-noop）、`sanitize.ts`（轨迹数据消毒）、`jsonl-path.ts`（文件路径管理）、`hash.ts`（SHA-256 内容哈希），以及 `skill_manage` + WriteAuthority + skills_guard、ProfileStore / ProfileUpdater、soul schema validator、idle_budget + consolidator dry-run。
+> - 🚧 **部分实现 / 延期**：Offline Optimizer 仅有 `local-noop`，无实际优化逻辑；完整的 trajectory → failure analysis → propose patch → human review 自动闭环尚未落地（基础设施已就绪，人工审核环节待接）；idle_evolution 配置已存在但运行时激活待验证。
 > - Linear 后续项：[QUI-12](https://linear.app/quilin-agent/issue/QUI-12/iter-f-implement-trajectory-to-patch-self-evolution-loop)。
 
 > 本文档是 Quilin Agent 工程规格系列的第 10 篇，也是最具野心的一篇。自进化是让 Agent 能够从失败中学习、自动改进自身 scaffold（提示词/工具配置/工作流）的能力——这是我们区别于绝大多数竞品的核心竞争力。核心设计受 MiniMax M2.7 的自进化闭环启发，系统化地融合了 DSPy、Voyager、ADAS 等最前沿的自动优化研究成果。

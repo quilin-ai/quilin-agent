@@ -5,9 +5,9 @@
 
 ## 当前状态 / Current State
 
-Quilin uses a custom minimal TypeScript Agent Loop instead of LangGraph or another external Agent framework. After the Iter D observability wiring, the loop still stays within the `<200 LOC` contract.
+Quilin uses a custom TypeScript Agent Loop instead of LangGraph or another external Agent framework. The loop system spans three files: `loop.ts` (452 LOC) + `loop-tool-calls.ts` (565 LOC) + `loop-types.ts` (85 LOC) = 1,102 LOC, having grown beyond the original `<200 LOC` contract as the system matured.
 
-Quilin 使用自研极简 TypeScript Agent Loop，不使用 LangGraph 或其他外部 Agent 框架。Iter D observability（可观测性）接线后，loop 仍守住 `<200 LOC` 契约。
+Quilin 使用自研 TypeScript Agent Loop，不使用 LangGraph 或其他外部 Agent 框架。循环体系横跨三个文件：`loop.ts` (452 行) + `loop-tool-calls.ts` (565 行) + `loop-types.ts` (85 行) = 1,102 行，已随系统成熟超出最初的 `<200 LOC` 契约。
 
 The current runtime split is:
 

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from omnimem.soul_schema import SoulDocument
+from quilin_mem.soul_schema import SoulDocument
 
 VALID_SOUL_MD = """---
 schema_version: 1

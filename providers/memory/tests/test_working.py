@@ -4,8 +4,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from omnimem.types import MemoryItem
-from omnimem.working import WorkingMemory
+from quilin_mem.types import MemoryItem
+from quilin_mem.working import WorkingMemory
 
 
 async def test_working_memory_keeps_recent_k_in_latest_first_order() -> None:

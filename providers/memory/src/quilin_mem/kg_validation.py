@@ -59,7 +59,7 @@ def resolve_db_path(db_path: str | None) -> str:
         return ":memory:"
 
     return os.environ.get(
-        "OMNIMEM_KG_PATH",
+        "QUILIN_MEM_KG_PATH",
         str(Path.home() / ".quilin" / KG_DEFAULT_DB_NAME),
     )
 

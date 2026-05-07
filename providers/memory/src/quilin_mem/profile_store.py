@@ -24,7 +24,7 @@ def _default_profile_db_path() -> str:
     if os.environ.get("QUILIN_ENV") == "test":
         return ":memory:"
 
-    return os.environ.get("OMNIMEM_DB_PATH", str(Path.home() / ".quilin" / "memory.db"))
+    return os.environ.get("QUILIN_MEM_DB_PATH", str(Path.home() / ".quilin" / "memory.db"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,8 +162,8 @@ def emit_profile_signal(
 class ProfileStore:
     """SQLite persistence for UserProfile.
 
-    The default database is OMNIMEM_DB_PATH so profile state is backed up and
-    deployed with the rest of OmniMem while staying in independent tables.
+    The default database is QUILIN_MEM_DB_PATH so profile state is backed up and
+    deployed with the rest of quilin-mem while staying in independent tables.
     """
 
     def __init__(self, db_path: str | None = None) -> None:

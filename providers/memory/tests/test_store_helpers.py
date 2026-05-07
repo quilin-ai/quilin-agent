@@ -5,8 +5,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from omnimem.store_filters import coerce_filter_datetime, layer_filter, matches_filters
-from omnimem.store_serialization import (
+from quilin_mem.store_filters import coerce_filter_datetime, layer_filter, matches_filters
+from quilin_mem.store_serialization import (
     deserialize_embedding,
     deserialize_memory_tier,
     deserialize_metadata,
@@ -15,7 +15,7 @@ from omnimem.store_serialization import (
     serialize_embedding,
     validate_memory_tier,
 )
-from omnimem.types import MemoryItem
+from quilin_mem.types import MemoryItem
 
 
 def test_store_serialization_handles_defaults_and_legacy_shapes() -> None:

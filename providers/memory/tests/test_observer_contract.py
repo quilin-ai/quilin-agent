@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from omnimem.observer import (
+from quilin_mem.observer import (
     MemoryObserver,
     NoOpMemoryObserver,
     ObservationArchiveGateDecision,
@@ -159,7 +159,7 @@ async def test_rule_first_observer_extracts_bilingual_multi_pattern_candidates()
     turn = {
         "content": (
             "用户喜欢中文总结。Please keep status updates concise. "
-            "Track this in QUI-16 and providers/memory/src/omnimem/observer.py."
+            "Track this in QUI-16 and providers/memory/src/quilin_mem/observer.py."
         ),
         "role": "user",
         "turn_id": "turn-bilingual-1",
@@ -185,7 +185,7 @@ async def test_rule_first_observer_extracts_bilingual_multi_pattern_candidates()
         "User requested: status updates concise",
         "User preference: 中文总结",
         "Referenced Linear issue: QUI-16",
-        "Referenced project path: providers/memory/src/omnimem/observer.py",
+        "Referenced project path: providers/memory/src/quilin_mem/observer.py",
     ]
     assert all(candidate.source_turn_id == "turn-bilingual-1" for candidate in candidates)
     assert all(candidate.metadata["source"] == "rule_first_observer" for candidate in candidates)

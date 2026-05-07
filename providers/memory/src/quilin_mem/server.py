@@ -13,7 +13,7 @@ from .logging import configure_once, logger
 from .retrieval_profile import RetrievalProfileStore
 from .retriever import MemoryRetriever
 from .scratchpad import ScratchpadStore
-from .store import OmniMemStore
+from .store import QuilinMemStore
 from .types import MemoryLayer, MemoryTier
 
 MAX_RECALL_QUERY_LENGTH = 512
@@ -158,7 +158,7 @@ def _tool_metadata_with_defaults(
 
 
 async def _memory_recall_with_store(
-    store: OmniMemStore,
+    store: QuilinMemStore,
     query: str,
     *,
     user_id: str | None = None,
@@ -261,7 +261,7 @@ def _child_trace_context(parent: TraceContext | None) -> TraceContext | None:
 
 
 async def _memory_store_with_store(
-    store: OmniMemStore,
+    store: QuilinMemStore,
     content: str,
     tier: MemoryTier = "working",
     layer: MemoryLayer | None = None,
@@ -372,7 +372,7 @@ async def _scratchpad_clear_with_store(
     return json.dumps({"cleared": cleared, **_trace_payload(trace_context)})
 
 
-def _get_store_from_context(ctx: Context[object, Any, object] | None) -> OmniMemStore | None:
+def _get_store_from_context(ctx: Context[object, Any, object] | None) -> QuilinMemStore | None:
     if ctx is None or getattr(ctx, "_request_context", None) is None:
         return None
 
@@ -381,11 +381,11 @@ def _get_store_from_context(ctx: Context[object, Any, object] | None) -> OmniMem
         return None
 
     store = lifespan_context.get("store")
-    return store if isinstance(store, OmniMemStore) else None
+    return store if isinstance(store, QuilinMemStore) else None
 
 
 def _build_store_lifespan(
-    store: OmniMemStore | None,
+    store: QuilinMemStore | None,
 ):
     @asynccontextmanager
     async def lifespan(_app: FastMCP):
@@ -393,7 +393,7 @@ def _build_store_lifespan(
             yield {"store": store}
             return
 
-        lifespan_store = await asyncio.to_thread(OmniMemStore)
+        lifespan_store = await asyncio.to_thread(QuilinMemStore)
         try:
             yield {"store": lifespan_store}
         finally:
@@ -408,7 +408,7 @@ async def memory_recall(
     session_id: str | None = None,
 ) -> str:
     """Legacy direct helper that opens a store per call."""
-    async with OmniMemStore() as store:
+    async with QuilinMemStore() as store:
         return await _memory_recall_with_store(
             store,
             query,
@@ -426,7 +426,7 @@ async def memory_store(
     content_type: str = "text",
 ) -> str:
     """Legacy direct helper that opens a store per call."""
-    async with OmniMemStore() as store:
+    async with QuilinMemStore() as store:
         return await _memory_store_with_store(
             store,
             content,
@@ -438,23 +438,23 @@ async def memory_store(
 
 
 def create_server(
-    store: OmniMemStore | None = None,
+    store: QuilinMemStore | None = None,
     scratchpad_store: ScratchpadStore | None = None,
 ) -> FastMCP:
-    server_store: OmniMemStore | None = store
+    server_store: QuilinMemStore | None = store
     server_scratchpad_store: ScratchpadStore | None = scratchpad_store
-    server = FastMCP("omnimem", lifespan=_build_store_lifespan(store))
+    server = FastMCP("quilin-mem", lifespan=_build_store_lifespan(store))
 
     async def resolve_store(
         ctx: Context[object, Any, object] | None = None,
-    ) -> OmniMemStore:
+    ) -> QuilinMemStore:
         context_store = _get_store_from_context(ctx)
         if context_store is not None:
             return context_store
 
         nonlocal server_store
         if server_store is None:
-            server_store = OmniMemStore()
+            server_store = QuilinMemStore()
 
         return server_store
 
@@ -577,5 +577,5 @@ mcp = create_server()
 
 def main() -> None:
     configure_once()
-    logger.info("omnimem server starting", transport="stdio")
+    logger.info("quilin-mem server starting", transport="stdio")
     mcp.run(transport="stdio")

@@ -75,7 +75,7 @@ describe("scanExternalContext", () => {
 			"afc142e0dcc3ef0201fabf3eb89350cd97a4582daa96bc370f9765dd5c66c0cf";
 		const result = scanExternalContext(
 			`content_hash=${sha256}\nsource_hash=${sha256}`,
-			"tool:omnimem/memory_recall",
+			"tool:quilin-mem/memory_recall",
 		);
 
 		expect(result.safe).toBe(true);

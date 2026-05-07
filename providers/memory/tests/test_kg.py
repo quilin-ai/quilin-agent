@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-from omnimem.kg import (
+from quilin_mem.kg import (
     KG_BUSY_TIMEOUT_MS,
     KG_SCHEMA_COMPONENT,
     KG_SCHEMA_VERSION,
@@ -30,8 +30,8 @@ def test_temporal_kg_defaults_to_dedicated_file_and_busy_timeout(
     tmp_path: Path,
 ) -> None:
     monkeypatch.delenv("QUILIN_ENV", raising=False)  # type: ignore[attr-defined]
-    monkeypatch.delenv("OMNIMEM_DB_PATH", raising=False)  # type: ignore[attr-defined]
-    monkeypatch.delenv("OMNIMEM_KG_PATH", raising=False)  # type: ignore[attr-defined]
+    monkeypatch.delenv("QUILIN_MEM_DB_PATH", raising=False)  # type: ignore[attr-defined]
+    monkeypatch.delenv("QUILIN_MEM_KG_PATH", raising=False)  # type: ignore[attr-defined]
     monkeypatch.setenv("HOME", str(tmp_path))
 
     graph = TemporalKnowledgeGraph()
@@ -48,7 +48,7 @@ def test_temporal_kg_defaults_to_dedicated_file_and_busy_timeout(
 
 def test_temporal_kg_uses_memory_in_test_env(monkeypatch) -> None:
     monkeypatch.setenv("QUILIN_ENV", "test")
-    monkeypatch.delenv("OMNIMEM_KG_PATH", raising=False)  # type: ignore[attr-defined]
+    monkeypatch.delenv("QUILIN_MEM_KG_PATH", raising=False)  # type: ignore[attr-defined]
 
     graph = TemporalKnowledgeGraph()
     try:

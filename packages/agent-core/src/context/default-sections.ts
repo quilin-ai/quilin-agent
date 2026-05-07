@@ -105,7 +105,7 @@ function findResolvedToolName(
 	const availableNamespacedName = ctx.availableTools.find((name) =>
 		name.endsWith(`/${shortName}`),
 	);
-	return availableNamespacedName ?? `omnimem/${shortName}`;
+	return availableNamespacedName ?? `quilin-mem/${shortName}`;
 }
 
 function renderToolProvenance(ctx: BuildContext): string | null {

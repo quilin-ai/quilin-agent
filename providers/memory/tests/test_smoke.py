@@ -4,9 +4,9 @@ import json
 import runpy
 from pathlib import Path
 
-from omnimem import __version__
-from omnimem import server as server_module
-from omnimem.types import MemoryItem, MemoryRecord
+from quilin_mem import __version__
+from quilin_mem import server as server_module
+from quilin_mem.types import MemoryItem, MemoryRecord
 
 
 def test_package_imports() -> None:
@@ -20,7 +20,7 @@ def test_module_entrypoint_delegates_to_server_main(monkeypatch) -> None:
 
     monkeypatch.setattr(server_module, "main", lambda: calls.append("main"))
 
-    runpy.run_module("omnimem.__main__", run_name="__main__")
+    runpy.run_module("quilin_mem.__main__", run_name="__main__")
 
     assert calls == ["main"]
 

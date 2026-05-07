@@ -4,8 +4,8 @@ import json
 
 import pytest
 
-from omnimem.server import create_server
-from omnimem.store import OmniMemStore
+from quilin_mem.server import create_server
+from quilin_mem.store import QuilinMemStore
 
 
 def _planning_review_payload(run_id: str) -> dict[str, object]:
@@ -36,7 +36,7 @@ def _decode_call_tool_result(result: object) -> dict[str, object]:
 
 
 async def _assert_planning_review_rejected(
-    store: OmniMemStore,
+    store: QuilinMemStore,
     payload: dict[str, object],
     *,
     metadata: dict[str, object],
@@ -56,7 +56,7 @@ async def _assert_planning_review_rejected(
 
 
 async def test_store_accepts_planning_review_semantic_record() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     run_id = "run-review-1"
 
     record = await store.store(
@@ -73,7 +73,7 @@ async def test_store_accepts_planning_review_semantic_record() -> None:
 
 
 async def test_store_rejects_running_planning_state_payloads_for_semantic() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     payload = _planning_review_payload("run-review-2")
     payload["events"] = [{"type": "checkpoint"}]
 
@@ -104,7 +104,7 @@ async def test_store_rejects_forbidden_planning_runtime_keys_for_semantic(
     runtime_key: str,
     runtime_value: object,
 ) -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     run_id = f"run-review-forbidden-{runtime_key}"
     payload = _planning_review_payload(run_id)
     payload[runtime_key] = runtime_value
@@ -120,7 +120,7 @@ async def test_store_rejects_forbidden_planning_runtime_keys_for_semantic(
 
 
 async def test_store_rejects_planning_review_outside_semantic_layer() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     run_id = "run-review-episodic"
 
     await _assert_planning_review_rejected(
@@ -135,7 +135,7 @@ async def test_store_rejects_planning_review_outside_semantic_layer() -> None:
 
 
 async def test_store_rejects_planning_review_text_content_type() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     run_id = "run-review-text"
 
     await _assert_planning_review_rejected(
@@ -187,7 +187,7 @@ async def test_store_rejects_invalid_planning_review_schema_and_run_id(
     payload: dict[str, object],
     match: str,
 ) -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
 
     await _assert_planning_review_rejected(
         store,
@@ -198,7 +198,7 @@ async def test_store_rejects_invalid_planning_review_schema_and_run_id(
 
 
 async def test_store_rejects_planning_state_source_for_semantic() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
 
     with pytest.raises(ValueError, match="planning_state"):
         await store.store(
@@ -231,7 +231,7 @@ async def test_store_rejects_planning_state_source_for_semantic() -> None:
 async def test_store_rejects_runtime_planning_state_even_without_planning_source(
     metadata: dict[str, object],
 ) -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
 
     with pytest.raises(ValueError, match="PlanningState"):
         await store.store(
@@ -252,7 +252,7 @@ async def test_store_rejects_runtime_planning_state_even_without_planning_source
 
 
 async def test_memory_store_tool_accepts_planning_review_schema_fields() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     server = create_server(store)
     run_id = "run-review-3"
 
@@ -284,7 +284,7 @@ async def test_memory_store_tool_accepts_planning_review_schema_fields() -> None
 
 
 async def test_store_rejects_semantic_records_without_stability_reason() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
 
     with pytest.raises(ValueError, match="stability_reason"):
         await store.store(

@@ -21,7 +21,7 @@ def configure_once() -> None:
 
 
 logger = structlog.get_logger(
-    service="omnimem",
+    service="quilin-mem",
     env=os.environ.get("QUILIN_ENV", "dev"),
 )
 

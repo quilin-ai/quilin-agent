@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from omnimem.episodic import EpisodicMemory
-from omnimem.store import OmniMemStore
-from omnimem.types import MemoryItem
+from quilin_mem.episodic import EpisodicMemory
+from quilin_mem.store import QuilinMemStore
+from quilin_mem.types import MemoryItem
 
 
 def _ts(hour: int) -> datetime:
@@ -12,7 +12,7 @@ def _ts(hour: int) -> datetime:
 
 
 async def test_compress_and_add_keeps_verbatim_content() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     episodic = EpisodicMemory(store)
     raw_content = "step 1\nstep 2\nfinal decision"
 
@@ -31,7 +31,7 @@ async def test_compress_and_add_keeps_verbatim_content() -> None:
 
 
 async def test_search_supports_session_user_and_time_filters() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     episodic = EpisodicMemory(store)
     await episodic.compress_and_add(
         MemoryItem(
@@ -85,7 +85,7 @@ async def test_search_supports_session_user_and_time_filters() -> None:
 
 
 async def test_save_and_load_checkpoint_roundtrip_by_run_and_event_seq() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     episodic = EpisodicMemory(store)
     first_payload = {"kind": "checkpoint", "step": 1}
     second_payload = {"kind": "checkpoint", "step": 2}
@@ -123,7 +123,7 @@ async def test_save_and_load_checkpoint_roundtrip_by_run_and_event_seq() -> None
 
 
 async def test_discard_all_clears_only_episodic_records() -> None:
-    store = OmniMemStore(db_path=":memory:")
+    store = QuilinMemStore(db_path=":memory:")
     episodic = EpisodicMemory(store)
     await episodic.compress_and_add(
         MemoryItem(content="ep-1", layer="episodic", created_at=_ts(9), last_accessed=_ts(9))

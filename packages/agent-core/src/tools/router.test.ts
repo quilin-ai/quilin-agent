@@ -2400,19 +2400,19 @@ describe("ToolRouter", () => {
 		});
 		const router = new ToolRouter([
 			{
-				name: "omnimem/memory_recall",
+				name: "quilin-mem/memory_recall",
 				description: "Recall memories",
 				parameters: z.object({ query: z.string() }),
 				execute,
 				category: "programmatic",
 				riskLevel: "read",
-				namespace: "omnimem",
+				namespace: "quilin-mem",
 			} satisfies ToolWithMetadata,
 		]);
 
 		const result = await router.execute({
 			id: "call-ns",
-			name: "omnimem/memory_recall",
+			name: "quilin-mem/memory_recall",
 			arguments: { query: "小明" },
 		});
 
@@ -2428,13 +2428,13 @@ describe("ToolRouter", () => {
 		});
 		const router = new ToolRouter([
 			{
-				name: "omnimem/memory_recall",
+				name: "quilin-mem/memory_recall",
 				description: "Recall memories",
 				parameters: z.object({ query: z.string() }),
 				execute,
 				category: "programmatic",
 				riskLevel: "read",
-				namespace: "omnimem",
+				namespace: "quilin-mem",
 			} satisfies ToolWithMetadata,
 		]);
 

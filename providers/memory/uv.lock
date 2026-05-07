@@ -1469,7 +1469,7 @@ wheels = [
 ]
 
 [[package]]
-name = "quilin-omnimem"
+name = "quilin-mem"
 version = "0.0.1"
 source = { editable = "." }
 dependencies = [

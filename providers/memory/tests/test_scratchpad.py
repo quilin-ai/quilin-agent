@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import UTC, datetime, timedelta
 
-from omnimem.scratchpad import (
+from quilin_mem.scratchpad import (
     DEFAULT_SCRATCHPAD_CAPACITY_PER_TASK,
     DEFAULT_SCRATCHPAD_TTL_SEC,
     ScratchpadStore,

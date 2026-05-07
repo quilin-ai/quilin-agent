@@ -21,7 +21,7 @@ function getMemoryServerCwd() {
 function createMemoryServerConfig() {
 	return {
 		command: "uv",
-		args: ["run", "python", "-m", "omnimem"],
+		args: ["run", "python", "-m", "quilin_mem"],
 		cwd: getMemoryServerCwd(),
 	};
 }
@@ -745,7 +745,7 @@ describe.sequential("MCPClientManager", () => {
 
 					return {
 						id: parsedStoreResult.id as string,
-						storageRef: `omnimem://episodic/${input.runId}/${input.eventSeq}`,
+						storageRef: `quilin-mem://episodic/${input.runId}/${input.eventSeq}`,
 					};
 				},
 			});
@@ -777,7 +777,7 @@ describe.sequential("MCPClientManager", () => {
 						runId,
 						phase: "executing",
 					}),
-					storageRef: `omnimem://episodic/${runId}/6`,
+					storageRef: `quilin-mem://episodic/${runId}/6`,
 				}),
 			);
 

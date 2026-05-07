@@ -46,7 +46,7 @@ describe("tool metadata types", () => {
 			category: "programmatic",
 			riskLevel: "read",
 			timeoutMs: 30_000,
-			namespace: "omnimem",
+			namespace: "quilin-mem",
 		};
 		const baseTool: Tool = tool;
 
@@ -54,7 +54,7 @@ describe("tool metadata types", () => {
 		expect(tool.category).toBe("programmatic");
 		expect(tool.riskLevel).toBe("read");
 		expect(tool.timeoutMs).toBe(30_000);
-		expect(tool.namespace).toBe("omnimem");
+		expect(tool.namespace).toBe("quilin-mem");
 	});
 
 	it("defines prompt descriptors with the minimal prompt-facing fields", () => {

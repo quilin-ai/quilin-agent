@@ -65,7 +65,7 @@ RETRIEVAL_PROFILE_HEALTH_CHANGE_CLASSIFICATIONS: tuple[RetrievalProfileHealthCha
 def _default_db_path() -> str:
     if os.environ.get("QUILIN_ENV") == "test":
         return ":memory:"
-    return os.environ.get("OMNIMEM_DB_PATH", str(Path.home() / ".quilin" / "memory.db"))
+    return os.environ.get("QUILIN_MEM_DB_PATH", str(Path.home() / ".quilin" / "memory.db"))
 
 
 @dataclass(frozen=True, slots=True)

@@ -259,7 +259,7 @@ describe("executeToolCalls safety integration", () => {
 	it("rewrites inverted Chinese identity memory before executing memory_store", async () => {
 		const toolCall: ToolCall = {
 			id: "call-memory",
-			name: "omnimem/memory_store",
+			name: "quilin-mem/memory_store",
 			arguments: {
 				content: "用户叫小明，称呼用户为孟哥",
 				tier: "working",
@@ -312,7 +312,7 @@ describe("executeToolCalls safety integration", () => {
 	}) => {
 		const toolCall: ToolCall = {
 			id: `call-memory-tier-${legacyTier}`,
-			name: "omnimem/memory_store",
+			name: "quilin-mem/memory_store",
 			arguments: {
 				content: "用户叫小明",
 				tier: legacyTier,
@@ -354,7 +354,7 @@ describe("executeToolCalls safety integration", () => {
 		expect(messages[2]).toMatchObject({
 			role: "tool",
 			toolCallId: `call-memory-tier-${legacyTier}`,
-			name: "omnimem/memory_store",
+			name: "quilin-mem/memory_store",
 		});
 		expect(JSON.parse(messages[2]?.content ?? "{}")).toEqual({
 			tier: canonicalTier,
@@ -364,7 +364,7 @@ describe("executeToolCalls safety integration", () => {
 				phase: "tool.memory_tier_alias_normalized",
 				payload: {
 					toolCallId: `call-memory-tier-${legacyTier}`,
-					toolName: "omnimem/memory_store",
+					toolName: "quilin-mem/memory_store",
 					legacyTier,
 					canonicalTier,
 				},

@@ -109,7 +109,7 @@ describe("tools integration", () => {
 				},
 			}),
 		);
-		await registry.register(createServerEntry("omnimem", "omnimem"));
+		await registry.register(createServerEntry("quilin-mem", "quilin-mem"));
 
 		const toolNames = registry.getAllTools().map((tool) => tool.name);
 		expect(toolNames).toEqual(
@@ -119,7 +119,7 @@ describe("tools integration", () => {
 				"file_list",
 				"shell_exec",
 				"web_fetch",
-				"omnimem/memory_recall",
+				"quilin-mem/memory_recall",
 			]),
 		);
 
@@ -187,16 +187,16 @@ describe("tools integration", () => {
 		);
 
 		registry.registerBuiltin(createBuiltinTools());
-		await registry.register(createServerEntry("omnimem", "omnimem"));
+		await registry.register(createServerEntry("quilin-mem", "quilin-mem"));
 		await registry.register(createServerEntry("memory", "memory"));
 		await registry.register(createServerEntry("web", "web"));
 
 		expect(registry.findTool("file_read")?.name).toBe("file_read");
-		expect(registry.findTool("omnimem/memory_recall")?.name).toBe(
-			"omnimem/memory_recall",
+		expect(registry.findTool("quilin-mem/memory_recall")?.name).toBe(
+			"quilin-mem/memory_recall",
 		);
 		expect(registry.findTool("memory_recall")?.name).toBe(
-			"omnimem/memory_recall",
+			"quilin-mem/memory_recall",
 		);
 		expect(registry.findTool("search")).toBeUndefined();
 	});
@@ -228,7 +228,7 @@ describe("tools integration", () => {
 			]),
 		);
 		registry.registerBuiltin(createBuiltinTools());
-		await registry.register(createServerEntry("omnimem", "omnimem"));
+		await registry.register(createServerEntry("quilin-mem", "quilin-mem"));
 		const router = new ToolRouter(registry.getAllTools());
 
 		const filePath = join(tempDir, "notes.txt");
@@ -241,7 +241,7 @@ describe("tools integration", () => {
 		});
 		const fullNameResult = await router.execute({
 			id: "mcp-full",
-			name: "omnimem/memory_recall",
+			name: "quilin-mem/memory_recall",
 			arguments: { query: "老孟" },
 		});
 		const shortNameResult = await router.execute({
@@ -362,14 +362,14 @@ describe("tools integration", () => {
 			createFakeClientFactory([memoryClient, webClient]),
 		);
 		registry.registerBuiltin(createBuiltinTools());
-		await registry.register(createServerEntry("omnimem", "omnimem"));
+		await registry.register(createServerEntry("quilin-mem", "quilin-mem"));
 		await registry.register(createServerEntry("web", "web"));
 
 		await registry.disconnectAll();
 
 		expect(memoryClient.disconnect).toHaveBeenCalledTimes(1);
 		expect(webClient.disconnect).toHaveBeenCalledTimes(1);
-		expect(registry.findTool("omnimem/memory_recall")).toBeUndefined();
+		expect(registry.findTool("quilin-mem/memory_recall")).toBeUndefined();
 		expect(registry.findTool("web/search")).toBeUndefined();
 		expect(registry.findTool("file_read")?.name).toBe("file_read");
 	});

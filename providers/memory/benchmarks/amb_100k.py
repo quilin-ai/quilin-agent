@@ -8,8 +8,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from omnimem.retriever import MemoryRetriever
-from omnimem.store import OmniMemStore
+from quilin_mem.retriever import MemoryRetriever
+from quilin_mem.store import quilin-memStore
 
 LONGMEMEVAL_BLOCKED_REASON = (
     "LongMemEval is not vendored in providers/memory and requires external dataset "
@@ -35,7 +35,7 @@ async def run_benchmark(
     if not db_path.exists():
         build_fixture(db_path, records=records)
 
-    store = OmniMemStore(db_path=str(db_path))
+    store = quilin-memStore(db_path=str(db_path))
     retriever = MemoryRetriever(store, bm25_limit=25)
     accuracy = await _measure_accuracy(retriever)
     speed = await _measure_speed(retriever, iterations=iterations)

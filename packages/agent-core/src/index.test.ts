@@ -130,11 +130,11 @@ vi.mock("./tools/mcp-client.js", async (importOriginal) => {
 function expectedBuiltinMcpServers() {
 	return [
 		{
-			id: "omnimem",
-			namespace: "omnimem",
+			id: "quilin-mem",
+			namespace: "quilin-mem",
 			config: {
 				command: "uv",
-				args: ["run", "python", "-m", "omnimem"],
+				args: ["run", "python", "-m", "quilin_mem"],
 				cwd: expect.stringMatching(/providers\/memory$/u),
 			},
 		},
