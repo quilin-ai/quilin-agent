@@ -910,6 +910,8 @@ export async function main(options: MainOptions = {}): Promise<void> {
 				inferenceConfig: runtimeInferenceConfig,
 				tierRouting: runtimeTierRouting,
 				writeAuthorityMode: runtimeWriteAuthorityMode,
+				trajectoryStore,
+				onIdle: () => idleRunner.tryRun(),
 				toolFilter: runtimeToolFilter,
 				onProviderRunRecord: createProviderRunRecordLogger("repl_turn"),
 				onMcpReconnectApplied: () =>
