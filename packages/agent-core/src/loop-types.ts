@@ -37,6 +37,10 @@ export interface LoopHooks {
 		readonly trustedToolOutput: boolean;
 		readonly hasBlockedThreat: boolean;
 	}) => void | Promise<void>;
+	readonly onTurnComplete?: (
+		turnCount: number,
+		messages: readonly Message[],
+	) => void | Promise<void>;
 }
 
 export async function recordLoopSpan(
