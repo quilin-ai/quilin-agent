@@ -213,11 +213,47 @@ export function createToolProvenanceSection(): PromptSection {
 	};
 }
 
+/**
+ * 对话工程 - 对话风格段 (Conversation Engineering - Style Section)
+ *
+ * 仅当 soul.md 存在且包含有效的 communication_style 字段时生效。
+ * 将 6 层风格参数编织成 system prompt 片段，注入到 prompt 末尾。
+ * 使用 per_session 频率——每个会话只计算一次，session 内冻结不变。
+ */
+export function createConversationStyleSection(
+	soulConfigPath?: string,
+): PromptSection {
+	return {
+		name: "conversation-style",
+		order: 90,
+		updateFrequency: "per_session",
+		compute: () => {
+			const soul = readSoulConfig(soulConfigPath);
+			if (soul == null) {
+				return null;
+			}
+
+			const styleName = soul.communication_style;
+			if (styleName == null || styleName === "") {
+				return null;
+			}
+
+			const style = resolveStylePreset(styleName);
+			if (style == null) {
+				return null;
+			}
+
+			return applyStyleToPrompt(style);
+		},
+	};
+}
+
 export function createDefaultPromptSections(): PromptSection[] {
 	return [
 		createIdentitySection(),
 		createRulesSection(),
 		createToolProvenanceSection(),
 		createToolGuidanceSection(),
+		createConversationStyleSection(),
 	];
 }

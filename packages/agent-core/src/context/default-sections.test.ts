@@ -1,5 +1,15 @@
-import { describe, expect, test } from "vitest";
 import {
+	existsSync,
+	mkdirSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import {
+	createConversationStyleSection,
+	createDefaultPromptSections,
 	createToolGuidanceSection,
 	createToolProvenanceSection,
 } from "./default-sections.js";
@@ -177,5 +187,121 @@ describe("createToolProvenanceSection", () => {
 		const section = createToolProvenanceSection();
 
 		expect(section.compute(baseContext)).toBeNull();
+	});
+});
+
+// -------------------------------------------------------------------
+// createConversationStyleSection
+// -------------------------------------------------------------------
+
+describe("createConversationStyleSection", () => {
+	let tmpDir: string;
+
+	beforeEach(() => {
+		tmpDir = join(
+			tmpdir(),
+			`quilin-style-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+		);
+		mkdirSync(tmpDir, { recursive: true });
+	});
+
+	afterEach(() => {
+		if (existsSync(tmpDir)) {
+			rmSync(tmpDir, { recursive: true, force: true });
+		}
+	});
+
+	function writeTestSoul(path: string, communicationStyle: string): void {
+		const content = [
+			"---",
+			"schema_version: 1",
+			'persona_name: "Test"',
+			'zodiac: "白羊座"',
+			'gender: "无性别"',
+			'mbti: "INTJ"',
+			"core_values:",
+			'  - "测试"',
+			`communication_style: "${communicationStyle}"`,
+			'created_at: "2026-05-07T12:00:00Z"',
+			'last_updated_by: "test"',
+			"---",
+			"",
+			"Test body.",
+		].join("\n");
+		writeFileSync(path, content, "utf-8");
+	}
+
+	test("返回 null 当 soul.md 不存在时", () => {
+		const section = createConversationStyleSection(
+			join(tmpDir, "nonexistent.md"),
+		);
+		expect(section.compute(baseContext)).toBeNull();
+	});
+
+	test("为有效风格名返回包含 6 层的 prompt 片段", () => {
+		const soulPath = join(tmpDir, "soul.md");
+		writeTestSoul(soulPath, "casual");
+
+		const section = createConversationStyleSection(soulPath);
+		const content = section.compute(baseContext);
+
+		expect(content).not.toBeNull();
+		expect(content).toContain("<conversation_style>");
+		expect(content).toContain("## 句子层 / Surface Layer");
+		expect(content).toContain("## 话轮结构层 / Turn Structure");
+		expect(content).toContain("## 观点判断层 / Opinion Layer");
+		expect(content).toContain("## 关系建模层 / Relationship Modeling");
+		expect(content).toContain("## 时间连续性层 / Temporal Continuity");
+		expect(content).toContain("## 元层面 / Meta Layer");
+	});
+
+	test("所有 7 种预设都能生成有效 prompt", () => {
+		const styles = [
+			"blunt",
+			"casual",
+			"thoughtful",
+			"energetic",
+			"dry",
+			"minimalist",
+			"warm",
+		];
+		for (const style of styles) {
+			const soulPath = join(tmpDir, `soul-${style}.md`);
+			writeTestSoul(soulPath, style);
+			const section = createConversationStyleSection(soulPath);
+			const content = section.compute(baseContext);
+			expect(content).not.toBeNull();
+			expect(content!.length).toBeGreaterThan(300);
+		}
+	});
+
+	test("返回 null 当 communication_style 为未知值", () => {
+		const soulPath = join(tmpDir, "soul.md");
+		writeTestSoul(soulPath, "nonexistent-style");
+		const section = createConversationStyleSection(soulPath);
+		expect(section.compute(baseContext)).toBeNull();
+	});
+
+	test("返回 null 当 communication_style 为空字符串", () => {
+		const soulPath = join(tmpDir, "soul.md");
+		writeTestSoul(soulPath, "");
+		const section = createConversationStyleSection(soulPath);
+		expect(section.compute(baseContext)).toBeNull();
+	});
+
+	test("section 是 per_session 频率且在末尾位置", () => {
+		const soulPath = join(tmpDir, "soul.md");
+		writeTestSoul(soulPath, "casual");
+		const section = createConversationStyleSection(soulPath);
+		expect(section.name).toBe("conversation-style");
+		expect(section.order).toBeGreaterThanOrEqual(60);
+		expect(section.updateFrequency).toBe("per_session");
+	});
+
+	test("注入到 createDefaultPromptSections 的末尾", () => {
+		const sections = createDefaultPromptSections();
+		const names = sections.map((s) => s.name);
+		expect(names).toContain("conversation-style");
+		expect(names.at(-1)).toBe("conversation-style");
 	});
 });
