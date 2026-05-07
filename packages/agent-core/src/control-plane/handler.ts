@@ -131,7 +131,7 @@ export function createControlPlaneHandler(
 
 			sendJson(response, 500, {
 				error: "internal_error",
-				message: "Control plane snapshot failed to read data",
+				message: "Control plane snapshot failed: " + String(error),
 			});
 		});
 	};

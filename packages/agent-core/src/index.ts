@@ -825,7 +825,7 @@ export async function main(options: MainOptions = {}): Promise<void> {
 		// Start web control plane / dashboard (test env skips)
 		if (process.env.NODE_ENV !== "test") {
 			try {
-				const cpServer = await startControlPlaneServer({
+				const cpServer = await startControlPlaneServer({ checkpoint: new SQLiteCheckpoint(),
 					port: Number.parseInt(process.env.QUILIN_DASHBOARD_PORT ?? "0", 10),
 				});
 				logger.info({ url: cpServer.url }, "Web dashboard started");
