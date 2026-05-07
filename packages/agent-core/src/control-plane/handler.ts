@@ -4,6 +4,15 @@ import {
 	type ServerResponse,
 } from "node:http";
 import type { AddressInfo } from "node:net";
+
+function readRequestBody(request: IncomingMessage): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const chunks: Buffer[] = [];
+		request.on("data", (chunk: Buffer) => chunks.push(chunk));
+		request.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
+		request.on("error", reject);
+	});
+}
 import { renderControlPlaneDashboardHtml } from "../observability/dashboard-page.js";
 import {
 	type BuildControlPlaneSnapshotOptions,
@@ -11,7 +20,9 @@ import {
 } from "./snapshot.js";
 
 export interface ControlPlaneHandlerOptions
-	extends BuildControlPlaneSnapshotOptions {}
+	extends BuildControlPlaneSnapshotOptions {
+	readonly onChat?: (message: string) => Promise<string>;
+}
 
 export interface StartControlPlaneServerOptions
 	extends ControlPlaneHandlerOptions {
@@ -80,12 +91,37 @@ export function createControlPlaneHandler(
 ): (request: IncomingMessage, response: ServerResponse) => void {
 	return (request, response) => {
 		void (async () => {
+			const url = new URL(request.url ?? "/", "http://127.0.0.1");
+
+			// POST /api/chat — simple one-shot chat
+			if (request.method === "POST" && url.pathname === "/api/chat") {
+				if (options.onChat == null) {
+					sendJson(response, 501, { error: "chat not available" });
+					return;
+				}
+				try {
+					const body = await readRequestBody(request);
+					const data = JSON.parse(body) as { message?: string };
+					if (data.message == null || data.message.trim().length === 0) {
+						sendJson(response, 400, { error: "message is required" });
+						return;
+					}
+					const reply = await options.onChat(data.message);
+					sendJson(response, 200, { reply });
+				} catch (err) {
+					sendJson(response, 500, {
+						error: "chat_failed",
+						message: String(err),
+					});
+				}
+				return;
+			}
+
 			if (request.method !== "GET" && request.method !== "HEAD") {
 				sendJson(response, 405, { error: "method_not_allowed" });
 				return;
 			}
 
-			const url = new URL(request.url ?? "/", "http://127.0.0.1");
 			if (!routeMatches(url.pathname)) {
 				sendJson(response, 404, { error: "not_found" });
 				return;

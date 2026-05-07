@@ -827,6 +827,17 @@ export async function main(options: MainOptions = {}): Promise<void> {
 			try {
 				const cpServer = await startControlPlaneServer({ checkpoint: new SQLiteCheckpoint(),
 					port: Number.parseInt(process.env.QUILIN_DASHBOARD_PORT ?? "0", 10),
+					onChat: async (message: string) => {
+						try {
+							const chatModel = provider(modelId);
+							const r = await new VercelLLMClient({ model: chatModel }).chat(
+								[{ role: "user", content: message }],
+								[],
+								{ temperature: 0.7, maxTokens: 2048, thinkingMode: "disabled" },
+							);
+							return r.content;
+						} catch (err) { return `Chat error: ${String(err)}`; }
+					},
 				});
 				logger.info({ url: cpServer.url }, "Web dashboard started");
 			} catch (err) {

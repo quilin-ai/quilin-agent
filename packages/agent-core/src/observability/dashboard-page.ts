@@ -444,6 +444,17 @@ footer{
 	${renderProvidersSection(snapshot.providers)}
 </main>
 <footer>Quilin Agent &middot; Control Plane &middot; v0.0.3</footer>
+<section class="card" id="chat-section" style="margin:1.5rem auto;max-width:900px">
+<h2>Chat</h2>
+<div id="chat-messages" style="max-height:400px;overflow-y:auto;margin-bottom:0.75rem"></div>
+<form id="chat-form" style="display:flex;gap:0.5rem">
+<input id="chat-input" type="text" placeholder="Type a message..." autocomplete="off" style="flex:1;background:var(--code-bg);border:1px solid var(--border);color:var(--fg);padding:0.5rem 0.75rem;border-radius:6px;font-size:14px">
+<button type="submit" style="background:var(--accent);color:#fff;border:none;padding:0.5rem 1rem;border-radius:6px;cursor:pointer;font-size:14px">Send</button>
+</form>
+</section>
+<script>
+(function(){const msgs=document.getElementById("chat-messages"),form=document.getElementById("chat-form"),input=document.getElementById("chat-input");let sending=false;function addMsg(role,text){const d=document.createElement("div");d.style.marginBottom="0.5rem";d.innerHTML='<strong>'+(role==="user"?"You":"Quilin")+':</strong> '+text.replace(/&/g,"&amp;").replace(/</g,"&lt;");msgs.appendChild(d);msgs.scrollTop=msgs.scrollHeight}form.addEventListener("submit",async function(e){e.preventDefault();const msg=input.value.trim();if(!msg||sending)return;sending=true;input.value="";addMsg("user",msg);try{const r=await fetch("/api/chat",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({message:msg})});const d=await r.json();addMsg("assistant",d.reply||d.error||"No response")}catch(err){addMsg("assistant","Error: "+err.message)}finally{sending=false}});})();
+</script>
 </body>
 </html>
 `;
