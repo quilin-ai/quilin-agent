@@ -49,6 +49,7 @@ describe("checkpoint writer", () => {
 				save,
 				load: vi.fn(),
 				list: vi.fn(),
+				listSessions: vi.fn(),
 			},
 			messages: [{ role: "user", content: "hello" }],
 			turnCount: 4,

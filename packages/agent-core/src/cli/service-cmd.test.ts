@@ -22,11 +22,9 @@ function fakeFs() {
 
 	const mkdir = vi.fn(async (_dirPath: string, _opts?: object) => {});
 
-	const writeFile = vi.fn(
-		async (filePath: string, data: string) => {
-			files.set(filePath, data);
-		},
-	);
+	const writeFile = vi.fn(async (filePath: string, data: string) => {
+		files.set(filePath, data);
+	});
 
 	const unlink = vi.fn(async (filePath: string) => {
 		if (files.has(filePath)) {
@@ -67,7 +65,8 @@ function makeOptions(
 	const options: ServiceCommandOptions = {
 		quilinPath: "/usr/local/bin/quilin",
 		logDir: "/home/user/.quilin/logs",
-		execFileSync: exec as unknown as typeof import("node:child_process").execFileSync,
+		execFileSync:
+			exec as unknown as typeof import("node:child_process").execFileSync,
 	};
 
 	const originalPlatform = process.platform;
@@ -398,9 +397,9 @@ describe("templates", () => {
 
 describe("resolveQuilinPath", () => {
 	it("uses provided quilinPath option", () => {
-		expect(
-			__testing.resolveQuilinPath({ quilinPath: "/custom/quilin" }),
-		).toBe("/custom/quilin");
+		expect(__testing.resolveQuilinPath({ quilinPath: "/custom/quilin" })).toBe(
+			"/custom/quilin",
+		);
 	});
 
 	it("falls back to process.execPath when no option given", () => {

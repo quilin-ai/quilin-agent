@@ -226,7 +226,11 @@ function pickRandom<T>(items: readonly T[]): T {
 
 export function generateRandomSoul(): Omit<
 	SoulConfig,
-	"schema_version" | "core_values" | "communication_style" | "created_at" | "last_updated_by"
+	| "schema_version"
+	| "core_values"
+	| "communication_style"
+	| "created_at"
+	| "last_updated_by"
 > & {
 	schema_version: number;
 	core_values: string[];
@@ -299,7 +303,11 @@ export function writeSoulConfig(config: SoulConfig, path?: string): void {
 	}
 
 	const { body, ...fields } = config;
-	writeFileSync(filePath, serializeFrontmatter(fields as Record<string, unknown>, body), "utf-8");
+	writeFileSync(
+		filePath,
+		serializeFrontmatter(fields as Record<string, unknown>, body),
+		"utf-8",
+	);
 }
 
 export function writeUserProfile(
@@ -313,7 +321,11 @@ export function writeUserProfile(
 	}
 
 	const { body, ...fields } = config;
-	writeFileSync(filePath, serializeFrontmatter(fields as Record<string, unknown>, body), "utf-8");
+	writeFileSync(
+		filePath,
+		serializeFrontmatter(fields as Record<string, unknown>, body),
+		"utf-8",
+	);
 }
 
 export interface EnsureDefaultConfigsResult {
@@ -365,5 +377,12 @@ export function ensureDefaultConfigs(
 		userCreated = true;
 	}
 
-	return { soulPath: soulFile, userPath: userFile, soulConfig, userProfile, soulCreated, userCreated };
+	return {
+		soulPath: soulFile,
+		userPath: userFile,
+		soulConfig,
+		userProfile,
+		soulCreated,
+		userCreated,
+	};
 }

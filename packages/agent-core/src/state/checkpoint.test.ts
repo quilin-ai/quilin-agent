@@ -3,7 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { logger } from "../logger.js";
-import { MigrationError, SQLiteCheckpoint } from "./checkpoint.js";
+import {
+	MigrationError,
+	type SessionSummary,
+	SQLiteCheckpoint,
+} from "./checkpoint.js";
 import type { AgentState, ReasoningPart } from "./types.js";
 
 interface StoredSession {
@@ -37,14 +41,22 @@ class MockDatabase {
 					return [] as T[];
 				}
 
+				const includesLastActiveAt = sql.includes("last_active_at");
+
 				return [...this.sessions.entries()]
 					.sort((left, right) =>
 						right[1].lastActiveAt.localeCompare(left[1].lastActiveAt),
 					)
-					.map(([sessionId, row]) => ({
-						session_id: sessionId,
-						state_json: row.stateJson,
-					})) as T[];
+					.map(([sessionId, row]) => {
+						const base: Record<string, unknown> = {
+							session_id: sessionId,
+							state_json: row.stateJson,
+						};
+						if (includesLastActiveAt) {
+							base.last_active_at = row.lastActiveAt;
+						}
+						return base;
+					}) as T[];
 			},
 			get: (...params: unknown[]) => {
 				if (!sql.includes("WHERE session_id = ?")) {
@@ -270,6 +282,86 @@ describe("SQLiteCheckpoint", () => {
 		await expect(
 			new SQLiteCheckpoint({ sessionId: "session-a", dbPath }).list(),
 		).resolves.toEqual(["session-c", "session-b", "session-a"]);
+	});
+
+	it("listSessions returns session summaries with last user message", async () => {
+		const dbPath = makeMemoryDbPath("checkpoint-list-sessions");
+
+		await new SQLiteCheckpoint({ sessionId: "session-u1", dbPath }).save(
+			makeState({
+				messages: [
+					{ role: "system", content: "system prompt" },
+					{ role: "user", content: "hello world" },
+					{ role: "assistant", content: "hi there" },
+				],
+				lastActiveAt: "2026-04-15T00:01:00.000Z",
+			}),
+		);
+		await new SQLiteCheckpoint({ sessionId: "session-u2", dbPath }).save(
+			makeState({
+				messages: [
+					{ role: "system", content: "system prompt" },
+					{
+						role: "user",
+						content:
+							"This is a very long user message that exceeds the eighty character limit for the session summary preview text rendering",
+					},
+				],
+				lastActiveAt: "2026-04-15T00:02:00.000Z",
+			}),
+		);
+
+		const summaries = await new SQLiteCheckpoint({
+			sessionId: "session-u1",
+			dbPath,
+		}).listSessions();
+
+		expect(summaries).toHaveLength(2);
+		expect(summaries[0]).toEqual<SessionSummary>({
+			sessionId: "session-u2",
+			lastMessage:
+				"This is a very long user message that exceeds the eighty character limit for the...",
+			messageCount: 2,
+			lastActiveAt: "2026-04-15T00:02:00.000Z",
+		});
+		expect(summaries[1]).toEqual<SessionSummary>({
+			sessionId: "session-u1",
+			lastMessage: "hello world",
+			messageCount: 3,
+			lastActiveAt: "2026-04-15T00:01:00.000Z",
+		});
+	});
+
+	it("listSessions returns empty lastMessage when no user messages exist", async () => {
+		const dbPath = makeMemoryDbPath("checkpoint-list-sessions-no-user");
+
+		await new SQLiteCheckpoint({ sessionId: "no-user-msg", dbPath }).save(
+			makeState({
+				messages: [
+					{ role: "system", content: "system prompt" },
+					{ role: "assistant", content: "auto reply" },
+				],
+				lastActiveAt: "2026-04-15T00:01:00.000Z",
+			}),
+		);
+
+		const summaries = await new SQLiteCheckpoint({
+			dbPath,
+		}).listSessions();
+
+		expect(summaries).toHaveLength(1);
+		expect(summaries[0]?.lastMessage).toBe("");
+		expect(summaries[0]?.messageCount).toBe(2);
+	});
+
+	it("listSessions returns empty array when no sessions exist", async () => {
+		const dbPath = makeMemoryDbPath("checkpoint-list-sessions-empty");
+
+		const summaries = await new SQLiteCheckpoint({
+			dbPath,
+		}).listSessions();
+
+		expect(summaries).toEqual([]);
 	});
 
 	it("auto-generates a UUID when sessionId is not provided", async () => {

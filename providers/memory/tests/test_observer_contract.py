@@ -1,16 +1,22 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 
 import pytest
 
 from quilin_mem.observer import (
+    L3aObserver,
     MemoryObserver,
     NoOpMemoryObserver,
     ObservationArchiveGateDecision,
     ObservationCandidate,
     ObservationTurn,
+    ObserverConfig,
     RuleFirstMemoryObserver,
+    _call_deepseek_api,
+    _format_turn_buffer,
+    _parse_l3a_llm_response,
     build_observation_archive_gate_report,
     build_observation_extraction_report,
     decide_observation_archive_gate,
@@ -1501,3 +1507,370 @@ async def test_observe_safely_keeps_valid_candidates_when_one_candidate_is_inval
         "The user prefers direct status updates.",
         "The user wants bilingual docs.",
     ]
+
+
+# ----------------------------------------------------------------- L3a observer -
+
+
+def _llm_caller_json_response(base_url: str, api_key: str, payload: bytes) -> str:
+    """Fake LLM caller returning valid JSON."""
+    return json.dumps(
+        {
+            "patterns": [
+                "User consistently prefers Chinese summaries",
+                "User has a habit of asking for unit tests before implementation",
+            ],
+            "suggestions": [
+                "Default to Chinese-language summaries in profile",
+                "Proactively suggest test-first workflow in planning phase",
+            ],
+            "confidence": 0.87,
+        }
+    )
+
+
+def _llm_caller_invalid_json(base_url: str, api_key: str, payload: bytes) -> str:
+    """Fake LLM caller returning invalid JSON."""
+    return "not valid json { broken"
+
+
+def _llm_caller_empty_response(base_url: str, api_key: str, payload: bytes) -> str:
+    """Fake LLM caller returning empty JSON."""
+    return "{}"
+
+
+def _llm_caller_network_error(base_url: str, api_key: str, payload: bytes) -> str:
+    """Fake LLM caller that raises a network error."""
+    raise OSError("connection refused")
+
+
+# -- ObserverConfig tests --
+
+
+def test_observer_config_defaults() -> None:
+    cfg = ObserverConfig()
+    assert cfg.model == "deepseek-v4-flash"
+    assert cfg.api_key == ""
+    assert cfg.frequency == 10
+    assert cfg.base_url == "https://api.deepseek.com/v1/chat/completions"
+
+
+def test_observer_config_custom_values() -> None:
+    cfg = ObserverConfig(
+        model="custom-model",
+        api_key="test-key",
+        frequency=5,
+        base_url="https://example.com/api",
+    )
+    assert cfg.model == "custom-model"
+    assert cfg.api_key == "test-key"
+    assert cfg.frequency == 5
+    assert cfg.base_url == "https://example.com/api"
+
+
+def test_observer_config_is_immutable() -> None:
+    cfg = ObserverConfig(frequency=3)
+    with pytest.raises(AttributeError):
+        cfg.frequency = 7  # type: ignore[misc]
+
+
+def test_observer_config_rejects_invalid_frequency() -> None:
+    with pytest.raises(ValueError, match="ObserverConfig.frequency must be >= 1"):
+        ObserverConfig(frequency=0)
+
+    with pytest.raises(ValueError, match="ObserverConfig.frequency must be >= 1"):
+        ObserverConfig(frequency=-1)
+
+
+# -- L3aObserver frequency control tests --
+
+
+async def test_l3a_observer_no_llm_before_frequency_threshold() -> None:
+    """LLM should not be called before the frequency threshold (10 turns)."""
+    call_log: list[object] = []
+
+    def tracking_caller(base_url: str, api_key: str, payload: bytes) -> str:
+        call_log.append(payload)
+        return _llm_caller_json_response(base_url, api_key, payload)
+
+    observer = L3aObserver(
+        ObserverConfig(api_key="test-key", frequency=10),
+        _llm_caller=tracking_caller,
+    )
+
+    for i in range(9):
+        candidates = await observer.observe(
+            {"content": f"turn {i + 1}: I prefer Chinese summaries", "role": "user"}
+        )
+        # Should have deterministic candidates
+        assert any("Chinese" in c.content for c in candidates)
+
+    assert len(call_log) == 0  # LLM never called
+
+
+async def test_l3a_observer_triggers_llm_at_frequency_boundary() -> None:
+    """LLM should be called exactly at the frequency boundary."""
+    call_log: list[object] = []
+
+    def tracking_caller(base_url: str, api_key: str, payload: bytes) -> str:
+        call_log.append(payload)
+        return _llm_caller_json_response(base_url, api_key, payload)
+
+    observer = L3aObserver(
+        ObserverConfig(api_key="test-key", frequency=5),
+        _llm_caller=tracking_caller,
+    )
+
+    for i in range(5):
+        await observer.observe(
+            {"content": f"turn {i + 1}: remember I prefer Chinese", "role": "user"}
+        )
+
+    assert len(call_log) == 1  # Called at turn 5
+
+
+async def test_l3a_observer_no_api_key_skips_llm() -> None:
+    """When api_key is empty, LLM should never be called."""
+    call_log: list[object] = []
+
+    def tracking_caller(base_url: str, api_key: str, payload: bytes) -> str:
+        call_log.append(payload)
+        return "{}"
+
+    observer = L3aObserver(
+        ObserverConfig(api_key="", frequency=1),
+        _llm_caller=tracking_caller,
+    )
+
+    # Even with frequency=1, no API key means no LLM call
+    for _ in range(5):
+        await observer.observe({"content": "I prefer concise updates", "role": "user"})
+
+    assert len(call_log) == 0
+
+
+async def test_l3a_observer_yields_deterministic_plus_llm_candidates() -> None:
+    """At frequency boundary, output includes both deterministic + LLM candidates."""
+    observer = L3aObserver(
+        ObserverConfig(api_key="test-key", frequency=3),
+        _llm_caller=_llm_caller_json_response,
+    )
+
+    for i in range(2):
+        await observer.observe({"content": f"turn {i + 1}: hello", "role": "user"})
+
+    # Turn 3 triggers LLM
+    candidates = await observer.observe(
+        {"content": "remember I prefer Chinese", "role": "user"}
+    )
+
+    # Should have deterministic candidate + LLM candidates
+    deterministic = [c for c in candidates if c.metadata.get("source") != "l3a_observer"]
+    llm_candidates = [c for c in candidates if c.metadata.get("source") == "l3a_observer"]
+
+    assert len(deterministic) >= 1
+    assert len(llm_candidates) >= 2  # 2 patterns + 2 suggestions
+
+
+async def test_l3a_observer_llm_failure_is_silent() -> None:
+    """Network failure in LLM should not raise — just fall back to deterministic."""
+    observer = L3aObserver(
+        ObserverConfig(api_key="test-key", frequency=1),
+        _llm_caller=_llm_caller_network_error,
+    )
+
+    candidates = await observer.observe(
+        {"content": "remember I prefer Chinese summaries", "role": "user"}
+    )
+
+    # Should still have deterministic candidates
+    assert len(candidates) >= 1
+    assert all(c.metadata.get("source") != "l3a_observer" for c in candidates)
+
+
+async def test_l3a_observer_invalid_json_is_silent() -> None:
+    """Invalid JSON from LLM should not raise — just skip LLM candidates."""
+    observer = L3aObserver(
+        ObserverConfig(api_key="test-key", frequency=1),
+        _llm_caller=_llm_caller_invalid_json,
+    )
+
+    candidates = await observer.observe(
+        {"content": "remember I prefer Chinese summaries", "role": "user"}
+    )
+
+    # Should still have deterministic candidates but no LLM extras
+    assert len(candidates) >= 1
+    assert all(c.metadata.get("source") != "l3a_observer" for c in candidates)
+
+
+# -- L3aObserver implements MemoryObserver protocol --
+
+
+async def test_l3a_observer_satisfies_memory_observer_protocol() -> None:
+    observer = L3aObserver(
+        ObserverConfig(api_key="test-key", frequency=10),
+        _llm_caller=_llm_caller_json_response,
+    )
+    assert isinstance(observer, MemoryObserver)
+
+
+# -- _call_deepseek_api function tests --
+
+
+async def test_call_deepseek_api_with_mock() -> None:
+    """Test _call_deepseek_api by injecting a custom handler."""
+
+    def fake_urlopen(req, timeout=None):
+        class FakeResponse:
+            def read(self):
+                return json.dumps(
+                    {
+                        "choices": [
+                            {
+                        "message": {
+                            "content": '{"patterns":[],"suggestions":[],"confidence":0.5}'
+                        }
+                    }
+                        ]
+                    }
+                ).encode("utf-8")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                pass
+
+        return FakeResponse()
+
+    import quilin_mem.observer as obs_mod
+
+    original = getattr(obs_mod, "urlopen", None)
+    obs_mod.urlopen = fake_urlopen  # type: ignore[attr-defined]
+    try:
+        result = _call_deepseek_api(
+            "https://test.example.com/v1/chat",
+            "test-key",
+            b'{"model":"test"}',
+        )
+        assert "patterns" in result
+    finally:
+        if original is not None:
+            obs_mod.urlopen = original
+
+
+# -- _format_turn_buffer tests --
+
+
+def test_format_turn_buffer_basic() -> None:
+    turns = [
+        ObservationTurn(content="I prefer Chinese", role="user", turn_id="t1"),
+        ObservationTurn(content="Understood.", role="assistant", turn_id="t2"),
+        ObservationTurn(content="请保持简洁", role="user", turn_id="t3"),
+    ]
+    formatted = _format_turn_buffer(turns)
+
+    assert "[Turn 1] (user): I prefer Chinese" in formatted
+    assert "[Turn 2] (assistant): Understood." in formatted
+    assert "[Turn 3] (user): 请保持简洁" in formatted
+
+
+def test_format_turn_buffer_empty() -> None:
+    assert _format_turn_buffer([]) == ""
+
+
+def test_format_turn_buffer_unknown_role() -> None:
+    turns = [ObservationTurn(content="hello", role="unknown", turn_id="t1")]
+    formatted = _format_turn_buffer(turns)
+    assert "(message)" in formatted
+
+
+def test_format_turn_buffer_truncates_long_content() -> None:
+    long_content = "x" * 500
+    turns = [ObservationTurn(content=long_content, role="user")]
+    formatted = _format_turn_buffer(turns)
+    assert len(formatted) < 500  # Should be truncated
+
+
+# -- _parse_l3a_llm_response tests --
+
+
+def test_parse_l3a_llm_response_valid() -> None:
+    buffer = [ObservationTurn(content="test", role="user", turn_id="t1")]
+    raw = json.dumps(
+        {
+            "patterns": ["User prefers short answers", "User likes Chinese"],
+            "suggestions": ["Set default language to zh"],
+            "confidence": 0.85,
+        }
+    )
+
+    candidates = _parse_l3a_llm_response(raw, buffer)
+
+    assert len(candidates) == 3  # 2 patterns + 1 suggestion
+    pattern_candidates = [c for c in candidates if c.kind == "preference"]
+    suggestion_candidates = [c for c in candidates if c.kind == "intent"]
+
+    assert len(pattern_candidates) == 2
+    assert len(suggestion_candidates) == 1
+    assert all(c.confidence == 0.85 for c in pattern_candidates)
+    assert suggestion_candidates[0].confidence == round(0.85 * 0.9, 3)
+    assert all(c.metadata["source"] == "l3a_observer" for c in candidates)
+    assert all(c.metadata["observer_version"] == "l3a-observer-v1" for c in candidates)
+    assert all(c.source_turn_id == "t1" for c in candidates)
+
+
+def test_parse_l3a_llm_response_invalid_json() -> None:
+    buffer = [ObservationTurn(content="test", role="user")]
+    candidates = _parse_l3a_llm_response("not json", buffer)
+    assert candidates == []
+
+
+def test_parse_l3a_llm_response_non_dict() -> None:
+    buffer = [ObservationTurn(content="test", role="user")]
+    candidates = _parse_l3a_llm_response('["not a dict"]', buffer)
+    assert candidates == []
+
+
+def test_parse_l3a_llm_response_empty_object() -> None:
+    buffer = [ObservationTurn(content="test", role="user")]
+    candidates = _parse_l3a_llm_response("{}", buffer)
+    assert candidates == []
+
+
+def test_parse_l3a_llm_response_clamps_confidence() -> None:
+    buffer = [ObservationTurn(content="test", role="user")]
+    raw = json.dumps({"patterns": ["test"], "confidence": 1.5})
+    candidates = _parse_l3a_llm_response(raw, buffer)
+    # confidence gets clamped to 1.0 (max)
+    assert candidates[0].confidence == 1.0
+
+    raw2 = json.dumps({"patterns": ["test"], "confidence": -0.5})
+    candidates2 = _parse_l3a_llm_response(raw2, buffer)
+    # Negative gets clamped to 0.0
+    assert candidates2[0].confidence == 0.0
+
+
+def test_parse_l3a_llm_response_filters_non_string_items() -> None:
+    buffer = [ObservationTurn(content="test", role="user")]
+    raw = json.dumps(
+        {
+            "patterns": ["valid pattern", 123, None, "  ", "another pattern"],
+            "suggestions": [],
+            "confidence": 0.5,
+        }
+    )
+    candidates = _parse_l3a_llm_response(raw, buffer)
+
+    pattern_contents = [c.content for c in candidates if c.kind == "preference"]
+    assert len(pattern_contents) == 2
+    assert any("valid pattern" in content for content in pattern_contents)
+
+
+def test_parse_l3a_llm_response_null_source_turn_id_when_buffer_empty() -> None:
+    candidates = _parse_l3a_llm_response(
+        json.dumps({"patterns": ["test"], "confidence": 0.5}),
+        [],
+    )
+    assert candidates[0].source_turn_id is None

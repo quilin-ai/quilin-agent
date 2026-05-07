@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import json
+import os
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Literal, Protocol, cast, runtime_checkable
+from urllib.request import Request, urlopen
 
 ObservationRole = Literal["user", "assistant", "tool", "system", "unknown"]
 ObservationKind = Literal["fact", "preference", "event", "intent", "relationship", "unknown"]
@@ -44,6 +48,49 @@ OBSERVATION_ARCHIVE_BLOCKING_REASON_ORDER: tuple[
     "low_quality_candidates",
     "no_high_quality_candidates",
 )
+
+_DEFAULT_OBSERVER_MODEL = "deepseek-v4-flash"
+_DEEPSEEK_CHAT_URL = "https://api.deepseek.com/v1/chat/completions"
+_L3A_OBSERVER_SYSTEM_PROMPT = (
+    "You are a user-behavior observer in the Quilin Agent memory system. "
+    "Analyze the provided conversation turns to discover: "
+    "1) recurring user preferences and habits, "
+    "2) repeated task patterns or workflows, "
+    "3) latent user intentions not yet explicitly stated, "
+    "4) communication style preferences (language, verbosity, tone). "
+    "Output ONLY a valid JSON object with three fields: "
+    '"patterns" (array of strings describing observed patterns), '
+    '"suggestions" (array of strings with actionable profile improvement suggestions), '
+    '"confidence" (a float between 0.0 and 1.0 indicating overall confidence). '
+    "Be conservative — only report patterns with clear evidence from the conversation."
+)
+_L3A_OBSERVER_USER_PROMPT_TEMPLATE = (
+    "Below are the most recent {turn_count} turns from a user session. "
+    "Analyze them and extract profile-worthy observations:\n\n{turns_text}"
+)
+
+
+@dataclass(slots=True, frozen=True)
+class ObserverConfig:
+    """Immutable configuration for L3a LLM-backed observer.
+
+    Fields:
+        model: DeepSeek model name for observer LLM calls.
+        api_key: API key for the observer LLM.  Default reads DEEPSEEK_API_KEY env var.
+        frequency: Trigger LLM analysis every N turns (default 10).
+        base_url: Chat completions endpoint URL.
+    """
+
+    model: str = field(
+        default_factory=lambda: os.environ.get("QUILIN_OBSERVER_MODEL", _DEFAULT_OBSERVER_MODEL)
+    )
+    api_key: str = field(default_factory=lambda: os.environ.get("DEEPSEEK_API_KEY", ""))
+    frequency: int = 10
+    base_url: str = _DEEPSEEK_CHAT_URL
+
+    def __post_init__(self) -> None:
+        if self.frequency < 1:
+            raise ValueError("ObserverConfig.frequency must be >= 1")
 
 VALID_OBSERVATION_ROLES: tuple[ObservationRole, ...] = (
     "user",
@@ -1352,6 +1399,211 @@ class NoOpMemoryObserver:
     async def observe(self, turn: ObservationTurnInput) -> list[ObservationCandidate]:
         normalize_observation_turn(turn)
         return []
+
+
+class L3aObserver:
+    """L3a (LLM-backed) observer — periodic deep analysis via flash model.
+
+    Deterministic (L1/L2) extraction runs on every turn.  Every *frequency* turns
+    the buffered conversation is sent to a flash-tier LLM for deeper pattern
+    discovery.  Results are parsed into ``ObservationCandidate`` objects and
+    optionally written to user profile via ``ProfileUpdater``.
+
+    The LLM call is best-effort — a network or parse failure silently falls back
+    to deterministic candidates only.
+    """
+
+    def __init__(
+        self,
+        config: ObserverConfig | None = None,
+        *,
+        profile_updater: object | None = None,
+        _llm_caller: object | None = None,
+    ) -> None:
+        self._config = config or ObserverConfig()
+        self._profile_updater = profile_updater
+        self._turn_buffer: list[ObservationTurn] = []
+        self._turn_count = 0
+        self._llm_caller = _llm_caller or _call_deepseek_api
+
+    async def observe(
+        self,
+        turn: ObservationTurnInput,
+    ) -> list[ObservationCandidate]:
+        normalized = normalize_observation_turn(turn)
+        self._turn_count += 1
+        self._turn_buffer.append(normalized)
+
+        candidates: list[ObservationCandidate] = list(
+            extract_observation_candidates(normalized)
+        )
+
+        if self._should_trigger_llm() and self._config.api_key:
+            try:
+                llm_candidates = await self._call_llm()
+                candidates.extend(llm_candidates)
+                if self._profile_updater is not None:
+                    self._apply_to_profile(llm_candidates)
+            except Exception:
+                pass  # L3a is best-effort — never block deterministic path
+
+        return candidates
+
+    # -- internal -------------------------------------------------------
+
+    def _should_trigger_llm(self) -> bool:
+        freq = self._config.frequency
+        if freq < 1:
+            return False
+        return self._turn_count % freq == 0
+
+    async def _call_llm(self) -> list[ObservationCandidate]:
+        turns_text = _format_turn_buffer(self._turn_buffer)
+        user_prompt = _L3A_OBSERVER_USER_PROMPT_TEMPLATE.format(
+            turn_count=len(self._turn_buffer),
+            turns_text=turns_text,
+        )
+        payload = json.dumps(
+            {
+                "model": self._config.model,
+                "messages": [
+                    {"role": "system", "content": _L3A_OBSERVER_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "response_format": {"type": "json_object"},
+                "temperature": 0.1,
+                "max_tokens": 1024,
+            }
+        ).encode("utf-8")
+
+        response_text = await asyncio.to_thread(
+            self._llm_caller,
+            self._config.base_url,
+            self._config.api_key,
+            payload,
+        )
+        return _parse_l3a_llm_response(response_text, self._turn_buffer)
+
+    def _apply_to_profile(self, candidates: list[ObservationCandidate]) -> None:
+        if self._profile_updater is None:
+            return
+        try:
+            from .profile_store import emit_profile_signal  # noqa: F811
+
+            for candidate in candidates:
+                if candidate.confidence < 0.7:
+                    continue
+                signal = emit_profile_signal(
+                    profile_id="__default__",
+                    updates={"observer_l3a_finding": candidate.content},
+                    source="l3a_observer",
+                )
+                self._profile_updater.apply_signal(  # type: ignore[union-attr]
+                    signal,
+                    who="l3a_observer",
+                    why=f"LLM-observed pattern (confidence={candidate.confidence:.2f})",
+                )
+        except Exception:
+            pass  # profile update is best-effort
+
+
+def _call_deepseek_api(base_url: str, api_key: str, payload: bytes) -> str:
+    """Synchronous HTTP POST to DeepSeek chat completions endpoint.
+
+    Extracted as a module-level function so tests can replace it via the
+    ``_llm_caller`` injection point on ``L3aObserver``.
+    """
+    req = Request(
+        base_url,
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+        method="POST",
+    )
+    with urlopen(req, timeout=30) as resp:
+        body = resp.read().decode("utf-8")
+    data = json.loads(body)
+    return data["choices"][0]["message"]["content"]
+
+
+def _format_turn_buffer(buffer: list[ObservationTurn]) -> str:
+    """Format buffered turns into a compact text block for the LLM prompt."""
+    lines: list[str] = []
+    for i, turn in enumerate(buffer, start=1):
+        role_label = turn.role if turn.role != "unknown" else "message"
+        snippet = turn.content[:300].replace("\n", " ")
+        lines.append(f"[Turn {i}] ({role_label}): {snippet}")
+    return "\n".join(lines)
+
+
+def _parse_l3a_llm_response(
+    raw_text: str,
+    buffer: list[ObservationTurn],
+) -> list[ObservationCandidate]:
+    """Parse JSON output from L3a LLM into ``ObservationCandidate`` objects."""
+    try:
+        data = json.loads(raw_text)
+    except json.JSONDecodeError:
+        return []
+
+    if not isinstance(data, dict):
+        return []
+
+    candidates: list[ObservationCandidate] = []
+    overall_confidence = float(data.get("confidence", 0.0))
+    if not (0.0 <= overall_confidence <= 1.0):
+        overall_confidence = min(max(overall_confidence, 0.0), 1.0)
+
+    source_turn_id = buffer[-1].turn_id if buffer else None
+
+    patterns: list[str] = _normalize_string_array(data.get("patterns"))
+    for pattern in patterns:
+        candidates.append(
+            ObservationCandidate(
+                content=f"L3a observed pattern: {pattern}",
+                confidence=round(overall_confidence, 3),
+                kind="preference",
+                source_turn_id=source_turn_id,
+                metadata={
+                    "source": "l3a_observer",
+                    "observer_version": "l3a-observer-v1",
+                    "evidence": [f"buffered_turns_{len(buffer)}"],
+                    "extraction_path": "l3a_llm",
+                },
+            )
+        )
+
+    suggestions: list[str] = _normalize_string_array(data.get("suggestions"))
+    for suggestion in suggestions:
+        candidates.append(
+            ObservationCandidate(
+                content=f"L3a suggestion: {suggestion}",
+                confidence=round(overall_confidence * 0.9, 3),
+                kind="intent",
+                source_turn_id=source_turn_id,
+                metadata={
+                    "source": "l3a_observer",
+                    "observer_version": "l3a-observer-v1",
+                    "evidence": [f"buffered_turns_{len(buffer)}"],
+                    "extraction_path": "l3a_llm",
+                },
+            )
+        )
+
+    return candidates
+
+
+def _normalize_string_array(value: object) -> list[str]:
+    """Normalize a JSON array of strings, filtering out non-string entries."""
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    for item in value:
+        if isinstance(item, str) and item.strip():
+            result.append(item.strip())
+    return result
 
 
 async def observe_safely(

@@ -25,6 +25,8 @@ vi.mock("../logger.js", () => ({
 vi.mock("../llm/provider.js", () => ({
 	createProvider: vi.fn(),
 	getDefaultModel: vi.fn(),
+	buildProviderLiveMatrix: vi.fn(() => []),
+	DEFAULT_PROVIDER_CATALOG: [],
 }));
 
 vi.mock("../repl.js", () => ({

@@ -119,6 +119,11 @@ const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
 		description: "Save and quit",
 	},
 	{
+		name: "resume",
+		signature: "/resume [<number>]",
+		description: "List or resume saved sessions",
+	},
+	{
 		name: "quit",
 		signature: "/quit",
 		description: "Save and quit",
@@ -272,6 +277,59 @@ function withDefaultMetadata(tools: readonly Tool[]): ToolWithMetadata[] {
 
 function formatReplList(values: readonly string[]): string {
 	return values.length === 0 ? "none" : values.join(",");
+}
+
+interface ResumeSessionSummary {
+	readonly sessionId: string;
+	readonly lastMessage: string;
+	readonly messageCount: number;
+	readonly lastActiveAt: string;
+}
+
+function formatResumeTime(isoTimestamp: string): string {
+	// ISO 8601 → "MM-DD HH:mm"
+	const month = isoTimestamp.slice(5, 7);
+	const day = isoTimestamp.slice(8, 10);
+	const hour = isoTimestamp.slice(11, 13);
+	const minute = isoTimestamp.slice(14, 16);
+	return `${month}-${day} ${hour}:${minute}`;
+}
+
+function renderResumeSessionsTable(
+	sessions: readonly ResumeSessionSummary[],
+): string {
+	const NUM_COL_WIDTH = 4;
+	const TIME_COL_WIDTH = 20;
+	const MSG_COL_WIDTH = 34;
+	const SEPARATOR_TOP = `┌${"─".repeat(NUM_COL_WIDTH)}┬${"─".repeat(TIME_COL_WIDTH)}┬${"─".repeat(MSG_COL_WIDTH)}┐`;
+	const SEPARATOR_MID = `├${"─".repeat(NUM_COL_WIDTH)}┼${"─".repeat(TIME_COL_WIDTH)}┼${"─".repeat(MSG_COL_WIDTH)}┤`;
+	const SEPARATOR_BOT = `└${"─".repeat(NUM_COL_WIDTH)}┴${"─".repeat(TIME_COL_WIDTH)}┴${"─".repeat(MSG_COL_WIDTH)}┘`;
+
+	const headerNum = " #";
+	const headerTime = " 时间";
+	const headerMsg = " 最后输入";
+
+	const lines: string[] = [SEPARATOR_TOP];
+	lines.push(
+		`│ ${headerNum.padEnd(NUM_COL_WIDTH - 1)}│ ${headerTime.padEnd(TIME_COL_WIDTH - 1)}│ ${headerMsg.padEnd(MSG_COL_WIDTH - 1)}│`,
+	);
+	lines.push(SEPARATOR_MID);
+
+	for (let index = 0; index < sessions.length; index++) {
+		const session = sessions[index] as ResumeSessionSummary;
+		const num = String(index + 1);
+		const time = formatResumeTime(session.lastActiveAt);
+		const message = session.lastMessage;
+
+		lines.push(
+			`│ ${num.padEnd(NUM_COL_WIDTH - 1)}│ ${time.padEnd(TIME_COL_WIDTH - 1)}│ ${message.padEnd(MSG_COL_WIDTH - 1)}│`,
+		);
+	}
+
+	lines.push(SEPARATOR_BOT);
+	lines.push("输入 /resume <编号> 恢复会话");
+
+	return lines.join("\n");
 }
 
 function formatCapabilitiesMcpStatus(
@@ -1991,6 +2049,73 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 			if (trimmed === "/collapse") {
 				reasoningDisplay = "collapsed";
 				stderr.write("Reasoning display: collapsed.\n");
+				continue;
+			}
+
+			if (trimmed === "/resume") {
+				const sessions = await checkpoint.listSessions();
+				if (sessions.length === 0) {
+					stderr.write("No saved sessions found.\n");
+				} else {
+					stderr.write(`${renderResumeSessionsTable(sessions)}\n`);
+				}
+				continue;
+			}
+
+			if (trimmed.startsWith("/resume ")) {
+				const arg = trimmed.slice(8).trim();
+				const parsedIndex = Number.parseInt(arg, 10);
+
+				if (!Number.isInteger(parsedIndex) || String(parsedIndex) !== arg) {
+					stderr.write(`Invalid session number: ${arg}\n`);
+					continue;
+				}
+
+				const sessions = await checkpoint.listSessions();
+				const targetIndex = parsedIndex - 1;
+
+				if (targetIndex < 0 || targetIndex >= sessions.length) {
+					stderr.write(
+						`Session number ${parsedIndex} out of range (1-${sessions.length}).\n`,
+					);
+					continue;
+				}
+
+				const targetSession = sessions[targetIndex] as ResumeSessionSummary;
+				const restoredState = await checkpoint.load(targetSession.sessionId);
+
+				if (restoredState == null) {
+					stderr.write(
+						`Session ${targetSession.sessionId} could not be loaded.\n`,
+					);
+					continue;
+				}
+
+				state = createState([...messages], {
+					...state,
+					isTerminal: true,
+					lastActiveAt: new Date().toISOString(),
+				});
+				await checkpoint.save(state);
+
+				const restoredMessages =
+					restoredState.messages[0]?.role === "system"
+						? restoredState.messages.slice(1)
+						: [...restoredState.messages];
+
+				messages.splice(0, messages.length, ...restoredMessages);
+				streamRenderState = createStreamRenderState();
+				runtimeSurface.sessionAssembler.resetSession();
+				state = createState([...messages], {
+					...restoredState,
+					messages: [...messages],
+					isTerminal: false,
+					lastActiveAt: new Date().toISOString(),
+				});
+
+				stderr.write(
+					`Resumed session ${targetSession.sessionId} (${restoredMessages.length} messages).\n\n`,
+				);
 				continue;
 			}
 

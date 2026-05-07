@@ -1,7 +1,14 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { SoulConfig, UserProfileConfig } from "./soul-profile.js";
 import {
 	ensureDefaultConfigs,
 	generateRandomSoul,
@@ -10,7 +17,6 @@ import {
 	writeSoulConfig,
 	writeUserProfile,
 } from "./soul-profile.js";
-import type { SoulConfig, UserProfileConfig } from "./soul-profile.js";
 
 const ZODIAC_SIGNS = [
 	"白羊座",
@@ -52,7 +58,10 @@ describe("soul-profile", () => {
 	let tmpDir: string;
 
 	beforeEach(() => {
-		tmpDir = join(tmpdir(), `quilin-soul-profile-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		tmpDir = join(
+			tmpdir(),
+			`quilin-soul-profile-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+		);
 		mkdirSync(tmpDir, { recursive: true });
 	});
 
@@ -250,7 +259,11 @@ describe("soul-profile", () => {
 
 		it("throws on a file with no YAML frontmatter delimiter", () => {
 			const soulPath = join(tmpDir, "soul-no-frontmatter.md");
-			writeFileSync(soulPath, "Just plain text, no frontmatter at all.", "utf-8");
+			writeFileSync(
+				soulPath,
+				"Just plain text, no frontmatter at all.",
+				"utf-8",
+			);
 			expect(() => readSoulConfig(soulPath)).toThrow(
 				"Missing YAML frontmatter delimiter",
 			);
@@ -270,11 +283,7 @@ describe("soul-profile", () => {
 
 		it("fills defaults for missing frontmatter fields", () => {
 			const soulPath = join(tmpDir, "soul-minimal.md");
-			writeFileSync(
-				soulPath,
-				"---\n---\n\nMinimal body.",
-				"utf-8",
-			);
+			writeFileSync(soulPath, "---\n---\n\nMinimal body.", "utf-8");
 			const read = readSoulConfig(soulPath);
 			expect(read).not.toBeNull();
 			// All fields get default values from ?? fallbacks
@@ -385,11 +394,7 @@ describe("soul-profile", () => {
 
 		it("fills defaults for missing frontmatter fields in user profile", () => {
 			const userPath = join(tmpDir, "user-minimal.md");
-			writeFileSync(
-				userPath,
-				"---\n---\n\nMinimal user body.",
-				"utf-8",
-			);
+			writeFileSync(userPath, "---\n---\n\nMinimal user body.", "utf-8");
 			const read = readUserProfile(userPath);
 			expect(read).not.toBeNull();
 			expect(read!.schema_version).toBe(1);

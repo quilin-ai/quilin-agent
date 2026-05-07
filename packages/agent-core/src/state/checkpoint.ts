@@ -4,6 +4,13 @@ import { dirname, join } from "node:path";
 import { logger } from "../logger.js";
 import type { AgentState, Checkpoint, Message } from "./types.js";
 
+export interface SessionSummary {
+	readonly sessionId: string;
+	readonly lastMessage: string;
+	readonly messageCount: number;
+	readonly lastActiveAt: string;
+}
+
 interface SQLiteCheckpointOptions {
 	readonly dbPath?: string;
 	readonly sessionId?: string;
@@ -25,6 +32,12 @@ const DEFAULT_DB_PATH = join(homedir(), ".quilin", "sessions.db");
 interface SessionRow {
 	readonly session_id: string;
 	readonly state_json: string;
+}
+
+interface SessionSummaryRow {
+	readonly session_id: string;
+	readonly state_json: string;
+	readonly last_active_at: string;
 }
 
 interface CheckpointEnvelopeV1 {
@@ -225,5 +238,48 @@ export class SQLiteCheckpoint implements Checkpoint {
 			)
 			.all()
 			.map((row) => row.session_id);
+	}
+
+	async listSessions(): Promise<readonly SessionSummary[]> {
+		const db = await this.getDb();
+
+		const rows = db
+			.query<SessionSummaryRow>(
+				"SELECT session_id, state_json, last_active_at FROM sessions ORDER BY last_active_at DESC",
+			)
+			.all();
+
+		return rows.map((row) => {
+			let lastMessage = "";
+			let messageCount = 0;
+
+			try {
+				const parsed: unknown = JSON.parse(row.state_json);
+				const state = migrateEnvelope(parsed);
+				messageCount = state.messages.length;
+
+				const lastUserMessage = [...state.messages]
+					.reverse()
+					.find((message) => message.role === "user");
+				if (lastUserMessage != null) {
+					const singleLine = lastUserMessage.content
+						.replace(/\s+/gu, " ")
+						.trim();
+					lastMessage =
+						singleLine.length > 80
+							? `${singleLine.slice(0, 80)}...`
+							: singleLine;
+				}
+			} catch {
+				// Ignore parsing errors; leave defaults
+			}
+
+			return {
+				sessionId: row.session_id,
+				lastMessage,
+				messageCount,
+				lastActiveAt: row.last_active_at,
+			};
+		});
 	}
 }

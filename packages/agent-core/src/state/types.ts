@@ -63,4 +63,12 @@ export interface Checkpoint {
 	save(state: AgentState): Promise<void>;
 	load(sessionId: string): Promise<AgentState | null>;
 	list(): Promise<readonly string[]>;
+	listSessions(): Promise<
+		readonly {
+			sessionId: string;
+			lastMessage: string;
+			messageCount: number;
+			lastActiveAt: string;
+		}[]
+	>;
 }

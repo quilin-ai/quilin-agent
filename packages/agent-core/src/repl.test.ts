@@ -2938,5 +2938,151 @@ describe("startRepl", () => {
 		expect(capturedMessages[0]).toContain("z_tool");
 		expect(capturedMessages[0]).not.toContain("nameless");
 		expect(capturedMessages[1]).toEqual(expect.any(String));
+
+		it("/resume lists sessions in a table", async () => {
+			mockCheckpointListSessions.mockResolvedValue([
+				{
+					sessionId: "session-u1",
+					lastMessage: "帮我查一下关于 AIHOT 的最新...",
+					messageCount: 5,
+					lastActiveAt: "2026-04-15T15:30:00.000Z",
+				},
+				{
+					sessionId: "session-u2",
+					lastMessage: "怎么优化 SQLite 查询性能？",
+					messageCount: 3,
+					lastActiveAt: "2026-04-15T10:15:00.000Z",
+				},
+			]);
+			mockQuestion
+				.mockResolvedValueOnce("/resume")
+				.mockResolvedValueOnce("/exit");
+
+			const { startRepl } = await import("./repl.js");
+
+			await startRepl({
+				provider: createMockProvider(() => createMockLanguageModel()),
+				modelId: "deepseek-chat",
+			});
+
+			expect(mockCheckpointListSessions).toHaveBeenCalledTimes(1);
+			const writes = stderrWriteSpy.mock.calls
+				.map(([value]) => String(value))
+				.join("");
+			expect(writes).toContain("04-15 15:30");
+			expect(writes).toContain("04-15 10:15");
+			expect(writes).toContain("帮我查一下关于 AIHOT 的最新...");
+			expect(writes).toContain("怎么优化 SQLite 查询性能？");
+			expect(writes).toContain("输入 /resume <编号> 恢复会话");
+		});
+
+		it("/resume shows empty message when no sessions exist", async () => {
+			mockCheckpointListSessions.mockResolvedValue([]);
+			mockQuestion
+				.mockResolvedValueOnce("/resume")
+				.mockResolvedValueOnce("/exit");
+
+			const { startRepl } = await import("./repl.js");
+
+			await startRepl({
+				provider: createMockProvider(() => createMockLanguageModel()),
+				modelId: "deepseek-chat",
+			});
+
+			expect(stderrWriteSpy).toHaveBeenCalledWith("No saved sessions found.\n");
+		});
+
+		it("/resume <number> restores a session and replaces current messages", async () => {
+			mockCheckpointListSessions.mockResolvedValue([
+				{
+					sessionId: "target-session",
+					lastMessage: "target message",
+					messageCount: 4,
+					lastActiveAt: "2026-04-15T15:30:00.000Z",
+				},
+			]);
+			mockCheckpointLoad.mockResolvedValue({
+				messages: [
+					{ role: "system", content: "other system prompt" },
+					{ role: "user", content: "restored question" },
+					{ role: "assistant", content: "restored answer" },
+				],
+				isTerminal: false,
+				turnCount: 2,
+				createdAt: "2026-04-15T15:00:00.000Z",
+				lastActiveAt: "2026-04-15T15:30:00.000Z",
+			});
+			mockQuestion
+				.mockResolvedValueOnce("/resume 1")
+				.mockResolvedValueOnce("follow-up")
+				.mockResolvedValueOnce("/exit");
+			mockRunAgentLoop.mockImplementation(async (_config, messages) => {
+				capturedMessages.push(structuredClone(messages));
+				return "ok";
+			});
+
+			const { startRepl } = await import("./repl.js");
+
+			await startRepl({
+				provider: createMockProvider(() => createMockLanguageModel()),
+				modelId: "deepseek-chat",
+			});
+
+			expect(mockCheckpointSave).toHaveBeenCalledWith(
+				expect.objectContaining({ isTerminal: true }),
+			);
+			expect(mockCheckpointLoad).toHaveBeenCalledWith("target-session");
+			expect(stderrWriteSpy).toHaveBeenCalledWith(
+				"Resumed session target-session (2 messages).\n\n",
+			);
+			expect(capturedMessages[0]).toEqual([
+				{ role: "user", content: "restored question" },
+				{ role: "assistant", content: "restored answer" },
+				{ role: "user", content: "follow-up" },
+			]);
+		});
+
+		it("/resume <number> shows error for out-of-range index", async () => {
+			mockCheckpointListSessions.mockResolvedValue([
+				{
+					sessionId: "session-u1",
+					lastMessage: "hello",
+					messageCount: 2,
+					lastActiveAt: "2026-04-15T15:30:00.000Z",
+				},
+			]);
+			mockQuestion
+				.mockResolvedValueOnce("/resume 5")
+				.mockResolvedValueOnce("/exit");
+
+			const { startRepl } = await import("./repl.js");
+
+			await startRepl({
+				provider: createMockProvider(() => createMockLanguageModel()),
+				modelId: "deepseek-chat",
+			});
+
+			expect(stderrWriteSpy).toHaveBeenCalledWith(
+				"Session number 5 out of range (1-1).\n",
+			);
+		});
+
+		it("/resume <number> shows error for invalid number format", async () => {
+			mockCheckpointListSessions.mockResolvedValue([]);
+			mockQuestion
+				.mockResolvedValueOnce("/resume abc")
+				.mockResolvedValueOnce("/exit");
+
+			const { startRepl } = await import("./repl.js");
+
+			await startRepl({
+				provider: createMockProvider(() => createMockLanguageModel()),
+				modelId: "deepseek-chat",
+			});
+
+			expect(stderrWriteSpy).toHaveBeenCalledWith(
+				"Invalid session number: abc\n",
+			);
+		});
 	});
 });

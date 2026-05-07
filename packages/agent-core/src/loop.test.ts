@@ -603,6 +603,7 @@ describe("runAgentLoop", () => {
 					save,
 					load: vi.fn(),
 					list: vi.fn(),
+					listSessions: vi.fn(),
 				},
 				state: {
 					messages: [{ role: "user", content: "hello" }],
@@ -655,6 +656,7 @@ describe("runAgentLoop", () => {
 					save,
 					load: vi.fn(),
 					list: vi.fn(),
+					listSessions: vi.fn(),
 				},
 				hooks: { onAssistantMessage },
 				inferenceConfig: {
@@ -714,6 +716,7 @@ describe("runAgentLoop", () => {
 					save,
 					load: vi.fn(),
 					list: vi.fn(),
+					listSessions: vi.fn(),
 				},
 				hooks: { onAssistantMessage },
 				inferenceConfig: {
@@ -1243,6 +1246,7 @@ describe("runAgentLoop", () => {
 					save,
 					load: vi.fn(),
 					list: vi.fn(),
+					listSessions: vi.fn(),
 				},
 				tools: [
 					{
@@ -2236,6 +2240,7 @@ describe("runAgentLoop", () => {
 			}),
 			load: vi.fn(),
 			list: vi.fn(),
+			listSessions: vi.fn(),
 		};
 		const runRecords: unknown[] = [];
 		const runLogger = {
@@ -2368,6 +2373,7 @@ describe("runAgentLoop", () => {
 			}),
 			load: vi.fn(),
 			list: vi.fn(),
+			listSessions: vi.fn(),
 		};
 		const crashingChat = vi
 			.fn()
@@ -2545,6 +2551,7 @@ describe("runAgentLoop", () => {
 					save: vi.fn(async () => undefined),
 					load: vi.fn(),
 					list: vi.fn(),
+					listSessions: vi.fn(),
 				},
 				tools: [
 					{

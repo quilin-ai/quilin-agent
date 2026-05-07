@@ -4,7 +4,9 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runConfigCommand } from "./cli/config-cmd.js";
+import { formatFirstRunWelcome } from "./cli/first-run-welcome.js";
 import { runServiceCommand } from "./cli/service-cmd.js";
+import { buildFirstRunOnboardingPlan } from "./config/first-run.js";
 import {
 	type CapabilitiesHotReloadEvent,
 	createCapabilitiesHotReloadController,
@@ -23,6 +25,7 @@ import {
 	VercelLLMClient,
 } from "./llm/client.js";
 import {
+	buildProviderLiveMatrix,
 	createProvider,
 	DEFAULT_PROVIDER_CATALOG,
 	getDefaultModel,
@@ -682,12 +685,14 @@ export async function main(options: MainOptions = {}): Promise<void> {
 	const userRuntime = await bootstrapUserRuntime();
 
 	const envTrustMode = process.env.QUILIN_TRUST_MODE;
-	const trustMode =
-		parseReplCliOptions().yolo ? "yolo"
-		: envTrustMode === "auto" || envTrustMode === "ask" ||
-			  envTrustMode === "read_only" || envTrustMode === "yolo" ?
-			envTrustMode
-		:	userRuntime.result.config.safety.trust_mode;
+	const trustMode = parseReplCliOptions().yolo
+		? "yolo"
+		: envTrustMode === "auto" ||
+				envTrustMode === "ask" ||
+				envTrustMode === "read_only" ||
+				envTrustMode === "yolo"
+			? envTrustMode
+			: userRuntime.result.config.safety.trust_mode;
 	logger.info(
 		{
 			version: "0.0.1",
@@ -700,6 +705,34 @@ export async function main(options: MainOptions = {}): Promise<void> {
 		},
 		"Quilin Agent starting",
 	);
+
+	// First-run onboarding detection / 首次运行引导检测
+	const isFirstRun = userRuntime.result.filePath === null;
+	let firstRunPlan: ReturnType<typeof buildFirstRunOnboardingPlan> | undefined;
+
+	if (isFirstRun) {
+		const providerMatrix = buildProviderLiveMatrix();
+		firstRunPlan = buildFirstRunOnboardingPlan({
+			userConfig: userRuntime.result,
+			providerMatrix,
+		});
+
+		if (process.env.NODE_ENV !== "test") {
+			logger.info(
+				{
+					first_run: true,
+					ready: firstRunPlan.ready,
+					required_steps: firstRunPlan.requiredStepIds,
+					recommended_steps: firstRunPlan.recommendedStepIds,
+					steps: firstRunPlan.steps.map((step) => ({
+						id: step.id,
+						status: step.status,
+					})),
+				},
+				"First run detected — onboarding plan built",
+			);
+		}
+	}
 
 	const provider = createProvider();
 	const modelSelection = selectRuntimeModel(
@@ -776,6 +809,11 @@ export async function main(options: MainOptions = {}): Promise<void> {
 		let shouldExit = false;
 
 		logger.info({ mode: "repl" }, "Starting CLI REPL...");
+
+		if (isFirstRun && firstRunPlan != null) {
+			process.stderr.write(formatFirstRunWelcome(firstRunPlan));
+			process.stderr.write("\n");
+		}
 
 		try {
 			await startRepl({

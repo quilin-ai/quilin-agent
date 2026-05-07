@@ -122,13 +122,7 @@ function plistPath(): string {
 }
 
 function systemdUnitPath(): string {
-	return path.join(
-		homedir(),
-		".config",
-		"systemd",
-		"user",
-		`${LABEL}.service`,
-	);
+	return path.join(homedir(), ".config", "systemd", "user", `${LABEL}.service`);
 }
 
 function serviceFilePath(osKind: OsKind): string {
@@ -319,11 +313,7 @@ async function runStatus(
 	let statusLine: string;
 	try {
 		if (osKind === "macos") {
-			statusLine = runExecCapture(
-				"launchctl",
-				["list", LABEL],
-				options,
-			);
+			statusLine = runExecCapture("launchctl", ["list", LABEL], options);
 		} else {
 			statusLine = runExecCapture(
 				"systemctl",
@@ -337,11 +327,9 @@ async function runStatus(
 
 	return {
 		exitCode: 0,
-		stdout: [
-			`service status: ${statusLine}`,
-			`  file: ${filePath}`,
-			"",
-		].join("\n"),
+		stdout: [`service status: ${statusLine}`, `  file: ${filePath}`, ""].join(
+			"\n",
+		),
 		stderr: "",
 	};
 }
