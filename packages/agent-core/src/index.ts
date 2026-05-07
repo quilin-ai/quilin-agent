@@ -941,6 +941,10 @@ process.on("unhandledRejection", (reason) => {
 
 if (import.meta.main) {
 	dispatchCli(process.argv.slice(2)).catch((err) => {
+		const msg = err instanceof Error ? err.message : String(err);
+		if (msg.includes("ERR_USE_AFTER_CLOSE")) {
+			process.exit(0);
+		}
 		logger.fatal({ error: providerErrorLogFields(err) }, "Unexpected error");
 		process.exit(1);
 	});
