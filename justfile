@@ -47,6 +47,14 @@ clean:
 dev:
     LOG_LEVEL=debug QUILIN_ENV=dev QUILIN_RUNTIME_MODE=repl bun --env-file=.env --watch packages/agent-core/src/index.ts
 
+# 调试（全自动 yolo 模式，不询问任何确认）
+dev-yolo:
+    LOG_LEVEL=debug QUILIN_ENV=dev QUILIN_RUNTIME_MODE=repl bun --env-file=.env --watch packages/agent-core/src/index.ts -- --yolo
+
+# 调试（ask 模式，所有写入都需确认）
+dev-ask:
+    LOG_LEVEL=debug QUILIN_TRUST_MODE=ask QUILIN_ENV=dev QUILIN_RUNTIME_MODE=repl bun --env-file=.env --watch packages/agent-core/src/index.ts
+
 # 恢复最近会话（前台，带 watch）
 dev-resume:
     LOG_LEVEL=debug QUILIN_ENV=dev QUILIN_RUNTIME_MODE=repl bun --env-file=.env --watch packages/agent-core/src/index.ts --resume-latest

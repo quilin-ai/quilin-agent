@@ -680,9 +680,13 @@ export async function main(options: MainOptions = {}): Promise<void> {
 
 	const userRuntime = await bootstrapUserRuntime();
 
-	const trustMode = parseReplCliOptions().yolo
-		? "yolo"
-		: userRuntime.result.config.safety.trust_mode;
+	const envTrustMode = process.env.QUILIN_TRUST_MODE;
+	const trustMode =
+		parseReplCliOptions().yolo ? "yolo"
+		: envTrustMode === "auto" || envTrustMode === "ask" ||
+			  envTrustMode === "read_only" || envTrustMode === "yolo" ?
+			envTrustMode
+		:	userRuntime.result.config.safety.trust_mode;
 	logger.info(
 		{
 			version: "0.0.1",
