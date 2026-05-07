@@ -8,7 +8,12 @@ import {
 	type RuntimeToolFilter,
 } from "./config/runtime.js";
 import { createDefaultPromptSections } from "./context/default-sections.js";
-import { BasicContextManager } from "./context/manager.js";
+import {
+	BasicContextManager,
+	DEFAULT_CONTEXT_BUDGET,
+} from "./context/manager.js";
+import type { TokenBudget } from "./context/types.js";
+import { estimateTokens } from "./context/tokens.js";
 import { PromptBuilder } from "./context/prompt-builder.js";
 import { PromptSessionAssembler } from "./context/prompt-session-assembler.js";
 import {
@@ -378,6 +383,150 @@ function renderCapabilitiesStatus(status: CapabilitiesReloadStatus): string {
 		`last_failure=${failure}`,
 		`mcp=${formatCapabilitiesMcpStatus(status.mcpReconnect)}`,
 		`skills=${formatCapabilitiesSkillsStatus(status)}`,
+	].join(" | ");
+}
+
+interface McpServerDisplayEntry {
+	readonly id: string;
+	readonly namespace: string;
+	readonly toolCount: number;
+	readonly connectionState: "connected" | "disconnected" | "error";
+	readonly reloadState: string;
+	readonly error: string | null;
+}
+
+function buildMcpServerDisplayEntries(
+	serverToolCounts: ReadonlyMap<string, number>,
+	status: CapabilitiesReloadStatus | undefined,
+): readonly McpServerDisplayEntry[] {
+	const management = status?.management?.mcp;
+	const mcpReconnect = status?.mcpReconnect;
+	const activeIds = new Set(mcpReconnect?.activeServerIds ?? []);
+	const addedIds = new Set(management?.added ?? []);
+	const removedIds = new Set(management?.removed ?? []);
+	const changedIds = new Set(management?.changed ?? []);
+	const applyState = management?.applyState ?? "not_requested";
+	const error = management?.error ?? null;
+
+	const allIds = new Set([
+		...serverToolCounts.keys(),
+		...activeIds,
+		...removedIds,
+	]);
+
+	const entries: McpServerDisplayEntry[] = [];
+	for (const serverId of allIds) {
+		const toolCount = serverToolCounts.get(serverId) ?? 0;
+		const connectionState: McpServerDisplayEntry["connectionState"] =
+			toolCount > 0
+				? "connected"
+				: removedIds.has(serverId)
+					? "disconnected"
+					: "error";
+
+		const reloadTags: string[] = [];
+		if (addedIds.has(serverId)) reloadTags.push("added");
+		if (removedIds.has(serverId)) reloadTags.push("removed");
+		if (changedIds.has(serverId)) reloadTags.push("changed");
+		const reloadState =
+			reloadTags.length > 0
+				? `${applyState}(${reloadTags.join(",")})`
+				: applyState;
+
+		entries.push({
+			id: serverId,
+			namespace: serverId,
+			toolCount,
+			connectionState,
+			reloadState,
+			error:
+				error != null
+					? `${error.errorName}:${error.errorMessage}`
+					: null,
+		});
+	}
+
+	return entries;
+}
+
+function formatMcpServerDisplayEntry(entry: McpServerDisplayEntry): string {
+	const fields = [
+		entry.id.padEnd(18),
+		`ns=${entry.namespace}`,
+		`tools=${entry.toolCount}`,
+		entry.connectionState,
+		`reload=${entry.reloadState}`,
+		entry.error == null ? undefined : `error=${entry.error}`,
+	];
+	return fields.filter((f): f is string => f != null).join(" ");
+}
+
+function renderMcpDetailStatus(
+	entries: readonly McpServerDisplayEntry[],
+): string {
+	if (entries.length === 0) {
+		return "MCP Servers: none";
+	}
+	const lines = entries.map(formatMcpServerDisplayEntry);
+	return `MCP Servers (${entries.length}):\n${lines.map((l) => `  ${l}`).join("\n")}`;
+}
+
+function renderMcpServerList(
+	entries: readonly McpServerDisplayEntry[],
+): string {
+	if (entries.length === 0) {
+		return "No MCP servers registered.";
+	}
+	const lines = entries.map(formatMcpServerDisplayEntry);
+	return [
+		`MCP Servers (${entries.length}):`,
+		...lines.map((line) => `  ${line}`),
+	].join("\n");
+}
+
+function renderTokenBudget(
+	messages: readonly Message[],
+	budget: TokenBudget = DEFAULT_CONTEXT_BUDGET,
+): string {
+	let systemTokens = 0;
+	let conversationTokens = 0;
+	let toolTokens = 0;
+	let memoryTokens = 0;
+
+	for (const msg of messages) {
+		const tokens = estimateTokens(msg.content);
+		switch (msg.role) {
+			case "system":
+				systemTokens += tokens;
+				break;
+			case "user":
+			case "assistant":
+				conversationTokens += tokens;
+				break;
+			case "tool":
+				if (msg.name?.includes("memory") === true) {
+					memoryTokens += tokens;
+				} else {
+					toolTokens += tokens;
+				}
+				break;
+		}
+	}
+
+	const totalUsed =
+		systemTokens + conversationTokens + toolTokens + memoryTokens;
+
+	function pct(used: number, cap: number): string {
+		if (cap <= 0) return "unbounded";
+		return `${Math.round((used / cap) * 100)}%`;
+	}
+
+	return [
+		`Token Budget: used=${totalUsed}/${budget.total}`,
+		`system=${systemTokens}/${budget.system}(${pct(systemTokens, budget.system)})`,
+		`messages=${conversationTokens}/${budget.conversation}(${pct(conversationTokens, budget.conversation)})`,
+		`tools=${toolTokens}/${budget.tools}(${pct(toolTokens, budget.tools)})`,
+		`memories=${memoryTokens}/${budget.memory}(${pct(memoryTokens, budget.memory)})`,
 	].join(" | ");
 }
 
@@ -1602,6 +1751,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 		createId: () => crypto.randomUUID(),
 	});
 	const toolProvenance: ToolProvenanceEntry[] = [];
+	let mcpServerToolCounts = new Map<string, number>();
 	let activeTurnId: string | undefined;
 	const enqueueLiveInput = (entry: QueuedLiveInput): void => {
 		queuedCommands.push(entry.input);
@@ -1995,7 +2145,13 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 					stderr.write(
 						`${renderCapabilitiesStatus(capabilitiesReloadStatus)}\n`,
 					);
+					const mcpEntries = buildMcpServerDisplayEntries(
+						mcpServerToolCounts,
+						capabilitiesReloadStatus,
+					);
+					stderr.write(`${renderMcpDetailStatus(mcpEntries)}\n`);
 				}
+				stderr.write(`${renderTokenBudget(messages)}\n`);
 				const supervisorSnapshot = supervisorRuntime.snapshot();
 				stderr.write(`${formatAgentsSummary(supervisorSnapshot)}\n`);
 				stderr.write(
@@ -2003,12 +2159,20 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 				);
 				continue;
 			}
-
 			if (trimmed === "/agents") {
 				stderr.write(`${renderAgentsStatus(supervisorRuntime.snapshot())}\n`);
 				continue;
 			}
 
+			if (trimmed === "/mcp") {
+				const cs = capabilitiesStatus?.();
+				const entries = buildMcpServerDisplayEntries(
+					mcpServerToolCounts,
+					cs,
+				);
+				stderr.write(`${renderMcpServerList(entries)}\n`);
+				continue;
+			}
 			if (trimmed.startsWith("/think")) {
 				const mode = trimmed.split(/\s+/u)[1];
 				switch (mode) {

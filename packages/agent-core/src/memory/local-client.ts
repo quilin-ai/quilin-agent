@@ -21,9 +21,15 @@ function toLocalItem(
 }
 
 function toMemoryItem(local: LocalMemoryItem): MemoryItem {
+	let parsedMetadata: Record<string, unknown> = {};
+	try {
+		parsedMetadata = JSON.parse(local.metadata_json);
+	} catch {
+		// metadata_json is corrupt; use empty defaults
+	}
 	const metadata: MemoryMetadata = {
 		schema_version: 1,
-		...JSON.parse(local.metadata_json),
+		...parsedMetadata,
 	};
 
 	return {

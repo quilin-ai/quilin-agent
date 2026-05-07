@@ -4,8 +4,8 @@ import { join } from "node:path";
 import { logger } from "../logger.js";
 import { LocalMemoryBackend } from "../memory/local-backend.js";
 
-const DEFAULT_MEMORY_DIR = join(homedir(), ".quilin");
-const DEFAULT_MEMORY_PATH = join(DEFAULT_MEMORY_DIR, "memory.db");
+const DEFAULT_MEMORY_PATH =
+	process.env.QUILIN_MEM_DB_PATH ?? join(homedir(), ".quilin", "memory.db");
 
 export interface MemoryBackendStatus {
 	readonly created: boolean;
@@ -13,7 +13,7 @@ export interface MemoryBackendStatus {
 }
 
 /**
- * Ensures the local memory backend (~/.quilin/memory.db) exists and has the
+ * Ensures the local memory backend (QUILIN_MEM_DB_PATH or ~/.quilin/memory.db) exists and has the
  * schema initialized.  Creates both the directory and the database file (with
  * tables, FTS5 index, and triggers) when the file is missing; otherwise the
  * call is a no-op.

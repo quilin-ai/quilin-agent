@@ -84,7 +84,10 @@ export function renderPanel(content: string, options: PanelOptions = {}): string
 
 	const contentLines = content.split("\n");
 	const contentWidth = measureMaxWidth(content);
-	const innerWidth = Math.min(contentWidth + pad * 2, maxWidth);
+	const titleWidth =
+		options.title == null ? 0 : visibleWidth(stripAnsi(options.title)) + 2;
+	const desiredInnerWidth = Math.max(contentWidth + pad * 2, titleWidth + 4);
+	const innerWidth = Math.min(desiredInnerWidth, maxWidth);
 
 	const topBar = renderPanelTopBar(innerWidth, border, options.title);
 	const bottomBar = `${border.bottomLeft}${repeat(border.horizontal, innerWidth)}${border.bottomRight}`;
@@ -211,8 +214,8 @@ export function renderTable<T extends Record<string, string | undefined>>(
 
 	let result = bars.top;
 	result += `\n${headerRow}`;
-	result += `\n${bars.mid}`;
 	if (rows.length > 0) {
+		result += `\n${bars.mid}`;
 		result += `\n${rowLines.join("\n")}`;
 	}
 	result += `\n${bars.bottom}`;

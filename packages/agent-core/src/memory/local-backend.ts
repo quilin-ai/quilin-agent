@@ -3,8 +3,8 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import Database from "better-sqlite3";
 
-const DEFAULT_DB_DIR = join(homedir(), ".quilin");
-const DEFAULT_DB_PATH = join(DEFAULT_DB_DIR, "memory.db");
+const DEFAULT_DB_PATH =
+	process.env.QUILIN_MEM_DB_PATH ?? join(homedir(), ".quilin", "memory.db");
 
 export interface LocalMemoryItem {
 	readonly id: string;

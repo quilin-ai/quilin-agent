@@ -62,14 +62,14 @@ export class InputHistory {
 	/**
 	 * Begin navigating history.  Call this when the user presses Up.
 	 * Saves the current "in-progress" line so it can be restored later.
+	 * Does NOT consume an entry — the caller must call previous() separately.
 	 */
-	startNavigation(currentLine: string): string | undefined {
+	startNavigation(currentLine: string): void {
 		this.savedLine = currentLine;
 		this.cursor = this.entries.length;
-		return this.previous();
 	}
 
-	/** Move one entry older (Up arrow). Returns undefined at the boundary. */
+	/** Move one entry older (Up arrow). Stays at the oldest entry when at the boundary. */
 	previous(): string | undefined {
 		if (this.entries.length === 0) {
 			return undefined;
@@ -82,7 +82,8 @@ export class InputHistory {
 			this.cursor -= 1;
 			return this.entries[this.cursor]?.input;
 		}
-		return undefined;
+		// At the boundary, return the oldest entry again
+		return this.entries[0]?.input;
 	}
 
 	/** Move one entry newer (Down arrow). Returns the saved line after passing the newest entry. */
