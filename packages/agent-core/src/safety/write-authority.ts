@@ -4,7 +4,12 @@ export type WriteRiskLevel = "low" | "medium" | "high" | "critical";
 
 export type WriteOrigin = "user" | "agent" | "idle";
 
-export type AuthorityMode = "ask" | "auto-low" | "auto-medium" | "deny-all";
+export type AuthorityMode =
+	| "ask"
+	| "auto-low"
+	| "auto-medium"
+	| "auto-all"
+	| "deny-all";
 
 export type WriteDecision =
 	| { readonly kind: "allow" }
@@ -62,6 +67,10 @@ export class WriteAuthority {
 	}
 
 	decide(request: WriteRequest): WriteDecision {
+		if (this.mode === "auto-all") {
+			return { kind: "allow" };
+		}
+
 		if (this.mode === "deny-all") {
 			return { kind: "deny", reason: "write authority disabled" };
 		}

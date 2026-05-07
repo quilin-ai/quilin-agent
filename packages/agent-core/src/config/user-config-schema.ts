@@ -171,10 +171,10 @@ export const idleEvolutionConfigSchema = z
 
 export const safetyConfigSchema = z
 	.object({
-		trust_mode: z.enum(["read_only", "ask", "auto"]).default("read_only"),
+		trust_mode: z.enum(["read_only", "ask", "auto", "yolo"]).default("auto"),
 	})
 	.strict()
-	.default({ trust_mode: "read_only" });
+	.default({ trust_mode: "auto" });
 
 export const userConfigSchema = z
 	.object({

@@ -332,7 +332,7 @@ describe("main", () => {
 					defaultTier: "lite",
 					allowEscalation: true,
 				}),
-				writeAuthorityMode: "ask",
+				writeAuthorityMode: "auto-medium",
 				toolFilter: {
 					enabled: [],
 					disabled: [],

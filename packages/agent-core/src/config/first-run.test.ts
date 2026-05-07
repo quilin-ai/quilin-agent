@@ -17,7 +17,7 @@ describe("buildFirstRunOnboardingPlan", () => {
 
 		expect(plan.firstRun).toBe(true);
 		expect(plan.ready).toBe(false);
-		expect(plan.requiredStepIds).toEqual(["provider", "review"]);
+		expect(plan.requiredStepIds).toEqual(["provider", "safety", "review"]);
 		expect(plan.redactedConfigSummary.llm.providers).toEqual(["deepseek"]);
 		expect(JSON.stringify(plan)).not.toContain("DEEPSEEK_API_KEY");
 	});
@@ -57,7 +57,7 @@ describe("buildFirstRunOnboardingPlan", () => {
 			["mcp", "complete"],
 			["skills", "complete"],
 			["memory", "complete"],
-			["safety", "complete"],
+			["safety", "required"],
 			["review", "required"],
 		]);
 		expect(JSON.stringify(plan)).not.toContain("redacted-in-tests");

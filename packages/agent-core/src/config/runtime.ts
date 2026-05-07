@@ -658,6 +658,8 @@ export function resolveRuntimeWriteAuthorityMode(
 	config: Pick<UserConfig, "safety">,
 ): AuthorityMode {
 	switch (config.safety.trust_mode) {
+		case "yolo":
+			return "auto-all";
 		case "auto":
 			return "auto-medium";
 		case "ask":

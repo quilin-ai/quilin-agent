@@ -1109,6 +1109,16 @@ describe("runtime config adapters", () => {
 			},
 		});
 		expect(resolveRuntimeWriteAuthorityMode(config)).toBe("auto-medium");
+		expect(
+			resolveRuntimeWriteAuthorityMode({
+				safety: { trust_mode: "yolo" },
+			}),
+		).toBe("auto-all");
+		expect(
+			resolveRuntimeWriteAuthorityMode({
+				safety: { trust_mode: "read_only" },
+			}),
+		).toBe("ask");
 
 		const toolFilter = buildRuntimeToolFilter(config);
 		expect(toolFilter).toEqual({

@@ -59,7 +59,7 @@ describe("user-config schema defaults", () => {
 			},
 		});
 		expect(result.config.observability.log_level).toBe("INFO");
-		expect(result.config.safety.trust_mode).toBe("read_only");
+		expect(result.config.safety.trust_mode).toBe("auto");
 		expect(result.config.idle_evolution.enabled).toBe(false);
 		expect(result.filePath).toBeNull();
 		expect(result.sources["llm.default_model"]).toBe("default");

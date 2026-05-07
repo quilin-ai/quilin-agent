@@ -41,3 +41,10 @@ model = "deepseek-v4-pro"
 thinking = "enabled"
 max_tokens = 16384
 thinking_budget_tokens = 10000
+
+# Safety: auto = auto-approve low+medium risk, ask = confirm all, read_only = deny all writes.
+# yolo = auto-approve ALL risks including critical (use with caution).
+# 安全模式：auto = 自动批准低+中风险，ask = 全部确认，read_only = 拒绝所有写入。
+# yolo = 自动批准全部包括高风险（谨慎使用，也可用 --yolo 命令行覆盖）。
+[safety]
+trust_mode = "auto"      # auto | ask | read_only | yolo

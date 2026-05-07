@@ -366,6 +366,7 @@ export interface MainOptions {
 interface ReplCliOptions {
 	readonly sessionId?: string;
 	readonly resumeLatest: boolean;
+	readonly yolo: boolean;
 }
 
 interface RuntimeModelSelection {
@@ -489,9 +490,12 @@ function resolveRuntimeMode(runtimeMode?: RuntimeMode): RuntimeMode {
 	return process.stdin.isTTY && process.stderr.isTTY ? "repl" : "service";
 }
 
-function parseReplCliOptions(argv: readonly string[]): ReplCliOptions {
+function parseReplCliOptions(
+	argv: readonly string[] = process.argv.slice(2),
+): ReplCliOptions {
 	let sessionId: string | undefined;
 	let resumeLatest = false;
+	let yolo = false;
 
 	for (let index = 0; index < argv.length; index += 1) {
 		const arg = argv[index];
@@ -509,9 +513,13 @@ function parseReplCliOptions(argv: readonly string[]): ReplCliOptions {
 		if (arg === "--resume-latest") {
 			resumeLatest = true;
 		}
+
+		if (arg === "--yolo") {
+			yolo = true;
+		}
 	}
 
-	return { sessionId, resumeLatest };
+	return { sessionId, resumeLatest, yolo };
 }
 
 function selectRuntimeModel(
@@ -671,6 +679,10 @@ export async function main(options: MainOptions = {}): Promise<void> {
 	configureLogger(runtimeMode);
 
 	const userRuntime = await bootstrapUserRuntime();
+
+	const trustMode = parseReplCliOptions().yolo
+		? "yolo"
+		: userRuntime.result.config.safety.trust_mode;
 	logger.info(
 		{
 			version: "0.0.1",
@@ -694,9 +706,9 @@ export async function main(options: MainOptions = {}): Promise<void> {
 		userRuntime.result.config,
 	);
 	const runtimeToolFilter = buildRuntimeToolFilter(userRuntime.result.config);
-	const runtimeWriteAuthorityMode = resolveRuntimeWriteAuthorityMode(
-		userRuntime.result.config,
-	);
+	const runtimeWriteAuthorityMode = resolveRuntimeWriteAuthorityMode({
+		safety: { trust_mode: trustMode },
+	});
 	const runtimeTierRouting = resolveRuntimeTierRoutingConfig(
 		userRuntime.result,
 		modelSelection,
