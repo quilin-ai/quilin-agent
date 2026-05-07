@@ -100,6 +100,112 @@ export class DockerSandboxRouter implements SandboxRouter {
 	private readonly allowDebugBridgeNetwork: boolean;
 	private readonly sessions = new Map<string, DockerSandboxSession>();
 
+	/**
+	 * Detect whether the Docker daemon is reachable by calling `docker info`.
+	 *
+	 * Docker daemon 可达性检测：调用 `docker info` 判断 Docker 守护进程是否正常运行。
+	 */
+	static async isDockerAvailable(options?: {
+		readonly dockerBinary?: string;
+		readonly probeTimeoutMs?: number;
+	}): Promise<boolean> {
+		try {
+			const controller = new AbortController();
+			const timeout = setTimeout(
+				() => controller.abort(),
+				options?.probeTimeoutMs ?? 5_000,
+			);
+			try {
+				const result = await runDockerSandboxCli(["info"], {
+					dockerBinary: options?.dockerBinary,
+					signal: controller.signal,
+				});
+				return result.exitCode === 0;
+			} finally {
+				clearTimeout(timeout);
+			}
+		} catch {
+			return false;
+		}
+	}
+
+	/**
+	 * Auto-detection execution: probes Docker availability, and if reachable
+	 * creates a disposable sandbox session, runs the command, and cleans up.
+	 * Returns `null` when Docker is unavailable so the caller can fall back
+	 * to the host runner.
+	 *
+	 * 自动检测执行：先探测 Docker 是否可用，可用则创建一次性沙箱会话执行命令后清理；
+	 * Docker 不可用时返回 `null`，由调用方回退到宿主机执行。
+	 */
+	async executeAuto(input: {
+		readonly argv: readonly string[];
+		readonly cwd?: string;
+		readonly env?: Readonly<Record<string, string>>;
+		readonly timeoutMs?: number;
+	}): Promise<DockerSandboxCliResult | null> {
+		const available = await DockerSandboxRouter.isDockerAvailable({
+			dockerBinary: this.dockerBinary,
+		});
+		if (!available) {
+			return null;
+		}
+
+		const workDir = input.cwd ?? process.cwd();
+		const cmdTimeoutMs = input.timeoutMs ?? DEFAULT_WALL_CLOCK_TIMEOUT_MS;
+
+		const session = await this.createSession({
+			owner: { agentId: "shell-exec-auto" },
+			purpose: "tool-worker",
+			image: { reference: "alpine:latest", allowlisted: true },
+			mounts: [
+				{
+					kind: "task",
+					hostPath: workDir,
+					sandboxPath: "/workspace",
+					access: "readwrite",
+					required: true,
+				},
+			],
+			networkPolicy: { mode: "none" },
+			resourcePolicy: { wallClockTimeoutMs: cmdTimeoutMs },
+			outputPolicy: {
+				artifactsPath: "/workspace/.quilin-artifacts",
+				maxArtifactBytes: 0,
+				includeHiddenFiles: false,
+				promotePatterns: [],
+				exposePartialOutputOnFailure: false,
+			},
+			permissionManifest: {
+				identity: { user: "quilin-worker", role: "worker" },
+				filesystem: {
+					readonly: [],
+					readwrite: ["/workspace"],
+					execute: ["/workspace"],
+				},
+				sessionSharing: "isolated",
+				allowSecretMounts: false,
+			},
+			ttlMs: Math.max(cmdTimeoutMs * 2, 60_000),
+		});
+
+		try {
+			const result = await session.execute({
+				argv: input.argv,
+				cwd: "/workspace",
+				env: input.env,
+				timeoutMs: cmdTimeoutMs,
+			});
+			return {
+				stdout: result.stdout,
+				stderr: result.stderr,
+				exitCode: result.exitCode,
+			};
+		} finally {
+			await this.destroySession(session.id, "completed");
+		}
+	}
+
 	constructor(options: DockerSandboxRouterOptions = {}) {
 		this.runner = options.runner ?? runDockerSandboxCli;
 		this.dockerBinary = options.dockerBinary;

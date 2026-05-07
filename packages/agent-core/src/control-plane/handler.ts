@@ -70,7 +70,8 @@ function routeMatches(pathname: string): boolean {
 	return (
 		pathname === "/" ||
 		pathname === "/control-plane" ||
-		pathname === "/control-plane/snapshot"
+		pathname === "/control-plane/snapshot" ||
+			pathname === "/dashboard"
 	);
 }
 
@@ -97,6 +98,16 @@ export function createControlPlaneHandler(
 				...options,
 				...(sessionLimit == null ? {} : { sessionLimit }),
 			});
+			if (url.pathname === "/dashboard") {
+				send(
+					response,
+					200,
+					"text/html; charset=utf-8",
+					renderControlPlaneDashboardHtml(snapshot),
+				);
+				return;
+			}
+
 			const body = `${JSON.stringify(snapshot)}\n`;
 			send(
 				response,

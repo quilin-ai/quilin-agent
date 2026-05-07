@@ -389,6 +389,47 @@ export class SkillsManager {
 		};
 	}
 
+	detectSimilar(
+		skillA: SkillDescriptor,
+		skillB: SkillDescriptor,
+	): MergeCandidate | null {
+		const nameSim = jaccardSimilarity(
+			tokenizeText(skillA.name),
+			tokenizeText(skillB.name),
+		);
+		const descSim = jaccardSimilarity(
+			tokenizeText(skillA.description),
+			tokenizeText(skillB.description),
+		);
+		const whenSim = jaccardSimilarity(
+			tokenizeText(skillA.frontmatter.whenToUse ?? ""),
+			tokenizeText(skillB.frontmatter.whenToUse ?? ""),
+		);
+
+		const similarity = nameSim * 0.4 + descSim * 0.3 + whenSim * 0.3;
+		if (similarity <= 0.8) {
+			return null;
+		}
+
+		const overlapFields: string[] = [];
+		if (nameSim > 0.8) {
+			overlapFields.push("name");
+		}
+		if (descSim > 0.8) {
+			overlapFields.push("description");
+		}
+		if (whenSim > 0.8) {
+			overlapFields.push("whenToUse");
+		}
+
+		return {
+			skillA,
+			skillB,
+			similarity: Math.round(similarity * 1000) / 1000,
+			overlapFields,
+		};
+	}
+
 	private scheduleRescan(): void {
 		if (!this.watching) {
 			return;
@@ -553,4 +594,31 @@ export function isWithinRoot(targetPath: string, rootPath: string): boolean {
 		pathRelative === "" ||
 		(!pathRelative.startsWith("..") && !isAbsolute(pathRelative))
 	);
+}
+
+function tokenizeText(text: string): readonly string[] {
+	const normalized = text.toLowerCase().replaceAll(/[^a-z0-9\s-]/gu, "");
+	const tokens = normalized.split(/[\s-]+/u).filter((token) => token.length > 1);
+	return [...new Set(tokens)];
+}
+
+function jaccardSimilarity(
+	tokensA: readonly string[],
+	tokensB: readonly string[],
+): number {
+	if (tokensA.length === 0 && tokensB.length === 0) {
+		return 0;
+	}
+
+	const setA = new Set(tokensA);
+	const setB = new Set(tokensB);
+	let intersection = 0;
+	for (const token of setA) {
+		if (setB.has(token)) {
+			intersection += 1;
+		}
+	}
+
+	const union = setA.size + setB.size - intersection;
+	return union === 0 ? 0 : intersection / union;
 }

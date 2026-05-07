@@ -278,6 +278,8 @@ export class SkillManager {
 				return this.update(action);
 			case "delete":
 				return this.delete(action);
+			case "merge":
+				return this.merge(action);
 		}
 	}
 
