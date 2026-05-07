@@ -53,6 +53,7 @@ const mockStreamingClient = vi.fn();
 const mockProviderControlPlaneClient = vi.fn();
 const mockCheckpointLoad = vi.fn();
 const mockCheckpointSave = vi.fn();
+const mockCheckpointListSessions = vi.fn();
 const mockCheckpointConstructor = vi.fn();
 const mockCreateBuiltinTools = vi.fn();
 const mockRegistryRegisterBuiltin = vi.fn();
@@ -361,6 +362,7 @@ class MockSQLiteCheckpoint {
 	load = mockCheckpointLoad;
 	save = mockCheckpointSave;
 	list = vi.fn();
+	listSessions = mockCheckpointListSessions;
 
 	constructor(...args: unknown[]) {
 		mockCheckpointConstructor(...args);
@@ -2938,6 +2940,7 @@ describe("startRepl", () => {
 		expect(capturedMessages[0]).toContain("z_tool");
 		expect(capturedMessages[0]).not.toContain("nameless");
 		expect(capturedMessages[1]).toEqual(expect.any(String));
+	});
 
 		it("/resume lists sessions in a table", async () => {
 			mockCheckpointListSessions.mockResolvedValue([
@@ -3085,4 +3088,3 @@ describe("startRepl", () => {
 			);
 		});
 	});
-});

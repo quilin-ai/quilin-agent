@@ -1490,19 +1490,39 @@ class L3aObserver:
         try:
             from .profile_store import emit_profile_signal  # noqa: F811
 
+            updater = self._profile_updater
+            signals: list[object] = []
             for candidate in candidates:
                 if candidate.confidence < 0.7:
                     continue
                 signal = emit_profile_signal(
-                    profile_id="__default__",
+                    profile_id="default",
                     updates={"observer_l3a_finding": candidate.content},
                     source="l3a_observer",
                 )
-                self._profile_updater.apply_signal(  # type: ignore[union-attr]
-                    signal,
+                signals.append(signal)
+
+            if not signals:
+                return
+
+            # Use bulk_update to sync user.md once after all signals
+            if hasattr(updater, "bulk_update"):
+                updater.bulk_update(  # type: ignore[union-attr]
+                    signals,
                     who="l3a_observer",
-                    why=f"LLM-observed pattern (confidence={candidate.confidence:.2f})",
+                    why=(
+                        f"LLM-observed patterns batch "
+                        f"({len(signals)} candidates, "
+                        f"max confidence={max(c.confidence for c in candidates):.2f})"
+                    ),
                 )
+            else:
+                for signal in signals:
+                    updater.apply_signal(  # type: ignore[union-attr]
+                        signal,
+                        who="l3a_observer",
+                        why="LLM-observed pattern",
+                    )
         except Exception:
             pass  # profile update is best-effort
 

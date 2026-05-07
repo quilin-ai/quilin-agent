@@ -1874,3 +1874,147 @@ def test_parse_l3a_llm_response_null_source_turn_id_when_buffer_empty() -> None:
         [],
     )
     assert candidates[0].source_turn_id is None
+
+
+# -- L3aObserver + ProfileUpdater integration tests --
+
+
+async def test_l3a_observer_calls_profile_updater_on_high_confidence_patterns(
+    tmp_path: object,
+) -> None:
+    """L3aObserver should write high-confidence patterns to profile via ProfileUpdater."""
+    from pathlib import Path as _Path
+
+    from quilin_mem.profile_store import ProfileStore
+    from quilin_mem.profile_updater import ProfileUpdater
+
+    store = ProfileStore(str(_Path(str(tmp_path)) / "memory.db"))
+    updater = ProfileUpdater(store)
+
+    # Patch user.md path
+    user_md_dir = _Path(str(tmp_path)) / ".quilin"
+    import quilin_mem.profile_updater as pu
+
+    orig_dir = pu._USER_MD_DIR
+    orig_path = pu._USER_MD_PATH
+    pu._USER_MD_DIR = user_md_dir
+    pu._USER_MD_PATH = user_md_dir / "user.md"
+    try:
+        observer = L3aObserver(
+            ObserverConfig(api_key="test-key", frequency=2),
+            profile_updater=updater,
+            _llm_caller=_llm_caller_json_response,
+        )
+
+        # Fill two turns to trigger LLM
+        await observer.observe({"content": "I prefer Chinese summaries", "role": "user"})
+        candidates = await observer.observe(
+            {"content": "Please keep updates concise", "role": "user"}
+        )
+
+        # Verify LLM candidates were produced
+        llm_candidates = [
+            c for c in candidates if c.metadata.get("source") == "l3a_observer"
+        ]
+        assert len(llm_candidates) >= 2, "Expected LLM candidates"
+
+        # Verify profile was updated
+        profile = store.get_profile("default")
+        assert profile is not None, "Profile should exist after L3a write"
+        assert (
+            "observer_l3a_finding" in profile.non_sensitive
+        ), "observer_l3a_finding should be in non_sensitive"
+
+        # Verify user.md was synchronized
+        user_md_path = user_md_dir / "user.md"
+        assert user_md_path.exists(), "user.md should exist after L3a write"
+        content = user_md_path.read_text(encoding="utf-8")
+        assert "observer_l3a_finding" in content
+        assert "# 关于用户" in content
+    finally:
+        pu._USER_MD_DIR = orig_dir
+        pu._USER_MD_PATH = orig_path
+
+
+async def test_l3a_observer_skips_low_confidence_candidates_for_profile(
+    tmp_path: object,
+) -> None:
+    """Candidates with confidence < 0.7 should NOT be written to profile."""
+    from pathlib import Path as _Path
+
+    from quilin_mem.profile_store import ProfileStore
+    from quilin_mem.profile_updater import ProfileUpdater
+
+    store = ProfileStore(str(_Path(str(tmp_path)) / "memory.db"))
+    updater = ProfileUpdater(store)
+
+    def low_confidence_llm(
+        base_url: str, api_key: str, payload: bytes  # noqa: ARG001
+    ) -> str:
+        return json.dumps(
+            {
+                "patterns": ["User seems slightly more engaged on Mondays"],
+                "suggestions": [],
+                "confidence": 0.3,  # below 0.7 threshold
+            }
+        )
+
+    observer = L3aObserver(
+        ObserverConfig(api_key="test-key", frequency=1),
+        profile_updater=updater,
+        _llm_caller=low_confidence_llm,
+    )
+
+    await observer.observe({"content": "hello", "role": "user"})
+
+    # Profile should not have been created (all low confidence)
+    profile = store.get_profile("default")
+    assert profile is None, "Low-confidence patterns should not create profile"
+
+
+async def test_l3a_observer_apply_to_profile_survives_updater_errors(
+    tmp_path: object,
+) -> None:
+    """_apply_to_profile should catch exceptions silently (best-effort)."""
+    class BrokenUpdater:
+        def apply_signal(self, *args: object, **kwargs: object) -> None:
+            msg = "disk full"
+            raise OSError(msg)
+
+        # No bulk_update — triggers the hasattr fallback path
+        def __getattr__(self, name: str) -> object:
+            if name == "bulk_update":
+                raise AttributeError(name)
+            return object.__getattribute__(self, name)
+
+    observer = L3aObserver(
+        ObserverConfig(api_key="test-key", frequency=1),
+        profile_updater=BrokenUpdater(),
+        _llm_caller=_llm_caller_json_response,
+    )
+
+    # Should not raise — profile update is best-effort
+    candidates = await observer.observe(
+        {"content": "I prefer concise updates", "role": "user"}
+    )
+    assert len(candidates) >= 1  # deterministic candidates still returned
+
+
+async def test_l3a_observer_without_profile_updater_still_returns_candidates() -> None:
+    """When profile_updater is None, observe() should still work fine."""
+    observer = L3aObserver(
+        ObserverConfig(api_key="test-key", frequency=1),
+        profile_updater=None,
+        _llm_caller=_llm_caller_json_response,
+    )
+
+    candidates = await observer.observe(
+        {"content": "I prefer concise updates", "role": "user"}
+    )
+
+    # Should have deterministic + LLM candidates (not blocked by missing updater)
+    assert len(candidates) >= 1
+    llm_candidates = [
+        c for c in candidates if c.metadata.get("source") == "l3a_observer"
+    ]
+    assert len(llm_candidates) >= 2

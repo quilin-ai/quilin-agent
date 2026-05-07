@@ -7,6 +7,7 @@ import { runConfigCommand } from "./cli/config-cmd.js";
 import { formatFirstRunWelcome } from "./cli/first-run-welcome.js";
 import { runServiceCommand } from "./cli/service-cmd.js";
 import { buildFirstRunOnboardingPlan } from "./config/first-run.js";
+import { ensureMemoryBackend } from "./config/memory-setup.js";
 import {
 	type CapabilitiesHotReloadEvent,
 	createCapabilitiesHotReloadController,
@@ -205,6 +206,7 @@ export type {
 	SubTask,
 } from "./planning/types.js";
 export * from "./repl.js";
+export * from "./tui/index.js";
 export * from "./safety/write-authority.js";
 export * from "./self-evolution/index.js";
 export {
@@ -683,6 +685,12 @@ export async function main(options: MainOptions = {}): Promise<void> {
 	configureLogger(runtimeMode);
 
 	const userRuntime = await bootstrapUserRuntime();
+
+	// Ensure ~/.quilin/memory.db exists with schema before any memory use.
+	// Guard against test-mode runs so index.test.ts call-index assertions stay stable.
+	if (process.env.NODE_ENV !== "test") {
+		ensureMemoryBackend();
+	}
 
 	const envTrustMode = process.env.QUILIN_TRUST_MODE;
 	const trustMode = parseReplCliOptions().yolo
