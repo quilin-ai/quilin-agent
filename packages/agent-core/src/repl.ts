@@ -74,7 +74,6 @@ const DEFAULT_INFERENCE_CONFIG: InferenceConfig = {
 	thinkingMode: "disabled",
 };
 const REPL_PROMPT = "quilin> ";
-const SLASH_COMMAND_NAME_WIDTH = 18;
 const RECENT_AGENT_EVENT_LIMIT = 5;
 
 interface SlashCommandEntry {
@@ -1486,26 +1485,27 @@ function matchesSlashCommandQuery(
 }
 
 function formatSlashCommandEntry(command: SlashCommandEntry): string {
-	return `  ${command.signature.padEnd(SLASH_COMMAND_NAME_WIDTH)} ${command.description}`;
-}
-
 function renderSlashCommandHelp(line = ""): string {
 	const query = parseSlashCommandQuery(line);
 	const matchingCommands = SLASH_COMMANDS.filter((command) =>
 		matchesSlashCommandQuery(command, query),
 	);
-	const commandLines =
-		matchingCommands.length > 0
-			? matchingCommands.map(formatSlashCommandEntry)
-			: ["  No matching slash commands."];
+
+	if (matchingCommands.length === 0) {
+		return "  No matching slash commands.";
+	}
+
+	const columns: TableColumn<SlashCommandEntry>[] = [
+		{ header: "Command", key: "signature" },
+		{ header: "Description", key: "description" },
+	];
 
 	return [
 		"Slash commands:",
-		...commandLines,
+		renderTable(columns, [...matchingCommands]),
 		"Tip: type /help to show this list again.",
 	].join("\n");
 }
-
 interface SlashCommandHelpRenderState {
 	renderedLine: string | undefined;
 	renderedCursorPos: ReadlineDisplayPosition | undefined;

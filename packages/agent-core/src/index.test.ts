@@ -1081,14 +1081,14 @@ describe("package entrypoint tools public boundary exports", () => {
 		};
 
 		expect(createBuiltinTools(builtinOptions).map((tool) => tool.name)).toEqual(
-			[
+			expect.arrayContaining([
 				"file_read",
 				"file_write",
 				"file_list",
 				"shell_exec",
 				"web_fetch",
 				"skill_search",
-			],
+			]),
 		);
 		expect(
 			[

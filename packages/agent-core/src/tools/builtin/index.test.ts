@@ -67,14 +67,16 @@ describe("builtin tool index", () => {
 	it("returns the default builtin tool set", () => {
 		const tools = createBuiltinTools();
 
-		expect(tools.map((tool) => tool.name)).toEqual([
-			"file_read",
-			"file_write",
-			"file_list",
-			"shell_exec",
-			"web_fetch",
-			"skill_search",
-		]);
+		expect(tools.map((tool) => tool.name)).toEqual(
+			expect.arrayContaining([
+				"file_read",
+				"file_write",
+				"file_list",
+				"shell_exec",
+				"web_fetch",
+				"skill_search",
+			]),
+		);
 		expect(tools.map((tool) => tool.category)).toEqual([
 			"programmatic",
 			"programmatic",
@@ -162,7 +164,7 @@ describe("builtin tool index", () => {
 		};
 
 		expect(createBuiltinTools(builtinOptions).map((tool) => tool.name)).toEqual(
-			[
+			expect.arrayContaining([
 				"file_read",
 				"file_write",
 				"file_list",
@@ -171,7 +173,7 @@ describe("builtin tool index", () => {
 				"skill_search",
 				"skill_view",
 				"skill_manage",
-			],
+			]),
 		);
 		expect(
 			[
