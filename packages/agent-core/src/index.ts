@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runConfigCommand } from "./cli/config-cmd.js";
+import { runServiceCommand } from "./cli/service-cmd.js";
 import {
 	type CapabilitiesHotReloadEvent,
 	createCapabilitiesHotReloadController,
@@ -815,6 +816,16 @@ export async function main(options: MainOptions = {}): Promise<void> {
 async function dispatchCli(argv: readonly string[]): Promise<void> {
 	if (argv[0] === "config") {
 		const result = await runConfigCommand(argv.slice(1));
+		if (result.stdout.length > 0) {
+			process.stdout.write(result.stdout);
+		}
+		if (result.stderr.length > 0) {
+			process.stderr.write(result.stderr);
+		}
+		process.exit(result.exitCode);
+	}
+	if (argv[0] === "service") {
+		const result = await runServiceCommand(argv.slice(1));
 		if (result.stdout.length > 0) {
 			process.stdout.write(result.stdout);
 		}

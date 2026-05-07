@@ -8,5 +8,6 @@ export * from "./exporters/prometheus.js";
 export * from "./log.js";
 export * from "./loop.js";
 export * from "./metrics.js";
+export * from "./persistent-store.js";
 export * from "./span.js";
 export * from "./trace-store.js";
