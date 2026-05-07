@@ -38,6 +38,7 @@ import { JsonFileSpanExporter } from "./observability/exporters/json-file.js";
 import { startRepl } from "./repl.js";
 import { SQLiteCheckpoint } from "./state/checkpoint.js";
 
+export * from "./config/first-run.js";
 export * from "./config/hot-reload.js";
 export {
 	type BootstrapOptions,
@@ -98,6 +99,7 @@ export {
 	userConfigSchema,
 } from "./config/user-config-schema.js";
 export * from "./context/index.js";
+export * from "./control-plane/index.js";
 export * from "./llm/client.js";
 export * from "./llm/provider.js";
 export * from "./llm/tier-router.js";
@@ -776,6 +778,8 @@ export async function main(options: MainOptions = {}): Promise<void> {
 				writeAuthorityMode: runtimeWriteAuthorityMode,
 				toolFilter: runtimeToolFilter,
 				onProviderRunRecord: createProviderRunRecordLogger("repl_turn"),
+				onMcpReconnectApplied: () =>
+					capabilitiesHotReload.markMcpReconnectAppliedAtReplTurnBoundary(),
 			});
 			shouldExit = true;
 		} finally {

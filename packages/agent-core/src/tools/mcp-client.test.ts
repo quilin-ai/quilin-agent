@@ -493,7 +493,7 @@ describe.sequential("MCPClientManager", () => {
 		});
 	});
 
-	it("connects to OmniMem and maps MCP tools into local Tool definitions", async () => {
+	it("connects to quilin-mem and maps MCP tools into local Tool definitions", async () => {
 		const manager = new MCPClientManager();
 
 		try {
@@ -627,7 +627,7 @@ describe.sequential("MCPClientManager", () => {
 		});
 	});
 
-	it("does not leak OmniMem state across fresh test connections", async () => {
+	it("does not leak quilin-mem state across fresh test connections", async () => {
 		const uniqueContent = `隔离测试-${crypto.randomUUID()}`;
 		const firstManager = new MCPClientManager();
 
@@ -667,7 +667,7 @@ describe.sequential("MCPClientManager", () => {
 		}
 	});
 
-	it("persists planning checkpoints through MCP OmniMem and recalls state snapshots", async () => {
+	it("persists planning checkpoints through MCP quilin-mem and recalls state snapshots", async () => {
 		const manager = new MCPClientManager();
 
 		try {
@@ -675,7 +675,7 @@ describe.sequential("MCPClientManager", () => {
 			const memoryStore = tools.find((tool) => tool.name === "memory_store");
 			const memoryRecall = tools.find((tool) => tool.name === "memory_recall");
 			if (memoryStore == null || memoryRecall == null) {
-				throw new Error("OmniMem MCP tools were not registered");
+				throw new Error("quilin-mem MCP tools were not registered");
 			}
 
 			const runId = `run-checkpoint-${crypto.randomUUID()}`;
@@ -863,7 +863,7 @@ describe.sequential("MCPClientManager", () => {
 		}
 	});
 
-	it("runs a thin e2e loop with fake LLM and real OmniMem bridge", async () => {
+	it("runs a thin e2e loop with fake LLM and real quilin-mem bridge", async () => {
 		const manager = new MCPClientManager();
 
 		try {

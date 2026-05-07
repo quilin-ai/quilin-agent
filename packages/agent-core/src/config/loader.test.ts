@@ -242,7 +242,7 @@ describe("loadCapabilitiesConfig", () => {
 		).rejects.toThrow(yamlPath);
 	});
 
-	it("returns the builtin OmniMem default when no config file exists", async () => {
+	it("returns the builtin quilin-mem default when no config file exists", async () => {
 		const workspaceRoot = await createTempWorkspace();
 
 		const loaded = await loadCapabilitiesConfig({

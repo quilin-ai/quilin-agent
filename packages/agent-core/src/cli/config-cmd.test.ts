@@ -76,6 +76,103 @@ describe("config show", () => {
 	});
 });
 
+describe("config status", () => {
+	it("emits provider auth and quota status without leaking secrets", async () => {
+		const file = path.join(tmpDir, "missing.toml");
+		const oauthPath = path.join(tmpDir, "gemini-oauth.json");
+		const result = await runConfigCommand(["status", "--config", file], {
+			env: {
+				DEEPSEEK_API_KEY: "secret-deepseek-key",
+				QUILIN_GEMINI_OAUTH_SESSION: oauthPath,
+			},
+			credentialPathExists: (_resolvedPath, redactedPath) =>
+				redactedPath === oauthPath,
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toBe("");
+		const parsed = JSON.parse(result.stdout);
+		expect(parsed.file_path).toBeNull();
+		expect(result.stdout).not.toContain("secret-deepseek-key");
+		expect(result.stdout).not.toContain(oauthPath);
+		expect(parsed.provider_live_matrix).toContainEqual(
+			expect.objectContaining({
+				provider: "deepseek",
+				credentialStatus: "configured",
+				quotaStatus: "planned",
+				redactedSources: ["env:DEEPSEEK_API_KEY"],
+				quotaProbe: expect.objectContaining({
+					ready: true,
+					redactedCredentialSources: ["env:DEEPSEEK_API_KEY"],
+				}),
+			}),
+		);
+		expect(parsed.provider_live_matrix).toContainEqual(
+			expect.objectContaining({
+				provider: "gemini",
+				credentialStatus: "configured",
+				redactedSources: ["oauth_cli:QUILIN_GEMINI_OAUTH_SESSION"],
+				credentialChecks: expect.arrayContaining([
+					expect.objectContaining({
+						mode: "oauth",
+						status: "configured",
+						redactedSource: "oauth_cli:QUILIN_GEMINI_OAUTH_SESSION",
+					}),
+				]),
+			}),
+		);
+	});
+
+	it("returns actionable missing credential reasons in provider status", async () => {
+		const result = await runConfigCommand(["status"], {
+			env: {
+				DEEPSEEK_API_KEY: "  ",
+				OPENAI_API_KEY: "",
+			},
+			credentialPathExists: () => false,
+		});
+
+		expect(result.exitCode).toBe(0);
+		const parsed = JSON.parse(result.stdout);
+		expect(parsed.provider_live_matrix).toContainEqual(
+			expect.objectContaining({
+				provider: "deepseek",
+				credentialStatus: "missing",
+				missingCredentialReasons: [
+					expect.objectContaining({
+						code: "env_empty",
+						redactedSource: "env:DEEPSEEK_API_KEY",
+					}),
+				],
+				quotaProbe: expect.objectContaining({
+					ready: false,
+					blockedReason: "missing_configured_credential",
+				}),
+			}),
+		);
+		expect(parsed.provider_live_matrix).toContainEqual(
+			expect.objectContaining({
+				provider: "openai",
+				missingCredentialReasons: [
+					expect.objectContaining({ code: "env_empty" }),
+					expect.objectContaining({
+						code: "credential_path_missing",
+						redactedSource: "oauth_file:~/.codex/auth.json",
+					}),
+				],
+			}),
+		);
+	});
+
+	it("returns exit 1 with error on unknown status flag", async () => {
+		const result = await runConfigCommand(["status", "--garbage"], {
+			env: {},
+		});
+		expect(result.exitCode).toBe(1);
+		expect(result.stderr).toMatch(/unknown flag/);
+	});
+});
+
 describe("config set", () => {
 	it("writes new value to a fresh file with mode 0600", async () => {
 		const file = path.join(tmpDir, "new.toml");
@@ -230,6 +327,7 @@ describe("config help", () => {
 		const result = await runConfigCommand(["help"]);
 		expect(result.exitCode).toBe(0);
 		expect(result.stderr).toMatch(/quilin config set/);
+		expect(result.stderr).toMatch(/quilin config status/);
 	});
 
 	it("rejects unknown subcommand", async () => {

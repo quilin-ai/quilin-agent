@@ -55,6 +55,7 @@ async function writeSkill(
 
 function buildConfig(input: {
 	readonly serverId?: string;
+	readonly serverArgs?: readonly string[];
 	readonly skills?: Record<string, unknown>;
 }): Record<string, unknown> {
 	return {
@@ -65,7 +66,7 @@ function buildConfig(input: {
 				: {
 						[input.serverId]: {
 							command: "node",
-							args: ["server.js"],
+							args: input.serverArgs ?? ["server.js"],
 							cwd: ".",
 						},
 					},
@@ -143,6 +144,18 @@ describe("CapabilitiesHotReloadController", () => {
 			operation: "reload",
 			trigger: "manual",
 		});
+		expect(controller.getStatus().management.config).toMatchObject({
+			applyState: "error",
+			error: {
+				generation: failed.snapshot.generation,
+				errorName: expect.any(String),
+			},
+			lastApplied: {
+				generation: 1,
+				operation: "bootstrap",
+				target: configPath,
+			},
+		});
 
 		await writeCapabilitiesFile(
 			workspaceRoot,
@@ -160,11 +173,59 @@ describe("CapabilitiesHotReloadController", () => {
 		expect(reloaded.snapshot.mcpReconnect).toMatchObject({
 			status: "pending_repl_apply",
 			reason: "applied_at_repl_turn_boundary",
+			applyState: "pending",
+			appliesAt: "repl_turn_boundary",
+			pendingReason: "waiting_for_repl_turn_boundary",
 			activeServerIds: ["beta"],
 			change: {
 				added: ["beta"],
 				removed: ["alpha"],
 				changed: [],
+			},
+		});
+		expect(controller.getStatus().management).toMatchObject({
+			config: {
+				domain: "config",
+				applyState: "applied",
+				changed: [configPath],
+				error: null,
+				lastApplied: {
+					generation: reloaded.snapshot.generation,
+					operation: "reload",
+					trigger: "manual",
+					target: configPath,
+				},
+			},
+			mcp: {
+				domain: "mcp",
+				applyState: "pending_repl_turn_boundary",
+				added: ["beta"],
+				removed: ["alpha"],
+				changed: [],
+				lastApplied: null,
+			},
+		});
+
+		const applied = controller.markMcpReconnectAppliedAtReplTurnBoundary(9_999);
+		expect(applied).toMatchObject({
+			status: "applied_at_repl_turn_boundary",
+			applyState: "applied",
+			lastApplied: {
+				generation: reloaded.snapshot.generation,
+				completedAtEpochMs: 9_999,
+				mode: "repl_turn_boundary",
+			},
+		});
+		expect(controller.getManagementStatus().mcp).toMatchObject({
+			applyState: "applied",
+			added: ["beta"],
+			removed: ["alpha"],
+			changed: [],
+			lastApplied: {
+				generation: reloaded.snapshot.generation,
+				completedAtEpochMs: 9_999,
+				operation: "repl_turn_boundary",
+				target: "beta",
 			},
 		});
 	});
@@ -212,6 +273,51 @@ describe("CapabilitiesHotReloadController", () => {
 					catalogSize: 1,
 				},
 			},
+			management: {
+				skills: {
+					domain: "skills",
+					applyState: "applied",
+					added: ["research-helper"],
+					removed: [],
+					changed: [],
+					error: null,
+					lastApplied: {
+						operation: "skills_discovery",
+						target: "1",
+					},
+				},
+			},
+		});
+	});
+
+	it("classifies MCP server config changes without requiring add/remove churn", async () => {
+		const workspaceRoot = await createTempWorkspace();
+		const configPath = await writeCapabilitiesFile(
+			workspaceRoot,
+			buildConfig({ serverId: "memory", serverArgs: ["old.js"] }),
+		);
+		const controller = createCapabilitiesHotReloadController({
+			workspaceRoot,
+			cwd: workspaceRoot,
+			argv: ["--config", configPath],
+			env: {},
+			watchEnabled: false,
+		});
+		await controller.bootstrap();
+
+		await writeCapabilitiesFile(
+			workspaceRoot,
+			buildConfig({ serverId: "memory", serverArgs: ["new.js"] }),
+		);
+		const reloaded = await controller.reload();
+
+		expect(reloaded.status).toBe("success");
+		expect(controller.getManagementStatus().mcp).toMatchObject({
+			applyState: "pending_repl_turn_boundary",
+			added: [],
+			removed: [],
+			changed: ["memory"],
+			error: null,
 		});
 	});
 

@@ -35,6 +35,7 @@ import { runAgentLoop } from "./loop.js";
 import {
 	type ChildRunStatusRecord,
 	InProcessSupervisorRuntime,
+	type SupervisorProgressEvent,
 	type SupervisorRuntimeSnapshot,
 } from "./multi-agent/index.js";
 import {
@@ -68,6 +69,7 @@ const DEFAULT_INFERENCE_CONFIG: InferenceConfig = {
 };
 const REPL_PROMPT = "quilin> ";
 const SLASH_COMMAND_NAME_WIDTH = 18;
+const RECENT_AGENT_EVENT_LIMIT = 5;
 
 interface SlashCommandEntry {
 	readonly name: string;
@@ -139,9 +141,22 @@ interface ReplOptions {
 	writeAuthorityMode?: AuthorityMode;
 	toolFilter?: RuntimeToolFilter;
 	capabilitiesStatus?: () => CapabilitiesReloadStatus;
-	supervisorRuntime?: InProcessSupervisorRuntime;
+	supervisorRuntime?: SupervisorRuntimeControlPlane;
 	agentRunLogger?: AgentRunLogSink;
 	onProviderRunRecord?: (record: ProviderRunRecord) => void;
+	onMcpReconnectApplied?: () => void;
+}
+
+interface SupervisorRuntimeControlPlane {
+	snapshot(): SupervisorRuntimeSnapshot;
+	getNotificationStatus?(): unknown;
+	notificationStatus?(): unknown;
+	notifications?(): unknown;
+}
+
+interface NotificationStatusProbe {
+	readonly source: string;
+	readonly value: unknown;
 }
 
 function createState(
@@ -386,27 +401,439 @@ function quoteAgentField(value: string | undefined): string | undefined {
 	return `"${shortened.replaceAll('"', "'")}"`;
 }
 
+function formatAgentProgress(record: ChildRunStatusRecord): string | undefined {
+	if (record.progress == null) {
+		return undefined;
+	}
+	const label = quoteAgentField(record.progress.label);
+	return [
+		`progress=${record.progress.completedSteps}/${record.progress.totalSteps}`,
+		label == null ? undefined : `label=${label}`,
+	]
+		.filter((field): field is string => field != null)
+		.join(" ");
+}
+
 function formatAgentRecord(record: ChildRunStatusRecord): string {
 	const fields = [
 		`${displayRunStatus(record).padEnd(18)} run=${record.runId}`,
 		`task=${record.taskId}`,
 		record.workerId == null ? undefined : `worker=${record.workerId}`,
 		record.currentStep == null ? undefined : `step=${record.currentStep}`,
+		formatAgentProgress(record),
 		record.blocker == null
 			? undefined
 			: `blocker=${quoteAgentField(record.blocker)}`,
 		`summary=${quoteAgentField(record.summary) ?? '""'}`,
 		`confidence=${record.confidence}`,
 		`artifacts=${record.reviewedArtifactCount}`,
-		`updated=${record.updatedAt}`,
+		record.lastHeartbeatAt == null
+			? undefined
+			: `heartbeat=${record.lastHeartbeatAt}`,
+		record.updatedAt == null ? undefined : `updated=${record.updatedAt}`,
 	];
 
 	return fields.filter((field): field is string => field != null).join(" ");
 }
 
+function progressSnapshot(snapshot: SupervisorRuntimeSnapshot) {
+	return snapshot.projection.snapshot;
+}
+
+function progressEvents(
+	snapshot: SupervisorRuntimeSnapshot,
+): readonly SupervisorProgressEvent[] {
+	return snapshot.projection.events ?? [];
+}
+
+function eventOccurredAt(event: SupervisorProgressEvent): string {
+	const extended = event as SupervisorProgressEvent & {
+		readonly timestamp?: unknown;
+		readonly updatedAt?: unknown;
+	};
+	const occurredAt = extended.occurredAt;
+	if (typeof occurredAt === "string") {
+		return occurredAt;
+	}
+	if (typeof extended.timestamp === "string") {
+		return extended.timestamp;
+	}
+	if (typeof extended.updatedAt === "string") {
+		return extended.updatedAt;
+	}
+	return "";
+}
+
+function countEvents(
+	events: readonly SupervisorProgressEvent[],
+	predicate: (event: SupervisorProgressEvent) => boolean,
+): number {
+	return events.filter(predicate).length;
+}
+
+function isRecoveryEvent(event: SupervisorProgressEvent): boolean {
+	return (
+		event.type.includes("recover") ||
+		event.type.includes("recovery") ||
+		event.type.includes("resume")
+	);
+}
+
+function recentKeyEvents(
+	snapshot: SupervisorRuntimeSnapshot,
+): readonly SupervisorProgressEvent[] {
+	const events = progressEvents(snapshot);
+	const keyEvents = events.filter(
+		(event) => event.type !== "progress_snapshot",
+	);
+	return (keyEvents.length === 0 ? events : keyEvents)
+		.slice()
+		.sort((left, right) =>
+			eventOccurredAt(right).localeCompare(eventOccurredAt(left)),
+		)
+		.slice(0, RECENT_AGENT_EVENT_LIMIT);
+}
+
+function formatBoundedPercent(value: number | null | undefined): string {
+	return value == null ? "unbounded" : `${value}%`;
+}
+
+function formatAgentProgressSummary(
+	snapshot: SupervisorRuntimeSnapshot,
+): string {
+	const projection = progressSnapshot(snapshot);
+	const events = progressEvents(snapshot);
+	const heartbeatCount = countEvents(
+		events,
+		(event) => event.type === "child_heartbeat",
+	);
+	const dueCheckpointCount = countEvents(
+		events,
+		(event) => event.type === "child_checkpoint" && event.payload.isDue,
+	);
+	const staleCount = projection.staleRunIds?.length ?? 0;
+	const recoveryCount = countEvents(events, isRecoveryEvent);
+
+	return [
+		`Progress: band=${projection.band ?? "unknown"}`,
+		`percent=${formatBoundedPercent(projection.boundedPercent)}`,
+		`heartbeat=${heartbeatCount}`,
+		`stale=${staleCount}`,
+		`recovery=${recoveryCount}`,
+		`oldest_heartbeat_ms=${projection.oldestHeartbeatAgeMs ?? "none"}`,
+		`checkpoint_due=${dueCheckpointCount}`,
+		`next_checkpoint=${projection.nextCheckpointAt ?? "none"}`,
+	].join(" | ");
+}
+
+function formatProgressEvent(event: SupervisorProgressEvent): string {
+	switch (event.type) {
+		case "child_stale":
+			return [
+				`${event.severity} child_stale`,
+				`run=${event.runId}`,
+				`task=${event.taskId}`,
+				`status=${event.payload.status}`,
+				`age_ms=${event.payload.heartbeatAgeMs}`,
+				`threshold_ms=${event.payload.staleAfterMs}`,
+				`summary=${quoteAgentField(event.payload.summary) ?? '""'}`,
+				`at=${event.occurredAt}`,
+			].join(" ");
+		case "child_heartbeat": {
+			const progress =
+				event.payload.progress == null
+					? undefined
+					: `progress=${event.payload.progress.completedSteps}/${event.payload.progress.totalSteps}`;
+			return [
+				`${event.severity} child_heartbeat`,
+				`run=${event.runId}`,
+				`task=${event.taskId}`,
+				`status=${event.payload.status}`,
+				progress,
+				event.payload.currentStep == null
+					? undefined
+					: `step=${event.payload.currentStep}`,
+				`age_ms=${event.payload.heartbeatAgeMs}`,
+				`summary=${quoteAgentField(event.payload.summary) ?? '""'}`,
+				`at=${event.occurredAt}`,
+			]
+				.filter((field): field is string => field != null)
+				.join(" ");
+		}
+		case "child_checkpoint":
+			return [
+				`${event.severity} child_checkpoint`,
+				`run=${event.runId}`,
+				`task=${event.taskId}`,
+				`status=${event.payload.status}`,
+				`due=${event.payload.isDue ? "yes" : "no"}`,
+				`due_ms=${event.payload.dueInMs}`,
+				`at=${event.occurredAt}`,
+			].join(" ");
+		case "terminal_children_summary":
+			return [
+				`${event.severity} terminal_children_summary`,
+				`total=${event.payload.total}`,
+				`completed=${event.payload.counts.completed}`,
+				`failed=${event.payload.counts.failed}`,
+				`cancelled=${event.payload.counts.cancelled}`,
+				`deferred=${event.payload.counts.deferred}`,
+				`at=${event.occurredAt}`,
+			].join(" ");
+		case "progress_snapshot":
+			return [
+				`${event.severity} progress_snapshot`,
+				`band=${event.payload.band}`,
+				`runs=${event.payload.totalRuns}`,
+				`stale=${event.payload.staleRunIds.length}`,
+				`percent=${formatBoundedPercent(event.payload.boundedPercent)}`,
+				`at=${event.occurredAt}`,
+			].join(" ");
+		default: {
+			const extended = event as {
+				readonly type?: unknown;
+				readonly severity?: unknown;
+				readonly runId?: unknown;
+				readonly taskId?: unknown;
+				readonly payload?: unknown;
+				readonly occurredAt?: unknown;
+			};
+			const payload = isRecord(extended.payload) ? extended.payload : {};
+			const summary = stringField(payload, ["summary", "message", "detail"]);
+			return [
+				`${typeof extended.severity === "string" ? extended.severity : "info"} ${typeof extended.type === "string" ? extended.type : "unknown_event"}`,
+				typeof extended.runId === "string"
+					? `run=${extended.runId}`
+					: undefined,
+				typeof extended.taskId === "string"
+					? `task=${extended.taskId}`
+					: undefined,
+				summary == null ? undefined : `summary=${quoteAgentField(summary)}`,
+				`at=${eventOccurredAt(event) || "unknown"}`,
+			]
+				.filter((field): field is string => field != null)
+				.join(" ");
+		}
+	}
+}
+
+function renderRecentAgentEvents(snapshot: SupervisorRuntimeSnapshot): string {
+	const events = recentKeyEvents(snapshot);
+	if (events.length === 0) {
+		return "Recent events:\n  none";
+	}
+
+	return [
+		"Recent events:",
+		...events.map((event) => `  ${formatProgressEvent(event)}`),
+	].join("\n");
+}
+
+function numberField(
+	record: Record<string, unknown>,
+	keys: readonly string[],
+): number | undefined {
+	for (const key of keys) {
+		const value = record[key];
+		if (typeof value === "number" && Number.isFinite(value)) {
+			return value;
+		}
+	}
+	return undefined;
+}
+
+function stringField(
+	record: Record<string, unknown>,
+	keys: readonly string[],
+): string | undefined {
+	for (const key of keys) {
+		const value = record[key];
+		if (typeof value === "string" && value.trim().length > 0) {
+			return value;
+		}
+	}
+	return undefined;
+}
+
+function arrayField(
+	record: Record<string, unknown>,
+	keys: readonly string[],
+): readonly unknown[] | undefined {
+	for (const key of keys) {
+		const value = record[key];
+		if (Array.isArray(value)) {
+			return value;
+		}
+	}
+	return undefined;
+}
+
+function countLikeField(
+	record: Record<string, unknown>,
+	keys: readonly string[],
+): number | undefined {
+	const direct = numberField(record, keys);
+	if (direct != null) {
+		return direct;
+	}
+	const arrayValue = arrayField(record, keys);
+	return arrayValue == null ? undefined : arrayValue.length;
+}
+
+function isPromiseLike(value: unknown): boolean {
+	return (
+		typeof value === "object" &&
+		value != null &&
+		"then" in value &&
+		typeof (value as { readonly then?: unknown }).then === "function"
+	);
+}
+
+function readNotificationStatus(
+	runtime: SupervisorRuntimeControlPlane,
+): NotificationStatusProbe | undefined {
+	const candidates = [
+		"getNotificationStatus",
+		"notificationStatus",
+		"notifications",
+	] as const;
+	const runtimeRecord = runtime as unknown as Record<string, unknown>;
+
+	for (const source of candidates) {
+		const candidate = runtimeRecord[source];
+		if (typeof candidate === "function") {
+			try {
+				const value = candidate.call(runtime);
+				return {
+					source,
+					value: isPromiseLike(value) ? { status: "async_unavailable" } : value,
+				};
+			} catch (err) {
+				return {
+					source,
+					value: {
+						status: "unavailable",
+						error: normalizeProviderError(err).name,
+					},
+				};
+			}
+		}
+		if (candidate != null) {
+			return {
+				source,
+				value: candidate,
+			};
+		}
+	}
+
+	return undefined;
+}
+
+function formatNotificationValue(probe: NotificationStatusProbe): string {
+	const { source, value } = probe;
+	if (typeof value === "string") {
+		return `status=${value} | source=${source}`;
+	}
+	if (!isRecord(value)) {
+		return `status=available | source=${source}`;
+	}
+
+	const status = stringField(value, ["status", "state", "mode"]) ?? "available";
+	const enabled =
+		typeof value.enabled === "boolean" ? value.enabled : undefined;
+	const channels = arrayField(value, ["channels", "sinks"])
+		?.map((entry) => String(entry))
+		.filter((entry) => entry.length > 0)
+		.join(",");
+	const last =
+		stringField(value, [
+			"lastNotifiedAt",
+			"lastDeliveredAt",
+			"lastNotificationAt",
+			"updatedAt",
+		]) ?? "none";
+	const error = stringField(value, ["error", "lastError"]);
+
+	const fields = [
+		`status=${status}`,
+		enabled == null ? undefined : `enabled=${enabled ? "yes" : "no"}`,
+		`source=${source}`,
+		`pending=${countLikeField(value, ["pendingCount", "pending"]) ?? 0}`,
+		`delivered=${numberField(value, ["deliveredCount", "sentCount"]) ?? 0}`,
+		`failed=${numberField(value, ["failedCount", "errorCount"]) ?? 0}`,
+		channels == null || channels.length === 0
+			? undefined
+			: `channels=${channels}`,
+		`last=${last}`,
+		`heartbeat=${countLikeField(value, ["heartbeatCount", "heartbeats"]) ?? 0}`,
+		`stale=${countLikeField(value, ["staleCount", "stale"]) ?? 0}`,
+		`recovery=${
+			countLikeField(value, ["recoveryCount", "recoveredCount", "recovery"]) ??
+			0
+		}`,
+		`recent=${countLikeField(value, ["recentCount", "recent", "recentEvents"]) ?? 0}`,
+		error == null ? undefined : `error=${quoteAgentField(error) ?? '""'}`,
+	];
+
+	return fields.filter((field): field is string => field != null).join(" | ");
+}
+
+function formatAgentNotificationStatus(
+	snapshot: SupervisorRuntimeSnapshot,
+	runtime: SupervisorRuntimeControlPlane,
+): string {
+	const projection = progressSnapshot(snapshot);
+	const events = progressEvents(snapshot);
+	const heartbeatCount = countEvents(
+		events,
+		(event) => event.type === "child_heartbeat",
+	);
+	const staleCount = projection.staleRunIds?.length ?? 0;
+	const recoveryCount = countEvents(events, isRecoveryEvent);
+	const warningCount = countEvents(
+		events,
+		(event) => event.severity === "warning",
+	);
+	const errorCount = countEvents(events, (event) => event.severity === "error");
+	const projectionStatus =
+		events.length === 0
+			? "empty"
+			: warningCount + errorCount > 0
+				? "needs_attention"
+				: "healthy";
+	const probe = readNotificationStatus(runtime);
+	const derivedFields =
+		probe == null
+			? [
+					`projection=${projectionStatus}`,
+					`key_events=${recentKeyEvents(snapshot).length}`,
+					`heartbeat=${heartbeatCount}`,
+					`stale=${staleCount}`,
+					`recovery=${recoveryCount}`,
+				]
+			: [
+					`projection=${projectionStatus}`,
+					`projection_key_events=${recentKeyEvents(snapshot).length}`,
+					`projection_heartbeat=${heartbeatCount}`,
+					`projection_stale=${staleCount}`,
+					`projection_recovery=${recoveryCount}`,
+				];
+	const statusFields =
+		probe == null
+			? [`status=${projectionStatus}`, "source=progress_projection"]
+			: [formatNotificationValue(probe)];
+
+	return `Agent notifications: ${[...statusFields, ...derivedFields].join(" | ")}`;
+}
+
 function renderAgentsStatus(snapshot: SupervisorRuntimeSnapshot): string {
 	if (snapshot.records.length === 0) {
-		return `${formatAgentsSummary(snapshot)}\nNo local subagent runs yet.`;
+		return [
+			formatAgentsSummary(snapshot),
+			formatAgentProgressSummary(snapshot),
+			renderRecentAgentEvents(snapshot),
+			"No local subagent runs yet.",
+		].join("\n");
 	}
 
 	const records = [...snapshot.records].sort((left, right) => {
@@ -419,6 +846,8 @@ function renderAgentsStatus(snapshot: SupervisorRuntimeSnapshot): string {
 
 	return [
 		formatAgentsSummary(snapshot),
+		formatAgentProgressSummary(snapshot),
+		renderRecentAgentEvents(snapshot),
 		"",
 		...records.map(formatAgentRecord),
 	].join("\n");
@@ -1089,6 +1518,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 		supervisorRuntime: providedSupervisorRuntime,
 		agentRunLogger,
 		onProviderRunRecord,
+		onMcpReconnectApplied,
 	} = options;
 	const context = new BasicContextManager();
 	const ownsStaticSkillsManager =
@@ -1364,6 +1794,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 				for (const [serverId, signature] of nextMcpServerSignatures) {
 					registeredMcpServerSignatures.set(serverId, signature);
 				}
+				onMcpReconnectApplied?.();
 
 				const nextPromptSession = createPromptSessionAssembler(
 					modelId,
@@ -1507,7 +1938,11 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 						`${renderCapabilitiesStatus(capabilitiesReloadStatus)}\n`,
 					);
 				}
-				stderr.write(`${formatAgentsSummary(supervisorRuntime.snapshot())}\n`);
+				const supervisorSnapshot = supervisorRuntime.snapshot();
+				stderr.write(`${formatAgentsSummary(supervisorSnapshot)}\n`);
+				stderr.write(
+					`${formatAgentNotificationStatus(supervisorSnapshot, supervisorRuntime)}\n`,
+				);
 				continue;
 			}
 

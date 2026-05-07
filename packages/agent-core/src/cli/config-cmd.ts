@@ -15,6 +15,11 @@ import {
 	FORBIDDEN_FIELD_FRAGMENTS,
 	userConfigSchema,
 } from "../config/user-config-schema.js";
+import {
+	buildProviderLiveMatrix,
+	DEFAULT_PROVIDER_CATALOG,
+	listProviderCredentialPathCandidates,
+} from "../llm/provider.js";
 
 const DEFAULT_CONFIG_PATH = path.join(homedir(), ".quilin", "config.toml");
 
@@ -26,7 +31,13 @@ export interface ConfigCommandResult {
 
 export interface ConfigCommandOptions {
 	readonly env?: Readonly<Record<string, string | undefined>>;
+	readonly credentialPathExists?: CredentialPathExists;
 }
+
+type CredentialPathExists = (
+	resolvedPath: string,
+	redactedPath: string,
+) => boolean | Promise<boolean>;
 
 export async function runConfigCommand(
 	argv: readonly string[],
@@ -37,6 +48,9 @@ export async function runConfigCommand(
 
 	if (subcommand === "show") {
 		return runShow(argv.slice(1), env);
+	}
+	if (subcommand === "status") {
+		return runStatus(argv.slice(1), env, options.credentialPathExists);
 	}
 	if (subcommand === "set") {
 		return runSet(argv.slice(1), env);
@@ -59,16 +73,120 @@ function helpText(): string {
 	return [
 		"Usage:",
 		"  quilin config show [--source] [--config <path>]",
+		"  quilin config status [--config <path>]",
 		"  quilin config set <dot.path> <value> [--config <path>]",
 		"",
 		"`show` prints the merged user config as JSON. With --source, prints",
 		"each leaf's winning layer (cli / env / file / default).",
+		"`status` prints provider auth and quota readiness without secrets.",
 		"",
 		"`set` writes <value> at <dot.path> into the config file (default",
 		"~/.quilin/config.toml; --config overrides). New files are created",
 		"with mode 0600. Forbidden field name fragments (api_key / token /",
 		"secret) are rejected; API keys live in env vars only.",
 	].join("\n");
+}
+
+interface StatusFlags {
+	readonly configPath: string;
+}
+
+function parseStatusFlags(argv: readonly string[]): StatusFlags {
+	let configPath = DEFAULT_CONFIG_PATH;
+	for (let i = 0; i < argv.length; i += 1) {
+		const arg = argv[i];
+		if (arg === "--config") {
+			const next = argv[i + 1];
+			if (next == null || next.startsWith("--")) {
+				throw new ConfigCliError("--config requires a path");
+			}
+			configPath = next;
+			i += 1;
+			continue;
+		}
+		throw new ConfigCliError(`unknown flag: ${arg}`);
+	}
+	return { configPath };
+}
+
+async function runStatus(
+	argv: readonly string[],
+	env: Readonly<Record<string, string | undefined>>,
+	credentialPathExists: CredentialPathExists = defaultCredentialPathExists,
+): Promise<ConfigCommandResult> {
+	let flags: StatusFlags;
+	try {
+		flags = parseStatusFlags(argv);
+	} catch (error) {
+		return cliError(error);
+	}
+
+	let result: UserConfigLoadResult;
+	try {
+		result = await loadUserConfig({ configPath: flags.configPath, env });
+	} catch (error) {
+		return cliError(error);
+	}
+
+	const existingCredentialPaths = await collectExistingCredentialPaths(
+		env,
+		credentialPathExists,
+	);
+	const providerLiveMatrix = buildProviderLiveMatrix(DEFAULT_PROVIDER_CATALOG, {
+		env,
+		existingCredentialPaths,
+	});
+
+	return {
+		exitCode: 0,
+		stdout: `${JSON.stringify(
+			{
+				file_path: result.filePath,
+				provider_live_matrix: providerLiveMatrix,
+			},
+			null,
+			2,
+		)}\n`,
+		stderr: "",
+	};
+}
+
+async function collectExistingCredentialPaths(
+	env: Readonly<Record<string, string | undefined>>,
+	credentialPathExists: CredentialPathExists,
+): Promise<readonly string[]> {
+	const existing: string[] = [];
+	for (const candidate of listProviderCredentialPathCandidates(
+		DEFAULT_PROVIDER_CATALOG,
+		env,
+	)) {
+		const resolvedPath = resolveCredentialPath(candidate);
+		if (await credentialPathExists(resolvedPath, candidate)) {
+			existing.push(candidate);
+		}
+	}
+	return existing;
+}
+
+function resolveCredentialPath(candidate: string): string {
+	if (candidate === "~") {
+		return homedir();
+	}
+	if (candidate.startsWith("~/")) {
+		return path.join(homedir(), candidate.slice(2));
+	}
+	return candidate;
+}
+
+async function defaultCredentialPathExists(
+	resolvedPath: string,
+): Promise<boolean> {
+	try {
+		await fs.access(resolvedPath);
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 interface ShowFlags {
@@ -359,7 +477,9 @@ function cliError(error: unknown): ConfigCommandResult {
 
 export const __testing = {
 	parseShowFlags,
+	parseStatusFlags,
 	parseSetFlags,
+	resolveCredentialPath,
 	setDotPath,
 	pickDotPath,
 	coerceLiteral,

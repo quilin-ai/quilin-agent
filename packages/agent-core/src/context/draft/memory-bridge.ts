@@ -9,9 +9,9 @@ export interface MemoryRecallResult {
 }
 
 /**
- * 将 OmniMem recall 结果转换为 ContextSource 列表。
+ * 将 quilin-mem recall 结果转换为 ContextSource 列表。
  * 不做 extractKeywords——直接由调用方传入 userInput 作为 recall query，
- * 让 OmniMem 自己做 query expansion 和 CJK n-gram 检索。
+ * 让 quilin-mem 自己做 query expansion 和 CJK n-gram 检索。
  */
 export function recallResultsToSources(
 	results: readonly MemoryRecallResult[],

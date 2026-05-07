@@ -45,11 +45,51 @@ export type ReloadUserRuntimeOptions = BootstrapOptions;
 
 export type RuntimeReloadSuccessOperation = "bootstrap" | "reload";
 
+export type RuntimeReloadApplyState =
+	| "not_requested"
+	| "in_flight"
+	| "applied"
+	| "error";
+
+export interface RuntimeReloadChangeSet {
+	readonly added: readonly string[];
+	readonly removed: readonly string[];
+	readonly changed: readonly string[];
+}
+
+export interface RuntimeReloadErrorSummary {
+	readonly generation: number;
+	readonly completedAtEpochMs: number;
+	readonly errorName: string;
+	readonly errorMessage: string;
+	readonly errorCode?: string;
+}
+
+export interface RuntimeReloadLastApplied {
+	readonly generation: number;
+	readonly completedAtEpochMs: number;
+	readonly operation: RuntimeReloadSuccessOperation;
+	readonly target: string | null;
+}
+
+export interface UserRuntimeReloadManagementStatus {
+	readonly domain: "user_config";
+	readonly generation: number;
+	readonly inFlight: boolean;
+	readonly applyState: RuntimeReloadApplyState;
+	readonly added: readonly string[];
+	readonly removed: readonly string[];
+	readonly changed: readonly string[];
+	readonly error: RuntimeReloadErrorSummary | null;
+	readonly lastApplied: RuntimeReloadLastApplied | null;
+}
+
 export interface RuntimeReloadSuccessSnapshot {
 	readonly generation: number;
 	readonly operation: RuntimeReloadSuccessOperation;
 	readonly completedAtEpochMs: number;
 	readonly configPath: string | null;
+	readonly change?: RuntimeReloadChangeSet;
 }
 
 export interface RuntimeReloadFailureSnapshot {
@@ -212,12 +252,18 @@ function buildSuccessSnapshot(
 	generation: number,
 	operation: RuntimeReloadSuccessOperation,
 	userRuntime: UserRuntime,
+	previousRuntime: UserRuntime | null,
 ): RuntimeReloadSuccessSnapshot {
 	return {
 		generation,
 		operation,
 		completedAtEpochMs: Date.now(),
 		configPath: userRuntime.result.filePath,
+		change: diffRuntimeConfigPaths(
+			previousRuntime?.result.filePath ?? null,
+			userRuntime.result.filePath,
+			operation,
+		),
 	};
 }
 
@@ -259,6 +305,40 @@ function sortedUniqueGenerations(
 	return Array.from(new Set(generations)).sort((left, right) => left - right);
 }
 
+function runtimeConfigTarget(path: string | null): string {
+	return path ?? "defaults";
+}
+
+function diffRuntimeConfigPaths(
+	previousPath: string | null,
+	nextPath: string | null,
+	operation: RuntimeReloadSuccessOperation,
+): RuntimeReloadChangeSet {
+	const nextTarget = runtimeConfigTarget(nextPath);
+	if (operation === "bootstrap") {
+		return {
+			added: [nextTarget],
+			removed: [],
+			changed: [],
+		};
+	}
+
+	const previousTarget = runtimeConfigTarget(previousPath);
+	if (previousTarget !== nextTarget) {
+		return {
+			added: [nextTarget],
+			removed: [previousTarget],
+			changed: [],
+		};
+	}
+
+	return {
+		added: [],
+		removed: [],
+		changed: [nextTarget],
+	};
+}
+
 function buildInFlightDelta(
 	before: readonly number[],
 	after: readonly number[],
@@ -285,11 +365,16 @@ function successSnapshotChanged(
 	if (before == null || after == null) {
 		return before !== after;
 	}
+	const beforeChange = normalizeRuntimeChangeSet(before.change);
+	const afterChange = normalizeRuntimeChangeSet(after.change);
 	return (
 		before.generation !== after.generation ||
 		before.operation !== after.operation ||
 		before.completedAtEpochMs !== after.completedAtEpochMs ||
-		before.configPath !== after.configPath
+		before.configPath !== after.configPath ||
+		beforeChange.added.join("\0") !== afterChange.added.join("\0") ||
+		beforeChange.removed.join("\0") !== afterChange.removed.join("\0") ||
+		beforeChange.changed.join("\0") !== afterChange.changed.join("\0")
 	);
 }
 
@@ -308,6 +393,45 @@ function failureSnapshotChanged(
 		before.errorMessage !== after.errorMessage ||
 		(before.errorCode ?? null) !== (after.errorCode ?? null)
 	);
+}
+
+function latestRuntimeFailureIsActive(): RuntimeReloadFailureSnapshot | null {
+	if (lastFailure == null) {
+		return null;
+	}
+	if (lastSuccess == null || lastFailure.generation >= lastSuccess.generation) {
+		return lastFailure;
+	}
+	return null;
+}
+
+function cloneRuntimeChangeSet(
+	change: RuntimeReloadChangeSet | undefined,
+): RuntimeReloadChangeSet {
+	const normalized = normalizeRuntimeChangeSet(change);
+	return {
+		added: [...normalized.added],
+		removed: [...normalized.removed],
+		changed: [...normalized.changed],
+	};
+}
+
+function normalizeRuntimeChangeSet(
+	change: RuntimeReloadChangeSet | undefined,
+): RuntimeReloadChangeSet {
+	return change ?? { added: [], removed: [], changed: [] };
+}
+
+function runtimeFailureToErrorSummary(
+	failure: RuntimeReloadFailureSnapshot,
+): RuntimeReloadErrorSummary {
+	return {
+		generation: failure.generation,
+		completedAtEpochMs: failure.completedAtEpochMs,
+		errorName: failure.errorName,
+		errorMessage: failure.errorMessage,
+		...(failure.errorCode == null ? {} : { errorCode: failure.errorCode }),
+	};
 }
 
 function getReloadOutcome(
@@ -584,8 +708,49 @@ export function getUserRuntimeStateSnapshot(): UserRuntimeStateSnapshot {
 		booted: runtime != null,
 		inFlight: inFlightGenerations.length > 0,
 		inFlightGenerations,
-		lastSuccess: lastSuccess == null ? null : { ...lastSuccess },
+		lastSuccess:
+			lastSuccess == null
+				? null
+				: {
+						...lastSuccess,
+						change: cloneRuntimeChangeSet(lastSuccess.change),
+					},
 		lastFailure: lastFailure == null ? null : { ...lastFailure },
+	};
+}
+
+export function getUserRuntimeReloadManagementStatus(): UserRuntimeReloadManagementStatus {
+	const inFlightGenerations = Array.from(inFlightReloadGenerations).sort(
+		(left, right) => left - right,
+	);
+	const activeError = latestRuntimeFailureIsActive();
+	const change = cloneRuntimeChangeSet(lastSuccess?.change);
+	return {
+		domain: "user_config",
+		generation: runtimeGeneration,
+		inFlight: inFlightGenerations.length > 0,
+		applyState:
+			activeError != null
+				? "error"
+				: inFlightGenerations.length > 0
+					? "in_flight"
+					: lastSuccess == null
+						? "not_requested"
+						: "applied",
+		added: [...change.added],
+		removed: [...change.removed],
+		changed: [...change.changed],
+		error:
+			activeError == null ? null : runtimeFailureToErrorSummary(activeError),
+		lastApplied:
+			lastSuccess == null
+				? null
+				: {
+						generation: lastSuccess.generation,
+						completedAtEpochMs: lastSuccess.completedAtEpochMs,
+						operation: lastSuccess.operation,
+						target: lastSuccess.configPath,
+					},
 	};
 }
 
@@ -600,7 +765,12 @@ export async function bootstrapUserRuntime(
 		extractDependencyOverrides(options),
 	);
 	runtimeGeneration += 1;
-	lastSuccess = buildSuccessSnapshot(runtimeGeneration, "bootstrap", runtime);
+	lastSuccess = buildSuccessSnapshot(
+		runtimeGeneration,
+		"bootstrap",
+		runtime,
+		null,
+	);
 	return runtime;
 }
 
@@ -639,7 +809,12 @@ export async function reloadUserRuntime(
 			dependencyOverrides,
 			currentRuntime,
 		);
-		lastSuccess = buildSuccessSnapshot(commitGeneration, "reload", runtime);
+		lastSuccess = buildSuccessSnapshot(
+			commitGeneration,
+			"reload",
+			runtime,
+			currentRuntime,
+		);
 		return runtime;
 	} catch (error) {
 		if (commitGeneration === runtimeGeneration) {

@@ -20,6 +20,7 @@ import {
 	getUserConfig,
 	getUserConfigSources,
 	getUserRuntime,
+	getUserRuntimeReloadManagementStatus,
 	getUserRuntimeStateSnapshot,
 	isRuntimeToolEnabled,
 	isUserRuntimeReady,
@@ -40,6 +41,11 @@ function successSnapshot(
 		operation: "reload",
 		completedAtEpochMs: 1000 + generation,
 		configPath: `/tmp/quilin-${generation}.toml`,
+		change: {
+			added: [],
+			removed: [],
+			changed: [`/tmp/quilin-${generation}.toml`],
+		},
 		...overrides,
 	};
 }
@@ -131,6 +137,26 @@ describe("user runtime bootstrap", () => {
 			generation: state.generation,
 			operation: "bootstrap",
 			configPath: null,
+			change: {
+				added: ["defaults"],
+				removed: [],
+				changed: [],
+			},
+		});
+		expect(getUserRuntimeReloadManagementStatus()).toMatchObject({
+			domain: "user_config",
+			generation: state.generation,
+			inFlight: false,
+			applyState: "applied",
+			added: ["defaults"],
+			removed: [],
+			changed: [],
+			error: null,
+			lastApplied: {
+				generation: state.generation,
+				operation: "bootstrap",
+				target: null,
+			},
 		});
 	});
 
@@ -771,6 +797,25 @@ describe("user runtime bootstrap", () => {
 			generation: stateAfter.generation,
 			operation: "reload",
 			configPath: file,
+			change: {
+				added: [],
+				removed: [],
+				changed: [file],
+			},
+		});
+		expect(getUserRuntimeReloadManagementStatus()).toMatchObject({
+			generation: stateAfter.generation,
+			inFlight: false,
+			applyState: "applied",
+			added: [],
+			removed: [],
+			changed: [file],
+			error: null,
+			lastApplied: {
+				generation: stateAfter.generation,
+				operation: "reload",
+				target: file,
+			},
 		});
 	});
 
@@ -810,6 +855,18 @@ describe("user runtime bootstrap", () => {
 			operation: "reload",
 			errorName: "UserConfigError",
 			errorCode: "SCHEMA_VALIDATION",
+		});
+		expect(getUserRuntimeReloadManagementStatus()).toMatchObject({
+			generation: stateAfter.generation,
+			inFlight: false,
+			applyState: "error",
+			added: [file],
+			removed: [],
+			changed: [],
+			error: {
+				generation: stateAfter.generation,
+				errorName: "UserConfigError",
+			},
 		});
 	});
 

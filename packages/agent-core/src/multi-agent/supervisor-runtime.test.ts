@@ -7,6 +7,7 @@ import {
 } from "../planning/index.js";
 import {
 	InProcessSupervisorRuntime,
+	type SupervisorChildEvent,
 	type SupervisorProgressEvent,
 	type SupervisorProgressEventSink,
 	type SupervisorWorker,
@@ -28,6 +29,19 @@ function createDeferred(): {
 		resolve = promiseResolve;
 	});
 	return { promise, resolve };
+}
+
+function createManualClock(initial = NOW): {
+	readonly now: () => string;
+	readonly set: (next: string) => void;
+} {
+	let current = initial;
+	return {
+		now: () => current,
+		set: (next) => {
+			current = next;
+		},
+	};
 }
 
 async function expectPending<T>(promise: Promise<T>): Promise<void> {
@@ -323,6 +337,79 @@ describe("InProcessSupervisorRuntime", () => {
 		});
 	});
 
+	it("keeps recovery context when child workers crash", async () => {
+		const worker = {
+			workerId: "worker-crash",
+			role: "research-worker",
+			capabilities: ["research"],
+			execute: vi.fn(async (_handoff, context) => {
+				context.heartbeat({
+					status: "active",
+					summary: "captured before crash",
+					currentStep: "writing crash context",
+					nextCheckpointAt: "2026-05-02T08:05:00.000Z",
+					reviewedArtifactCount: 1,
+				});
+				throw new Error("worker crashed mid-run");
+			}),
+		} satisfies SupervisorWorker;
+		const runtime = new InProcessSupervisorRuntime({
+			workers: [worker],
+			now: createClock(),
+		});
+
+		const handle = runtime.dispatch(makeHandoff("delegated-crash"));
+
+		await expect(handle.completion).resolves.toMatchObject({
+			status: "failed",
+			summary: "worker crashed mid-run",
+		});
+		const recovery = runtime
+			.drainChildEvents({ types: "recovery" })
+			.find(
+				(
+					event,
+				): event is Extract<
+					SupervisorChildEvent,
+					{ readonly type: "recovery" }
+				> => event.type === "recovery",
+			);
+
+		expect(recovery?.payload.plan).toMatchObject({
+			reason: "crashed",
+			runId: handle.runId,
+			taskId: handle.taskId,
+			status: "failed",
+			summary: "worker crashed mid-run",
+			context: {
+				record: {
+					status: "failed",
+					summary: "worker crashed mid-run",
+				},
+				handoff: {
+					taskName: "Step delegated-crash",
+					receiverRole: "research-worker",
+				},
+			},
+		});
+		expect(
+			recovery?.payload.plan.context.history.map((entry) => entry.type),
+		).toEqual(["heartbeat", "heartbeat", "checkpoint", "completion"]);
+		expect(recovery?.payload.plan.context.artifacts).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					kind: "handoff_argument",
+					label: "path",
+					value: "delegated-crash.md",
+				}),
+				expect.objectContaining({
+					kind: "reviewed_artifacts",
+					count: 1,
+				}),
+			]),
+		);
+	});
+
 	it("rejects public heartbeat attempts to force terminal states", async () => {
 		const release = createDeferred();
 		const worker = {
@@ -504,6 +591,68 @@ describe("InProcessSupervisorRuntime", () => {
 			status: "completed",
 			summary: "done same tick",
 		});
+	});
+
+	it("publishes subscribed and drainable child lifecycle notifications", async () => {
+		const received: SupervisorChildEvent[] = [];
+		const worker = {
+			workerId: "worker-notify",
+			role: "research-worker",
+			capabilities: ["research"],
+			execute: vi.fn(async (_handoff, context) => {
+				context.heartbeat({
+					status: "active",
+					summary: "collecting evidence",
+					currentStep: "collecting evidence",
+					progress: { completedSteps: 1, totalSteps: 3 },
+					nextCheckpointAt: "2026-05-02T08:03:00.000Z",
+				});
+				context.reportBlocked({
+					summary: "Need reviewer to confirm merge order",
+					blocker: "merge order decision required",
+					currentStep: "blocked on review",
+				});
+				return { summary: "notification run finished" };
+			}),
+		} satisfies SupervisorWorker;
+		const runtime = new InProcessSupervisorRuntime({
+			workers: [worker],
+			now: createClock(),
+		});
+		const unsubscribe = runtime.subscribeChildEvents((event) => {
+			received.push(event);
+		});
+
+		const handle = runtime.dispatch(makeHandoff("delegated-notify"));
+		await expect(handle.completion).resolves.toMatchObject({
+			status: "completed",
+			summary: "notification run finished",
+		});
+
+		expect(received.map((event) => event.type)).toEqual([
+			"heartbeat",
+			"heartbeat",
+			"checkpoint",
+			"heartbeat",
+			"blocked",
+			"completion",
+		]);
+		expect(runtime.recentChildEvents(2).map((event) => event.type)).toEqual([
+			"blocked",
+			"completion",
+		]);
+		expect(
+			runtime
+				.drainChildEvents({ types: ["checkpoint", "blocked"] })
+				.map((event) => event.type),
+		).toEqual(["checkpoint", "blocked"]);
+		expect(
+			runtime
+				.drainChildEvents({ types: ["checkpoint", "blocked"] })
+				.map((event) => event.type),
+		).toEqual([]);
+
+		unsubscribe();
 	});
 
 	it("cancels active child runs only after worker acknowledgement", async () => {
@@ -959,6 +1108,106 @@ describe("InProcessSupervisorRuntime", () => {
 		).resolves.toMatchObject({
 			status: "completed",
 			summary: "done delegated-wake",
+		});
+	});
+
+	it("detects stale children and emits recovery plans with resumable context", async () => {
+		const clock = createManualClock();
+		const release = createDeferred();
+		const worker = {
+			workerId: "worker-stale",
+			role: "research-worker",
+			capabilities: ["research"],
+			execute: vi.fn(async (_handoff, context) => {
+				context.heartbeat({
+					status: "active",
+					summary: "halfway through stale task",
+					currentStep: "collecting stale context",
+					progress: { completedSteps: 2, totalSteps: 4 },
+					nextCheckpointAt: "2026-05-02T08:01:00.000Z",
+					confidence: "medium",
+				});
+				await release.promise;
+				return {
+					summary: "stale worker eventually completed",
+					confidence: "high" as const,
+				};
+			}),
+		} satisfies SupervisorWorker;
+		const runtime = new InProcessSupervisorRuntime({
+			workers: [worker],
+			now: clock.now,
+			staleAfterMs: 120_000,
+		});
+
+		const handle = runtime.dispatch(makeHandoff("delegated-stale"));
+		runtime.drainChildEvents();
+		runtime.appendInput(handle.runId, {
+			content: "main-agent correction to preserve",
+			metadata: { source: "operator", priority: "high" },
+		});
+		clock.set("2026-05-02T08:05:00.000Z");
+
+		const plans = runtime.detectStaleRuns();
+		const drained = runtime.drainChildEvents();
+		const recovery = drained.find(
+			(
+				event,
+			): event is Extract<
+				SupervisorChildEvent,
+				{ readonly type: "recovery" }
+			> => event.type === "recovery",
+		);
+
+		expect(plans).toHaveLength(1);
+		expect(plans[0]).toMatchObject({
+			reason: "stale",
+			runId: handle.runId,
+			taskId: handle.taskId,
+			status: "active",
+			summary: "halfway through stale task",
+			context: {
+				heartbeatAgeMs: 300_000,
+				record: {
+					currentStep: "collecting stale context",
+					progress: { completedSteps: 2, totalSteps: 4 },
+				},
+				pendingInputs: [
+					{
+						kind: "append",
+						contentPreview: "main-agent correction to preserve",
+						metadataKeys: ["priority", "source"],
+					},
+				],
+				checkpoints: [
+					{
+						nextCheckpointAt: "2026-05-02T08:01:00.000Z",
+						summary: "halfway through stale task",
+					},
+				],
+			},
+		});
+		expect(drained.map((event) => event.type)).toEqual(["stale", "recovery"]);
+		expect(recovery?.payload.plan.context.artifacts).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					kind: "handoff_argument",
+					label: "path",
+					value: "delegated-stale.md",
+				}),
+			]),
+		);
+		expect(runtime.detectStaleRuns().map((plan) => plan.reason)).toEqual([
+			"stale",
+		]);
+		expect(runtime.drainChildEvents({ types: ["stale", "recovery"] })).toEqual(
+			[],
+		);
+
+		release.resolve();
+		await expect(handle.completion).resolves.toMatchObject({
+			status: "completed",
+			summary: "stale worker eventually completed",
 		});
 	});
 

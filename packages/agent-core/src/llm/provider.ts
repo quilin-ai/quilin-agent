@@ -6,11 +6,14 @@ import type {
 	LLMProviderId,
 	LLMRouteDecision,
 	LLMRouteRequest,
+	ProviderAuthMode,
 	ProviderAuthStrategy,
 	ProviderCatalog,
 	ProviderCatalogEntry,
+	ProviderCredentialSource,
 	ProviderLiveMatrixEntry,
 	ProviderQuotaAwareness,
+	ProviderQuotaAwarenessStatus,
 } from "./types.js";
 
 interface DeepSeekUsagePayload {
@@ -88,9 +91,63 @@ const metadataExtractorRegistry = {
 
 type EnvLookup = Readonly<Record<string, string | undefined>>;
 
-interface ProviderCredentialProbe {
+export interface ProviderCredentialProbe {
 	readonly env?: EnvLookup;
 	readonly existingCredentialPaths?: readonly string[];
+}
+
+export type ProviderMissingCredentialReasonCode =
+	| "credential_path_env_empty"
+	| "credential_path_env_unset"
+	| "credential_path_missing"
+	| "env_empty"
+	| "env_unset"
+	| "unknown";
+
+export interface ProviderMissingCredentialReason {
+	readonly mode: ProviderAuthMode;
+	readonly source: ProviderCredentialSource;
+	readonly redactedSource: string;
+	readonly code: ProviderMissingCredentialReasonCode;
+	readonly message: string;
+}
+
+export interface ProviderCredentialLiveCheck {
+	readonly mode: ProviderAuthMode;
+	readonly source: ProviderCredentialSource;
+	readonly label: string;
+	readonly status: "configured" | "missing";
+	readonly redactedSource: string;
+	readonly missingReason?: ProviderMissingCredentialReason;
+}
+
+export interface ProviderQuotaProbeDescriptor {
+	readonly status: ProviderQuotaAwarenessStatus;
+	readonly source: ProviderQuotaAwareness["source"];
+	readonly ready: boolean;
+	readonly requiresExternalApi: boolean;
+	readonly endpointHint?: string;
+	readonly blockedReason?: string;
+	readonly redactedCredentialSources: readonly string[];
+}
+
+export type ProviderLiveMatrixEntryWithDetails = ProviderLiveMatrixEntry & {
+	readonly credentialChecks: readonly ProviderCredentialLiveCheck[];
+	readonly missingCredentialReasons: readonly ProviderMissingCredentialReason[];
+	readonly redactedSources: readonly string[];
+	readonly quotaStatus: ProviderQuotaAwarenessStatus;
+	readonly quotaProbe: ProviderQuotaProbeDescriptor;
+};
+
+export interface ProviderQuotaProbeRequest {
+	readonly provider: LLMProviderId;
+	readonly quotaStatus: ProviderQuotaAwarenessStatus;
+	readonly quotaSource: ProviderQuotaAwareness["source"];
+	readonly credentialMode: ProviderAuthMode;
+	readonly credentialSource: ProviderCredentialSource;
+	readonly redactedSource: string;
+	readonly requiresExternalApi: boolean;
+	readonly endpointHint?: string;
 }
 
 const unsupportedQuotaAwareness: ProviderQuotaAwareness = {
@@ -302,6 +359,159 @@ function isStrategyConfigured(
 	);
 }
 
+function redactedCredentialSource(strategy: ProviderAuthStrategy): string {
+	if (strategy.requiredEnv != null && strategy.requiredEnv.length > 0) {
+		return `env:${strategy.requiredEnv.join("|")}`;
+	}
+
+	if (strategy.credentialPathEnv != null) {
+		return `${strategy.source}:${strategy.credentialPathEnv}`;
+	}
+
+	if (strategy.credentialPath != null) {
+		return `${strategy.source}:${strategy.credentialPath}`;
+	}
+
+	return `${strategy.source}:${strategy.label}`;
+}
+
+function missingReason(
+	strategy: ProviderAuthStrategy,
+	code: ProviderMissingCredentialReasonCode,
+	message: string,
+): ProviderMissingCredentialReason {
+	return {
+		mode: strategy.mode,
+		source: strategy.source,
+		redactedSource: redactedCredentialSource(strategy),
+		code,
+		message,
+	};
+}
+
+function evaluateCredentialStrategy(
+	strategy: ProviderAuthStrategy,
+	probe: ProviderCredentialProbe,
+): ProviderCredentialLiveCheck {
+	const env = probe.env ?? process.env;
+	const redactedSource = redactedCredentialSource(strategy);
+	const existingCredentialPaths = probe.existingCredentialPaths ?? [];
+
+	if (strategy.requiredEnv != null && strategy.requiredEnv.length > 0) {
+		const hasConfiguredEnv = strategy.requiredEnv.some(
+			(name) => (env[name]?.trim().length ?? 0) > 0,
+		);
+		if (hasConfiguredEnv) {
+			return {
+				mode: strategy.mode,
+				source: strategy.source,
+				label: strategy.label,
+				status: "configured",
+				redactedSource,
+			};
+		}
+
+		const hasEmptyEnv = strategy.requiredEnv.some(
+			(name) => env[name] != null && env[name]?.trim().length === 0,
+		);
+		return {
+			mode: strategy.mode,
+			source: strategy.source,
+			label: strategy.label,
+			status: "missing",
+			redactedSource,
+			missingReason: missingReason(
+				strategy,
+				hasEmptyEnv ? "env_empty" : "env_unset",
+				hasEmptyEnv
+					? `Environment credential ${strategy.requiredEnv.join(" or ")} is present but empty.`
+					: `Set ${strategy.requiredEnv.join(" or ")} to enable ${strategy.label}.`,
+			),
+		};
+	}
+
+	if (strategy.credentialPathEnv != null) {
+		const credentialPath = env[strategy.credentialPathEnv]?.trim();
+		if (credentialPath == null || credentialPath.length === 0) {
+			return {
+				mode: strategy.mode,
+				source: strategy.source,
+				label: strategy.label,
+				status: "missing",
+				redactedSource,
+				missingReason: missingReason(
+					strategy,
+					env[strategy.credentialPathEnv] == null
+						? "credential_path_env_unset"
+						: "credential_path_env_empty",
+					`Set ${strategy.credentialPathEnv} to the credential file path for ${strategy.label}.`,
+				),
+			};
+		}
+
+		if (existingCredentialPaths.includes(credentialPath)) {
+			return {
+				mode: strategy.mode,
+				source: strategy.source,
+				label: strategy.label,
+				status: "configured",
+				redactedSource,
+			};
+		}
+
+		return {
+			mode: strategy.mode,
+			source: strategy.source,
+			label: strategy.label,
+			status: "missing",
+			redactedSource,
+			missingReason: missingReason(
+				strategy,
+				"credential_path_missing",
+				`Credential file from ${strategy.credentialPathEnv} was not found.`,
+			),
+		};
+	}
+
+	if (strategy.credentialPath != null) {
+		if (existingCredentialPaths.includes(strategy.credentialPath)) {
+			return {
+				mode: strategy.mode,
+				source: strategy.source,
+				label: strategy.label,
+				status: "configured",
+				redactedSource,
+			};
+		}
+
+		return {
+			mode: strategy.mode,
+			source: strategy.source,
+			label: strategy.label,
+			status: "missing",
+			redactedSource,
+			missingReason: missingReason(
+				strategy,
+				"credential_path_missing",
+				`Credential file ${strategy.credentialPath} was not found.`,
+			),
+		};
+	}
+
+	return {
+		mode: strategy.mode,
+		source: strategy.source,
+		label: strategy.label,
+		status: "missing",
+		redactedSource,
+		missingReason: missingReason(
+			strategy,
+			"unknown",
+			`No credential source is configured for ${strategy.label}.`,
+		),
+	};
+}
+
 function describeMissingCredential(strategy: ProviderAuthStrategy): string {
 	if (strategy.requiredEnv != null && strategy.requiredEnv.length > 0) {
 		return `${strategy.mode}:${strategy.requiredEnv.join("|")}`;
@@ -318,18 +528,96 @@ function describeMissingCredential(strategy: ProviderAuthStrategy): string {
 	return `${strategy.mode}:${strategy.label}`;
 }
 
+function quotaProbeDescriptor(
+	quotaAwareness: ProviderQuotaAwareness,
+	configuredCredentialChecks: readonly ProviderCredentialLiveCheck[],
+): ProviderQuotaProbeDescriptor {
+	const redactedCredentialSources = configuredCredentialChecks.map(
+		(check) => check.redactedSource,
+	);
+	if (quotaAwareness.status === "unsupported") {
+		return {
+			status: quotaAwareness.status,
+			source: quotaAwareness.source,
+			ready: false,
+			requiresExternalApi: quotaAwareness.requiresExternalApi,
+			blockedReason: "quota_awareness_unsupported",
+			redactedCredentialSources,
+		};
+	}
+
+	if (configuredCredentialChecks.length === 0) {
+		return {
+			status: quotaAwareness.status,
+			source: quotaAwareness.source,
+			ready: false,
+			requiresExternalApi: quotaAwareness.requiresExternalApi,
+			...(quotaAwareness.endpointHint == null
+				? {}
+				: { endpointHint: quotaAwareness.endpointHint }),
+			blockedReason: "missing_configured_credential",
+			redactedCredentialSources,
+		};
+	}
+
+	return {
+		status: quotaAwareness.status,
+		source: quotaAwareness.source,
+		ready: true,
+		requiresExternalApi: quotaAwareness.requiresExternalApi,
+		...(quotaAwareness.endpointHint == null
+			? {}
+			: { endpointHint: quotaAwareness.endpointHint }),
+		redactedCredentialSources,
+	};
+}
+
+export function listProviderCredentialPathCandidates(
+	catalog: ProviderCatalog = DEFAULT_PROVIDER_CATALOG,
+	env: EnvLookup = process.env,
+): readonly string[] {
+	const paths: string[] = [];
+	for (const entry of catalog.entries) {
+		for (const strategy of listAuthStrategies(entry)) {
+			if (strategy.credentialPath != null) {
+				paths.push(strategy.credentialPath);
+			}
+			if (strategy.credentialPathEnv != null) {
+				const envPath = env[strategy.credentialPathEnv]?.trim();
+				if (envPath != null && envPath.length > 0) {
+					paths.push(envPath);
+				}
+			}
+		}
+	}
+
+	return Array.from(new Set(paths));
+}
+
 export function buildProviderLiveMatrix(
 	catalog: ProviderCatalog = DEFAULT_PROVIDER_CATALOG,
 	probe: ProviderCredentialProbe = {},
-): readonly ProviderLiveMatrixEntry[] {
+): readonly ProviderLiveMatrixEntryWithDetails[] {
 	return catalog.entries.map((entry) => {
 		const strategies = listAuthStrategies(entry);
+		const credentialChecks = strategies.map((strategy) =>
+			evaluateCredentialStrategy(strategy, probe),
+		);
+		const configuredCredentialChecks = credentialChecks.filter(
+			(check) => check.status === "configured",
+		);
 		const configuredStrategies = strategies.filter((strategy) =>
 			isStrategyConfigured(strategy, probe),
 		);
+		const missingCredentialReasons = credentialChecks
+			.map((check) => check.missingReason)
+			.filter(
+				(reason): reason is ProviderMissingCredentialReason => reason != null,
+			);
 		const missingCredentials = strategies
 			.filter((strategy) => !isStrategyConfigured(strategy, probe))
 			.map(describeMissingCredential);
+		const quotaAwareness = entry.quotaAwareness ?? unsupportedQuotaAwareness;
 
 		return {
 			provider: entry.provider,
@@ -349,8 +637,43 @@ export function buildProviderLiveMatrix(
 			),
 			missingCredentials,
 			liveEvidence: entry.liveEvidence,
-			quotaAwareness: entry.quotaAwareness ?? unsupportedQuotaAwareness,
+			quotaAwareness,
+			credentialChecks,
+			missingCredentialReasons,
+			redactedSources: configuredCredentialChecks.map(
+				(check) => check.redactedSource,
+			),
+			quotaStatus: quotaAwareness.status,
+			quotaProbe: quotaProbeDescriptor(
+				quotaAwareness,
+				configuredCredentialChecks,
+			),
 		};
+	});
+}
+
+export function buildProviderQuotaProbeRequests(
+	matrix: readonly ProviderLiveMatrixEntryWithDetails[] = buildProviderLiveMatrix(),
+): readonly ProviderQuotaProbeRequest[] {
+	return matrix.flatMap((entry) => {
+		if (!entry.quotaProbe.ready || entry.quotaStatus === "unsupported") {
+			return [];
+		}
+
+		return entry.credentialChecks
+			.filter((check) => check.status === "configured")
+			.map((check) => ({
+				provider: entry.provider,
+				quotaStatus: entry.quotaStatus,
+				quotaSource: entry.quotaAwareness.source,
+				credentialMode: check.mode,
+				credentialSource: check.source,
+				redactedSource: check.redactedSource,
+				requiresExternalApi: entry.quotaAwareness.requiresExternalApi,
+				...(entry.quotaAwareness.endpointHint == null
+					? {}
+					: { endpointHint: entry.quotaAwareness.endpointHint }),
+			}));
 	});
 }
 

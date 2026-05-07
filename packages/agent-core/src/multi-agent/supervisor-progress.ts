@@ -239,6 +239,188 @@ export type SupervisorProgressEvent =
 	| SupervisorChildCheckpointEvent
 	| SupervisorTerminalChildrenSummaryEvent;
 
+export type SupervisorChildEventType =
+	| "heartbeat"
+	| "checkpoint"
+	| "completion"
+	| "blocked"
+	| "stale"
+	| "recovery";
+
+export type SupervisorChildRecoveryReason =
+	| "stale"
+	| "failed"
+	| "crashed"
+	| "manual";
+
+export interface SupervisorChildRecordSnapshot {
+	readonly runId: string;
+	readonly taskId: string;
+	readonly workerId?: string;
+	readonly status: ChildRunStatus;
+	readonly summary: string;
+	readonly currentStep?: string;
+	readonly progress?: ChildRunProgress;
+	readonly blocker?: string;
+	readonly confidence: SupervisorConfidence;
+	readonly reviewedArtifactCount: number;
+	readonly lastHeartbeatAt: string;
+	readonly nextCheckpointAt?: string;
+	readonly createdAt: string;
+	readonly updatedAt: string;
+}
+
+export interface SupervisorChildRecoveryHistoryEntry {
+	readonly sequence: number;
+	readonly type: SupervisorChildEventType;
+	readonly occurredAt: string;
+	readonly summary: string;
+	readonly status?: ChildRunStatus;
+	readonly currentStep?: string;
+	readonly blocker?: string;
+}
+
+export interface SupervisorChildCheckpointSummary {
+	readonly sequence: number;
+	readonly occurredAt: string;
+	readonly nextCheckpointAt: string;
+	readonly summary: string;
+	readonly currentStep?: string;
+	readonly progress?: ChildRunProgress;
+}
+
+export interface SupervisorChildArtifactSummary {
+	readonly kind: "handoff_argument" | "reviewed_artifacts";
+	readonly label: string;
+	readonly value?: string;
+	readonly count?: number;
+}
+
+export interface SupervisorChildPendingInputSummary {
+	readonly id: string;
+	readonly kind: string;
+	readonly contentPreview: string;
+	readonly metadataKeys: readonly string[];
+	readonly createdAt: string;
+}
+
+export interface SupervisorChildHandoffSummary {
+	readonly parentRunId: string;
+	readonly taskName: string;
+	readonly taskDescription: string;
+	readonly receiverRole: string;
+	readonly receiverGoal: string;
+	readonly requiredCapabilities: readonly string[];
+	readonly risk: string;
+}
+
+export interface SupervisorChildRecoveryContextSnapshot {
+	readonly generatedAt: string;
+	readonly heartbeatAgeMs: number;
+	readonly record: SupervisorChildRecordSnapshot;
+	readonly pendingInputs: readonly SupervisorChildPendingInputSummary[];
+	readonly history: readonly SupervisorChildRecoveryHistoryEntry[];
+	readonly checkpoints: readonly SupervisorChildCheckpointSummary[];
+	readonly artifacts: readonly SupervisorChildArtifactSummary[];
+	readonly handoff?: SupervisorChildHandoffSummary;
+}
+
+export interface SupervisorChildRecoveryPlan {
+	readonly id: string;
+	readonly reason: SupervisorChildRecoveryReason;
+	readonly generatedAt: string;
+	readonly runId: string;
+	readonly taskId: string;
+	readonly status: ChildRunStatus;
+	readonly summary: string;
+	readonly suggestedAction: string;
+	readonly context: SupervisorChildRecoveryContextSnapshot;
+}
+
+interface SupervisorChildEventBase {
+	readonly schemaVersion: 1;
+	readonly id: string;
+	readonly sequence: number;
+	readonly type: SupervisorChildEventType;
+	readonly severity: SupervisorProgressEventSeverity;
+	readonly occurredAt: string;
+	readonly runId: string;
+	readonly taskId: string;
+}
+
+export interface SupervisorChildHeartbeatNotification
+	extends SupervisorChildEventBase {
+	readonly type: "heartbeat";
+	readonly payload: {
+		readonly record: SupervisorChildRecordSnapshot;
+		readonly heartbeatAgeMs: number;
+		readonly previousStatus?: ChildRunStatus;
+	};
+}
+
+export interface SupervisorChildCheckpointNotification
+	extends SupervisorChildEventBase {
+	readonly type: "checkpoint";
+	readonly payload: {
+		readonly record: SupervisorChildRecordSnapshot;
+		readonly nextCheckpointAt: string;
+		readonly dueInMs: number;
+	};
+}
+
+export interface SupervisorChildCompletionNotification
+	extends SupervisorChildEventBase {
+	readonly type: "completion";
+	readonly severity: SupervisorProgressEventSeverity;
+	readonly payload: {
+		readonly record: SupervisorChildRecordSnapshot & {
+			readonly status: TerminalChildRunStatus;
+		};
+		readonly previousStatus?: ChildRunStatus;
+	};
+}
+
+export interface SupervisorChildBlockedNotification
+	extends SupervisorChildEventBase {
+	readonly type: "blocked";
+	readonly severity: "warning";
+	readonly payload: {
+		readonly record: SupervisorChildRecordSnapshot;
+		readonly blocker: string;
+		readonly currentStep?: string;
+	};
+}
+
+export interface SupervisorChildStaleNotification
+	extends SupervisorChildEventBase {
+	readonly type: "stale";
+	readonly severity: "warning";
+	readonly payload: {
+		readonly record: SupervisorChildRecordSnapshot;
+		readonly heartbeatAgeMs: number;
+		readonly staleAfterMs: number;
+	};
+}
+
+export interface SupervisorChildRecoveryNotification
+	extends SupervisorChildEventBase {
+	readonly type: "recovery";
+	readonly severity: "warning";
+	readonly payload: {
+		readonly plan: SupervisorChildRecoveryPlan;
+	};
+}
+
+export type SupervisorChildEvent =
+	| SupervisorChildHeartbeatNotification
+	| SupervisorChildCheckpointNotification
+	| SupervisorChildCompletionNotification
+	| SupervisorChildBlockedNotification
+	| SupervisorChildStaleNotification
+	| SupervisorChildRecoveryNotification;
+
+export type SupervisorChildNotification = SupervisorChildEvent;
+
 export interface SupervisorProgressEventProjection {
 	readonly snapshot: SupervisorProgressSnapshot;
 	readonly events: readonly SupervisorProgressEvent[];

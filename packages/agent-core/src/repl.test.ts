@@ -130,7 +130,13 @@ function createSecretProviderError(messagePrefix = "provider failed"): Error {
 	return error;
 }
 
-function createSupervisorSnapshot(records: readonly Record<string, unknown>[]) {
+function createSupervisorSnapshot(
+	records: readonly Record<string, unknown>[],
+	options: {
+		readonly snapshot?: Record<string, unknown>;
+		readonly events?: readonly Record<string, unknown>[];
+	} = {},
+) {
 	const counts = {
 		queued: 0,
 		assigned: 0,
@@ -148,12 +154,80 @@ function createSupervisorSnapshot(records: readonly Record<string, unknown>[]) {
 		const status = record.status as keyof typeof counts;
 		counts[status] += 1;
 	}
+	const nonTerminalRecords = records.filter(
+		(record) =>
+			!["completed", "failed", "cancelled", "deferred"].includes(
+				String(record.status),
+			),
+	);
+	const activeRunIds = nonTerminalRecords
+		.filter((record) =>
+			[
+				"active",
+				"blocked",
+				"waiting_for_review",
+				"aggregating",
+				"cancel_requested",
+			].includes(String(record.status)),
+		)
+		.map((record) => String(record.runId));
+	const queuedRunIds = nonTerminalRecords
+		.filter((record) => ["queued", "assigned"].includes(String(record.status)))
+		.map((record) => String(record.runId));
+	const blockedRunIds = nonTerminalRecords
+		.filter((record) => record.status === "blocked" || record.blocker != null)
+		.map((record) => String(record.runId));
+	const terminalRunIds = records
+		.filter((record) =>
+			["completed", "failed", "cancelled", "deferred"].includes(
+				String(record.status),
+			),
+		)
+		.map((record) => String(record.runId));
 
 	return {
 		records,
 		projection: {
-			snapshot: { counts },
-			events: [],
+			snapshot: {
+				generatedAt: "2026-05-06T00:00:03.000Z",
+				totalRuns: records.length,
+				counts,
+				activeRunIds,
+				queuedRunIds,
+				blockedRunIds,
+				staleRunIds: [],
+				terminalRunIds,
+				oldestHeartbeatAgeMs: null,
+				nextCheckpointAt: null,
+				band:
+					records.length === 0
+						? "idle"
+						: nonTerminalRecords.length === 0
+							? "done"
+							: blockedRunIds.length > 0
+								? "blocked"
+								: activeRunIds.length > 0
+									? "making_progress"
+									: "starting",
+				boundedPercent: null,
+				currentSteps: nonTerminalRecords
+					.map((record) => record.currentStep)
+					.filter((step): step is string => typeof step === "string"),
+				blockers: nonTerminalRecords
+					.map((record) => record.blocker)
+					.filter((blocker): blocker is string => typeof blocker === "string"),
+				reviewedArtifactCount: records.reduce(
+					(total, record) =>
+						total +
+						(typeof record.reviewedArtifactCount === "number"
+							? record.reviewedArtifactCount
+							: 0),
+					0,
+				),
+				confidence: "unknown",
+				...options.snapshot,
+			},
+			events: options.events ?? [],
 		},
 	};
 }
@@ -763,6 +837,81 @@ describe("startRepl", () => {
 			]),
 		);
 		expect(agentRunLogger.flush).toHaveBeenCalledTimes(1);
+	});
+
+	it("queues /agents entered during an active turn and renders it before the next prompt", async () => {
+		mockQuestion
+			.mockResolvedValueOnce("start work")
+			.mockResolvedValueOnce("/exit");
+		mockRunAgentLoop.mockImplementationOnce(async () => {
+			emitMockReadlineEvent("line", "/agents");
+			return "first reply";
+		});
+		const supervisorRuntime = {
+			snapshot: vi.fn(() =>
+				createSupervisorSnapshot(
+					[
+						{
+							runId: "run-live",
+							taskId: "task-live",
+							status: "active",
+							summary: "Still running",
+							currentStep: "heartbeat",
+							confidence: "medium",
+							reviewedArtifactCount: 0,
+							lastHeartbeatAt: "2026-05-06T00:01:00.000Z",
+							updatedAt: "2026-05-06T00:01:00.000Z",
+						},
+					],
+					{
+						snapshot: {
+							band: "making_progress",
+							oldestHeartbeatAgeMs: 5_000,
+						},
+						events: [
+							{
+								schemaVersion: 1,
+								id: "child_heartbeat:run-live:task-live:2026-05-06T00:01:00.000Z",
+								type: "child_heartbeat",
+								severity: "info",
+								occurredAt: "2026-05-06T00:01:00.000Z",
+								runId: "run-live",
+								taskId: "task-live",
+								payload: {
+									status: "active",
+									summary: "Still running",
+									currentStep: "heartbeat",
+									confidence: "medium",
+									reviewedArtifactCount: 0,
+									lastHeartbeatAt: "2026-05-06T00:01:00.000Z",
+									heartbeatAgeMs: 5_000,
+								},
+							},
+						],
+					},
+				),
+			),
+		};
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: createMockProvider(() => createMockLanguageModel()),
+			modelId: "deepseek-chat",
+			supervisorRuntime: supervisorRuntime as never,
+		});
+
+		expect(stderrWriteSpy).toHaveBeenCalledWith(
+			"Command queued for current turn: /agents\n",
+		);
+		expect(mockRunAgentLoop).toHaveBeenCalledTimes(1);
+		expect(supervisorRuntime.snapshot).toHaveBeenCalledTimes(1);
+		const writes = stderrWriteSpy.mock.calls
+			.map((call) => String(call[0]))
+			.join("");
+		expect(writes).toContain("Agents: active=1");
+		expect(writes).toContain("Recent events:");
+		expect(writes).toContain("info child_heartbeat run=run-live");
 	});
 
 	it("starts and stops the skills watcher and prints catalog hints", async () => {
@@ -1750,20 +1899,51 @@ describe("startRepl", () => {
 				}),
 			),
 			modelId: "deepseek-chat",
-			capabilitiesStatus: () => ({
-				generation: 3,
-				booted: true,
-				watching: true,
-				watchedPaths: ["/tmp/quilin/capabilities.json"],
-				inFlight: false,
-				inFlightGenerations: [],
-				lastSuccess: {
+			capabilitiesStatus: () =>
+				({
 					generation: 3,
-					operation: "reload",
-					trigger: "watch",
-					completedAtEpochMs: 1_234,
-					source: { kind: "project", path: "/tmp/quilin/capabilities.json" },
-					configPath: "/tmp/quilin/capabilities.json",
+					booted: true,
+					watching: true,
+					watchedPaths: ["/tmp/quilin/capabilities.json"],
+					inFlight: false,
+					inFlightGenerations: [],
+					lastSuccess: {
+						generation: 3,
+						operation: "reload",
+						trigger: "watch",
+						completedAtEpochMs: 1_234,
+						source: { kind: "project", path: "/tmp/quilin/capabilities.json" },
+						configPath: "/tmp/quilin/capabilities.json",
+						mcpReconnect: {
+							status: "pending_repl_apply",
+							reason: "applied_at_repl_turn_boundary",
+							activeServerIds: ["browser"],
+							change: {
+								added: ["browser"],
+								removed: [],
+								changed: [],
+							},
+						},
+					},
+					lastFailure: null,
+					lastSkillsChange: null,
+					skillsStatus: {
+						generation: 2,
+						watching: true,
+						inFlight: false,
+						inFlightGenerations: [],
+						lastSuccess: {
+							generation: 2,
+							completedAtEpochMs: 1_200,
+							catalogSize: 7,
+							change: {
+								added: ["research-helper"],
+								removed: [],
+								changed: [],
+							},
+						},
+						lastFailure: null,
+					},
 					mcpReconnect: {
 						status: "pending_repl_apply",
 						reason: "applied_at_repl_turn_boundary",
@@ -1774,37 +1954,7 @@ describe("startRepl", () => {
 							changed: [],
 						},
 					},
-				},
-				lastFailure: null,
-				lastSkillsChange: null,
-				skillsStatus: {
-					generation: 2,
-					watching: true,
-					inFlight: false,
-					inFlightGenerations: [],
-					lastSuccess: {
-						generation: 2,
-						completedAtEpochMs: 1_200,
-						catalogSize: 7,
-						change: {
-							added: ["research-helper"],
-							removed: [],
-							changed: [],
-						},
-					},
-					lastFailure: null,
-				},
-				mcpReconnect: {
-					status: "pending_repl_apply",
-					reason: "applied_at_repl_turn_boundary",
-					activeServerIds: ["browser"],
-					change: {
-						added: ["browser"],
-						removed: [],
-						changed: [],
-					},
-				},
-			}),
+				}) as never,
 		});
 
 		expect(stderrWriteSpy).toHaveBeenCalledWith(
@@ -1817,44 +1967,151 @@ describe("startRepl", () => {
 			.mockResolvedValueOnce("/status")
 			.mockResolvedValueOnce("/agents")
 			.mockResolvedValueOnce("/exit");
+		const getNotificationStatus = vi.fn(() => ({
+			status: "watching",
+			enabled: true,
+			pendingCount: 1,
+			deliveredCount: 2,
+			failedCount: 0,
+			channels: ["repl", "tui"],
+			lastNotifiedAt: "2026-05-06T00:00:02.500Z",
+			heartbeatCount: 3,
+			staleCount: 1,
+			recoveryCount: 1,
+			recentEvents: [{ type: "child_stale" }],
+		}));
 		const supervisorRuntime = {
 			snapshot: vi.fn(() =>
-				createSupervisorSnapshot([
+				createSupervisorSnapshot(
+					[
+						{
+							runId: "run-active",
+							taskId: "task-build",
+							workerId: "builder",
+							status: "active",
+							summary: "Implementing runtime hooks",
+							currentStep: "coding",
+							progress: {
+								completedSteps: 2,
+								totalSteps: 5,
+								label: "control plane",
+							},
+							confidence: "medium",
+							reviewedArtifactCount: 0,
+							lastHeartbeatAt: "2026-05-06T00:00:01.000Z",
+							nextCheckpointAt: "2026-05-06T00:05:00.000Z",
+							updatedAt: "2026-05-06T00:00:01.000Z",
+						},
+						{
+							runId: "run-decision",
+							taskId: "task-plan",
+							workerId: "planner",
+							status: "blocked",
+							summary: "Need user choice",
+							currentStep: "needs_decision",
+							blocker: "Choose provider strategy",
+							confidence: "low",
+							reviewedArtifactCount: 1,
+							lastHeartbeatAt: "2026-05-05T23:57:00.000Z",
+							updatedAt: "2026-05-06T00:00:02.000Z",
+						},
+						{
+							runId: "run-done",
+							taskId: "task-review",
+							workerId: "reviewer",
+							status: "completed",
+							summary: "Review complete",
+							confidence: "high",
+							reviewedArtifactCount: 2,
+							lastHeartbeatAt: "2026-05-06T00:00:00.000Z",
+							updatedAt: "2026-05-06T00:00:00.000Z",
+						},
+					],
 					{
-						runId: "run-active",
-						taskId: "task-build",
-						workerId: "builder",
-						status: "active",
-						summary: "Implementing runtime hooks",
-						currentStep: "coding",
-						confidence: "medium",
-						reviewedArtifactCount: 0,
-						updatedAt: "2026-05-06T00:00:01.000Z",
+						snapshot: {
+							band: "blocked",
+							boundedPercent: 40,
+							staleRunIds: ["run-decision"],
+							oldestHeartbeatAgeMs: 180_000,
+							nextCheckpointAt: "2026-05-06T00:05:00.000Z",
+						},
+						events: [
+							{
+								schemaVersion: 1,
+								id: "progress_snapshot:2026-05-06T00:00:03.000Z",
+								type: "progress_snapshot",
+								severity: "warning",
+								occurredAt: "2026-05-06T00:00:03.000Z",
+								payload: {
+									generatedAt: "2026-05-06T00:00:03.000Z",
+									band: "blocked",
+									totalRuns: 3,
+									counts: {},
+									activeRunIds: ["run-active", "run-decision"],
+									queuedRunIds: [],
+									blockedRunIds: ["run-decision"],
+									staleRunIds: ["run-decision"],
+									terminalRunIds: ["run-done"],
+									boundedPercent: 40,
+									confidence: "low",
+									reviewedArtifactCount: 3,
+									nextCheckpointAt: "2026-05-06T00:05:00.000Z",
+								},
+							},
+							{
+								schemaVersion: 1,
+								id: "child_stale:run-decision:task-plan:2026-05-06T00:00:03.000Z",
+								type: "child_stale",
+								severity: "warning",
+								occurredAt: "2026-05-06T00:00:03.000Z",
+								runId: "run-decision",
+								taskId: "task-plan",
+								payload: {
+									workerId: "planner",
+									status: "blocked",
+									summary: "Need user choice",
+									lastHeartbeatAt: "2026-05-05T23:57:00.000Z",
+									heartbeatAgeMs: 180_000,
+									staleAfterMs: 120_000,
+								},
+							},
+							{
+								schemaVersion: 1,
+								id: "child_recovery:run-active:task-build:2026-05-06T00:00:04.000Z",
+								type: "child_recovery",
+								severity: "info",
+								occurredAt: "2026-05-06T00:00:04.000Z",
+								runId: "run-active",
+								taskId: "task-build",
+								payload: {
+									summary: "Worker recovered after stale heartbeat",
+								},
+							},
+							{
+								schemaVersion: 1,
+								id: "child_heartbeat:run-active:task-build:2026-05-06T00:00:01.000Z",
+								type: "child_heartbeat",
+								severity: "info",
+								occurredAt: "2026-05-06T00:00:01.000Z",
+								runId: "run-active",
+								taskId: "task-build",
+								payload: {
+									workerId: "builder",
+									status: "active",
+									summary: "Implementing runtime hooks",
+									currentStep: "coding",
+									progress: { completedSteps: 2, totalSteps: 5 },
+									confidence: "medium",
+									reviewedArtifactCount: 0,
+									lastHeartbeatAt: "2026-05-06T00:00:01.000Z",
+									heartbeatAgeMs: 2_000,
+								},
+							},
+						],
 					},
-					{
-						runId: "run-decision",
-						taskId: "task-plan",
-						workerId: "planner",
-						status: "blocked",
-						summary: "Need user choice",
-						currentStep: "needs_decision",
-						blocker: "Choose provider strategy",
-						confidence: "low",
-						reviewedArtifactCount: 1,
-						updatedAt: "2026-05-06T00:00:02.000Z",
-					},
-					{
-						runId: "run-done",
-						taskId: "task-review",
-						workerId: "reviewer",
-						status: "completed",
-						summary: "Review complete",
-						confidence: "high",
-						reviewedArtifactCount: 2,
-						updatedAt: "2026-05-06T00:00:00.000Z",
-					},
-				]),
+				),
 			),
+			getNotificationStatus,
 		};
 
 		const { startRepl } = await import("./repl.js");
@@ -1868,13 +2125,28 @@ describe("startRepl", () => {
 		expect(stderrWriteSpy).toHaveBeenCalledWith(
 			"Agents: active=1 | blocked=0 | needs_decision=1 | completed=1 | failed=0 | queued=0\n",
 		);
+		expect(stderrWriteSpy).toHaveBeenCalledWith(
+			"Agent notifications: status=watching | enabled=yes | source=getNotificationStatus | pending=1 | delivered=2 | failed=0 | channels=repl,tui | last=2026-05-06T00:00:02.500Z | heartbeat=3 | stale=1 | recovery=1 | recent=1 | projection=needs_attention | projection_key_events=3 | projection_heartbeat=1 | projection_stale=1 | projection_recovery=1\n",
+		);
 		const writes = stderrWriteSpy.mock.calls
 			.map((call) => String(call[0]))
 			.join("");
 		expect(writes).toContain("needs_decision");
 		expect(writes).toContain("run=run-decision");
 		expect(writes).toContain('blocker="Choose provider strategy"');
+		expect(writes).toContain(
+			"Progress: band=blocked | percent=40% | heartbeat=1 | stale=1 | recovery=1 | oldest_heartbeat_ms=180000 | checkpoint_due=0 | next_checkpoint=2026-05-06T00:05:00.000Z",
+		);
+		expect(writes).toContain("Recent events:");
+		expect(writes).toContain(
+			'info child_recovery run=run-active task=task-build summary="Worker recovered after stale heartbeat"',
+		);
+		expect(writes).toContain(
+			'warning child_stale run=run-decision task=task-plan status=blocked age_ms=180000 threshold_ms=120000 summary="Need user choice"',
+		);
+		expect(writes).toContain('progress=2/5 label="control plane"');
 		expect(writes).toContain("completed");
+		expect(getNotificationStatus).toHaveBeenCalledTimes(1);
 	});
 
 	it("shows an empty local subagent runtime in /agents", async () => {
@@ -1893,8 +2165,37 @@ describe("startRepl", () => {
 		});
 
 		expect(stderrWriteSpy).toHaveBeenCalledWith(
-			"Agents: none\nNo local subagent runs yet.\n",
+			`${[
+				"Agents: none",
+				"Progress: band=idle | percent=unbounded | heartbeat=0 | stale=0 | recovery=0 | oldest_heartbeat_ms=none | checkpoint_due=0 | next_checkpoint=none",
+				"Recent events:",
+				"  none",
+				"No local subagent runs yet.",
+			].join("\n")}\n`,
 		);
+	});
+
+	it("does not block /status on async notification probes", async () => {
+		mockQuestion
+			.mockResolvedValueOnce("/status")
+			.mockResolvedValueOnce("/exit");
+		const notificationStatus = vi.fn(() => new Promise(() => undefined));
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: createMockProvider(() => createMockLanguageModel()),
+			modelId: "deepseek-chat",
+			supervisorRuntime: {
+				snapshot: vi.fn(() => createSupervisorSnapshot([])),
+				notificationStatus,
+			} as never,
+		});
+
+		expect(stderrWriteSpy).toHaveBeenCalledWith(
+			"Agent notifications: status=async_unavailable | source=notificationStatus | pending=0 | delivered=0 | failed=0 | last=none | heartbeat=0 | stale=0 | recovery=0 | recent=0 | projection=empty | projection_key_events=0 | projection_heartbeat=0 | projection_stale=0 | projection_recovery=0\n",
+		);
+		expect(notificationStatus).toHaveBeenCalledTimes(1);
 	});
 
 	it("shows configured tiers and the last routed tier in /status", async () => {

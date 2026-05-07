@@ -16,28 +16,97 @@ import {
 
 export type CapabilitiesReloadOperation = "bootstrap" | "reload";
 export type CapabilitiesReloadTrigger = "manual" | "watch";
+export type CapabilitiesReloadDomain = "config" | "mcp" | "skills";
+export type CapabilitiesReloadApplyState =
+	| "not_requested"
+	| "in_flight"
+	| "unchanged"
+	| "pending_repl_turn_boundary"
+	| "applied"
+	| "error";
 
-export interface McpServerChangeSet {
+export interface CapabilitiesReloadChangeSet {
 	readonly added: readonly string[];
 	readonly removed: readonly string[];
 	readonly changed: readonly string[];
+}
+
+export interface CapabilitiesReloadErrorSummary {
+	readonly generation: number;
+	readonly completedAtEpochMs: number;
+	readonly errorName: string;
+	readonly errorMessage: string;
+}
+
+export interface CapabilitiesReloadLastApplied {
+	readonly generation: number;
+	readonly completedAtEpochMs: number;
+	readonly operation:
+		| CapabilitiesReloadOperation
+		| "skills_discovery"
+		| "repl_turn_boundary";
+	readonly trigger?: CapabilitiesReloadTrigger;
+	readonly target: string | null;
+}
+
+export interface CapabilitiesReloadDomainStatus {
+	readonly domain: CapabilitiesReloadDomain;
+	readonly generation: number;
+	readonly inFlight: boolean;
+	readonly applyState: CapabilitiesReloadApplyState;
+	readonly added: readonly string[];
+	readonly removed: readonly string[];
+	readonly changed: readonly string[];
+	readonly error: CapabilitiesReloadErrorSummary | null;
+	readonly lastApplied: CapabilitiesReloadLastApplied | null;
+}
+
+export interface CapabilitiesReloadManagementStatus {
+	readonly config: CapabilitiesReloadDomainStatus;
+	readonly mcp: CapabilitiesReloadDomainStatus;
+	readonly skills: CapabilitiesReloadDomainStatus;
+}
+
+export interface McpServerChangeSet extends CapabilitiesReloadChangeSet {}
+
+export interface McpReconnectLastApplied {
+	readonly generation: number;
+	readonly completedAtEpochMs: number;
+	readonly mode: "repl_turn_boundary";
 }
 
 export type McpDynamicReconnectStatus =
 	| {
 			readonly status: "not_requested";
 			readonly reason: "bootstrap";
+			readonly applyState: "not_requested";
+			readonly generation: number;
 			readonly activeServerIds: readonly string[];
 	  }
 	| {
 			readonly status: "unchanged";
+			readonly applyState: "unchanged";
+			readonly generation: number;
 			readonly activeServerIds: readonly string[];
 	  }
 	| {
 			readonly status: "pending_repl_apply";
 			readonly reason: "applied_at_repl_turn_boundary";
+			readonly applyState: "pending";
+			readonly appliesAt: "repl_turn_boundary";
+			readonly pendingReason: "waiting_for_repl_turn_boundary";
+			readonly generation: number;
+			readonly requestedAtEpochMs: number;
 			readonly activeServerIds: readonly string[];
 			readonly change: McpServerChangeSet;
+	  }
+	| {
+			readonly status: "applied_at_repl_turn_boundary";
+			readonly applyState: "applied";
+			readonly generation: number;
+			readonly activeServerIds: readonly string[];
+			readonly change: McpServerChangeSet;
+			readonly lastApplied: McpReconnectLastApplied;
 	  };
 
 export interface CapabilitiesReloadSuccessSnapshot {
@@ -47,6 +116,7 @@ export interface CapabilitiesReloadSuccessSnapshot {
 	readonly completedAtEpochMs: number;
 	readonly source: CapabilitiesConfigSource;
 	readonly configPath: string | null;
+	readonly change: CapabilitiesReloadChangeSet;
 	readonly mcpReconnect: McpDynamicReconnectStatus;
 }
 
@@ -78,7 +148,13 @@ export interface CapabilitiesReloadStatus {
 	readonly lastSkillsChange: CapabilitiesSkillsReloadSnapshot | null;
 	readonly skillsStatus: SkillsReloadStatus | null;
 	readonly mcpReconnect: McpDynamicReconnectStatus | null;
+	readonly management: CapabilitiesReloadManagementStatus;
 }
+
+type CapabilitiesReloadStatusCore = Omit<
+	CapabilitiesReloadStatus,
+	"management"
+>;
 
 export type CapabilitiesReloadResult =
 	| {
@@ -170,12 +246,15 @@ export class CapabilitiesHotReloadController {
 		this.mcpReconnect = {
 			status: "not_requested",
 			reason: "bootstrap",
+			applyState: "not_requested",
+			generation: this.generation,
 			activeServerIds: runtime.mcpServers.map((entry) => entry.id),
 		};
 		this.lastSuccess = buildCapabilitiesReloadSuccessSnapshot({
 			generation: this.generation,
 			operation: "bootstrap",
 			trigger: "manual",
+			previousLoaded: null,
 			loaded,
 			mcpReconnect: this.mcpReconnect,
 		});
@@ -209,7 +288,7 @@ export class CapabilitiesHotReloadController {
 		const inFlightGenerations = Array.from(this.inFlightReloadGenerations).sort(
 			(left, right) => left - right,
 		);
-		return {
+		const status = {
 			generation: this.generation,
 			booted: this.runtime != null,
 			watching: this.configWatchers.length > 0,
@@ -222,6 +301,42 @@ export class CapabilitiesHotReloadController {
 			skillsStatus: this.runtime?.skillsManager?.getReloadStatus() ?? null,
 			mcpReconnect: cloneMcpReconnect(this.mcpReconnect),
 		};
+		return {
+			...status,
+			management: buildCapabilitiesReloadManagementStatus(status),
+		};
+	}
+
+	getManagementStatus(): CapabilitiesReloadManagementStatus {
+		return this.getStatus().management;
+	}
+
+	markMcpReconnectAppliedAtReplTurnBoundary(
+		completedAtEpochMs = Date.now(),
+	): McpDynamicReconnectStatus | null {
+		if (this.mcpReconnect?.status !== "pending_repl_apply") {
+			return cloneMcpReconnect(this.mcpReconnect);
+		}
+
+		this.mcpReconnect = {
+			status: "applied_at_repl_turn_boundary",
+			applyState: "applied",
+			generation: this.mcpReconnect.generation,
+			activeServerIds: [...this.mcpReconnect.activeServerIds],
+			change: cloneChangeSet(this.mcpReconnect.change),
+			lastApplied: {
+				generation: this.mcpReconnect.generation,
+				completedAtEpochMs,
+				mode: "repl_turn_boundary",
+			},
+		};
+		if (this.lastSuccess != null) {
+			this.lastSuccess = {
+				...this.lastSuccess,
+				mcpReconnect: this.mcpReconnect,
+			};
+		}
+		return cloneMcpReconnect(this.mcpReconnect);
 	}
 
 	async reload(
@@ -245,7 +360,9 @@ export class CapabilitiesHotReloadController {
 			const mcpReconnect = buildMcpReconnectStatus(
 				currentRuntime.mcpServers,
 				runtime.mcpServers,
+				commitGeneration,
 			);
+			const previousLoaded = this.loaded;
 			this.deactivateSkillsRuntime();
 			currentRuntime.skillsManager?.stopWatching();
 			this.loaded = loaded;
@@ -255,6 +372,7 @@ export class CapabilitiesHotReloadController {
 				generation: commitGeneration,
 				operation: "reload",
 				trigger,
+				previousLoaded,
 				loaded,
 				mcpReconnect,
 			});
@@ -422,10 +540,215 @@ function resolveCapabilitiesWatchPaths(
 	return existsSync(projectConfigDir) ? [projectConfigDir] : [];
 }
 
+function configSourceLabel(source: CapabilitiesConfigSource): string {
+	return source.path ?? source.kind;
+}
+
+function diffCapabilitiesConfigSources(
+	previous: CapabilitiesConfigSource | null,
+	next: CapabilitiesConfigSource,
+	operation: CapabilitiesReloadOperation,
+): CapabilitiesReloadChangeSet {
+	const nextLabel = configSourceLabel(next);
+	if (previous == null) {
+		return {
+			added: operation === "bootstrap" ? [nextLabel] : [],
+			removed: [],
+			changed: operation === "bootstrap" ? [] : [nextLabel],
+		};
+	}
+
+	const previousLabel = configSourceLabel(previous);
+	if (previousLabel !== nextLabel) {
+		return {
+			added: [nextLabel],
+			removed: [previousLabel],
+			changed: [],
+		};
+	}
+
+	return {
+		added: [],
+		removed: [],
+		changed: [nextLabel],
+	};
+}
+
+function emptyChangeSet(): CapabilitiesReloadChangeSet {
+	return {
+		added: [],
+		removed: [],
+		changed: [],
+	};
+}
+
+function latestFailureIsActive(input: {
+	readonly successGeneration: number | null;
+	readonly failureGeneration: number | null;
+}): boolean {
+	return (
+		input.failureGeneration != null &&
+		(input.successGeneration == null ||
+			input.failureGeneration >= input.successGeneration)
+	);
+}
+
+function failureToErrorSummary(
+	failure:
+		| CapabilitiesReloadFailureSnapshot
+		| NonNullable<SkillsReloadStatus["lastFailure"]>,
+): CapabilitiesReloadErrorSummary {
+	return {
+		generation: failure.generation,
+		completedAtEpochMs: failure.completedAtEpochMs,
+		errorName: failure.errorName,
+		errorMessage: failure.errorMessage,
+	};
+}
+
+function buildConfigManagementStatus(
+	status: CapabilitiesReloadStatusCore,
+): CapabilitiesReloadDomainStatus {
+	const lastSuccess = status.lastSuccess;
+	const lastFailure = status.lastFailure;
+	const activeError = latestFailureIsActive({
+		successGeneration: lastSuccess?.generation ?? null,
+		failureGeneration: lastFailure?.generation ?? null,
+	})
+		? lastFailure
+		: null;
+	const change = lastSuccess?.change ?? emptyChangeSet();
+	return {
+		domain: "config",
+		generation: status.generation,
+		inFlight: status.inFlight,
+		applyState:
+			activeError != null
+				? "error"
+				: status.inFlight
+					? "in_flight"
+					: lastSuccess == null
+						? "not_requested"
+						: "applied",
+		added: [...change.added],
+		removed: [...change.removed],
+		changed: [...change.changed],
+		error: activeError == null ? null : failureToErrorSummary(activeError),
+		lastApplied:
+			lastSuccess == null
+				? null
+				: {
+						generation: lastSuccess.generation,
+						completedAtEpochMs: lastSuccess.completedAtEpochMs,
+						operation: lastSuccess.operation,
+						trigger: lastSuccess.trigger,
+						target: lastSuccess.configPath ?? lastSuccess.source.kind,
+					},
+	};
+}
+
+function buildMcpManagementStatus(
+	status: CapabilitiesReloadStatusCore,
+): CapabilitiesReloadDomainStatus {
+	const mcpReconnect = status.mcpReconnect;
+	const change =
+		mcpReconnect?.status === "pending_repl_apply" ||
+		mcpReconnect?.status === "applied_at_repl_turn_boundary"
+			? mcpReconnect.change
+			: emptyChangeSet();
+	return {
+		domain: "mcp",
+		generation: mcpReconnect?.generation ?? status.generation,
+		inFlight: status.inFlight,
+		applyState:
+			mcpReconnect == null
+				? "not_requested"
+				: mcpReconnect.status === "pending_repl_apply"
+					? "pending_repl_turn_boundary"
+					: mcpReconnect.status === "applied_at_repl_turn_boundary"
+						? "applied"
+						: mcpReconnect.status === "unchanged"
+							? "unchanged"
+							: "not_requested",
+		added: [...change.added],
+		removed: [...change.removed],
+		changed: [...change.changed],
+		error: null,
+		lastApplied:
+			mcpReconnect?.status === "applied_at_repl_turn_boundary"
+				? {
+						generation: mcpReconnect.lastApplied.generation,
+						completedAtEpochMs: mcpReconnect.lastApplied.completedAtEpochMs,
+						operation: "repl_turn_boundary",
+						target:
+							mcpReconnect.activeServerIds.length === 0
+								? null
+								: mcpReconnect.activeServerIds.join(","),
+					}
+				: null,
+	};
+}
+
+function buildSkillsManagementStatus(
+	status: CapabilitiesReloadStatusCore,
+): CapabilitiesReloadDomainStatus {
+	const skillsStatus = status.skillsStatus;
+	const lastSuccess = skillsStatus?.lastSuccess ?? null;
+	const lastFailure = skillsStatus?.lastFailure ?? null;
+	const activeError = latestFailureIsActive({
+		successGeneration: lastSuccess?.generation ?? null,
+		failureGeneration: lastFailure?.generation ?? null,
+	})
+		? lastFailure
+		: null;
+	const change = lastSuccess?.change ?? emptyChangeSet();
+	return {
+		domain: "skills",
+		generation: skillsStatus?.generation ?? status.generation,
+		inFlight: skillsStatus?.inFlight ?? false,
+		applyState:
+			activeError != null
+				? "error"
+				: skillsStatus?.inFlight === true
+					? "in_flight"
+					: lastSuccess == null
+						? "not_requested"
+						: change.added.length === 0 &&
+								change.removed.length === 0 &&
+								change.changed.length === 0
+							? "unchanged"
+							: "applied",
+		added: [...change.added],
+		removed: [...change.removed],
+		changed: [...change.changed],
+		error: activeError == null ? null : failureToErrorSummary(activeError),
+		lastApplied:
+			lastSuccess == null
+				? null
+				: {
+						generation: lastSuccess.generation,
+						completedAtEpochMs: lastSuccess.completedAtEpochMs,
+						operation: "skills_discovery",
+						target: String(lastSuccess.catalogSize),
+					},
+	};
+}
+
+function buildCapabilitiesReloadManagementStatus(
+	status: CapabilitiesReloadStatusCore,
+): CapabilitiesReloadManagementStatus {
+	return {
+		config: buildConfigManagementStatus(status),
+		mcp: buildMcpManagementStatus(status),
+		skills: buildSkillsManagementStatus(status),
+	};
+}
+
 function buildCapabilitiesReloadSuccessSnapshot(input: {
 	readonly generation: number;
 	readonly operation: CapabilitiesReloadOperation;
 	readonly trigger: CapabilitiesReloadTrigger;
+	readonly previousLoaded: LoadedCapabilitiesConfig | null;
 	readonly loaded: LoadedCapabilitiesConfig;
 	readonly mcpReconnect: McpDynamicReconnectStatus;
 }): CapabilitiesReloadSuccessSnapshot {
@@ -436,6 +759,11 @@ function buildCapabilitiesReloadSuccessSnapshot(input: {
 		completedAtEpochMs: Date.now(),
 		source: input.loaded.source,
 		configPath: input.loaded.source.path ?? null,
+		change: diffCapabilitiesConfigSources(
+			input.previousLoaded?.source ?? null,
+			input.loaded.source,
+			input.operation,
+		),
 		mcpReconnect: input.mcpReconnect,
 	};
 }
@@ -509,12 +837,15 @@ function hasMcpChanges(change: McpServerChangeSet): boolean {
 function buildMcpReconnectStatus(
 	previous: readonly MCPServerEntry[],
 	next: readonly MCPServerEntry[],
+	generation: number,
 ): McpDynamicReconnectStatus {
 	const activeServerIds = next.map((entry) => entry.id);
 	const change = diffMcpServers(previous, next);
 	if (!hasMcpChanges(change)) {
 		return {
 			status: "unchanged",
+			applyState: "unchanged",
+			generation,
 			activeServerIds,
 		};
 	}
@@ -522,9 +853,22 @@ function buildMcpReconnectStatus(
 	return {
 		status: "pending_repl_apply",
 		reason: "applied_at_repl_turn_boundary",
+		applyState: "pending",
+		appliesAt: "repl_turn_boundary",
+		pendingReason: "waiting_for_repl_turn_boundary",
+		generation,
+		requestedAtEpochMs: Date.now(),
 		activeServerIds,
 		change,
 	};
+}
+
+function cloneChangeSet<T extends CapabilitiesReloadChangeSet>(change: T): T {
+	return {
+		added: [...change.added],
+		removed: [...change.removed],
+		changed: [...change.changed],
+	} as unknown as T;
 }
 
 function cloneMcpReconnect(
@@ -537,11 +881,15 @@ function cloneMcpReconnect(
 		return {
 			...status,
 			activeServerIds: [...status.activeServerIds],
-			change: {
-				added: [...status.change.added],
-				removed: [...status.change.removed],
-				changed: [...status.change.changed],
-			},
+			change: cloneChangeSet(status.change),
+		};
+	}
+	if (status.status === "applied_at_repl_turn_boundary") {
+		return {
+			...status,
+			activeServerIds: [...status.activeServerIds],
+			change: cloneChangeSet(status.change),
+			lastApplied: { ...status.lastApplied },
 		};
 	}
 	return {
@@ -559,6 +907,7 @@ function cloneSuccessSnapshot(
 	return {
 		...snapshot,
 		source: { ...snapshot.source },
+		change: cloneChangeSet(snapshot.change),
 		mcpReconnect: cloneMcpReconnect(
 			snapshot.mcpReconnect,
 		) as McpDynamicReconnectStatus,
@@ -573,11 +922,7 @@ function cloneSkillsSnapshot(
 	}
 	return {
 		...snapshot,
-		change: {
-			added: [...snapshot.change.added],
-			removed: [...snapshot.change.removed],
-			changed: [...snapshot.change.changed],
-		},
+		change: cloneChangeSet(snapshot.change),
 		status: {
 			...snapshot.status,
 			inFlightGenerations: [...snapshot.status.inFlightGenerations],
@@ -586,11 +931,7 @@ function cloneSkillsSnapshot(
 					? null
 					: {
 							...snapshot.status.lastSuccess,
-							change: {
-								added: [...snapshot.status.lastSuccess.change.added],
-								removed: [...snapshot.status.lastSuccess.change.removed],
-								changed: [...snapshot.status.lastSuccess.change.changed],
-							},
+							change: cloneChangeSet(snapshot.status.lastSuccess.change),
 						},
 			lastFailure:
 				snapshot.status.lastFailure == null

@@ -10,11 +10,23 @@ import {
 	projectSupervisorProgressEvents,
 	recordChildRunHeartbeat,
 	recordSupervisorProgressEvent,
+	type SupervisorChildArtifactSummary,
+	type SupervisorChildCheckpointSummary,
+	type SupervisorChildEvent,
+	type SupervisorChildEventType,
+	type SupervisorChildHandoffSummary,
+	type SupervisorChildPendingInputSummary,
+	type SupervisorChildRecordSnapshot,
+	type SupervisorChildRecoveryHistoryEntry,
+	type SupervisorChildRecoveryPlan,
+	type SupervisorChildRecoveryReason,
 	type SupervisorConfidence,
 	type SupervisorProgressEvent,
 	type SupervisorProgressEventProjection,
+	type SupervisorProgressEventSeverity,
 	type SupervisorProgressEventSink,
 	type SupervisorProgressSinkBatchReport,
+	type TerminalChildRunStatus,
 } from "./index.js";
 
 export interface SupervisorWorkerResult {
@@ -99,6 +111,7 @@ export interface InProcessSupervisorRuntimeOptions {
 	readonly now?: () => string;
 	readonly staleAfterMs?: number;
 	readonly maxActiveRuns?: number;
+	readonly maxChildEventHistory?: number;
 }
 
 export interface SupervisorRuntimeAdmissionResult {
@@ -118,6 +131,20 @@ export interface SupervisorRuntimeSnapshot {
 	readonly records: readonly ChildRunStatusRecord[];
 	readonly projection: SupervisorProgressEventProjection;
 }
+
+export interface SupervisorChildEventQuery {
+	readonly runIds?: string | readonly string[];
+	readonly taskIds?: string | readonly string[];
+	readonly types?:
+		| SupervisorChildEventType
+		| readonly SupervisorChildEventType[];
+	readonly sinceSequence?: number;
+	readonly limit?: number;
+}
+
+export type SupervisorChildEventListener = (
+	event: SupervisorChildEvent,
+) => void;
 
 interface ActiveRunState {
 	readonly controller: AbortController;
@@ -139,13 +166,38 @@ const WORKER_HEARTBEAT_STATUSES = new Set<ChildRunStatusRecord["status"]>([
 	"aggregating",
 ]);
 
-function isTerminalStatus(status: ChildRunStatusRecord["status"]): boolean {
+const DEFAULT_CHILD_EVENT_HISTORY_LIMIT = 200;
+const RECOVERY_HISTORY_LIMIT = 25;
+const INPUT_CONTENT_PREVIEW_LIMIT = 160;
+const ARTIFACT_ARGUMENT_KEY_PARTS = [
+	"artifact",
+	"file",
+	"output",
+	"path",
+	"report",
+];
+
+function isTerminalStatus(
+	status: ChildRunStatusRecord["status"],
+): status is TerminalChildRunStatus {
 	return (
 		status === "completed" ||
 		status === "failed" ||
 		status === "cancelled" ||
 		status === "deferred"
 	);
+}
+
+function assertPositiveInteger(value: number, name: string): void {
+	if (!Number.isInteger(value) || value < 1) {
+		throw new RangeError(`${name} must be a positive integer`);
+	}
+}
+
+function assertNonNegativeInteger(value: number, name: string): void {
+	if (!Number.isInteger(value) || value < 0) {
+		throw new RangeError(`${name} must be a non-negative integer`);
+	}
 }
 
 function isControlLockedStatus(
@@ -162,6 +214,55 @@ function normalizeInputPayload(
 	input: string | SupervisorRuntimeInputPayload,
 ): SupervisorRuntimeInputPayload {
 	return typeof input === "string" ? { content: input } : input;
+}
+
+function truncate(value: string, maxLength: number): string {
+	return value.length <= maxLength
+		? value
+		: `${value.slice(0, maxLength - 3)}...`;
+}
+
+function summarizeValue(value: unknown): string {
+	if (typeof value === "string") {
+		return truncate(value, INPUT_CONTENT_PREVIEW_LIMIT);
+	}
+
+	const serialized = JSON.stringify(value);
+	return truncate(serialized ?? String(value), INPUT_CONTENT_PREVIEW_LIMIT);
+}
+
+function childEventSeverityForRecord(
+	record: ChildRunStatusRecord,
+): SupervisorProgressEventSeverity {
+	if (record.status === "failed" || record.status === "cancelled") {
+		return "error";
+	}
+	if (
+		record.status === "blocked" ||
+		record.status === "cancel_requested" ||
+		record.status === "deferred" ||
+		record.blocker != null
+	) {
+		return "warning";
+	}
+	if (record.status === "completed") {
+		return "success";
+	}
+	return "info";
+}
+
+function heartbeatAgeMs(record: ChildRunStatusRecord, now: string): number {
+	return Math.max(0, Date.parse(now) - Date.parse(record.lastHeartbeatAt));
+}
+
+function checkpointDueInMs(nextCheckpointAt: string, now: string): number {
+	return Math.max(0, Date.parse(nextCheckpointAt) - Date.parse(now));
+}
+
+function snapshotChildRecord(
+	record: ChildRunStatusRecord,
+): SupervisorChildRecordSnapshot {
+	return { ...record };
 }
 
 function normalizeLifecycleEscalation(
@@ -258,6 +359,40 @@ function cancellationReason(
 	);
 }
 
+function recordFromChildEvent(
+	event: SupervisorChildEvent,
+): SupervisorChildRecordSnapshot | undefined {
+	switch (event.type) {
+		case "heartbeat":
+		case "checkpoint":
+		case "completion":
+		case "blocked":
+		case "stale":
+			return event.payload.record;
+		case "recovery":
+			return event.payload.plan.context.record;
+		default:
+			return assertNever(event);
+	}
+}
+
+function summaryFromChildEvent(event: SupervisorChildEvent): string {
+	switch (event.type) {
+		case "checkpoint":
+			return `checkpoint due at ${event.payload.nextCheckpointAt}`;
+		case "stale":
+			return `${event.payload.record.summary} (stale ${event.payload.heartbeatAgeMs}ms)`;
+		case "recovery":
+			return event.payload.plan.summary;
+		case "heartbeat":
+		case "completion":
+		case "blocked":
+			return event.payload.record.summary;
+		default:
+			return assertNever(event);
+	}
+}
+
 function supervisorProgressEventEmissionKey(
 	event: SupervisorProgressEvent,
 ): string {
@@ -348,6 +483,7 @@ export class InProcessSupervisorRuntime {
 	private readonly now: () => string;
 	private readonly staleAfterMs?: number;
 	private readonly maxActiveRuns: number;
+	private readonly maxChildEventHistory: number;
 	private readonly records = new Map<string, ChildRunStatusRecord>();
 	private readonly handoffs = new Map<string, DelegationHandoff>();
 	private readonly completions = new Map<string, ChildRunDeferred>();
@@ -355,7 +491,14 @@ export class InProcessSupervisorRuntime {
 	private readonly pendingInputs = new Map<string, SupervisorRuntimeInput[]>();
 	private readonly inputWaiters = new Map<string, InputWaiter[]>();
 	private readonly emittedEventKeys = new Set<string>();
+	private readonly childEvents: SupervisorChildEvent[] = [];
+	private readonly pendingChildEvents: SupervisorChildEvent[] = [];
+	private readonly childEventListeners =
+		new Set<SupervisorChildEventListener>();
+	private readonly staleNotificationKeys = new Set<string>();
+	private readonly crashedRunIds = new Set<string>();
 	private nextInputSequence = 0;
+	private nextChildEventSequence = 0;
 
 	constructor(options: InProcessSupervisorRuntimeOptions = {}) {
 		this.workers = options.workers ?? [];
@@ -363,6 +506,8 @@ export class InProcessSupervisorRuntime {
 		this.now = options.now ?? (() => new Date().toISOString());
 		this.staleAfterMs = options.staleAfterMs;
 		this.maxActiveRuns = options.maxActiveRuns ?? Number.POSITIVE_INFINITY;
+		this.maxChildEventHistory =
+			options.maxChildEventHistory ?? DEFAULT_CHILD_EVENT_HISTORY_LIMIT;
 		if (
 			!Number.isFinite(this.maxActiveRuns) &&
 			this.maxActiveRuns !== Number.POSITIVE_INFINITY
@@ -372,6 +517,7 @@ export class InProcessSupervisorRuntime {
 		if (this.maxActiveRuns < 1) {
 			throw new RangeError("maxActiveRuns must be a positive number");
 		}
+		assertPositiveInteger(this.maxChildEventHistory, "maxChildEventHistory");
 	}
 
 	admitHandoff(handoff: DelegationHandoff): SupervisorRuntimeAdmissionResult {
@@ -618,6 +764,113 @@ export class InProcessSupervisorRuntime {
 		return flushSupervisorProgressSinkReport(this.sink);
 	}
 
+	subscribeChildEvents(listener: SupervisorChildEventListener): () => void {
+		this.childEventListeners.add(listener);
+		return () => {
+			this.childEventListeners.delete(listener);
+		};
+	}
+
+	listChildEvents(
+		query: SupervisorChildEventQuery = {},
+	): readonly SupervisorChildEvent[] {
+		return this.filterChildEvents(this.childEvents, query);
+	}
+
+	recentChildEvents(
+		limit = 20,
+		query: Omit<SupervisorChildEventQuery, "limit"> = {},
+	): readonly SupervisorChildEvent[] {
+		return this.listChildEvents({ ...query, limit });
+	}
+
+	drainChildEvents(
+		query: SupervisorChildEventQuery = {},
+	): readonly SupervisorChildEvent[] {
+		const limit = query.limit;
+		if (limit != null) {
+			assertNonNegativeInteger(limit, "query.limit");
+		}
+
+		const matchingIndexes = this.pendingChildEvents
+			.map((event, index) => ({ event, index }))
+			.filter(({ event }) => this.childEventMatches(event, query));
+		const selectedIndexes = new Set(
+			(limit == null ? matchingIndexes : matchingIndexes.slice(-limit)).map(
+				({ index }) => index,
+			),
+		);
+		const selectedEvents = this.pendingChildEvents.filter((_, index) =>
+			selectedIndexes.has(index),
+		);
+		this.pendingChildEvents.splice(
+			0,
+			this.pendingChildEvents.length,
+			...this.pendingChildEvents.filter(
+				(_, index) => !selectedIndexes.has(index),
+			),
+		);
+
+		return selectedEvents;
+	}
+
+	detectStaleRuns(): readonly SupervisorChildRecoveryPlan[] {
+		const staleEvents = this.snapshot().projection.events.filter(
+			(
+				event,
+			): event is Extract<
+				SupervisorProgressEvent,
+				{ readonly type: "child_stale" }
+			> => event.type === "child_stale",
+		);
+		const plans: SupervisorChildRecoveryPlan[] = [];
+
+		for (const staleEvent of staleEvents) {
+			const record = this.requireRecord(staleEvent.runId);
+			const staleKey = `${record.runId}:${record.lastHeartbeatAt}`;
+			let plan: SupervisorChildRecoveryPlan;
+
+			if (!this.staleNotificationKeys.has(staleKey)) {
+				this.staleNotificationKeys.add(staleKey);
+				this.emitChildEvent({
+					type: "stale",
+					severity: "warning",
+					occurredAt: staleEvent.occurredAt,
+					runId: record.runId,
+					taskId: record.taskId,
+					payload: {
+						record: snapshotChildRecord(record),
+						heartbeatAgeMs: staleEvent.payload.heartbeatAgeMs,
+						staleAfterMs: staleEvent.payload.staleAfterMs,
+					},
+				});
+				plan = this.createRecoveryPlan(
+					record.runId,
+					"stale",
+					staleEvent.occurredAt,
+				);
+				this.emitRecoveryEvent(plan);
+			} else {
+				plan = this.createRecoveryPlan(
+					record.runId,
+					"stale",
+					staleEvent.occurredAt,
+				);
+			}
+
+			plans.push(plan);
+		}
+
+		return plans;
+	}
+
+	buildRecoveryPlan(
+		runId: string,
+		reason: SupervisorChildRecoveryReason = "manual",
+	): SupervisorChildRecoveryPlan {
+		return this.createRecoveryPlan(runId, reason, this.now());
+	}
+
 	private startRun(runId: string): SupervisorRunHandle | null {
 		const handoff = this.handoffs.get(runId);
 		if (handoff == null || this.activeRuns.has(runId)) {
@@ -731,6 +984,9 @@ export class InProcessSupervisorRuntime {
 			const shouldCancel =
 				controller.signal.aborted ||
 				currentRecord?.status === "cancel_requested";
+			if (!shouldCancel) {
+				this.crashedRunIds.add(handoff.childRunId);
+			}
 			return this.writeTerminalRecord(handoff.childRunId, {
 				status: shouldCancel ? "cancelled" : "failed",
 				summary: shouldCancel
@@ -856,7 +1112,9 @@ export class InProcessSupervisorRuntime {
 	}
 
 	private setRecord(record: ChildRunStatusRecord): void {
+		const previousRecord = this.records.get(record.runId);
 		this.records.set(record.runId, record);
+		this.recordChildRuntimeEvents(previousRecord, record);
 		for (const event of this.snapshot().projection.events) {
 			const key = supervisorProgressEventEmissionKey(event);
 			if (this.emittedEventKeys.has(key)) {
@@ -864,6 +1122,343 @@ export class InProcessSupervisorRuntime {
 			}
 			this.emittedEventKeys.add(key);
 			recordSupervisorProgressEvent(this.sink, event);
+		}
+	}
+
+	private recordChildRuntimeEvents(
+		previousRecord: ChildRunStatusRecord | undefined,
+		record: ChildRunStatusRecord,
+	): void {
+		const occurredAt = record.updatedAt;
+
+		if (isTerminalStatus(record.status)) {
+			this.emitChildEvent({
+				type: "completion",
+				severity: childEventSeverityForRecord(record),
+				occurredAt,
+				runId: record.runId,
+				taskId: record.taskId,
+				payload: {
+					record: snapshotChildRecord(
+						record,
+					) as SupervisorChildRecordSnapshot & {
+						readonly status: TerminalChildRunStatus;
+					},
+					previousStatus: previousRecord?.status,
+				},
+			});
+
+			if (record.status === "failed") {
+				this.emitRecoveryEvent(
+					this.createRecoveryPlan(
+						record.runId,
+						this.crashedRunIds.has(record.runId) ? "crashed" : "failed",
+						occurredAt,
+					),
+				);
+			}
+			return;
+		}
+
+		if (record.status !== "queued" && record.status !== "assigned") {
+			this.emitChildEvent({
+				type: "heartbeat",
+				severity: childEventSeverityForRecord(record),
+				occurredAt,
+				runId: record.runId,
+				taskId: record.taskId,
+				payload: {
+					record: snapshotChildRecord(record),
+					heartbeatAgeMs: heartbeatAgeMs(record, occurredAt),
+					previousStatus: previousRecord?.status,
+				},
+			});
+		}
+
+		const blocker = record.blocker?.trim();
+		if (
+			record.status === "blocked" ||
+			(blocker != null && blocker.length > 0)
+		) {
+			this.emitChildEvent({
+				type: "blocked",
+				severity: "warning",
+				occurredAt,
+				runId: record.runId,
+				taskId: record.taskId,
+				payload: {
+					record: snapshotChildRecord(record),
+					blocker: blocker ?? record.summary,
+					currentStep: record.currentStep,
+				},
+			});
+		}
+
+		if (
+			record.nextCheckpointAt != null &&
+			record.nextCheckpointAt !== previousRecord?.nextCheckpointAt
+		) {
+			this.emitChildEvent({
+				type: "checkpoint",
+				severity:
+					checkpointDueInMs(record.nextCheckpointAt, occurredAt) === 0
+						? "warning"
+						: "info",
+				occurredAt: record.nextCheckpointAt,
+				runId: record.runId,
+				taskId: record.taskId,
+				payload: {
+					record: snapshotChildRecord(record),
+					nextCheckpointAt: record.nextCheckpointAt,
+					dueInMs: checkpointDueInMs(record.nextCheckpointAt, occurredAt),
+				},
+			});
+		}
+	}
+
+	private emitRecoveryEvent(
+		plan: SupervisorChildRecoveryPlan,
+	): SupervisorChildEvent {
+		return this.emitChildEvent({
+			type: "recovery",
+			severity: "warning",
+			occurredAt: plan.generatedAt,
+			runId: plan.runId,
+			taskId: plan.taskId,
+			payload: { plan },
+		});
+	}
+
+	private emitChildEvent(
+		event: Omit<SupervisorChildEvent, "schemaVersion" | "id" | "sequence">,
+	): SupervisorChildEvent {
+		this.nextChildEventSequence += 1;
+		const notification = {
+			...event,
+			schemaVersion: 1 as const,
+			id: `child_event:${this.nextChildEventSequence}`,
+			sequence: this.nextChildEventSequence,
+		} as SupervisorChildEvent;
+
+		this.childEvents.push(notification);
+		if (this.childEvents.length > this.maxChildEventHistory) {
+			this.childEvents.splice(
+				0,
+				this.childEvents.length - this.maxChildEventHistory,
+			);
+		}
+		this.pendingChildEvents.push(notification);
+		if (this.pendingChildEvents.length > this.maxChildEventHistory) {
+			this.pendingChildEvents.splice(
+				0,
+				this.pendingChildEvents.length - this.maxChildEventHistory,
+			);
+		}
+
+		for (const listener of this.childEventListeners) {
+			try {
+				listener(notification);
+			} catch {
+				// One broken listener must not block others
+			}
+		}
+
+		return notification;
+	}
+
+	private childEventMatches(
+		event: SupervisorChildEvent,
+		query: SupervisorChildEventQuery,
+	): boolean {
+		const runIds = normalizeQueryValues(query.runIds);
+		const taskIds = normalizeQueryValues(query.taskIds);
+		const types = normalizeQueryValues(query.types);
+
+		return (
+			(runIds == null || runIds.has(event.runId)) &&
+			(taskIds == null || taskIds.has(event.taskId)) &&
+			(types == null || types.has(event.type)) &&
+			(query.sinceSequence == null || event.sequence > query.sinceSequence)
+		);
+	}
+
+	private filterChildEvents(
+		events: readonly SupervisorChildEvent[],
+		query: SupervisorChildEventQuery,
+	): readonly SupervisorChildEvent[] {
+		if (query.limit != null) {
+			assertNonNegativeInteger(query.limit, "query.limit");
+		}
+
+		const filteredEvents = events.filter((event) =>
+			this.childEventMatches(event, query),
+		);
+		return query.limit == null
+			? [...filteredEvents]
+			: filteredEvents.slice(-query.limit);
+	}
+
+	private createRecoveryPlan(
+		runId: string,
+		reason: SupervisorChildRecoveryReason,
+		generatedAt: string,
+	): SupervisorChildRecoveryPlan {
+		const record = this.requireRecord(runId);
+		const context = this.createRecoveryContextSnapshot(record, generatedAt);
+
+		return {
+			id: `recovery:${reason}:${runId}:${generatedAt}`,
+			reason,
+			generatedAt,
+			runId: record.runId,
+			taskId: record.taskId,
+			status: record.status,
+			summary: record.summary,
+			suggestedAction: this.recoverySuggestedAction(reason, record),
+			context,
+		};
+	}
+
+	private createRecoveryContextSnapshot(
+		record: ChildRunStatusRecord,
+		generatedAt: string,
+	): SupervisorChildRecoveryPlan["context"] {
+		const historyEvents = this.childEvents
+			.filter(
+				(event) => event.runId === record.runId && event.type !== "recovery",
+			)
+			.slice(-RECOVERY_HISTORY_LIMIT);
+
+		return {
+			generatedAt,
+			heartbeatAgeMs: heartbeatAgeMs(record, generatedAt),
+			record: snapshotChildRecord(record),
+			pendingInputs: this.summarizePendingInputs(record.runId),
+			history: historyEvents.map((event) => this.summarizeHistoryEvent(event)),
+			checkpoints: historyEvents
+				.filter(
+					(
+						event,
+					): event is Extract<
+						SupervisorChildEvent,
+						{ readonly type: "checkpoint" }
+					> => event.type === "checkpoint",
+				)
+				.map((event) => this.summarizeCheckpointEvent(event)),
+			artifacts: this.summarizeArtifacts(record),
+			handoff: this.summarizeHandoff(record.runId),
+		};
+	}
+
+	private summarizeHistoryEvent(
+		event: SupervisorChildEvent,
+	): SupervisorChildRecoveryHistoryEntry {
+		const record = recordFromChildEvent(event);
+		return {
+			sequence: event.sequence,
+			type: event.type,
+			occurredAt: event.occurredAt,
+			summary: summaryFromChildEvent(event),
+			status: record?.status,
+			currentStep: record?.currentStep,
+			blocker: record?.blocker,
+		};
+	}
+
+	private summarizeCheckpointEvent(
+		event: Extract<SupervisorChildEvent, { readonly type: "checkpoint" }>,
+	): SupervisorChildCheckpointSummary {
+		return {
+			sequence: event.sequence,
+			occurredAt: event.occurredAt,
+			nextCheckpointAt: event.payload.nextCheckpointAt,
+			summary: event.payload.record.summary,
+			currentStep: event.payload.record.currentStep,
+			progress: event.payload.record.progress,
+		};
+	}
+
+	private summarizePendingInputs(
+		runId: string,
+	): readonly SupervisorChildPendingInputSummary[] {
+		return (this.pendingInputs.get(runId) ?? []).map((input) => ({
+			id: input.id,
+			kind: input.kind,
+			contentPreview: truncate(input.content, INPUT_CONTENT_PREVIEW_LIMIT),
+			metadataKeys: Object.keys(input.metadata ?? {}).sort(),
+			createdAt: input.createdAt,
+		}));
+	}
+
+	private summarizeHandoff(
+		runId: string,
+	): SupervisorChildHandoffSummary | undefined {
+		const handoff = this.handoffs.get(runId);
+		if (handoff == null) {
+			return undefined;
+		}
+
+		return {
+			parentRunId: handoff.parentRunId,
+			taskName: handoff.task.name,
+			taskDescription: handoff.task.description,
+			receiverRole: handoff.receiver.role,
+			receiverGoal: handoff.agent.goal,
+			requiredCapabilities: [...handoff.receiver.requiredCapabilities],
+			risk: handoff.risk,
+		};
+	}
+
+	private summarizeArtifacts(
+		record: ChildRunStatusRecord,
+	): readonly SupervisorChildArtifactSummary[] {
+		const artifacts: SupervisorChildArtifactSummary[] = [];
+		if (record.reviewedArtifactCount > 0) {
+			artifacts.push({
+				kind: "reviewed_artifacts",
+				label: "reviewedArtifactCount",
+				count: record.reviewedArtifactCount,
+			});
+		}
+
+		const handoff = this.handoffs.get(record.runId);
+		const args = handoff?.task.arguments ?? {};
+		for (const [key, value] of Object.entries(args).sort(([left], [right]) =>
+			left.localeCompare(right),
+		)) {
+			const normalizedKey = key.toLowerCase();
+			if (
+				!ARTIFACT_ARGUMENT_KEY_PARTS.some((part) =>
+					normalizedKey.includes(part),
+				)
+			) {
+				continue;
+			}
+			artifacts.push({
+				kind: "handoff_argument",
+				label: key,
+				value: summarizeValue(value),
+			});
+		}
+
+		return artifacts;
+	}
+
+	private recoverySuggestedAction(
+		reason: SupervisorChildRecoveryReason,
+		record: ChildRunStatusRecord,
+	): string {
+		switch (reason) {
+			case "stale":
+				return "Inspect the latest checkpoint and pending inputs, then resume or restart from the captured context.";
+			case "crashed":
+				return "Restart the child worker with the recovery context and preserve the prior history as read-only input.";
+			case "failed":
+				return "Review the terminal failure summary and decide whether to retry, defer, or replace the child run.";
+			case "manual":
+				return `Use the captured context to continue ${record.taskId} from its latest known state.`;
+			default:
+				return assertNever(reason);
 		}
 	}
 
