@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 from datetime import UTC, datetime, timedelta
 
 from quilin_mem.consolidator import (
@@ -296,10 +297,8 @@ def test_recall_weights_update_is_immutable() -> None:
     assert update.prior_delta == 0.08
 
     # Should be frozen (immutable)
-    try:
+    with contextlib.suppress(Exception):
         update.prior_delta = 0.5  # type: ignore[misc]
-    except Exception:
-        pass
     assert update.prior_delta == 0.08
 
 

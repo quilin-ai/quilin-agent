@@ -26,6 +26,14 @@ import {
 	type SkillViewToolOptions,
 } from "./skill-view.js";
 import { createWebFetchTool, type WebFetchToolOptions } from "./web-fetch.js";
+import {
+	createAudioTranscribeTool,
+	createImageDescribeTool,
+	createVideoSummarizeTool,
+	type AudioTranscribeToolOptions,
+	type ImageDescribeToolOptions,
+	type VideoSummarizeToolOptions,
+} from "./multimodal.js";
 
 export interface BuiltinToolOptions {
 	readonly fileRead?: FileReadToolOptions;
@@ -33,6 +41,9 @@ export interface BuiltinToolOptions {
 	readonly fileList?: FileListToolOptions;
 	readonly shellExec?: ShellExecToolOptions;
 	readonly webFetch?: WebFetchToolOptions;
+	readonly imageDescribe?: ImageDescribeToolOptions;
+	readonly videoSummarize?: VideoSummarizeToolOptions;
+	readonly audioTranscribe?: AudioTranscribeToolOptions;
 	readonly writeAuthority?: WriteAuthority;
 	readonly skillsManager?: SkillsManager;
 	readonly skillSearch?: Omit<SkillSearchToolOptions, "skillsManager">;
@@ -58,6 +69,9 @@ export function createBuiltinTools(
 			authority: options.writeAuthority ?? options.shellExec?.authority,
 		}),
 		createWebFetchTool(options.webFetch),
+		createImageDescribeTool(options.imageDescribe),
+		createVideoSummarizeTool(options.videoSummarize),
+		createAudioTranscribeTool(options.audioTranscribe),
 		createSkillSearchTool({
 			skillsManager: options.skillsManager,
 			...options.skillSearch,
@@ -86,23 +100,29 @@ export function createBuiltinTools(
 }
 
 export type {
+	AudioTranscribeToolOptions,
 	FileListToolOptions,
 	FileReadToolOptions,
 	FileWriteToolOptions,
+	ImageDescribeToolOptions,
 	ShellExecToolOptions,
 	SkillManageToolOptions,
 	SkillSearchToolOptions,
 	SkillViewToolOptions,
+	VideoSummarizeToolOptions,
 	WebFetchToolOptions,
 };
 
 export {
+	createAudioTranscribeTool,
 	createFileListTool,
 	createFileReadTool,
 	createFileWriteTool,
+	createImageDescribeTool,
 	createShellExecTool,
 	createSkillManageTool,
 	createSkillSearchTool,
 	createSkillViewTool,
+	createVideoSummarizeTool,
 	createWebFetchTool,
 };

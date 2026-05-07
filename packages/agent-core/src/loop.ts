@@ -338,6 +338,10 @@ export async function runAgentLoop(
 					runLogContext,
 				);
 				loopSucceeded = true;
+				await config.hooks?.onTurnComplete?.(
+					turnCount,
+					[...workingMessages, assistantMessage],
+				);
 				await recordAgentRunEvent(
 					runLogger,
 					"turn.completed",
@@ -431,6 +435,7 @@ export async function runAgentLoop(
 				consecutiveBlockedToolOutputs,
 			});
 			turnKind = "tool-resume";
+			await config.hooks?.onTurnComplete?.(turnCount, workingMessages);
 		}
 	} catch (error) {
 		await recordAgentRunEvent(

@@ -1,5 +1,4 @@
 import { execFile } from "node:child_process";
-import { createReadStream } from "node:fs";
 import { access, readFile, stat } from "node:fs/promises";
 import { basename, extname, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -65,6 +64,12 @@ const AUDIO_MIME_MAP: Readonly<Record<string, string>> = {
 };
 
 // ---------------------------------------------------------------------------
+
+type Fetcher = (
+	input: string | URL | Request,
+	init?: RequestInit,
+) => Promise<Response>;
+
 // Result helpers
 // ---------------------------------------------------------------------------
 
@@ -170,7 +175,7 @@ interface VisionApiCallParams {
 	readonly apiKey: string;
 	readonly maxOutputChars: number;
 	readonly timeoutMs: number;
-	readonly fetcher: typeof fetch;
+	readonly fetcher: Fetcher;
 }
 
 async function callVisionApi(
@@ -290,11 +295,11 @@ async function extractFrameJpeg(
 		], {
 			timeout: 30_000,
 			maxBuffer: 20 * 1024 * 1024,
-			encoding: "buffer" as unknown as undefined,
+			encoding: "buffer",
 		});
 
 		// When encoding is "buffer", stdout is Buffer.
-		const buffer = stdout as Buffer;
+		const buffer = (stdout as unknown) as Buffer;
 		if (buffer.length === 0) {
 			throw new Error("ffmpeg produced an empty frame.");
 		}
@@ -318,7 +323,7 @@ export interface ImageDescribeToolOptions {
 	readonly maxImageBytes?: number;
 	readonly maxOutputChars?: number;
 	readonly timeoutMs?: number;
-	readonly fetcher?: typeof fetch;
+	readonly fetcher?: Fetcher;
 }
 
 export function createImageDescribeTool(
@@ -440,7 +445,7 @@ export interface VideoSummarizeToolOptions {
 	readonly maxFrames?: number;
 	readonly frameIntervalSeconds?: number;
 	readonly timeoutMs?: number;
-	readonly fetcher?: typeof fetch;
+	readonly fetcher?: Fetcher;
 }
 
 export function createVideoSummarizeTool(
@@ -579,7 +584,7 @@ export interface AudioTranscribeToolOptions {
 	readonly maxAudioBytes?: number;
 	readonly maxOutputChars?: number;
 	readonly timeoutMs?: number;
-	readonly fetcher?: typeof fetch;
+	readonly fetcher?: Fetcher;
 }
 
 export function createAudioTranscribeTool(

@@ -2130,11 +2130,11 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 
 				for (const entry of changedMcpServers) {
 					const registeredTools = await registry.register(entry);
-						mcpServerToolCounts.set(entry.id, registeredTools.length);
+					mcpServerToolCounts.set(entry.id, registeredTools.length);
 				}
 				for (const serverId of removedMcpServerIds) {
 					await registry.unregister(serverId);
-						mcpServerToolCounts.delete(serverId);
+					mcpServerToolCounts.delete(serverId);
 				}
 
 				registry.clearBuiltinTools();
@@ -2294,7 +2294,10 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 						mcpServerToolCounts,
 						capabilitiesReloadStatus,
 					);
-					stderr.write(`${renderMcpDetailStatus(mcpEntries)}\n`);
+					stderr.write(
+								`${renderCapabilitiesTable(capabilitiesReloadStatus)}\n`,
+							);
+							stderr.write(`${renderMcpDetailStatus(mcpEntries)}\n`);
 				}
 				stderr.write(`${renderTokenBudget(messages)}\n`);
 				const supervisorSnapshot = supervisorRuntime.snapshot();
@@ -2315,7 +2318,16 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 					mcpServerToolCounts,
 					cs,
 				);
-				stderr.write(`${renderMcpServerList(entries)}\n`);
+				if (entries.length === 0) {
+					stderr.write("No MCP servers registered.\n");
+				} else {
+					stderr.write(`MCP Servers (${entries.length}):\n`);
+					const textLines = entries.map(formatMcpServerDisplayEntry);
+					stderr.write(
+						`${textLines.map((l) => `  ${l}`).join("\n")}\n`,
+					);
+					stderr.write(`${renderMcpServerTable(entries)}\n`);
+				}
 				continue;
 			}
 			if (trimmed.startsWith("/think")) {

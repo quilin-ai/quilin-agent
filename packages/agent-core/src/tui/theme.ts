@@ -339,5 +339,7 @@ export function truncateVisible(
 	// Preserve leading ANSI codes so truncated text keeps its colour.
 	const ansiPrefix = text.match(/^(\x1b\[[0-9;]*m)+/)?.[0] ?? "";
 	const visible = plain.slice(0, Math.max(0, maxWidth - ellipsis.length));
-	return `${ansiPrefix}${visible}${ellipsis}${ANSI.reset}`;
+	return ansiPrefix
+		? `${ansiPrefix}${visible}${ellipsis}${ANSI.reset}`
+		: `${visible}${ellipsis}`;
 }

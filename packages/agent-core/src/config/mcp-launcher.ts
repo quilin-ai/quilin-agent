@@ -89,7 +89,10 @@ export function stopQuilinMemMcp(): void {
 	}
 
 	const child = quilinMemProcess;
-	quilinMemProcess = null;
+	// Keep quilinMemProcess set while the process may still be
+	// alive — null it only after SIGKILL to avoid a race where
+	// startQuilinMemMcp() sees it as not running during the
+	// 5-second grace period and spawns a duplicate.
 
 	child.on("exit", () => {
 		logger.info("quilin-mem MCP stopped");
@@ -100,6 +103,7 @@ export function stopQuilinMemMcp(): void {
 	setTimeout(() => {
 		if (child.exitCode == null && !child.killed) {
 			child.kill("SIGKILL");
+			quilinMemProcess = null;
 		}
 	}, 5000);
 }
