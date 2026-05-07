@@ -477,6 +477,76 @@ export class SkillManager {
 		return { ok: true, descriptor };
 	}
 
+	private async merge(
+		action: Extract<SkillManageAction, { action: "merge" }>,
+	): Promise<SkillManageResult> {
+		if (!validateSkillName(action.sourceName)) {
+			return createError(
+				"validation_failed",
+				"source skill name must be a valid slug",
+			);
+		}
+		if (!validateSkillName(action.targetName)) {
+			return createError(
+				"validation_failed",
+				"target skill name must be a valid slug",
+			);
+		}
+
+		const source = this.skillsManager.findByName(action.sourceName);
+		if (source == null) {
+			return createError("not_found", `source skill not found: ${action.sourceName}`);
+		}
+		const target = this.skillsManager.findByName(action.targetName);
+		if (target == null) {
+			return createError("not_found", `target skill not found: ${action.targetName}`);
+		}
+
+		const resolvedPath = await this.resolveExistingPath(target.path);
+		if ("error" in resolvedPath) {
+			return resolvedPath.error;
+		}
+
+		const content = await this.fsOps.readFile(resolvedPath.path, "utf8");
+		const parsed = parseSkillMarkdown(content);
+		const nextBody = mergeSkillBody(
+			parsed.body,
+			action.strategy,
+			action.sourceName,
+		);
+		const nextFrontmatter = mergeSkillFrontmatter(
+			parsed.frontmatter,
+			source.frontmatter,
+			action.strategy,
+		);
+
+		const serialized = this.serializeAndValidate(nextFrontmatter, nextBody);
+		if ("error" in serialized) {
+			return serialized.error;
+		}
+
+		const authorization = await this.authorizeWrite(
+			this.buildMergeRequest(
+				action.sourceName,
+				action.targetName,
+				resolvedPath.path,
+				nextFrontmatter,
+				nextBody,
+			),
+		);
+		if (authorization != null) {
+			return authorization;
+		}
+
+		await this.fsOps.writeFile(resolvedPath.path, serialized.markdown);
+		await this.skillsManager.discover();
+		const descriptor = this.skillsManager.findByName(action.targetName);
+		if (descriptor == null) {
+			return createError("not_found", "target skill not found after discover");
+		}
+		return { ok: true, descriptor };
+	}
+
 	private async delete(
 		action: Extract<SkillManageAction, { action: "delete" }>,
 	): Promise<SkillManageResult> {

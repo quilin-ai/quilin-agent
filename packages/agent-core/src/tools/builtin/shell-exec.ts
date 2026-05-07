@@ -6,12 +6,9 @@ import {
 	type WriteOrigin,
 } from "../../safety/write-authority.js";
 import type { SandboxPolicy, SandboxRequest } from "../sandbox.js";
-import type {
-	SandboxCommandResult,
-	SandboxRouter,
-} from "../sandbox-router.js";
 import type { ToolWithMetadata } from "../tool-metadata.js";
 import type { ToolResult } from "../types.js";
+import { DockerSandboxRouter } from "../docker-sandbox-router.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MIN_TIMEOUT_MS = 1_000;
@@ -513,7 +510,7 @@ export interface ShellExecToolOptions {
 	readonly env?: NodeJS.ProcessEnv;
 	readonly authority?: WriteAuthority;
 	readonly origin?: WriteOrigin;
-	readonly sandboxRouter?: SandboxRouter;
+	readonly sandbox?: "auto" | "off" | "on";
 }
 
 function buildShellExecEnv(overrides?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
