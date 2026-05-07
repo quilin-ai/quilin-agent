@@ -364,7 +364,7 @@ export class MCPClientManager {
 					};
 				});
 			} catch (error) {
-				await transport.close().catch(() => undefined);
+				try { await transport.close(); } catch { /* already closed */ }
 				this.client = undefined;
 				this.transport = undefined;
 				this.isConnected = false;

@@ -2133,9 +2133,9 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 						nextMcpServerSignatures.get(entry.id),
 				);
 
-				for (const entry of changedMcpServers) {
+				for (const entry of changedMcpServers) { try {
 					const registeredTools = await registry.register(entry);
-					mcpServerToolCounts.set(entry.id, registeredTools.length);
+					mcpServerToolCounts.set(entry.id, registeredTools.length); } catch (err) { logger.warn({ err, serverId: entry.id }, "MCP register failed"); }
 				}
 				for (const serverId of removedMcpServerIds) {
 					await registry.unregister(serverId);

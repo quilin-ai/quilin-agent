@@ -912,6 +912,18 @@ async function dispatchCli(argv: readonly string[]): Promise<void> {
 	await main();
 }
 
+// MCP transport can close asynchronously and cause ERR_USE_AFTER_CLOSE
+// on the stdio pipes; catch unhandled rejections to avoid a hard crash.
+process.on("unhandledRejection", (reason) => {
+	const msg = reason instanceof Error ? reason.message : String(reason);
+	if (msg.includes("ERR_USE_AFTER_CLOSE") || msg.includes("closed")) {
+		logger.warn({ reason: msg }, "Suppressed async transport error");
+		return;
+	}
+	logger.fatal({ reason: msg }, "Unhandled rejection");
+	process.exit(1);
+});
+
 if (import.meta.main) {
 	dispatchCli(process.argv.slice(2)).catch((err) => {
 		logger.fatal({ error: providerErrorLogFields(err) }, "Unexpected error");
