@@ -526,7 +526,7 @@ export class SkillManager {
 		}
 
 		const authorization = await this.authorizeWrite(
-			this.buildMergeRequest(
+			buildMergeRequest(
 				action.sourceName,
 				action.targetName,
 				resolvedPath.path,
@@ -904,4 +904,51 @@ function isFsErrorCode(error: unknown, code: string): boolean {
 		"code" in error &&
 		(error as { code?: string }).code === code
 	);
+}
+
+function mergeSkillBody(
+	targetBody: string,
+	strategy: "keep_source" | "keep_target" | "combine",
+	sourceName: string,
+): string {
+	return targetBody;
+}
+
+function mergeSkillFrontmatter(
+	target: SkillFrontmatter,
+	source: SkillFrontmatter,
+	strategy: "keep_source" | "keep_target" | "combine",
+): SkillFrontmatter {
+	if (strategy === "keep_target") {
+		return target;
+	}
+	if (strategy === "keep_source") {
+		return { ...source, name: target.name };
+	}
+	return { ...target, ...source, name: target.name };
+}
+
+function buildMergeRequest(
+	sourceName: string,
+	targetName: string,
+	targetPath: string,
+	frontmatter: SkillFrontmatter,
+	body: string,
+): WriteRequest {
+	const sensitiveTools = findSensitiveTools(frontmatter.allowedTools);
+	const riskLevel = sensitiveTools.length > 0 ? "critical" : "high";
+	const details = [
+		`path=${targetPath}`,
+		`bytes=${Buffer.byteLength(body, "utf8")}`,
+		sensitiveTools.length === 0 ? undefined : `sensitive_tools=${sensitiveTools.join(",")}`,
+		`sourceName=${sourceName}`,
+	].filter((value): value is string => value != null);
+
+	return {
+		tool: "skill_manage",
+		origin: "agent",
+		riskLevel,
+		summary: `skills.merge ${sourceName} => ${targetName}`,
+		detail: details.join(" | "),
+	};
 }

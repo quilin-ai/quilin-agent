@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { WriteAuthority } from "../../safety/write-authority.js";
 import { defaultSandboxEvaluator, resolveSandboxPolicy } from "../sandbox.js";
 import { createShellExecTool } from "./shell-exec.js";
+import { DockerSandboxRouter } from "../docker-sandbox-router.js";
 
 function createPermissiveAuthority(): WriteAuthority {
 	return new WriteAuthority({
@@ -121,7 +122,7 @@ describe("builtin shell_exec tool", () => {
 			exitCode: 0,
 			timedOut: false,
 		}));
-		const tool = createShellExecTool({
+		const tool = createShellExecTool({ sandbox: "off",
 			runner,
 			defaultTimeoutMs: 5_000,
 			authority: createPermissiveAuthority(),
@@ -161,7 +162,7 @@ describe("builtin shell_exec tool", () => {
 			exitCode: null,
 			timedOut: true,
 		}));
-		const timeoutTool = createShellExecTool({
+		const timeoutTool = createShellExecTool({ sandbox: "off",
 			runner: timeoutRunner,
 			authority: createPermissiveAuthority(),
 		});
@@ -182,7 +183,7 @@ describe("builtin shell_exec tool", () => {
 			exitCode: 126,
 			timedOut: false,
 		}));
-		const failingTool = createShellExecTool({
+		const failingTool = createShellExecTool({ sandbox: "off",
 			runner: failingRunner,
 			authority: createPermissiveAuthority(),
 		});
@@ -200,7 +201,7 @@ describe("builtin shell_exec tool", () => {
 
 	it("blocks dangerous shell patterns before invoking the runner", async () => {
 		const runner = vi.fn();
-		const tool = createShellExecTool({
+		const tool = createShellExecTool({ sandbox: "off",
 			runner,
 			authority: createPermissiveAuthority(),
 		});
@@ -217,7 +218,7 @@ describe("builtin shell_exec tool", () => {
 	});
 
 	it("returns parser errors for empty, dangling escape, and unterminated quote commands", async () => {
-		const tool = createShellExecTool({
+		const tool = createShellExecTool({ sandbox: "off",
 			runner: vi.fn(),
 			authority: createPermissiveAuthority(),
 		});
@@ -232,7 +233,7 @@ describe("builtin shell_exec tool", () => {
 	it("blocks destructive rm and disk wipe patterns after authorization", async () => {
 		const runner = vi.fn();
 		const confirm = vi.fn(async () => true);
-		const tool = createShellExecTool({
+		const tool = createShellExecTool({ sandbox: "off",
 			runner,
 			authority: new WriteAuthority({ mode: "ask", confirm }),
 		});
@@ -271,7 +272,7 @@ describe("builtin shell_exec tool", () => {
 
 	it("blocks shell control operators after tokenization", async () => {
 		const runner = vi.fn();
-		const tool = createShellExecTool({
+		const tool = createShellExecTool({ sandbox: "off",
 			runner,
 			authority: createPermissiveAuthority(),
 		});
@@ -285,7 +286,7 @@ describe("builtin shell_exec tool", () => {
 
 	it("handles control operators without a preceding argument", async () => {
 		const runner = vi.fn();
-		const tool = createShellExecTool({
+		const tool = createShellExecTool({ sandbox: "off",
 			runner,
 			authority: createPermissiveAuthority(),
 		});
@@ -299,7 +300,7 @@ describe("builtin shell_exec tool", () => {
 
 	it("blocks shell wrapper executables that use -c", async () => {
 		const runner = vi.fn();
-		const tool = createShellExecTool({
+		const tool = createShellExecTool({ sandbox: "off",
 			runner,
 			authority: createPermissiveAuthority(),
 		});
@@ -324,7 +325,7 @@ describe("builtin shell_exec tool", () => {
 
 	it("blocks fork bomb payloads before invoking the runner", async () => {
 		const runner = vi.fn();
-		const tool = createShellExecTool({
+		const tool = createShellExecTool({ sandbox: "off",
 			runner,
 			authority: createPermissiveAuthority(),
 		});
@@ -347,7 +348,7 @@ describe("builtin shell_exec tool", () => {
 			exitCode: 0,
 			timedOut: false,
 		}));
-		const tool = createShellExecTool({
+		const tool = createShellExecTool({ sandbox: "off",
 			runner,
 			authority: createPermissiveAuthority(),
 		});
@@ -382,7 +383,7 @@ describe("builtin shell_exec tool", () => {
 			exitCode: 0,
 			timedOut: false,
 		}));
-		const tool = createShellExecTool({
+		const tool = createShellExecTool({ sandbox: "off",
 			runner,
 			maxOutputChars: 10,
 			authority: createPermissiveAuthority(),
@@ -409,7 +410,7 @@ describe("builtin shell_exec tool", () => {
 			exitCode: 2,
 			timedOut: false,
 		}));
-		const tool = createShellExecTool({
+		const tool = createShellExecTool({ sandbox: "off",
 			runner,
 			maxOutputChars: 2,
 			authority: createPermissiveAuthority(),
@@ -428,7 +429,7 @@ describe("builtin shell_exec tool", () => {
 		vi.stubEnv("FAKE_SECRET", "hunter2");
 		vi.stubEnv("SHELL", "/bin/zsh");
 		vi.stubEnv("TERM", "xterm-256color");
-		const tool = createShellExecTool({
+		const tool = createShellExecTool({ sandbox: "off",
 			authority: createPermissiveAuthority(),
 		});
 
@@ -447,7 +448,7 @@ describe("builtin shell_exec tool", () => {
 	});
 
 	it("maps default runner non-zero exits into structured command failures", async () => {
-		const tool = createShellExecTool({
+		const tool = createShellExecTool({ sandbox: "off",
 			authority: createPermissiveAuthority(),
 		});
 
@@ -463,7 +464,7 @@ describe("builtin shell_exec tool", () => {
 	});
 
 	it("reports missing executables from the default runner as command failures", async () => {
-		const tool = createShellExecTool({
+		const tool = createShellExecTool({ sandbox: "off",
 			authority: createPermissiveAuthority(),
 		});
 
@@ -485,7 +486,7 @@ describe("builtin shell_exec tool", () => {
 			exitCode: 0,
 			timedOut: false,
 		}));
-		const tool = createShellExecTool({
+		const tool = createShellExecTool({ sandbox: "off",
 			runner,
 			authority: createPermissiveAuthority(),
 		});
@@ -509,7 +510,7 @@ describe("builtin shell_exec tool", () => {
 			exitCode: 0,
 			timedOut: false,
 		}));
-		const tool = createShellExecTool({
+		const tool = createShellExecTool({ sandbox: "off",
 			runner,
 			authority: createPermissiveAuthority(),
 		});
@@ -536,7 +537,7 @@ describe("builtin shell_exec tool", () => {
 			exitCode: 0,
 			timedOut: false,
 		}));
-		const tool = createShellExecTool({
+		const tool = createShellExecTool({ sandbox: "off",
 			runner,
 			env: {
 				TEST_OVERRIDE: "1",
@@ -567,7 +568,7 @@ describe("builtin shell_exec tool", () => {
 			exitCode: 0,
 			timedOut: false,
 		}));
-		const tool = createShellExecTool({
+		const tool = createShellExecTool({ sandbox: "off",
 			runner,
 			executableAllowlist: ["ls", " git ", ""],
 			authority: createPermissiveAuthority(),
@@ -610,7 +611,7 @@ describe("builtin shell_exec tool", () => {
 			exitCode: 0,
 			timedOut: false,
 		}));
-		const tool = createShellExecTool({
+		const tool = createShellExecTool({ sandbox: "off",
 			runner,
 			authority: new WriteAuthority({ mode: "deny-all" }),
 		});
@@ -634,7 +635,7 @@ describe("builtin shell_exec tool", () => {
 			timedOut: false,
 		}));
 		const confirm = vi.fn(async () => true);
-		const tool = createShellExecTool({
+		const tool = createShellExecTool({ sandbox: "off",
 			runner,
 			authority: new WriteAuthority({ mode: "ask", confirm }),
 		});
@@ -673,7 +674,7 @@ describe("builtin shell_exec tool", () => {
 			timedOut: false,
 		}));
 		const auditLog = vi.fn();
-		const tool = createShellExecTool({
+		const tool = createShellExecTool({ sandbox: "off",
 			runner,
 			origin: "idle",
 			authority: new WriteAuthority({ mode: "ask", auditLog }),
@@ -711,7 +712,7 @@ describe("builtin shell_exec tool", () => {
 			exitCode: 0,
 			timedOut: false,
 		}));
-		const tool = createShellExecTool({
+		const tool = createShellExecTool({ sandbox: "off",
 			runner,
 			authority: new WriteAuthority({
 				mode: "ask",
@@ -741,7 +742,7 @@ describe("builtin shell_exec tool", () => {
 			exitCode: undefined,
 			timedOut: false,
 		}));
-		const tool = createShellExecTool({
+		const tool = createShellExecTool({ sandbox: "off",
 			runner: runner as never,
 			authority: createPermissiveAuthority(),
 		});
@@ -772,7 +773,7 @@ describe("builtin shell_exec tool", () => {
 			exitCode: null,
 			timedOut: false,
 		}));
-		const tool = createShellExecTool({
+		const tool = createShellExecTool({ sandbox: "off",
 			runner,
 			authority: createPermissiveAuthority(),
 		});
@@ -787,4 +788,48 @@ describe("builtin shell_exec tool", () => {
 			exitCode: 1,
 		});
 	});
+	it("includes sandbox enum in the zod schema with auto as default", () => {
+		const tool = createShellExecTool();
+		const result = tool.parameters.safeParse({ command: "echo hi", sandbox: "auto" });
+		expect(result.success).toBe(true);
+		if (result.success) expect((result.data as { sandbox: string }).sandbox).toBe("auto");
+	});
+
+	it("rejects invalid sandbox enum values", () => {
+		const tool = createShellExecTool();
+		const result = tool.parameters.safeParse({ command: "echo hi", sandbox: "docker" });
+		expect(result.success).toBe(false);
+	});
+
+	it("falls back to host runner when sandbox is auto and Docker is unavailable", async () => {
+		vi.spyOn(DockerSandboxRouter, "isDockerAvailable").mockResolvedValue(false);
+		try {
+			const runner = vi.fn(async () => ({ stdout: "host-output\n", stderr: "", exitCode: 0, timedOut: false }));
+			const tool = createShellExecTool({ runner, authority: createPermissiveAuthority(), sandbox: "auto" });
+			const result = await tool.execute({ command: "echo hello" });
+			expect(result.isError).toBe(false);
+			expect(runner).toHaveBeenCalledTimes(1);
+			expect(JSON.parse(result.content).stdout).toBe("host-output\n");
+		} finally { vi.restoreAllMocks(); }
+	});
+
+	it("errors when sandbox is on and Docker is unavailable", async () => {
+		vi.spyOn(DockerSandboxRouter, "isDockerAvailable").mockResolvedValue(false);
+		try {
+			const tool = createShellExecTool({ authority: createPermissiveAuthority(), sandbox: "on" });
+			const result = await tool.execute({ command: "echo hello" });
+			expect(result.isError).toBe(true);
+			expect(JSON.parse(result.content)).toEqual({ error: expect.stringContaining("Docker is not available") });
+		} finally { vi.restoreAllMocks(); }
+	});
+
+	it("runs on host when sandbox is off", async () => {
+		const runner = vi.fn(async () => ({ stdout: "host-output\n", stderr: "", exitCode: 0, timedOut: false }));
+		const tool = createShellExecTool({ runner, authority: createPermissiveAuthority(), sandbox: "off" });
+		const result = await tool.execute({ command: "echo hello" });
+		expect(result.isError).toBe(false);
+		expect(runner).toHaveBeenCalledTimes(1);
+		expect(JSON.parse(result.content).stdout).toBe("host-output\n");
+	});
+
 });

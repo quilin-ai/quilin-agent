@@ -150,6 +150,7 @@ describe("DockerSandboxRouter", () => {
 		});
 		await router.createSession(createRequest("shell-boundary"));
 		const shellExec = createShellExecTool({
+			sandbox: "off",
 			runner: shellRunner,
 			authority: new WriteAuthority({
 				mode: "ask",
@@ -1016,4 +1017,28 @@ describe("DockerSandboxRouter", () => {
 			}),
 		).rejects.toThrow();
 	});
+	it("executeAuto returns null when Docker is unavailable", async () => {
+		vi.spyOn(DockerSandboxRouter, "isDockerAvailable").mockResolvedValue(false);
+		try {
+			const runner = vi.fn<DockerSandboxCliRunner>();
+			const router = createDockerSandboxRouter({ runner, now: fixedNow }) as unknown as DockerSandboxRouter;
+			const result = await router.executeAuto({ argv: ["echo", "hello"] });
+			expect(result).toBeNull();
+			expect(runner).not.toHaveBeenCalled();
+		} finally { vi.restoreAllMocks(); }
+	});
+
+	it("executeAuto creates session and executes when Docker is available", async () => {
+		vi.spyOn(DockerSandboxRouter, "isDockerAvailable").mockResolvedValue(true);
+		try {
+			const runner = vi.fn<DockerSandboxCliRunner>(async () => ({ stdout: "ok\n", stderr: "", exitCode: 0 }));
+			const router = createDockerSandboxRouter({ runner, now: fixedNow, createSessionId: () => "session-exec-auto-test" }) as unknown as DockerSandboxRouter;
+			const result = await router.executeAuto({ argv: ["echo", "hello"], cwd: "/tmp", timeoutMs: 10_000 });
+			expect(result).not.toBeNull();
+			expect(result?.exitCode).toBe(0);
+			expect(result?.stdout).toBe("ok\n");
+			expect(runner).toHaveBeenCalled();
+		} finally { vi.restoreAllMocks(); }
+	});
+
 });

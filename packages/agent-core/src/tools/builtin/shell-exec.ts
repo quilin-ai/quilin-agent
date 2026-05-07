@@ -524,105 +524,17 @@ function buildShellExecEnv(overrides?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 	};
 }
 
-interface SandboxExecOptions {
-	readonly cwd?: string;
-	readonly timeoutMs?: number;
-	readonly origin?: WriteOrigin;
-	readonly sandboxRouter?: SandboxRouter;
+async function tryDockerSandbox(command: string, argv: readonly string[], options: ShellExecToolOptions & { readonly cwd?: string; readonly timeoutMs?: number }): Promise<ToolResult | null> {
+	const r = new DockerSandboxRouter();
+	const ms = clampTimeoutMs(options.timeoutMs ?? options.defaultTimeoutMs ?? DEFAULT_TIMEOUT_MS);
+	const a = await r.executeAuto({ argv, cwd: options.cwd, env: buildShellExecEnv(options.env) as Record<string, string>, timeoutMs: ms });
+	if (a == null) return null;
+	const so = truncateText(a.stdout, options.maxOutputChars ?? DEFAULT_MAX_OUTPUT_CHARS);
+	const se = truncateText(a.stderr, options.maxOutputChars ?? DEFAULT_MAX_OUTPUT_CHARS);
+	if (a.exitCode == null || a.exitCode !== 0) return createErrorResult("builtin-shell-exec", { error: a.stderr || `Docker sandbox command failed: ${command}`, exitCode: a.exitCode ?? 1 });
+	return createSuccessResult("builtin-shell-exec", { command, exitCode: a.exitCode, stdout: so.value, stderr: se.value, truncated: so.truncated || se.truncated, sandbox: true });
 }
 
-const DEFAULT_SANDBOX_IMAGE = "docker.io/library/alpine:latest";
-const DEFAULT_SANDBOX_TTL_MS = 120_000;
-
-async function executeInSandbox(
-	command: string,
-	options: SandboxExecOptions,
-): Promise<ToolResult> {
-	if (options.sandboxRouter == null) {
-		return createErrorResult("builtin-shell-exec", {
-			error: "Sandbox execution requested but no sandbox router is configured",
-		});
-	}
-
-	const createRequest = {
-		owner: {
-			agentId: "shell_exec",
-			...(options.origin == null ? {} : { runId: `shell_exec:${options.origin}` }),
-		},
-		purpose: "tool-worker" as const,
-		image: { reference: DEFAULT_SANDBOX_IMAGE },
-		mounts: [],
-		networkPolicy: { mode: "none" as const },
-		resourcePolicy: {
-			wallClockTimeoutMs:
-				clampTimeoutMs(
-					options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-				),
-		},
-		outputPolicy: {
-			artifactsPath: "/tmp/sandbox-output",
-			maxArtifactBytes: 0,
-			includeHiddenFiles: false,
-			promotePatterns: [],
-			exposePartialOutputOnFailure: false,
-		},
-		permissionManifest: {
-			identity: { role: "worker" as const },
-			filesystem: {
-				readonly: [],
-				readwrite: ["/workspace"],
-				execute: [],
-			},
-			sessionSharing: "isolated" as const,
-			allowSecretMounts: false,
-		},
-		ttlMs: DEFAULT_SANDBOX_TTL_MS,
-	};
-
-	let session: Awaited<ReturnType<SandboxRouter["createSession"]>> | undefined;
-	try {
-		session = await options.sandboxRouter.createSession(createRequest);
-		const result: SandboxCommandResult = await session.execute({
-			argv: ["/bin/sh", "-c", command],
-			cwd: options.cwd,
-			timeoutMs: options.timeoutMs,
-		});
-
-		if (result.timedOut) {
-			return createErrorResult("builtin-shell-exec", {
-				error: `Sandbox command timed out: ${command}`,
-			});
-		}
-
-		if (result.failure != null || (result.exitCode != null && result.exitCode !== 0)) {
-			return createErrorResult("builtin-shell-exec", {
-				error: result.stderr || result.failure?.message || `Sandbox command failed: ${command}`,
-				exitCode: result.exitCode ?? 1,
-			});
-		}
-
-		return createSuccessResult("builtin-shell-exec", {
-			command,
-			exitCode: result.exitCode ?? 0,
-			stdout: result.stdout,
-			stderr: result.stderr,
-			truncated: result.outputTruncated,
-			sandbox: true,
-			sessionId: result.sessionId,
-		});
-	} catch (error) {
-		return createErrorResult("builtin-shell-exec", {
-			error:
-				error instanceof Error
-					? `Sandbox execution failed: ${error.message}`
-					: "Sandbox execution failed",
-		});
-	} finally {
-		if (session != null) {
-			await options.sandboxRouter.destroySession(session.id, "completed");
-		}
-	}
-}
 
 export function createShellExecTool(
 	options: ShellExecToolOptions = {},
@@ -636,7 +548,7 @@ export function createShellExecTool(
 			command: z.string(),
 			cwd: z.string().optional(),
 			timeoutMs: z.number().int().min(1).optional(),
-			sandbox: z.boolean().optional(),
+			sandbox: z.enum(["auto", "off", "on"]).optional().default("auto"),
 		}),
 		category: "programmatic",
 		riskLevel: "exec",
@@ -648,19 +560,8 @@ export function createShellExecTool(
 				command: string;
 				cwd?: string;
 				timeoutMs?: number;
-				sandbox?: boolean;
+				sandbox?: "auto" | "off" | "on";
 			};
-
-			const sandboxRequested =
-				sandbox === true || process.env.QUILIN_SANDBOX === "always";
-			if (sandboxRequested) {
-				return executeInSandbox(command, {
-					cwd,
-					timeoutMs,
-					origin: options.origin,
-					sandboxRouter: options.sandboxRouter,
-				});
-			}
 
 			let executable: string;
 			let argv: string[];
@@ -668,6 +569,14 @@ export function createShellExecTool(
 			try {
 				tokens = tokenizeCommand(command);
 				[executable, ...argv] = tokens;
+
+			const sm = options.sandbox ?? "auto";
+			const es = (sandbox as string | undefined) ?? sm;
+			if (es === "on" || es === "auto") {
+				const dr = await tryDockerSandbox(command, [executable, ...argv], { ...options, cwd, timeoutMs });
+				if (dr != null) return dr;
+				if (es === "on") return createErrorResult("builtin-shell-exec", { error: "Docker sandbox is required but Docker is not available" });
+			}
 			} catch (error) {
 				return createErrorResult("builtin-shell-exec", {
 					error:

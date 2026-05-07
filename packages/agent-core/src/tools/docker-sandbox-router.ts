@@ -99,6 +99,16 @@ export class DockerSandboxRouter implements SandboxRouter {
 	private readonly createSessionId: () => string;
 	private readonly allowDebugBridgeNetwork: boolean;
 	private readonly sessions = new Map<string, DockerSandboxSession>();
+	static async isDockerAvailable(options?: { readonly dockerBinary?: string; readonly probeTimeoutMs?: number }): Promise<boolean> {
+		try { const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), options?.probeTimeoutMs ?? 5_000); try { const r = await runDockerSandboxCli(["info"], { dockerBinary: options?.dockerBinary, signal: ctrl.signal }); return r.exitCode === 0; } finally { clearTimeout(t); } } catch { return false; }
+	}
+	async executeAuto(input: { readonly argv: readonly string[]; readonly cwd?: string; readonly env?: Readonly<Record<string, string>>; readonly timeoutMs?: number }): Promise<DockerSandboxCliResult | null> {
+		if (!(await DockerSandboxRouter.isDockerAvailable({ dockerBinary: this.dockerBinary }))) return null;
+		const d = input.cwd ?? process.cwd(); const ms = input.timeoutMs ?? DEFAULT_WALL_CLOCK_TIMEOUT_MS;
+		const s = await this.createSession({ owner: { agentId: "shell-exec-auto" }, purpose: "tool-worker", image: { reference: "alpine:latest", allowlisted: true }, mounts: [{ kind: "task", hostPath: d, sandboxPath: "/workspace", access: "readwrite", required: true }], networkPolicy: { mode: "none" }, resourcePolicy: { wallClockTimeoutMs: ms }, outputPolicy: { artifactsPath: "/workspace/.quilin-artifacts", maxArtifactBytes: 0, includeHiddenFiles: false, promotePatterns: [], exposePartialOutputOnFailure: false }, permissionManifest: { identity: { user: "quilin-worker", role: "worker" }, filesystem: { readonly: [], readwrite: ["/workspace"], execute: ["/workspace"] }, sessionSharing: "isolated", allowSecretMounts: false }, ttlMs: Math.max(ms * 2, 60_000) });
+		try { const r = await s.execute({ argv: input.argv, cwd: "/workspace", env: input.env, timeoutMs: ms }); return { stdout: r.stdout, stderr: r.stderr, exitCode: r.exitCode }; } finally { await this.destroySession(s.id, "completed"); }
+	}
+
 
 	/**
 	 * Detect whether the Docker daemon is reachable by calling `docker info`.
