@@ -14,8 +14,6 @@ import {
 	BasicContextManager,
 	DEFAULT_CONTEXT_BUDGET,
 } from "./context/manager.js";
-import type { TokenBudget } from "./context/types.js";
-import { estimateTokens } from "./context/tokens.js";
 import { PromptBuilder } from "./context/prompt-builder.js";
 import { PromptSessionAssembler } from "./context/prompt-session-assembler.js";
 import {
@@ -24,6 +22,8 @@ import {
 	createSkillsCatalogSection,
 } from "./context/skills-catalog-section.js";
 import { createTemporalBucketSection } from "./context/temporal.js";
+import { estimateTokens } from "./context/tokens.js";
+import type { TokenBudget } from "./context/types.js";
 import {
 	normalizeProviderError,
 	ProviderControlPlaneLLMClient,
@@ -38,7 +38,6 @@ import type {
 	ProviderRunRecord,
 } from "./llm/types.js";
 import { logger } from "./logger.js";
-import { renderPanel, renderTable, type TableColumn } from "./tui/renderer.js";
 import { runAgentLoop } from "./loop.js";
 import { AgentLoopError } from "./loop-types.js";
 import {
@@ -62,9 +61,6 @@ import {
 	type AuthorityMode,
 	WriteAuthority,
 } from "./safety/write-authority.js";
-import type { SkillsCatalogChange, SkillsManager } from "./skills/manager.js";
-import { SQLiteCheckpoint } from "./state/checkpoint.js";
-import type { AgentState, Message } from "./state/types.js";
 import type {
 	JsonlProposalStore,
 	ProposalApplyOutcome,
@@ -75,11 +71,15 @@ import type {
 	StoredProposalRecord,
 	TrajectoryRecordInput,
 } from "./self-evolution/types.js";
+import type { SkillsCatalogChange, SkillsManager } from "./skills/manager.js";
+import { SQLiteCheckpoint } from "./state/checkpoint.js";
+import type { AgentState, Message } from "./state/types.js";
 import { createBuiltinTools } from "./tools/builtin/index.js";
 import { MCPRegistry, type MCPServerEntry } from "./tools/registry.js";
 import type { SandboxApprovalRequest } from "./tools/router.js";
 import type { ToolWithMetadata } from "./tools/tool-metadata.js";
 import type { Tool } from "./tools/types.js";
+import { renderPanel, renderTable, type TableColumn } from "./tui/renderer.js";
 
 const DEFAULT_INFERENCE_CONFIG: InferenceConfig = {
 	temperature: 0.7,
@@ -158,7 +158,8 @@ const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
 	},
 	{
 		name: "proposal-reject",
-		signature: "/proposal-reject <proposalId> --reason \"...\" [--reviewer <name>]",
+		signature:
+			'/proposal-reject <proposalId> --reason "..." [--reviewer <name>]',
 		description: "Reject a pending proposal",
 	},
 	{
@@ -172,6 +173,21 @@ const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
 		description: "Save and quit",
 	},
 ];
+
+/**
+ * Late-bound runtime references exposed to the embedder once the REPL has
+ * constructed its dependencies. Consumed by `index.ts` to wire dashboard
+ * data providers (tasks / memory / tools panels) without forcing those
+ * runtime objects to be passed in from outside `startRepl`.
+ *
+ * REPL 构造完依赖后回传给宿主的运行时引用集合。`index.ts` 用它把
+ * dashboard 的 tasks / memory / tools 面板接到真实数据源，而不需要
+ * 把这些运行时对象塞进 `startRepl` 的入参。
+ */
+export interface ReplRuntimeRefs {
+	readonly registry: MCPRegistry;
+	readonly supervisorRuntime: SupervisorRuntimeControlPlane;
+}
 
 interface ReplOptions {
 	provider: ReturnType<typeof createProvider>;
@@ -191,8 +207,8 @@ interface ReplOptions {
 	capabilitiesStatus?: () => CapabilitiesReloadStatus;
 	supervisorRuntime?: SupervisorRuntimeControlPlane;
 	agentRunLogger?: AgentRunLogSink;
-		trajectoryStore?: JsonlTrajectoryStore;
-		onIdle?: () => Promise<void>;
+	trajectoryStore?: JsonlTrajectoryStore;
+	onIdle?: () => Promise<void>;
 	// Self-evolution proposal review store. When provided, REPL exposes
 	// /proposals, /proposal-approve, /proposal-reject, /proposal-apply
 	// slash commands so users can review and act on pending proposals.
@@ -211,6 +227,21 @@ interface ReplOptions {
 	 * docs/07 §2.6.4，每次 idle 提案 append 都必须走该 gate）。
 	 */
 	onWriteAuthorityReady?: (authority: WriteAuthority) => void;
+	/**
+	 * Optional hook fired once the REPL has constructed its `MCPRegistry`
+	 * and `SupervisorRuntimeControlPlane`. Used by the embedder (index.ts)
+	 * to late-bind dashboard data providers to live runtime sources —
+	 * without this hook the providers would have to be wired before the
+	 * REPL is started, which is impossible because `MCPRegistry` is
+	 * instantiated inside `startRepl`. See QUI-105 round 2.
+	 *
+	 * REPL 构造好 MCPRegistry 与 SupervisorRuntimeControlPlane 后触发的
+	 * 可选钩子。宿主（index.ts）用它把 dashboard data provider 晚绑到
+	 * 真实运行时数据源——没有这个钩子，provider 只能在 REPL 启动前
+	 * 绑定，而 MCPRegistry 是在 startRepl 内部才实例化的。详见 QUI-105
+	 * round 2。
+	 */
+	onRuntimeReady?: (runtime: ReplRuntimeRefs) => void;
 	onProviderRunRecord?: (record: ProviderRunRecord) => void;
 	onMcpReconnectApplied?: () => void;
 	// Provides the loaded user config so REPL can wire user-tuned
@@ -301,10 +332,12 @@ function createPromptSessionAssembler(
 		// All tools are registered in ToolRouter and callable once discovered.
 		getAvailableTools: () => ["tool_search", "skill_search", "mcp_search"],
 		getAvailableToolDescriptors: () =>
-			filterToolsByRuntimeConfig(registry.getToolDescriptors(), toolFilter)
-				.filter((t) =>
-					["tool_search", "skill_search", "mcp_search"].includes(t.name ?? ""),
-				),
+			filterToolsByRuntimeConfig(
+				registry.getToolDescriptors(),
+				toolFilter,
+			).filter((t) =>
+				["tool_search", "skill_search", "mcp_search"].includes(t.name ?? ""),
+			),
 		getSessionState: () => ({
 			skills: {
 				recentSkillNames: skillsManager?.getRecentSkillNames() ?? [],
@@ -466,7 +499,10 @@ function renderCapabilitiesTable(status: CapabilitiesReloadStatus): string {
 		{ field: "In Flight", value: status.inFlight ? "yes" : "no" },
 		{ field: "Last Reload", value: reload },
 		{ field: "Last Failure", value: failure },
-		{ field: "MCP Reconnect", value: formatCapabilitiesMcpStatus(status.mcpReconnect) },
+		{
+			field: "MCP Reconnect",
+			value: formatCapabilitiesMcpStatus(status.mcpReconnect),
+		},
 		{ field: "Skills", value: formatCapabilitiesSkillsStatus(status) },
 	];
 
@@ -526,10 +562,7 @@ function buildMcpServerDisplayEntries(
 			toolCount,
 			connectionState,
 			reloadState,
-			error:
-				error != null
-					? `${error.errorName}:${error.errorMessage}`
-					: null,
+			error: error != null ? `${error.errorName}:${error.errorMessage}` : null,
 		});
 	}
 
@@ -635,9 +668,7 @@ function shortenProposalId(proposalId: string): string {
 	return `${proposalId.slice(0, PROPOSAL_ID_SHORT_LENGTH)}…`;
 }
 
-function summarizeProposalAffectedPaths(
-	record: StoredProposalRecord,
-): string {
+function summarizeProposalAffectedPaths(record: StoredProposalRecord): string {
 	const patch = record.generatedPatchProposal;
 	if (patch === undefined) {
 		return "artifact-only";
@@ -649,9 +680,10 @@ function summarizeProposalAffectedPaths(
 	const visible = changes
 		.slice(0, 3)
 		.map((change) => `${change.changeKind}:${change.path}`);
-	const more = changes.length > visible.length
-		? ` +${changes.length - visible.length}`
-		: "";
+	const more =
+		changes.length > visible.length
+			? ` +${changes.length - visible.length}`
+			: "";
 	return `${visible.join(",")}${more}`;
 }
 
@@ -673,9 +705,7 @@ function truncateProposalSummary(value: string, maxLength = 60): string {
 	return `${normalized.slice(0, Math.max(0, maxLength - 1))}…`;
 }
 
-function formatProposalListRow(
-	record: StoredProposalRecord,
-): ProposalListRow {
+function formatProposalListRow(record: StoredProposalRecord): ProposalListRow {
 	return {
 		proposalId: shortenProposalId(record.proposalId),
 		createdAt: record.createdAt,
@@ -2248,6 +2278,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 		onIdle,
 		proposalStore,
 		onWriteAuthorityReady,
+		onRuntimeReady,
 		onProviderRunRecord,
 		onMcpReconnectApplied,
 		getUserConfig,
@@ -2265,6 +2296,16 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 	const supervisorRuntime =
 		providedSupervisorRuntime ??
 		new InProcessSupervisorRuntime({ maxActiveRuns: 6 });
+	if (onRuntimeReady != null) {
+		try {
+			onRuntimeReady({ registry, supervisorRuntime });
+		} catch (error) {
+			logger.warn(
+				{ err: error },
+				"startRepl: onRuntimeReady hook threw — continuing",
+			);
+		}
+	}
 	const resolvedSessionId = sessionId ?? crypto.randomUUID();
 	const checkpoint = new SQLiteCheckpoint({ sessionId: resolvedSessionId });
 	const runLogger =
@@ -2278,7 +2319,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 		createId: () => crypto.randomUUID(),
 	});
 	const toolProvenance: ToolProvenanceEntry[] = [];
-	let mcpServerToolCounts = new Map<string, number>();
+	const mcpServerToolCounts = new Map<string, number>();
 	let activeTurnId: string | undefined;
 	const enqueueLiveInput = (entry: QueuedLiveInput): void => {
 		queuedCommands.push(entry.input);
@@ -2594,10 +2635,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 							},
 						);
 					} catch (err) {
-						logger.warn(
-							{ err, serverId: entry.id },
-							"MCP register failed",
-						);
+						logger.warn({ err, serverId: entry.id }, "MCP register failed");
 						mcpServerToolCounts.delete(entry.id);
 						await recordAgentRunEvent(
 							runLogger,
@@ -2792,9 +2830,9 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 						capabilitiesReloadStatus,
 					);
 					stderr.write(
-								`${renderCapabilitiesTable(capabilitiesReloadStatus)}\n`,
-							);
-							stderr.write(`${renderMcpDetailStatus(mcpEntries)}\n`);
+						`${renderCapabilitiesTable(capabilitiesReloadStatus)}\n`,
+					);
+					stderr.write(`${renderMcpDetailStatus(mcpEntries)}\n`);
 				}
 				stderr.write(`${renderTokenBudget(messages)}\n`);
 				const supervisorSnapshot = supervisorRuntime.snapshot();
@@ -2811,27 +2849,19 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 
 			if (trimmed === "/mcp") {
 				const cs = capabilitiesStatus?.();
-				const entries = buildMcpServerDisplayEntries(
-					mcpServerToolCounts,
-					cs,
-				);
+				const entries = buildMcpServerDisplayEntries(mcpServerToolCounts, cs);
 				if (entries.length === 0) {
 					stderr.write("No MCP servers registered.\n");
 				} else {
 					stderr.write(`MCP Servers (${entries.length}):\n`);
 					const textLines = entries.map(formatMcpServerDisplayEntry);
-					stderr.write(
-						`${textLines.map((l) => `  ${l}`).join("\n")}\n`,
-					);
+					stderr.write(`${textLines.map((l) => `  ${l}`).join("\n")}\n`);
 					stderr.write(`${renderMcpServerTable(entries)}\n`);
 				}
 				continue;
 			}
 
-			if (
-				trimmed === "/proposals" ||
-				trimmed.startsWith("/proposals ")
-			) {
+			if (trimmed === "/proposals" || trimmed.startsWith("/proposals ")) {
 				if (proposalStore == null) {
 					stderr.write(
 						"Self-evolution proposal store is not configured. Configure proposalStore to enable review commands.\n",
@@ -2876,9 +2906,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 
 			if (trimmed.startsWith("/proposal-approve")) {
 				if (proposalStore == null) {
-					stderr.write(
-						"Self-evolution proposal store is not configured.\n",
-					);
+					stderr.write("Self-evolution proposal store is not configured.\n");
 					continue;
 				}
 				const tokens = tokenizeSlashCommand(trimmed).slice(1);
@@ -2979,9 +3007,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 
 			if (trimmed.startsWith("/proposal-reject")) {
 				if (proposalStore == null) {
-					stderr.write(
-						"Self-evolution proposal store is not configured.\n",
-					);
+					stderr.write("Self-evolution proposal store is not configured.\n");
 					continue;
 				}
 				const tokens = tokenizeSlashCommand(trimmed).slice(1);
@@ -3062,9 +3088,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 				trimmed.startsWith("/proposal-apply ")
 			) {
 				if (proposalStore == null) {
-					stderr.write(
-						"Self-evolution proposal store is not configured.\n",
-					);
+					stderr.write("Self-evolution proposal store is not configured.\n");
 					continue;
 				}
 				const tokens = tokenizeSlashCommand(trimmed).slice(1);
@@ -3402,9 +3426,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 						const turnInput: TrajectoryRecordInput = {
 							runId: `${resolvedSessionId}-${state.turnCount}`,
 							outcome: "success",
-							steps: [
-								{ index: 0, kind: "model", label: "user-turn" },
-							],
+							steps: [{ index: 0, kind: "model", label: "user-turn" }],
 						};
 						await trajectoryStore.append(turnInput);
 					} catch (trajErr) {

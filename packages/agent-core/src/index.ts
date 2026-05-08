@@ -47,6 +47,12 @@ import type {
 } from "./llm/types.js";
 import { configureLogger, logger } from "./logger.js";
 import { LocalMemoryBackend } from "./memory/local-backend.js";
+import {
+	createMemoryProviderFromRefs,
+	createTasksProviderFromRefs,
+	createToolsProviderFromRefs,
+	type DashboardRuntimeRefs,
+} from "./observability/dashboard-runtime-providers.js";
 import { JsonFileSpanExporter } from "./observability/exporters/json-file.js";
 import { startRepl } from "./repl.js";
 import { analyzeTrajectoryFailures } from "./self-evolution/failure-analyzer.js";
@@ -57,6 +63,7 @@ import {
 import { JsonlProposalStore } from "./self-evolution/proposal-store.js";
 import { JsonlTrajectoryStore } from "./self-evolution/trajectory-store.js";
 import { SQLiteCheckpoint } from "./state/checkpoint.js";
+import { getSubagentRegistrySnapshot } from "./tools/builtin/index.js";
 
 export * from "./config/first-run.js";
 export * from "./config/hot-reload.js";
@@ -837,6 +844,17 @@ export async function main(options: MainOptions = {}): Promise<void> {
 		const sessionId = await resolveReplSessionId();
 		let shouldExit = false;
 
+		// Late-bound runtime references for the dashboard tasks / memory /
+		// tools panels. Populated by `onRuntimeReady` inside `startRepl`
+		// once `MCPRegistry` and `SupervisorRuntimeControlPlane` exist.
+		// Provider closures read this object on each request, so flipping
+		// fields from undefined to live values automatically lights up the
+		// panels without restarting the dashboard server. See QUI-105
+		// round 2.
+		// 晚绑定的运行时引用。`startRepl` 内 `onRuntimeReady` 触发后填充。
+		// Provider 闭包每次请求都读这个对象，字段切到真值后面板自动接通，
+		// 无需重启 dashboard server。详见 QUI-105 round 2。
+		const dashboardRuntimeRefs: DashboardRuntimeRefs = {};
 		// Start web control plane / dashboard (test env skips)
 		if (process.env.NODE_ENV !== "test") {
 			try {
@@ -845,10 +863,15 @@ export async function main(options: MainOptions = {}): Promise<void> {
 					checkpoint: dashboardCheckpoint,
 					// Wire dashboard data providers so the 7-panel UI returns real
 					// data instead of empty placeholders. Sessions come from the
-					// SQLite checkpoint store. Memory / tools / topology / tasks /
-					// skills stay on their empty defaults until their runtime
-					// sources are exposed at this scope — see TODO below.
+					// SQLite checkpoint store. Tasks / memory / tools read from
+					// `dashboardRuntimeRefs`, populated via `onRuntimeReady` in
+					// `startRepl` (QUI-105 round 2 late-binding).
 					dataProviders: {
+						tasks: createTasksProviderFromRefs(dashboardRuntimeRefs, () =>
+							getSubagentRegistrySnapshot(),
+						),
+						memory: createMemoryProviderFromRefs(dashboardRuntimeRefs),
+						tools: createToolsProviderFromRefs(dashboardRuntimeRefs),
 						sessions: async () => {
 							try {
 								const summaries = await dashboardCheckpoint.listSessions();
@@ -908,12 +931,12 @@ export async function main(options: MainOptions = {}): Promise<void> {
 								],
 							};
 						},
-						// TODO(QUI-105 round 2): wire memory / tools / tasks / skills
-						// catalog / mcp servers providers from LocalMemoryBackend /
-						// MCPRegistry / SupervisorRuntime / SkillsManager once REPL
-						// runtime exposes them at this scope. Today only sessions,
-						// providers (inside skills-mcp), and a minimal topology view
-						// are connected to live data.
+						// QUI-105 round 2: tasks / memory / tools providers above are
+						// wired via `dashboardRuntimeRefs` late-binding (populated in
+						// `onRuntimeReady` below). Skills catalog + MCP servers list
+						// inside `skills-mcp` is still emptied (provider matrix is
+						// what's wired today); follow-up to surface SkillsManager and
+						// MCPRegistry server-level metadata on a separate ticket.
 					},
 					port: Number.parseInt(process.env.QUILIN_DASHBOARD_PORT ?? "0", 10),
 					onChat: (() => {
@@ -1017,6 +1040,21 @@ export async function main(options: MainOptions = {}): Promise<void> {
 					// 把活的 WriteAuthority 绑定到 IdleEvolutionRunner，保证 idle
 					// 提案落盘前都经过 §2.6.4 的安全 gate。
 					idleRunner.setWriteAuthority(authority);
+				},
+				onRuntimeReady: (runtime) => {
+					// Late-bind runtime sources so the dashboard tasks / memory /
+					// tools panels start serving real data once REPL has its
+					// MCPRegistry + SupervisorRuntime constructed. The memory
+					// backend factory uses a fresh short-lived SQLite handle per
+					// request so we don't fight REPL for the singleton handle.
+					// 晚绑定运行时数据源，让 dashboard tasks / memory / tools 面板
+					// 在 REPL 构造好 MCPRegistry 与 SupervisorRuntime 后开始返回
+					// 真实数据。memory backend 工厂每次请求拿短连接，避免与 REPL
+					// 主线程争用单例句柄。
+					dashboardRuntimeRefs.registry = runtime.registry;
+					dashboardRuntimeRefs.supervisorRuntime = runtime.supervisorRuntime;
+					dashboardRuntimeRefs.memoryBackendFactory = () =>
+						new LocalMemoryBackend();
 				},
 				toolFilter: runtimeToolFilter,
 				onProviderRunRecord: createProviderRunRecordLogger("repl_turn"),

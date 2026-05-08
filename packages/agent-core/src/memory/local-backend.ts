@@ -218,6 +218,39 @@ export class LocalMemoryBackend {
 		return rows;
 	}
 
+	/**
+	 * Returns a count of stored memories grouped by tier. Always returns
+	 * all four tiers (working / episodic / semantic / skill) — tiers with
+	 * zero entries report `0` rather than being omitted, so callers (e.g.
+	 * the dashboard memory panel) can render a stable shape.
+	 *
+	 * 按 tier 返回存储记忆条数。固定返回 4 层（working / episodic /
+	 * semantic / skill），空层返回 0 而不是省略，便于上层（例如
+	 * dashboard 记忆面板）渲染稳定结构。
+	 */
+	countByTier(): Readonly<Record<LocalMemoryItem["layer"], number>> {
+		this.ensureOpen();
+		const rows = this.db
+			.prepare("SELECT layer, COUNT(*) as count FROM memories GROUP BY layer")
+			.all() as ReadonlyArray<{
+			readonly layer: LocalMemoryItem["layer"];
+			readonly count: number;
+		}>;
+
+		const counts: Record<LocalMemoryItem["layer"], number> = {
+			working: 0,
+			episodic: 0,
+			semantic: 0,
+			skill: 0,
+		};
+
+		for (const row of rows) {
+			counts[row.layer] = row.count;
+		}
+
+		return counts;
+	}
+
 	close(): void {
 		this.db.close();
 		this.closed = true;

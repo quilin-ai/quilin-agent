@@ -159,16 +159,16 @@ Logs（日志）        →  结构化 JSON 日志（携带 trace_id/span_id 关
 
 ### 2.1.1 WebUI Dashboard 面板定义 / WebUI Dashboard Panel Inventory
 
-> **当前实现状态 / Current implementation status (QUI-105 round 2, 2026-05-09)**
+> **当前实现状态 / Current implementation status (QUI-105 round 2 complete, 2026-05-09)**
 >
-> 当前 7 个面板中，4 个已经接通真实数据源、3 个还在 round 2 接线中。
-> Of the seven panels below, four are wired to live data sources and three are still being wired in round 2.
+> 7 个面板全部接通真实数据源。tasks / memory / tools 通过 `dashboardRuntimeRefs` 晚绑定到 REPL 内的 `MCPRegistry` / `SupervisorRuntimeControlPlane` / `LocalMemoryBackend`（详见 `packages/agent-core/src/observability/dashboard-runtime-providers.ts` 与 `packages/agent-core/src/repl.ts` 的 `onRuntimeReady` 钩子）。
+> All 7 panels are wired to live data sources. Tasks / memory / tools late-bind to the REPL-owned `MCPRegistry` / `SupervisorRuntimeControlPlane` / `LocalMemoryBackend` via `dashboardRuntimeRefs` (see `packages/agent-core/src/observability/dashboard-runtime-providers.ts` and the `onRuntimeReady` hook in `packages/agent-core/src/repl.ts`).
 
 | 面板 / Panel | 数据源 / Data source | 核心指标 / Core metrics | 刷新策略 / Refresh | 状态 / Status |
 |------|--------|---------|---------|---------|
-| **任务面板 / Tasks** | TaskState + OTel Session Spans | 任务状态分布（进行中/完成/失败）、任务耗时分布、步骤效率 / task status distribution, duration, step efficiency | 实时（WebSocket）/ realtime (WebSocket) | 🚧 pending round 2 — 后端 placeholder 已带 `message: "tasks provider not connected"` 提示，等待 supervisor runtime 真实接线 / backend placeholder ships a `message` hint, awaiting supervisor runtime wiring |
-| **记忆面板 / Memory** | quilin-mem 4 层存储 / quilin-mem 4-tier store | 各层记忆条数、存储大小、最近访问时间、检索命中率 / per-tier counts, storage size, recency, retrieval hit rate | 按需刷新 / on-demand | 🚧 pending round 2 — 4 层 tier 占位符携带 "memory provider not connected" 文案，等待 quilin-mem MCP provider 真实接线 / four tier placeholders carry a "memory provider not connected" note, awaiting the quilin-mem MCP provider |
-| **工具面板 / Tools** | OTel Tool Spans | 工具调用频率 Top 10、成功率、平均延迟、成本分摊 / top-10 tool invocations, success rate, latency, cost share | 5s 轮询 / 5s polling | 🚧 pending round 2 — registry 占位符 `{ tools: [], total: 0 }`，等待运行期工具登记表接线 / registry placeholder shipped, awaiting live registry wiring |
+| **任务面板 / Tasks** | SupervisorRuntime snapshot + Subagent registry | 任务状态分布（进行中/完成/失败）、任务耗时分布、步骤效率 / task status distribution, duration, step efficiency | 实时（WebSocket）/ realtime (WebSocket) | ✅ shipped — `createTasksProviderFromRefs` 通过 `onRuntimeReady` 接到 `SupervisorRuntime.snapshot()` 与 `getSubagentRegistrySnapshot()`；REPL 启动前面板返回 `message: "tasks provider awaiting REPL runtime"` 提示 / wired to live `SupervisorRuntime.snapshot()` and `getSubagentRegistrySnapshot()` via `onRuntimeReady`; pre-REPL window surfaces an awaiting-runtime message |
+| **记忆面板 / Memory** | LocalMemoryBackend.countByTier | 各层记忆条数、存储大小、最近访问时间、检索命中率 / per-tier counts, storage size, recency, retrieval hit rate | 按需刷新 / on-demand | ✅ shipped — `createMemoryProviderFromRefs` 每次请求拿短生命周期 `LocalMemoryBackend` 句柄，调用新增的 `countByTier()` 返回 4 层条数，避免与 REPL 主线程争用单例 / each request opens a short-lived `LocalMemoryBackend` handle and calls the new `countByTier()`; avoids contending for the REPL singleton |
+| **工具面板 / Tools** | MCPRegistry.getAllTools | 工具调用频率 Top 10、成功率、平均延迟、成本分摊 / top-10 tool invocations, success rate, latency, cost share | 5s 轮询 / 5s polling | ✅ shipped — `createToolsProviderFromRefs` 列出 REPL 内 `MCPRegistry` 的全部 builtin + 命名空间工具，按 namespace 聚合计数（runtime metrics 仍由 metrics 面板基于 TraceStore 提供）/ lists all builtin + namespaced tools from the REPL's live `MCPRegistry`, grouped by namespace (runtime metrics remain on the metrics panel via TraceStore) |
 | **指标面板 / Metrics** | OTel Metrics + TraceStore | Token 消耗趋势（input/output/thinking）、成本累计、Prompt Cache 命中率 / token usage trend, cost accumulation, prompt cache hit rate | 5s 轮询 / 5s polling | ✅ shipped — TraceStore 自动聚合，无需 provider / auto-aggregated from TraceStore, no provider needed |
 | **Sub-Agent 进度面板 / Sub-Agent topology** | ProgressAggregator (06-multi-agent) | 各 Sub-Agent 实时状态、进度百分比、当前步骤、预估剩余时间；整体任务进度总览 / per-agent status, progress %, current step, ETA | 实时（WebSocket）/ realtime (WebSocket) | ✅ shipped — 通过 topology provider 接 ProgressAggregator / wired via topology provider |
 | **会话面板 / Sessions** | TraceStore session index | 会话列表、活跃数、终态计数、token 与成本汇总 / session list, active count, terminal count, token and cost rollup | 按需刷新 / on-demand | ✅ shipped — TraceStore 自动汇总 / auto-aggregated from TraceStore |

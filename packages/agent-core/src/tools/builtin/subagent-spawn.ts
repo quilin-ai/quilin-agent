@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import type { AgentLoopConfig } from "../../loop-types.js";
 import { runAgentLoop } from "../../loop.js";
+import type { AgentLoopConfig } from "../../loop-types.js";
 import type { ToolWithMetadata } from "../tool-metadata.js";
 import type { ToolResult } from "../types.js";
 
@@ -56,6 +56,34 @@ export function _resetSubagentRegistryForTests(): void {
 	subagentRegistry.clear();
 }
 
+export interface SubagentRegistrySnapshotEntry {
+	readonly runId: string;
+	readonly task: string;
+	readonly worker: string;
+	readonly startedAt: string;
+	readonly status: "running" | "completed" | "failed";
+}
+
+/**
+ * Returns a read-only snapshot of the subagent registry for observability /
+ * dashboard consumption. Order is insertion order (oldest first); callers
+ * that want "most recent first" can reverse. Task strings are returned
+ * verbatim — UI callers should truncate before display.
+ *
+ * 返回 subagent 注册表只读快照，供 observability / dashboard 使用。顺序是
+ * 插入顺序（旧→新）；需要"最近优先"的调用方自行 reverse。task 文本未截断，
+ * 由 UI 调用方在展示前裁剪。
+ */
+export function getSubagentRegistrySnapshot(): readonly SubagentRegistrySnapshotEntry[] {
+	return [...subagentRegistry.entries()].map(([runId, record]) => ({
+		runId,
+		task: record.task,
+		worker: record.worker,
+		startedAt: record.startedAt,
+		status: record.status,
+	}));
+}
+
 export function createSubagentSpawnTool(
 	options: SubagentSpawnToolOptions,
 ): ToolWithMetadata {
@@ -73,17 +101,28 @@ export function createSubagentSpawnTool(
 				.describe(
 					`Task for the subagent (max ${MAX_TASK_CHARS} chars; split larger tasks before delegation)`,
 				),
-			worker: z.string().optional().default("default").describe("Worker label: researcher, coder, reviewer"),
+			worker: z
+				.string()
+				.optional()
+				.default("default")
+				.describe("Worker label: researcher, coder, reviewer"),
 		}),
 		category: "interactive",
 		riskLevel: "read",
 		execute: async (args: unknown) => {
-			const { task, worker } = z.object({
-				task: z.string().min(1).max(MAX_TASK_CHARS),
-				worker: z.string().optional().default("default"),
-			}).parse(args as Record<string, unknown>);
+			const { task, worker } = z
+				.object({
+					task: z.string().min(1).max(MAX_TASK_CHARS),
+					worker: z.string().optional().default("default"),
+				})
+				.parse(args as Record<string, unknown>);
 			const runId = randomUUID();
-			const record: SubagentRecord = { task, worker, startedAt: new Date().toISOString(), status: "running" };
+			const record: SubagentRecord = {
+				task,
+				worker,
+				startedAt: new Date().toISOString(),
+				status: "running",
+			};
 			evictTerminalRecordsIfFull();
 			subagentRegistry.set(runId, record);
 			void (async () => {
@@ -110,10 +149,24 @@ export function createSubagentSpawnTool(
 						},
 						subMessages,
 					);
-					record.status = "completed"; record.result = result;
-				} catch (err) { record.status = "failed"; record.error = String(err); }
+					record.status = "completed";
+					record.result = result;
+				} catch (err) {
+					record.status = "failed";
+					record.error = String(err);
+				}
 			})();
-			return { toolCallId: "subagent_spawn", isError: false, content: JSON.stringify({ runId, worker, task, status: "spawned", hint: "Use subagent_status to check progress" }) };
+			return {
+				toolCallId: "subagent_spawn",
+				isError: false,
+				content: JSON.stringify({
+					runId,
+					worker,
+					task,
+					status: "spawned",
+					hint: "Use subagent_status to check progress",
+				}),
+			};
 		},
 	};
 }
@@ -132,7 +185,9 @@ const subagentStatusParametersSchema = z.object({
 		.max(500)
 		.optional()
 		.default(50)
-		.describe("Max records to return (most recent first). Default 50, hard max 500."),
+		.describe(
+			"Max records to return (most recent first). Default 50, hard max 500.",
+		),
 });
 
 export function createSubagentStatusTool(): ToolWithMetadata {
@@ -149,7 +204,11 @@ export function createSubagentStatusTool(): ToolWithMetadata {
 				(args as Record<string, unknown>) ?? {},
 			);
 			if (subagentRegistry.size === 0) {
-				return { toolCallId: "subagent_status", content: "No subagents spawned yet.", isError: false };
+				return {
+					toolCallId: "subagent_status",
+					content: "No subagents spawned yet.",
+					isError: false,
+				};
 			}
 			const allEntries = [...subagentRegistry.entries()];
 			const matching = allEntries.filter(([, r]) =>
@@ -163,13 +222,16 @@ export function createSubagentStatusTool(): ToolWithMetadata {
 				task: r.task.slice(0, 120),
 				status: r.status,
 				startedAt: r.startedAt,
-				...(r.status === "completed" ? { result: (r.result ?? "").slice(0, 500) } : {}),
+				...(r.status === "completed"
+					? { result: (r.result ?? "").slice(0, 500) }
+					: {}),
 				...(r.status === "failed" ? { error: r.error } : {}),
 			}));
 			const totals = {
 				total: subagentRegistry.size,
 				running: allEntries.filter(([, r]) => r.status === "running").length,
-				completed: allEntries.filter(([, r]) => r.status === "completed").length,
+				completed: allEntries.filter(([, r]) => r.status === "completed")
+					.length,
 				failed: allEntries.filter(([, r]) => r.status === "failed").length,
 			};
 			return {

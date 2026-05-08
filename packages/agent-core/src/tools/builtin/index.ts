@@ -1,6 +1,15 @@
 import type { WriteAuthority } from "../../safety/write-authority.js";
 import type { SkillsManager } from "../../skills/manager.js";
+import { createMcpSearchTool } from "../mcp-marketplace.js";
 import type { ToolWithMetadata } from "../tool-metadata.js";
+import {
+	type ConfigViewToolOptions,
+	createConfigViewTool,
+	createSessionListTool,
+	createToolSearchTool,
+	type SessionListToolOptions,
+	type ToolSearchToolOptions,
+} from "./config-session-tools.js";
 import {
 	createFileListTool,
 	createFileReadTool,
@@ -9,6 +18,14 @@ import {
 	type FileReadToolOptions,
 	type FileWriteToolOptions,
 } from "./file-tools.js";
+import {
+	type AudioTranscribeToolOptions,
+	createAudioTranscribeTool,
+	createImageDescribeTool,
+	createVideoSummarizeTool,
+	type ImageDescribeToolOptions,
+	type VideoSummarizeToolOptions,
+} from "./multimodal.js";
 import {
 	createShellExecTool,
 	type ShellExecToolOptions,
@@ -25,29 +42,14 @@ import {
 	createSkillViewTool,
 	type SkillViewToolOptions,
 } from "./skill-view.js";
-import { createWebFetchTool, type WebFetchToolOptions } from "./web-fetch.js";
 import {
-	createAudioTranscribeTool,
-	createImageDescribeTool,
-	createVideoSummarizeTool,
-	type AudioTranscribeToolOptions,
-	type ImageDescribeToolOptions,
-	type VideoSummarizeToolOptions,
-} from "./multimodal.js";
-import {
-	type ConfigViewToolOptions,
-	type SessionListToolOptions,
-	type ToolSearchToolOptions,
-	createConfigViewTool,
-	createSessionListTool,
-	createToolSearchTool,
-} from "./config-session-tools.js";
-import { createMcpSearchTool } from "../mcp-marketplace.js";
-import {
-	type SubagentSpawnToolOptions,
 	createSubagentSpawnTool,
 	createSubagentStatusTool,
+	getSubagentRegistrySnapshot,
+	type SubagentRegistrySnapshotEntry,
+	type SubagentSpawnToolOptions,
 } from "./subagent-spawn.js";
+import { createWebFetchTool, type WebFetchToolOptions } from "./web-fetch.js";
 
 export interface BuiltinToolOptions {
 	readonly fileRead?: FileReadToolOptions;
@@ -90,11 +92,15 @@ export function createBuiltinTools(
 		createImageDescribeTool(options.imageDescribe),
 		createVideoSummarizeTool(options.videoSummarize),
 		createAudioTranscribeTool(options.audioTranscribe),
-		...(options.subagentSpawn != null ? [createSubagentSpawnTool(options.subagentSpawn)] : []),
+		...(options.subagentSpawn != null
+			? [createSubagentSpawnTool(options.subagentSpawn)]
+			: []),
 		createSubagentStatusTool(),
 		createConfigViewTool(options.configView ?? { getRuntimeState: () => null }),
 		createSessionListTool(options.sessionList),
-		...(options.toolSearch != null ? [createToolSearchTool(options.toolSearch)] : []),
+		...(options.toolSearch != null
+			? [createToolSearchTool(options.toolSearch)]
+			: []),
 		createMcpSearchTool(),
 		createSkillSearchTool({
 			skillsManager: options.skillsManager,
@@ -133,6 +139,7 @@ export type {
 	SkillManageToolOptions,
 	SkillSearchToolOptions,
 	SkillViewToolOptions,
+	SubagentRegistrySnapshotEntry,
 	VideoSummarizeToolOptions,
 	WebFetchToolOptions,
 };
@@ -149,4 +156,5 @@ export {
 	createSkillViewTool,
 	createVideoSummarizeTool,
 	createWebFetchTool,
+	getSubagentRegistrySnapshot,
 };
