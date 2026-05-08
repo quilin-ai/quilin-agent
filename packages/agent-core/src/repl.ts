@@ -2252,21 +2252,6 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 			onRunRecord: recordProviderRun,
 		});
 
-		// Register runtime-dependent tools: subagent_spawn + tool_search
-		registry.registerBuiltin([
-			createSubagentSpawnTool({
-				loopConfig: {
-					llm,
-					context,
-					checkpoint,
-					tools: filterToolsByRuntimeConfig(registry.getAllTools(), toolFilter),
-					inferenceConfig,
-					toolRouterOptions: { sandboxOrigin: "agent" as const },
-				},
-			}),
-			createToolSearchTool({ getTools: () => registry.getAllTools() }),
-		]);
-
 		while (true) {
 			slashCommandHelpShownForPrompt = false;
 			mainPromptActive = queuedCommands.length === 0;

@@ -6,7 +6,7 @@ import type { ToolWithMetadata } from "../tool-metadata.js";
 import type { ToolResult } from "../types.js";
 
 export interface SubagentSpawnToolOptions {
-	readonly loopConfig: Omit<AgentLoopConfig, "state">;
+	readonly getLoopConfig: () => Omit<AgentLoopConfig, "state">;
 }
 
 // Module-level registry shared by spawn + status tools
@@ -45,7 +45,8 @@ export function createSubagentSpawnTool(
 			subagentRegistry.set(runId, record);
 			void (async () => {
 				try {
-					const result = await runAgentLoop({ ...options.loopConfig, state: {
+					const loopConfig = options.getLoopConfig();
+					const result = await runAgentLoop({ ...loopConfig, state: {
 						messages: [{ role: "system", content: `Subagent [${worker}]. Task: ${task}. Work independently, report concisely.` }, { role: "user", content: task }],
 						isTerminal: false, turnCount: 0, createdAt: new Date().toISOString(), lastActiveAt: new Date().toISOString(),
 					} }, []);
