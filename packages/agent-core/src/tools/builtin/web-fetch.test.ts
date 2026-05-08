@@ -1296,6 +1296,7 @@ describe("builtin web_fetch tool", () => {
 			sandboxOperation: "network",
 		});
 
+		if (request == null) throw new Error("expected sandbox request");
 		expect(request.operation).toBe("network");
 		const network = request.signals?.network;
 		expect(network?.destination).toBe("not a url at all");
@@ -1323,6 +1324,7 @@ describe("builtin web_fetch tool", () => {
 			sandboxOperation: "network",
 		});
 
+		if (request == null) throw new Error("expected sandbox request");
 		const network = request.signals?.network;
 		expect(network?.destination).toBeUndefined();
 		expect(network?.method).toBe("POST");
@@ -1368,6 +1370,7 @@ describe("isKnownPrivateDestination via sandbox policy", () => {
 			sandboxOperation: "network",
 		});
 
+		if (request == null) throw new Error("expected sandbox request");
 		expect(request.signals?.network?.destination).toBe("localhost:8080");
 	});
 
@@ -1392,6 +1395,7 @@ describe("isKnownPrivateDestination via sandbox policy", () => {
 			sandboxOperation: "network",
 		});
 
+		if (request == null) throw new Error("expected sandbox request");
 		expect(request.signals?.network?.destination).toBe("api.localhost");
 	});
 });
