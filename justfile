@@ -66,6 +66,15 @@ dev-debug:
 dev-yolo log="info":
     LOG_LEVEL={{ if log == "quiet" { "silent" } else if log == "verbose" { "debug" } else { log } }} QUILIN_ENV=dev QUILIN_RUNTIME_MODE=repl bun --env-file=.env --watch packages/agent-core/src/index.ts -- --yolo
 
+# 一次性模式（不带 --watch）：评估对话能力时用
+# 当并行有别的 agent / 编辑器在改源码，bun --watch 会反复 reload entry，
+# 触发 capabilities hot-reload 死循环（重打 banner / 清屏 / 反复 spawn MCP /
+# 旧 Python 子进程变孤儿）。dev-once 关掉 watch，源码改动不再触发 reload，
+# 适合真实评估 REPL 行为或并发开发场景。yolo 模式（不询问 non-CRITICAL）。
+# 例：just dev-once / just dev-once quiet / just dev-once verbose
+dev-once log="info":
+    LOG_LEVEL={{ if log == "quiet" { "silent" } else if log == "verbose" { "debug" } else { log } }} QUILIN_ENV=dev QUILIN_RUNTIME_MODE=repl bun --env-file=.env packages/agent-core/src/index.ts -- --yolo
+
 # Ask 模式：所有写入都需确认
 # 例：just dev-ask / just dev-ask quiet / just dev-ask verbose
 dev-ask log="info":
