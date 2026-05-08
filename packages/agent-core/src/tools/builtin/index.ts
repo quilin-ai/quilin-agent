@@ -93,7 +93,6 @@ export function createBuiltinTools(
 		createSubagentStatusTool(),
 		createConfigViewTool(options.configView ?? { getRuntimeState: () => null }),
 		createSessionListTool(options.sessionList),
-		createToolSearchTool({ getTools: () => [] }),
 		createMcpSearchTool(),
 		createSkillSearchTool({
 			skillsManager: options.skillsManager,
