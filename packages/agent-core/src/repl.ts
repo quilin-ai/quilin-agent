@@ -1,13 +1,14 @@
+import { createHash } from "node:crypto";
 import { stderr, stdin } from "node:process";
 import { clearScreenDown, emitKeypressEvents, moveCursor } from "node:readline";
 import * as readline from "node:readline/promises";
 import type { CapabilitiesReloadStatus } from "./config/hot-reload.js";
 import type { CapabilitiesRuntime } from "./config/loader.js";
-import type { UserConfig } from "./config/user-config-schema.js";
 import {
 	isRuntimeToolEnabled,
 	type RuntimeToolFilter,
 } from "./config/runtime.js";
+import type { UserConfig } from "./config/user-config-schema.js";
 import { createDefaultPromptSections } from "./context/default-sections.js";
 import {
 	BasicContextManager,
@@ -64,8 +65,16 @@ import {
 import type { SkillsCatalogChange, SkillsManager } from "./skills/manager.js";
 import { SQLiteCheckpoint } from "./state/checkpoint.js";
 import type { AgentState, Message } from "./state/types.js";
+import type {
+	JsonlProposalStore,
+	ProposalApplyOutcome,
+	ProposalApplyResult,
+} from "./self-evolution/proposal-store.js";
 import type { JsonlTrajectoryStore } from "./self-evolution/trajectory-store.js";
-import type { TrajectoryRecordInput } from "./self-evolution/types.js";
+import type {
+	StoredProposalRecord,
+	TrajectoryRecordInput,
+} from "./self-evolution/types.js";
 import { createBuiltinTools } from "./tools/builtin/index.js";
 import { MCPRegistry, type MCPServerEntry } from "./tools/registry.js";
 import type { SandboxApprovalRequest } from "./tools/router.js";
@@ -138,6 +147,26 @@ const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
 		description: "List registered MCP servers",
 	},
 	{
+		name: "proposals",
+		signature: "/proposals [--limit N]",
+		description: "List pending self-evolution proposals",
+	},
+	{
+		name: "proposal-approve",
+		signature: "/proposal-approve <proposalId> [--reviewer <name>] [--yes]",
+		description: "Approve a pending proposal",
+	},
+	{
+		name: "proposal-reject",
+		signature: "/proposal-reject <proposalId> --reason \"...\" [--reviewer <name>]",
+		description: "Reject a pending proposal",
+	},
+	{
+		name: "proposal-apply",
+		signature: "/proposal-apply [--limit N]",
+		description: "Apply approved proposals via WriteAuthority",
+	},
+	{
 		name: "quit",
 		signature: "/quit",
 		description: "Save and quit",
@@ -164,6 +193,12 @@ interface ReplOptions {
 	agentRunLogger?: AgentRunLogSink;
 		trajectoryStore?: JsonlTrajectoryStore;
 		onIdle?: () => Promise<void>;
+	// Self-evolution proposal review store. When provided, REPL exposes
+	// /proposals, /proposal-approve, /proposal-reject, /proposal-apply
+	// slash commands so users can review and act on pending proposals.
+	// 自进化提案审核存储。提供后，REPL 暴露上述 slash 命令，
+	// 让用户能在终端查看 pending 提案、approve/reject、并触发 apply。
+	proposalStore?: JsonlProposalStore;
 	onProviderRunRecord?: (record: ProviderRunRecord) => void;
 	onMcpReconnectApplied?: () => void;
 	// Provides the loaded user config so REPL can wire user-tuned
@@ -556,6 +591,274 @@ function renderMcpServerTable(
 	}));
 
 	return renderTable(columns, rows);
+}
+
+// ---------------------------------------------------------------------------
+// Self-evolution proposal review TUI helpers
+// 自进化提案审核 TUI 辅助函数
+// ---------------------------------------------------------------------------
+
+const DEFAULT_PROPOSAL_LIST_LIMIT = 20;
+const PROPOSAL_ID_SHORT_LENGTH = 12;
+
+interface ProposalListRow {
+	readonly proposalId: string;
+	readonly createdAt: string;
+	readonly type: string;
+	readonly summary: string;
+	readonly affectedPaths: string;
+}
+
+interface ProposalApplyRow {
+	readonly proposalId: string;
+	readonly outcome: string;
+	readonly reasonCode: string;
+	readonly reason: string;
+}
+
+function shortenProposalId(proposalId: string): string {
+	if (proposalId.length <= PROPOSAL_ID_SHORT_LENGTH) {
+		return proposalId;
+	}
+	return `${proposalId.slice(0, PROPOSAL_ID_SHORT_LENGTH)}…`;
+}
+
+function summarizeProposalAffectedPaths(
+	record: StoredProposalRecord,
+): string {
+	const patch = record.generatedPatchProposal;
+	if (patch === undefined) {
+		return "artifact-only";
+	}
+	const changes = patch.fileChanges ?? [];
+	if (changes.length === 0) {
+		return "patch:0-files";
+	}
+	const visible = changes
+		.slice(0, 3)
+		.map((change) => `${change.changeKind}:${change.path}`);
+	const more = changes.length > visible.length
+		? ` +${changes.length - visible.length}`
+		: "";
+	return `${visible.join(",")}${more}`;
+}
+
+function classifyProposalType(record: StoredProposalRecord): string {
+	if (record.generatedPatchProposal !== undefined) {
+		return "patch";
+	}
+	if (record.artifacts.length > 0) {
+		return "artifact";
+	}
+	return "draft";
+}
+
+function truncateProposalSummary(value: string, maxLength = 60): string {
+	const normalized = value.replace(/\s+/gu, " ").trim();
+	if (normalized.length <= maxLength) {
+		return normalized;
+	}
+	return `${normalized.slice(0, Math.max(0, maxLength - 1))}…`;
+}
+
+function formatProposalListRow(
+	record: StoredProposalRecord,
+): ProposalListRow {
+	return {
+		proposalId: shortenProposalId(record.proposalId),
+		createdAt: record.createdAt,
+		type: classifyProposalType(record),
+		summary: truncateProposalSummary(record.summary),
+		affectedPaths: summarizeProposalAffectedPaths(record),
+	};
+}
+
+function renderProposalListTable(
+	records: readonly StoredProposalRecord[],
+): string {
+	const columns: readonly TableColumn<ProposalListRow>[] = [
+		{ header: "proposalId", key: "proposalId" },
+		{ header: "createdAt", key: "createdAt" },
+		{ header: "type", key: "type" },
+		{ header: "summary", key: "summary" },
+		{ header: "paths", key: "affectedPaths" },
+	];
+	return renderTable(columns, records.map(formatProposalListRow));
+}
+
+function describeApplyOutcome(
+	outcome: ProposalApplyOutcome,
+	status: "skipped" | "failed",
+): ProposalApplyRow {
+	return {
+		proposalId: shortenProposalId(outcome.proposalId),
+		outcome: status,
+		reasonCode: outcome.reasonCode,
+		reason: truncateProposalSummary(outcome.reason),
+	};
+}
+
+function renderProposalApplyTable(result: ProposalApplyResult): string {
+	const rows: ProposalApplyRow[] = [
+		...result.applied.map(
+			(record): ProposalApplyRow => ({
+				proposalId: shortenProposalId(record.proposalId),
+				outcome: "applied",
+				reasonCode: "ok",
+				reason: "patch applied via WriteAuthority gate",
+			}),
+		),
+		...result.skipped.map((entry) => describeApplyOutcome(entry, "skipped")),
+		...result.failed.map((entry) => describeApplyOutcome(entry, "failed")),
+	];
+	const columns: readonly TableColumn<ProposalApplyRow>[] = [
+		{ header: "proposalId", key: "proposalId" },
+		{ header: "outcome", key: "outcome" },
+		{ header: "reasonCode", key: "reasonCode" },
+		{ header: "reason", key: "reason" },
+	];
+	return renderTable(columns, rows);
+}
+
+interface ProposalCommandArgs {
+	readonly positional: readonly string[];
+	readonly flags: ReadonlyMap<string, string | true>;
+}
+
+interface ParseProposalCommandOptions {
+	// Flags listed here greedily consume every following non-`--` token
+	// until the next flag or end of input, joining them with single spaces.
+	// 这类 flag 会贪婪消耗后续非 `--` token 直到下一个 flag 或输入结束，并以单空格 join。
+	// Used for freeform reason / message fields where requiring quotes hurts UX.
+	// 用于 reason / message 这类自由文本字段，避免强制用户加引号。
+	readonly greedyFlags?: ReadonlySet<string>;
+}
+
+function parseProposalCommandArgs(
+	rawArgs: readonly string[],
+	options: ParseProposalCommandOptions = {},
+): ProposalCommandArgs {
+	const greedyFlags = options.greedyFlags ?? new Set<string>();
+	const positional: string[] = [];
+	const flags = new Map<string, string | true>();
+	let i = 0;
+	while (i < rawArgs.length) {
+		const token = rawArgs[i] ?? "";
+		if (token.startsWith("--")) {
+			const flagName = token.slice(2);
+			if (greedyFlags.has(flagName)) {
+				const collected: string[] = [];
+				let j = i + 1;
+				while (j < rawArgs.length) {
+					const candidate = rawArgs[j] ?? "";
+					if (candidate.startsWith("--")) {
+						break;
+					}
+					collected.push(candidate);
+					j += 1;
+				}
+				if (collected.length === 0) {
+					flags.set(flagName, true);
+				} else {
+					flags.set(flagName, collected.join(" "));
+				}
+				i = j;
+				continue;
+			}
+			const next = rawArgs[i + 1];
+			if (next !== undefined && !next.startsWith("--")) {
+				flags.set(flagName, next);
+				i += 2;
+				continue;
+			}
+			flags.set(flagName, true);
+			i += 1;
+			continue;
+		}
+		positional.push(token);
+		i += 1;
+	}
+	return { positional, flags };
+}
+
+// Maximum length for a proposal review reason. Anything longer is
+// truncated before persistence to keep audit log lines bounded.
+// 提案审核 reason 字段最大长度，超过则截断以保证审计日志行长度可控。
+const MAX_PROPOSAL_REASON_LENGTH = 4096;
+
+// Sanitize a free-form review reason before persistence:
+// - strip ASCII control characters (incl. NUL, BEL, BS, LF, CR, ESC, DEL)
+// - clamp length to MAX_PROPOSAL_REASON_LENGTH
+// JSON.stringify in the store already escapes characters for jsonl integrity,
+// but stripping control chars here keeps audit logs human-readable and
+// prevents terminal-injection style payloads from leaking through.
+// 对自由文本 reason 进行清洗：剔除 ASCII 控制字符并限制长度。
+// 存储层会用 JSON.stringify 包裹整条记录，因此 jsonl 完整性不会因换行破裂；
+// 这里再清洗一次主要是防止控制字符污染审计日志和终端。
+// Exported for unit tests so we can verify C0/DEL stripping and length cap
+// without booting the full REPL. Production callers stay inside repl.ts.
+// 导出给单元测试，方便直接验证 C0/DEL 清洗和长度上限，无需启动完整 REPL。
+// 生产路径仍只在 repl.ts 内调用。
+export function sanitizeProposalReason(raw: string): string {
+	let cleaned = "";
+	for (const ch of raw) {
+		const code = ch.codePointAt(0) ?? 0;
+		// Strip C0 controls (0x00-0x1F) and DEL (0x7F); collapse to space.
+		// 剔除 C0 控制字符（0x00-0x1F）与 DEL（0x7F），统一替换为空格。
+		if ((code >= 0 && code <= 0x1f) || code === 0x7f) {
+			cleaned += " ";
+		} else {
+			cleaned += ch;
+		}
+	}
+	const collapsed = cleaned.replace(/\s+/gu, " ").trim();
+	if (collapsed.length <= MAX_PROPOSAL_REASON_LENGTH) {
+		return collapsed;
+	}
+	return collapsed.slice(0, MAX_PROPOSAL_REASON_LENGTH);
+}
+
+// Hash the sanitized review reason before emitting telemetry so that the
+// agent-run JSONL log keeps a stable correlator without leaking free-form
+// reviewer text. Empty input → undefined so the payload omits the field
+// entirely instead of recording a hash of "".
+// 在发出遥测前对清洗后的 reason 做哈希，让 agent-run JSONL 日志保留稳定相关性
+// 标识，但不泄露评审人的自由文本。空输入返回 undefined，让 payload 直接省略字段，
+// 避免落入"空串哈希"。
+function hashReviewReason(reason: string): string | undefined {
+	if (reason.length === 0) {
+		return undefined;
+	}
+	return createHash("sha256").update(reason).digest("hex").slice(0, 12);
+}
+
+function tokenizeSlashCommand(input: string): readonly string[] {
+	const tokens: string[] = [];
+	const pattern = /"([^"]*)"|'([^']*)'|(\S+)/gu;
+	let match: RegExpExecArray | null = pattern.exec(input);
+	while (match !== null) {
+		tokens.push(match[1] ?? match[2] ?? match[3] ?? "");
+		match = pattern.exec(input);
+	}
+	return tokens;
+}
+
+function parsePositiveLimitFlag(
+	flags: ReadonlyMap<string, string | true>,
+	fallback: number,
+): { ok: true; value: number } | { ok: false; reason: string } {
+	const raw = flags.get("limit");
+	if (raw === undefined) {
+		return { ok: true, value: fallback };
+	}
+	if (raw === true) {
+		return { ok: false, reason: "--limit requires a positive integer" };
+	}
+	const parsed = Number.parseInt(raw, 10);
+	if (!Number.isInteger(parsed) || parsed <= 0 || String(parsed) !== raw) {
+		return { ok: false, reason: `Invalid --limit value: ${raw}` };
+	}
+	return { ok: true, value: parsed };
 }
 
 function renderTokenBudget(
@@ -1888,6 +2191,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 		agentRunLogger,
 		trajectoryStore,
 		onIdle,
+		proposalStore,
 		onProviderRunRecord,
 		onMcpReconnectApplied,
 		getUserConfig,
@@ -2457,6 +2761,304 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 				}
 				continue;
 			}
+
+			if (
+				trimmed === "/proposals" ||
+				trimmed.startsWith("/proposals ")
+			) {
+				if (proposalStore == null) {
+					stderr.write(
+						"Self-evolution proposal store is not configured. Configure proposalStore to enable review commands.\n",
+					);
+					continue;
+				}
+				const tokens = tokenizeSlashCommand(trimmed).slice(1);
+				const args = parseProposalCommandArgs(tokens);
+				const limitResult = parsePositiveLimitFlag(
+					args.flags,
+					DEFAULT_PROPOSAL_LIST_LIMIT,
+				);
+				if (!limitResult.ok) {
+					stderr.write(`${limitResult.reason}\n`);
+					continue;
+				}
+				try {
+					const pending = await proposalStore.query({
+						reviewState: "pending_review",
+					});
+					if (pending.length === 0) {
+						stderr.write("No pending proposals.\n");
+						continue;
+					}
+					const visible = pending.slice(0, limitResult.value);
+					stderr.write(
+						`Pending proposals (${visible.length} of ${pending.length}):\n`,
+					);
+					stderr.write(`${renderProposalListTable(visible)}\n`);
+					if (pending.length > visible.length) {
+						stderr.write(
+							`Showing first ${visible.length}; pass --limit ${pending.length} to see all.\n`,
+						);
+					}
+				} catch (error) {
+					stderr.write(
+						`Failed to list proposals: ${error instanceof Error ? error.message : String(error)}\n`,
+					);
+				}
+				continue;
+			}
+
+			if (trimmed.startsWith("/proposal-approve")) {
+				if (proposalStore == null) {
+					stderr.write(
+						"Self-evolution proposal store is not configured.\n",
+					);
+					continue;
+				}
+				const tokens = tokenizeSlashCommand(trimmed).slice(1);
+				const args = parseProposalCommandArgs(tokens);
+				const proposalId = args.positional[0];
+				if (proposalId === undefined || proposalId.length === 0) {
+					stderr.write(
+						"Usage: /proposal-approve <proposalId> [--reviewer <name>] [--yes]\n",
+					);
+					continue;
+				}
+				const reviewerFlag = args.flags.get("reviewer");
+				const reviewer =
+					typeof reviewerFlag === "string" && reviewerFlag.length > 0
+						? reviewerFlag
+						: "repl-user";
+				// Proposal approval is the human-in-loop gate for self-evolution
+				// scaffold-patch apply (a CRITICAL-classified write per
+				// docs/07-safety-guardrails §2.6.4 — "CRITICAL 永远 confirm").
+				// Trust mode (auto-low / auto-medium) MUST NOT silently skip the
+				// approval prompt; only an explicit `--yes` flag may opt out per
+				// invocation. This preserves the 4-eye review intent of the gate.
+				// 提案 approve 是 self-evolution scaffold-patch apply（按 07-safety
+				// §2.6.4 分类为 CRITICAL，"CRITICAL 永远 confirm"）的人工把关入口。
+				// trust_mode (auto-low / auto-medium) 不能静默跳过这一确认；
+				// 仅允许显式 `--yes` 在单次调用内 opt-out，保持人工 review 的设计意图。
+				const skipConfirm = args.flags.get("yes") === true;
+				let record: StoredProposalRecord | null;
+				try {
+					record = await proposalStore.getById(proposalId);
+				} catch (error) {
+					stderr.write(
+						`Failed to load proposal ${proposalId}: ${error instanceof Error ? error.message : String(error)}\n`,
+					);
+					continue;
+				}
+				if (record == null) {
+					stderr.write(`Proposal not found: ${proposalId}\n`);
+					continue;
+				}
+				if (record.status !== "pending_review") {
+					stderr.write(
+						`Proposal ${proposalId} is already ${record.status} and cannot be approved again.\n`,
+					);
+					continue;
+				}
+				if (!skipConfirm) {
+					if (rl == null) {
+						stderr.write(
+							"Cannot prompt for approval confirmation without an interactive REPL; pass --yes to skip.\n",
+						);
+						continue;
+					}
+					const resumeLiveInput = liveInputQueue.suspend();
+					let answer: string;
+					try {
+						answer = (
+							await rl.question(
+								`Approve proposal ${shortenProposalId(record.proposalId)} — "${truncateProposalSummary(record.title)}"? [y/N]: `,
+							)
+						).trim();
+					} finally {
+						resumeLiveInput();
+					}
+					const normalized = answer.toLowerCase();
+					if (normalized !== "y" && normalized !== "yes") {
+						stderr.write("Approval cancelled.\n");
+						continue;
+					}
+				}
+				try {
+					const transitioned = await proposalStore.transitionReviewState(
+						record.proposalId,
+						{
+							status: "approved",
+							reviewer,
+							reason: "Approved via REPL slash command.",
+						},
+					);
+					stderr.write(
+						`Proposal approved: ${transitioned.proposalId} (reviewer=${reviewer}).\n`,
+					);
+					stderr.write(
+						"Use /proposal-apply to apply approved proposals, or wait for the next idle apply pass.\n",
+					);
+					await recordAgentRunEvent(runLogger, "proposal.approved", {
+						proposalId: transitioned.proposalId,
+						reviewer,
+						skipConfirm,
+					});
+				} catch (error) {
+					stderr.write(
+						`Failed to approve proposal: ${error instanceof Error ? error.message : String(error)}\n`,
+					);
+				}
+				continue;
+			}
+
+			if (trimmed.startsWith("/proposal-reject")) {
+				if (proposalStore == null) {
+					stderr.write(
+						"Self-evolution proposal store is not configured.\n",
+					);
+					continue;
+				}
+				const tokens = tokenizeSlashCommand(trimmed).slice(1);
+				// `--reason` is greedy: it consumes every following non-flag token
+				// and joins them with a single space, so unquoted multi-word
+				// reasons (`--reason duplicate of QUI-90`) work correctly without
+				// silently dropping trailing words.
+				// `--reason` 贪婪消耗后续非 flag token 并以单空格 join，
+				// 这样不带引号的多词 reason（例如 `--reason duplicate of QUI-90`）
+				// 也能完整保留，不会丢字。
+				const args = parseProposalCommandArgs(tokens, {
+					greedyFlags: new Set(["reason"]),
+				});
+				const proposalId = args.positional[0];
+				if (proposalId === undefined || proposalId.length === 0) {
+					stderr.write(
+						'Usage: /proposal-reject <proposalId> --reason "..." [--reviewer <name>]\n',
+					);
+					continue;
+				}
+				const reasonFlag = args.flags.get("reason");
+				if (reasonFlag === undefined || reasonFlag === true) {
+					stderr.write(
+						'Missing --reason "..." (rejection reason is required).\n',
+					);
+					continue;
+				}
+				const reasonText = sanitizeProposalReason(reasonFlag);
+				if (reasonText.length === 0) {
+					stderr.write("Rejection reason must be a non-empty string.\n");
+					continue;
+				}
+				const reviewerFlag = args.flags.get("reviewer");
+				const reviewer =
+					typeof reviewerFlag === "string" && reviewerFlag.length > 0
+						? reviewerFlag
+						: "repl-user";
+				try {
+					const record = await proposalStore.getById(proposalId);
+					if (record == null) {
+						stderr.write(`Proposal not found: ${proposalId}\n`);
+						continue;
+					}
+					if (record.status !== "pending_review") {
+						stderr.write(
+							`Proposal ${proposalId} is already ${record.status} and cannot be rejected.\n`,
+						);
+						continue;
+					}
+					const transitioned = await proposalStore.transitionReviewState(
+						record.proposalId,
+						{
+							status: "rejected",
+							reviewer,
+							reason: reasonText,
+						},
+					);
+					stderr.write(
+						`Proposal rejected: ${transitioned.proposalId} (reviewer=${reviewer}).\n`,
+					);
+					const reasonHash = hashReviewReason(reasonText);
+					await recordAgentRunEvent(runLogger, "proposal.rejected", {
+						proposalId: transitioned.proposalId,
+						reviewer,
+						reasonChars: reasonText.length,
+						...(reasonHash == null ? {} : { reasonHash }),
+					});
+				} catch (error) {
+					stderr.write(
+						`Failed to reject proposal: ${error instanceof Error ? error.message : String(error)}\n`,
+					);
+				}
+				continue;
+			}
+
+			if (
+				trimmed === "/proposal-apply" ||
+				trimmed.startsWith("/proposal-apply ")
+			) {
+				if (proposalStore == null) {
+					stderr.write(
+						"Self-evolution proposal store is not configured.\n",
+					);
+					continue;
+				}
+				const tokens = tokenizeSlashCommand(trimmed).slice(1);
+				const args = parseProposalCommandArgs(tokens);
+				const limitResult = parsePositiveLimitFlag(args.flags, 0);
+				if (!limitResult.ok) {
+					stderr.write(`${limitResult.reason}\n`);
+					continue;
+				}
+				try {
+					const result = await proposalStore.applyApproved(writeAuthority, {
+						origin: "user",
+						reviewer: "repl-user",
+					});
+					const totalOutcomes =
+						result.applied.length +
+						result.skipped.length +
+						result.failed.length;
+					if (totalOutcomes === 0) {
+						stderr.write("No approved proposals to apply.\n");
+						continue;
+					}
+					stderr.write(
+						`Apply outcomes: applied=${result.applied.length} skipped=${result.skipped.length} failed=${result.failed.length}\n`,
+					);
+					stderr.write(`${renderProposalApplyTable(result)}\n`);
+					// Emit one telemetry event per outcome bucket so the agent-run
+					// JSONL log preserves the audit trail for CRITICAL scaffold-patch
+					// applies (07 §2.6.4: every WriteAuthority confirm gate must be
+					// observable). proposalIds keep the link back to proposalStore.
+					// 每种 outcome bucket 发一条遥测事件，让 agent-run JSONL 保留
+					// CRITICAL scaffold-patch apply 的审计链路（07 §2.6.4: 每次
+					// WriteAuthority confirm gate 都必须可观测）。proposalId 用于
+					// 反查 proposalStore。
+					for (const applied of result.applied) {
+						await recordAgentRunEvent(runLogger, "proposal.applied", {
+							proposalId: applied.proposalId,
+							reviewer: "repl-user",
+						});
+					}
+					for (const outcome of result.skipped) {
+						await recordAgentRunEvent(runLogger, "proposal.apply_skipped", {
+							proposalId: outcome.proposalId,
+							reasonCode: outcome.reasonCode,
+						});
+					}
+					for (const outcome of result.failed) {
+						await recordAgentRunEvent(runLogger, "proposal.apply_failed", {
+							proposalId: outcome.proposalId,
+							reasonCode: outcome.reasonCode,
+						});
+					}
+				} catch (error) {
+					stderr.write(
+						`Failed to apply approved proposals: ${error instanceof Error ? error.message : String(error)}\n`,
+					);
+				}
+				continue;
+			}
+
 			if (trimmed.startsWith("/think")) {
 				const mode = trimmed.split(/\s+/u)[1];
 				switch (mode) {
