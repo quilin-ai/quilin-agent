@@ -13,6 +13,12 @@ function readRequestBody(request: IncomingMessage): Promise<string> {
 		request.on("error", reject);
 	});
 }
+
+import {
+	createObservabilityDashboardHandler,
+	type DashboardDataProviders,
+	type ObservabilityDashboardOptions,
+} from "../observability/dashboard.js";
 import { renderControlPlaneDashboardHtml } from "../observability/dashboard-page.js";
 import {
 	type BuildControlPlaneSnapshotOptions,
@@ -22,6 +28,33 @@ import {
 export interface ControlPlaneHandlerOptions
 	extends BuildControlPlaneSnapshotOptions {
 	readonly onChat?: (message: string) => Promise<string>;
+	readonly dataProviders?: DashboardDataProviders;
+	readonly observability?: Omit<ObservabilityDashboardOptions, "dataProviders">;
+}
+
+const OBSERVABILITY_PATH_PREFIXES = [
+	"/ui",
+	"/api/dashboard/",
+	"/traces",
+	"/metrics",
+] as const;
+
+function isObservabilityRoute(pathname: string): boolean {
+	if (pathname === "/metrics" || pathname === "/traces") {
+		return true;
+	}
+	if (pathname === "/ui" || pathname === "/ui/") {
+		return true;
+	}
+	for (const prefix of OBSERVABILITY_PATH_PREFIXES) {
+		if (prefix.endsWith("/") && pathname.startsWith(prefix)) {
+			return true;
+		}
+		if (!prefix.endsWith("/") && pathname.startsWith(`${prefix}/`)) {
+			return true;
+		}
+	}
+	return false;
 }
 
 export interface StartControlPlaneServerOptions
@@ -82,16 +115,31 @@ function routeMatches(pathname: string): boolean {
 		pathname === "/" ||
 		pathname === "/control-plane" ||
 		pathname === "/control-plane/snapshot" ||
-			pathname === "/dashboard"
+		pathname === "/dashboard"
 	);
 }
 
 export function createControlPlaneHandler(
 	options: ControlPlaneHandlerOptions = {},
 ): (request: IncomingMessage, response: ServerResponse) => void {
+	const observabilityHandler = createObservabilityDashboardHandler({
+		...(options.observability ?? {}),
+		...(options.dataProviders == null
+			? {}
+			: { dataProviders: options.dataProviders }),
+	});
+
 	return (request, response) => {
 		void (async () => {
 			const url = new URL(request.url ?? "/", "http://127.0.0.1");
+
+			// Delegate observability dashboard / API / static asset routes to the
+			// observability handler so /ui/, /api/dashboard/*, /metrics, /traces
+			// share the same port as the control plane.
+			if (isObservabilityRoute(url.pathname)) {
+				observabilityHandler(request, response);
+				return;
+			}
 
 			// POST /api/chat — simple one-shot chat
 			if (request.method === "POST" && url.pathname === "/api/chat") {

@@ -7,6 +7,10 @@
   "bin": {
     "quilin": "src/index.ts"
   },
+  "files": [
+    "dist",
+    "src/observability/dashboard-ui"
+  ],
   "scripts": {
     "build": "bun build src/index.ts --outdir dist --target node",
     "test": "vitest run --configLoader runner",

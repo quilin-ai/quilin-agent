@@ -1,7 +1,15 @@
 // Quilin Observability Dashboard — vanilla JS controller.
 // 7-panel single-page UI. No bundler, no framework.
 
-const PANELS = ["tasks", "memory", "tools", "metrics", "topology", "sessions", "skills"];
+const PANELS = [
+	"tasks",
+	"memory",
+	"tools",
+	"metrics",
+	"topology",
+	"sessions",
+	"skills",
+];
 
 const ENDPOINTS = {
 	tasks: "/api/dashboard/tasks",
@@ -54,7 +62,9 @@ function badge(status) {
 }
 
 async function fetchJson(url) {
-	const response = await fetch(url, { headers: { accept: "application/json" } });
+	const response = await fetch(url, {
+		headers: { accept: "application/json" },
+	});
 	if (!response.ok) {
 		throw new Error(`${url} responded ${response.status}`);
 	}
@@ -77,16 +87,26 @@ function renderKvGrid(container, entries) {
 		.join("");
 }
 
+// Render metric cards.
+// `card.value` is treated as text and is auto-escaped (default safe path).
+// `card.valueHtml` is treated as already-escaped HTML for callers that need
+// inline layout markup (e.g. `<br>` between count and note). Callers that opt
+// into `valueHtml` are responsible for escaping every dynamic substring inside
+// it; the helper does NOT escape it. When both are provided, `valueHtml` wins.
 function renderMetricCards(container, cards) {
 	container.innerHTML = cards
-		.map(
-			(card) => `
+		.map((card) => {
+			const valueMarkup =
+				card.valueHtml != null
+					? card.valueHtml
+					: escape(String(card.value ?? ""));
+			return `
 			<div class="metric-card">
 				<div class="metric-label">${escape(card.label)}</div>
-				<div class="metric-value">${card.value}</div>
+				<div class="metric-value">${valueMarkup}</div>
 			</div>
-		`,
-		)
+		`;
+		})
 		.join("");
 }
 
@@ -131,7 +151,10 @@ function renderMemory(panel, data) {
 		container,
 		tiers.map((tier) => ({
 			label: tier.name,
-			value: `${tier.count}<br><span class="muted" style="font-size:.7rem">${escape(tier.note ?? "")}</span>`,
+			// tier.count and tier.note can both originate from untrusted MCP /
+			// TraceStore data, so escape every dynamic field before splicing it
+			// into the layout markup.
+			valueHtml: `${escape(String(tier.count ?? 0))}<br><span class="muted" style="font-size:.7rem">${escape(tier.note ?? "")}</span>`,
 		})),
 	);
 	setEmpty(panel, false);
@@ -145,7 +168,10 @@ function renderTools(panel, data) {
 		[
 			"By namespace",
 			Object.entries(data.byNamespace ?? {})
-				.map(([ns, n]) => `<span class="badge badge-info">${escape(ns)}: ${n}</span>`)
+				.map(
+					([ns, n]) =>
+						`<span class="badge badge-info">${escape(ns)}: ${n}</span>`,
+				)
 				.join(" ") || "<span class='muted'>none</span>",
 		],
 	]);
@@ -169,13 +195,14 @@ function renderTools(panel, data) {
 function renderMetrics(panel, data) {
 	const headline = panel.querySelector("#metrics-headline");
 	const totals = data.totals ?? {};
+	// `value` is the text-only path — renderMetricCards escapes it for us.
 	renderMetricCards(headline, [
-		{ label: "Total Spans", value: escape(String(totals.spans ?? 0)) },
-		{ label: "LLM Calls", value: escape(String(totals.llmCalls ?? 0)) },
-		{ label: "Tokens In", value: escape(String(totals.tokensIn ?? 0)) },
-		{ label: "Tokens Out", value: escape(String(totals.tokensOut ?? 0)) },
-		{ label: "Errors", value: escape(String(totals.errors ?? 0)) },
-		{ label: "Avg Latency (ms)", value: escape(String(totals.avgLatencyMs ?? 0)) },
+		{ label: "Total Spans", value: String(totals.spans ?? 0) },
+		{ label: "LLM Calls", value: String(totals.llmCalls ?? 0) },
+		{ label: "Tokens In", value: String(totals.tokensIn ?? 0) },
+		{ label: "Tokens Out", value: String(totals.tokensOut ?? 0) },
+		{ label: "Errors", value: String(totals.errors ?? 0) },
+		{ label: "Avg Latency (ms)", value: String(totals.avgLatencyMs ?? 0) },
 	]);
 	const tbody = panel.querySelector("#metrics-tools-table tbody");
 	const byTool = data.byTool ?? [];
@@ -283,7 +310,9 @@ function renderSkillsMcp(panel, data) {
 	const config = data.config ?? null;
 	const configBlock = panel.querySelector("#config-block");
 	configBlock.textContent =
-		config == null ? "(no config provider connected)" : JSON.stringify(config, null, 2);
+		config == null
+			? "(no config provider connected)"
+			: JSON.stringify(config, null, 2);
 
 	const providers = data.providers ?? [];
 	panel.querySelector("#providers-count").textContent = `(${providers.length})`;
@@ -339,7 +368,8 @@ function activateTab(name) {
 		const tab = document.querySelector(`.tab[data-panel="${panel}"]`);
 		const section = document.getElementById(`panel-${panel}`);
 		const isActive = panel === name;
-		if (tab != null) tab.setAttribute("aria-selected", isActive ? "true" : "false");
+		if (tab != null)
+			tab.setAttribute("aria-selected", isActive ? "true" : "false");
 		if (section != null) {
 			section.hidden = !isActive;
 			section.setAttribute("aria-hidden", isActive ? "false" : "true");

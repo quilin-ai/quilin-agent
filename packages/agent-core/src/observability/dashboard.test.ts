@@ -393,10 +393,14 @@ describe("observability dashboard 7-panel UI", () => {
 	it("returns empty placeholders for all 7 panels when no providers wired", async () => {
 		const baseUrl = await startDashboardWithProviders({});
 
-		const tasks = (await (await fetch(`${baseUrl}/api/dashboard/tasks`)).json()) as DashboardTasksData;
+		const tasks = (await (
+			await fetch(`${baseUrl}/api/dashboard/tasks`)
+		).json()) as DashboardTasksData;
 		expect(tasks).toEqual({ records: [], activeRunCount: 0, staleRunCount: 0 });
 
-		const memory = (await (await fetch(`${baseUrl}/api/dashboard/memory`)).json()) as DashboardMemoryData;
+		const memory = (await (
+			await fetch(`${baseUrl}/api/dashboard/memory`)
+		).json()) as DashboardMemoryData;
 		expect(memory.tiers.map((tier) => tier.name)).toEqual([
 			"working",
 			"episodic",
@@ -404,10 +408,14 @@ describe("observability dashboard 7-panel UI", () => {
 			"skill",
 		]);
 
-		const tools = (await (await fetch(`${baseUrl}/api/dashboard/tools`)).json()) as DashboardToolsData;
+		const tools = (await (
+			await fetch(`${baseUrl}/api/dashboard/tools`)
+		).json()) as DashboardToolsData;
 		expect(tools).toEqual({ tools: [], total: 0, byNamespace: {} });
 
-		const topology = (await (await fetch(`${baseUrl}/api/dashboard/topology`)).json()) as DashboardTopologyData;
+		const topology = (await (
+			await fetch(`${baseUrl}/api/dashboard/topology`)
+		).json()) as DashboardTopologyData;
 		expect(topology).toEqual({
 			supervisorStatus: "unknown",
 			activeRunCount: 0,
@@ -415,7 +423,9 @@ describe("observability dashboard 7-panel UI", () => {
 			runs: [],
 		});
 
-		const sessions = (await (await fetch(`${baseUrl}/api/dashboard/sessions`)).json()) as DashboardSessionsData;
+		const sessions = (await (
+			await fetch(`${baseUrl}/api/dashboard/sessions`)
+		).json()) as DashboardSessionsData;
 		expect(sessions).toEqual({
 			sessions: [],
 			total: 0,
@@ -423,7 +433,9 @@ describe("observability dashboard 7-panel UI", () => {
 			terminalCount: 0,
 		});
 
-		const skills = (await (await fetch(`${baseUrl}/api/dashboard/skills-mcp`)).json()) as DashboardSkillsMcpData;
+		const skills = (await (
+			await fetch(`${baseUrl}/api/dashboard/skills-mcp`)
+		).json()) as DashboardSkillsMcpData;
 		expect(skills).toEqual({
 			skills: { catalog: [] },
 			mcp: { servers: [] },
@@ -457,7 +469,12 @@ describe("observability dashboard 7-panel UI", () => {
 		};
 		const toolsData: DashboardToolsData = {
 			tools: [
-				{ name: "shell_exec", namespace: "builtin", category: "shell", riskLevel: "high" },
+				{
+					name: "shell_exec",
+					namespace: "builtin",
+					category: "shell",
+					riskLevel: "high",
+				},
 			],
 			total: 1,
 			byNamespace: { builtin: 1 },
@@ -483,12 +500,12 @@ describe("observability dashboard 7-panel UI", () => {
 			sessions: () => sessionsData,
 		});
 
-		expect(await (await fetch(`${baseUrl}/api/dashboard/tasks`)).json()).toEqual(
-			tasksData,
-		);
-		expect(await (await fetch(`${baseUrl}/api/dashboard/tools`)).json()).toEqual(
-			toolsData,
-		);
+		expect(
+			await (await fetch(`${baseUrl}/api/dashboard/tasks`)).json(),
+		).toEqual(tasksData);
+		expect(
+			await (await fetch(`${baseUrl}/api/dashboard/tools`)).json(),
+		).toEqual(toolsData);
 		expect(
 			await (await fetch(`${baseUrl}/api/dashboard/sessions`)).json(),
 		).toEqual(sessionsData);
@@ -559,7 +576,88 @@ describe("observability dashboard 7-panel UI", () => {
 		expect(body.totals.tokensOut).toBe(50);
 		expect(body.totals.errors).toBe(1);
 		expect(body.byTool).toEqual([
-			{ tool: "shell_exec", calls: 1, errors: 1, p50LatencyMs: 30, p95LatencyMs: 30 },
+			{
+				tool: "shell_exec",
+				calls: 1,
+				errors: 1,
+				p50LatencyMs: 30,
+				p95LatencyMs: 30,
+			},
 		]);
+	});
+
+	it("computes nearest-rank percentiles for n=10 samples (QUI-105 round-1 #4)", async () => {
+		const logsDir = await mkdtemp(
+			join(tmpdir(), "quilin-dashboard-percentile-"),
+		);
+		await mkdir(logsDir, { recursive: true });
+		const today = new Date().toISOString().slice(0, 10);
+		// 10 latency samples: 10, 20, ..., 100. Nearest-rank dictates:
+		//   p50 -> ceil(0.5 * 10) - 1 = idx 4 -> 50
+		//   p95 -> ceil(0.95 * 10) - 1 = idx 9 -> 100
+		// The previous Math.floor formula returned idx 5 (60) and idx 9 (100),
+		// which silently underweighted small-sample p50.
+		const lines: string[] = [];
+		for (let i = 1; i <= 10; i += 1) {
+			lines.push(
+				JSON.stringify(
+					serializedSpan({
+						name: "tool.invoke",
+						span_id: i.toString().padStart(16, "0"),
+						trace_id: i.toString().padStart(32, "0"),
+						duration_ms: i * 10,
+						attributes: { "tool.name": "shell_exec" },
+					}),
+				),
+			);
+		}
+		await writeFile(
+			join(logsDir, `traces-${today}.jsonl`),
+			`${lines.join("\n")}\n`,
+		);
+		const server = createServer(
+			createObservabilityDashboardHandler({ logsDir }),
+		);
+		servers.push(server);
+		await new Promise<void>((resolve) => {
+			server.listen(0, "127.0.0.1", resolve);
+		});
+		const address = server.address() as AddressInfo;
+
+		const response = await fetch(
+			`http://127.0.0.1:${address.port}/api/dashboard/metrics`,
+		);
+		const body = (await response.json()) as {
+			byTool: ReadonlyArray<{
+				tool: string;
+				p50LatencyMs?: number;
+				p95LatencyMs?: number;
+			}>;
+		};
+		expect(body.byTool).toHaveLength(1);
+		expect(body.byTool[0]?.tool).toBe("shell_exec");
+		expect(body.byTool[0]?.p50LatencyMs).toBe(50);
+		expect(body.byTool[0]?.p95LatencyMs).toBe(100);
+	});
+
+	it("forwards query params to /api/dashboard/metrics (QUI-105 round-1 #5)", async () => {
+		const observedQueries: TraceQuery[] = [];
+		const traceStore = {
+			querySpanSnapshots: async () => ({
+				spans: [],
+				skippedLines: 0,
+				files: [],
+			}),
+			querySpans: async (query: TraceQuery) => {
+				observedQueries.push(query);
+				return { spans: [], skippedLines: 0, files: [] };
+			},
+		} as unknown as TraceStore;
+		const baseUrl = await startDashboardWithTraceStore(traceStore);
+
+		await fetch(`${baseUrl}/api/dashboard/metrics?date=2026-04-25&limit=7`);
+
+		expect(observedQueries).toHaveLength(1);
+		expect(observedQueries[0]).toEqual({ date: "2026-04-25", limit: 7 });
 	});
 });

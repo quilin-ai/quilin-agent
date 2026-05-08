@@ -8,17 +8,12 @@ import { runConfigCommand } from "./cli/config-cmd.js";
 import { formatFirstRunWelcome } from "./cli/first-run-welcome.js";
 import { runServiceCommand } from "./cli/service-cmd.js";
 import { buildFirstRunOnboardingPlan } from "./config/first-run.js";
-import { LocalMemoryBackend } from "./memory/local-backend.js";
-import { startControlPlaneServer } from "./control-plane/handler.js";
-import { ensureMemoryBackend } from "./config/memory-setup.js";
-import {
-	startQuilinMemMcp,
-	startQuilinWebMcp,
-} from "./config/mcp-launcher.js";
 import {
 	type CapabilitiesHotReloadEvent,
 	createCapabilitiesHotReloadController,
 } from "./config/hot-reload.js";
+import { startQuilinMemMcp, startQuilinWebMcp } from "./config/mcp-launcher.js";
+import { ensureMemoryBackend } from "./config/memory-setup.js";
 import {
 	bootstrapUserRuntime,
 	buildRuntimeInferenceConfig,
@@ -27,6 +22,7 @@ import {
 	resolveRuntimeWriteAuthorityMode,
 } from "./config/runtime.js";
 import type { UserConfigLoadResult } from "./config/user-config.js";
+import { startControlPlaneServer } from "./control-plane/handler.js";
 import {
 	normalizeProviderError,
 	ProviderControlPlaneLLMClient,
@@ -46,15 +42,16 @@ import type {
 	ProviderRunRecord,
 } from "./llm/types.js";
 import { configureLogger, logger } from "./logger.js";
+import { LocalMemoryBackend } from "./memory/local-backend.js";
 import { JsonFileSpanExporter } from "./observability/exporters/json-file.js";
 import { startRepl } from "./repl.js";
+import { analyzeTrajectoryFailures } from "./self-evolution/failure-analyzer.js";
 import {
 	DEFAULT_IDLE_DAILY_TOKEN_QUOTA,
 	IdleEvolutionRunner,
 } from "./self-evolution/idle-runner.js";
 import { JsonlProposalStore } from "./self-evolution/proposal-store.js";
 import { JsonlTrajectoryStore } from "./self-evolution/trajectory-store.js";
-import { analyzeTrajectoryFailures } from "./self-evolution/failure-analyzer.js";
 import { SQLiteCheckpoint } from "./state/checkpoint.js";
 
 export * from "./config/first-run.js";
@@ -220,7 +217,6 @@ export type {
 	SubTask,
 } from "./planning/types.js";
 export * from "./repl.js";
-export * from "./tui/index.js";
 export * from "./safety/write-authority.js";
 export * from "./self-evolution/index.js";
 export {
@@ -352,6 +348,7 @@ export type {
 	ToolErrorCode,
 	ToolResult,
 } from "./tools/types.js";
+export * from "./tui/index.js";
 export * from "./types/index.js";
 
 const HEARTBEAT_INTERVAL_MS = 60_000;
@@ -575,7 +572,7 @@ function resolveRuntimeTierRoutingConfig(
 		if (!isEnabledDefaultCatalogModel(modelSelection.modelId)) {
 			throw new Error(
 				`llm.default_model ${modelSelection.modelId} is providerless and not enabled in DEFAULT_PROVIDER_CATALOG; configure custom model ids under llm.tiers.<flash|lite|pro>.provider/model.`,
-		);
+			);
 		}
 	}
 
@@ -757,7 +754,7 @@ export async function main(options: MainOptions = {}): Promise<void> {
 					})),
 				},
 				"First run detected — onboarding plan built",
-		);
+			);
 		}
 	}
 
@@ -838,37 +835,127 @@ export async function main(options: MainOptions = {}): Promise<void> {
 		// Start web control plane / dashboard (test env skips)
 		if (process.env.NODE_ENV !== "test") {
 			try {
-				const cpServer = await startControlPlaneServer({ checkpoint: new SQLiteCheckpoint(),
+				const dashboardCheckpoint = new SQLiteCheckpoint();
+				const cpServer = await startControlPlaneServer({
+					checkpoint: dashboardCheckpoint,
+					// Wire dashboard data providers so the 7-panel UI returns real
+					// data instead of empty placeholders. Sessions come from the
+					// SQLite checkpoint store. Memory / tools / topology / tasks /
+					// skills stay on their empty defaults until their runtime
+					// sources are exposed at this scope — see TODO below.
+					dataProviders: {
+						sessions: async () => {
+							try {
+								const summaries = await dashboardCheckpoint.listSessions();
+								const entries = summaries.map((summary) => ({
+									sessionId: summary.sessionId,
+									status: "active",
+									source: "checkpoint",
+									messageCount: summary.messageCount,
+									lastActiveAt: summary.lastActiveAt,
+								}));
+								return {
+									sessions: entries,
+									total: entries.length,
+									activeCount: entries.length,
+									terminalCount: 0,
+								};
+							} catch {
+								return {
+									sessions: [],
+									total: 0,
+									activeCount: 0,
+									terminalCount: 0,
+								};
+							}
+						},
+						skillsMcp: () => {
+							const matrix = buildProviderLiveMatrix();
+							const providers = matrix.map((entry) => ({
+								provider: entry.provider,
+								status: entry.status,
+								configuredSources: entry.configuredSources,
+								credentialStatus: entry.credentialStatus,
+							}));
+							return {
+								skills: { catalog: [] },
+								mcp: { servers: [] },
+								config: null,
+								providers,
+							};
+						},
+						topology: () => {
+							const sessionId =
+								typeof process.env.QUILIN_SESSION_ID === "string"
+									? process.env.QUILIN_SESSION_ID
+									: "main-repl";
+							return {
+								supervisorStatus: "active",
+								activeRunCount: 1,
+								totalRunCount: 1,
+								runs: [
+									{
+										runId: sessionId,
+										workerName: "repl",
+										status: "active",
+										startedAt: new Date().toISOString(),
+									},
+								],
+							};
+						},
+						// TODO(QUI-105 round 2): wire memory / tools / tasks / skills
+						// catalog / mcp servers providers from LocalMemoryBackend /
+						// MCPRegistry / SupervisorRuntime / SkillsManager once REPL
+						// runtime exposes them at this scope. Today only sessions,
+						// providers (inside skills-mcp), and a minimal topology view
+						// are connected to live data.
+					},
 					port: Number.parseInt(process.env.QUILIN_DASHBOARD_PORT ?? "0", 10),
 					onChat: (() => {
-						const history: { role: "user" | "assistant"; content: string }[] = [];
+						const history: { role: "user" | "assistant"; content: string }[] =
+							[];
 						return async (message: string) => {
 							try {
 								let memoryCtx = "";
 								try {
 									const be = new LocalMemoryBackend();
 									const mems = be.recall(message, { limit: 3 });
-									if (mems.length > 0) memoryCtx = "\n[Memories]\n" + mems.map(m => "- " + m.content).join("\n") + "\n[/Memories]\n";
+									if (mems.length > 0)
+										memoryCtx =
+											"\n[Memories]\n" +
+											mems.map((m) => "- " + m.content).join("\n") +
+											"\n[/Memories]\n";
 									be.close();
-								} catch { /* memory offline */ }
+								} catch {
+									/* memory offline */
+								}
 								history.push({ role: "user", content: message });
 								const chatModel = provider(modelId);
 								const sys = `You are Quilin, a local AI agent with memory. You remember past chats. Be concise, personal, and warm.${memoryCtx}`;
 								const r = await new VercelLLMClient({ model: chatModel }).chat(
 									[{ role: "system", content: sys }, ...history.slice(-10)],
 									[],
-									{ temperature: 0.7, maxTokens: 2048, thinkingMode: "disabled" },
+									{
+										temperature: 0.7,
+										maxTokens: 2048,
+										thinkingMode: "disabled",
+									},
 								);
 								history.push({ role: "assistant", content: r.content });
 								if (history.length > 20) history.splice(0, 2);
 								return r.content;
-							} catch (err) { return `Chat error: ${String(err)}`; }
+							} catch (err) {
+								return `Chat error: ${String(err)}`;
+							}
 						};
 					})(),
 				});
 				logger.info({ url: cpServer.url }, "Web dashboard started");
 			} catch (err) {
-				logger.warn({ error: providerErrorLogFields(err) }, "Web dashboard failed to start");
+				logger.warn(
+					{ error: providerErrorLogFields(err) },
+					"Web dashboard failed to start",
+				);
 			}
 		}
 

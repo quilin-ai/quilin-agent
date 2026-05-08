@@ -13,9 +13,9 @@ import type {
 	SupervisorProgressEventType,
 } from "../multi-agent/supervisor-progress.js";
 import { redactString } from "../safety/redaction.js";
+import type { SerializedSpan } from "./exporters/json-file.js";
 import { renderPrometheusMetrics } from "./exporters/prometheus.js";
 import { aggregateSpanMetrics } from "./metrics.js";
-import type { SerializedSpan } from "./exporters/json-file.js";
 import { type TraceQuery, TraceStore } from "./trace-store.js";
 
 export interface DashboardTaskRecord {
@@ -497,13 +497,19 @@ function buildMetricsData(
 		}
 	}
 
-	const percentile = (values: readonly number[], p: number): number | undefined => {
+	// Nearest-rank percentile: idx = ceil(p/100 * n) - 1, clamped to [0, n-1].
+	// Math.floor produced an off-by-one undercount for small samples (n < 100);
+	// e.g. p=95 of 10 samples returned the 9th value's index 9 via floor(9.5)=9
+	// only by accident, but p=50 of 10 samples returned index 5 (the 6th value)
+	// when nearest-rank dictates the 5th (index 4).
+	const percentile = (
+		values: readonly number[],
+		p: number,
+	): number | undefined => {
 		if (values.length === 0) return undefined;
 		const sorted = [...values].sort((left, right) => left - right);
-		const idx = Math.min(
-			sorted.length - 1,
-			Math.floor((p / 100) * sorted.length),
-		);
+		const rank = Math.ceil((p / 100) * sorted.length);
+		const idx = Math.min(sorted.length - 1, Math.max(0, rank - 1));
 		return Math.round(sorted[idx] ?? 0);
 	};
 
@@ -651,9 +657,11 @@ export function createObservabilityDashboardHandler(
 							: emptyToolsData();
 						break;
 					case "metrics": {
-						const result = await traceStore.querySpans({
-							limit: options.defaultTraceLimit ?? 200,
-						});
+						const query = parseTraceQuery(
+							url,
+							options.defaultTraceLimit ?? 200,
+						);
+						const result = await traceStore.querySpans(query);
 						payload = buildMetricsData(result.spans);
 						break;
 					}
