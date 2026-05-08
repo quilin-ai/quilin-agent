@@ -1157,6 +1157,75 @@ describe("builtin web_fetch tool", () => {
 		expect(secondPayload.fromCache).toBe(true);
 	});
 
+	it("invokes sub-LLM extraction on cache hit when prompt is provided", async () => {
+		const fetcher = vi.fn().mockResolvedValue(
+			new Response("<h1>Pricing</h1><p>$42</p>", {
+				status: 200,
+				headers: { "content-type": "text/html" },
+			}),
+		);
+		const llmResponse: LLMResponse = {
+			content: "the price is $42",
+			usage: { inputTokens: 10, outputTokens: 5 },
+			finishReason: "stop",
+		};
+		const chat = vi.fn().mockResolvedValue(llmResponse);
+		const llmClient: LLMClient = {
+			chat: chat as unknown as LLMClient["chat"],
+		};
+		const cache = createWebFetchCache();
+		const tool = createWebFetchTool({
+			fetcher,
+			resolver: createResolver({ "example.com": ["93.184.216.34"] }),
+			cache,
+			htmlToMarkdown: async (html) => html,
+			llmClient,
+		});
+
+		const first = await tool.execute({ url: "https://example.com/pricing" });
+		const second = await tool.execute({
+			url: "https://example.com/pricing",
+			prompt: "What is the price?",
+		});
+
+		expect(fetcher).toHaveBeenCalledTimes(1);
+		const secondPayload = JSON.parse(second.content);
+		expect(JSON.parse(first.content).extracted).toBeUndefined();
+		expect(secondPayload.fromCache).toBe(true);
+		expect(secondPayload.extracted).toBe(true);
+		expect(secondPayload.body).toBe("the price is $42");
+		expect(secondPayload.rawMarkdownLength).toBeGreaterThan(0);
+		expect(chat).toHaveBeenCalledTimes(1);
+	});
+
+	it("returns cached markdown unchanged on cache hit when prompt has no llmClient", async () => {
+		const fetcher = vi.fn().mockResolvedValue(
+			new Response("<h1>Hi</h1>", {
+				status: 200,
+				headers: { "content-type": "text/html" },
+			}),
+		);
+		const cache = createWebFetchCache();
+		const tool = createWebFetchTool({
+			fetcher,
+			resolver: createResolver({ "example.com": ["93.184.216.34"] }),
+			cache,
+			htmlToMarkdown: async (html) => html,
+		});
+
+		await tool.execute({ url: "https://example.com/page" });
+		const second = await tool.execute({
+			url: "https://example.com/page",
+			prompt: "Extract title",
+		});
+
+		expect(fetcher).toHaveBeenCalledTimes(1);
+		const payload = JSON.parse(second.content);
+		expect(payload.fromCache).toBe(true);
+		expect(payload.extracted).toBeUndefined();
+		expect(payload.body).toBe("<h1>Hi</h1>");
+	});
+
 	it("does not cache POST responses", async () => {
 		const fetcher = vi.fn().mockResolvedValue(
 			new Response("<p>posted</p>", {

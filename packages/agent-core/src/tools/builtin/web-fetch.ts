@@ -665,6 +665,26 @@ export function createWebFetchTool(
 			if (cacheable) {
 				const cached = cache.get(parsedUrl.toString());
 				if (cached) {
+					if (prompt != null && prompt.length > 0 && options.llmClient) {
+						const extracted = await extractWithLLM({
+							llmClient: options.llmClient,
+							inferenceConfig:
+								options.extractionInferenceConfig ?? DEFAULT_EXTRACTION_INFERENCE,
+							markdown: cached.markdown,
+							prompt,
+							maxMarkdownLength: maxBodyChars,
+						});
+						return createSuccessResult("builtin-web-fetch", {
+							url: cached.url,
+							status: cached.status,
+							contentType: cached.contentType,
+							body: extracted,
+							truncated: cached.truncated,
+							rawMarkdownLength: cached.markdown.length,
+							extracted: true,
+							fromCache: true,
+						});
+					}
 					return createSuccessResult("builtin-web-fetch", {
 						url: cached.url,
 						status: cached.status,
