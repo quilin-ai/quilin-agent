@@ -1,6 +1,6 @@
 # 当前状态 / Quilin Agent Status
 
-This status snapshot was updated on 2026-05-07 / 本状态快照更新于 2026-05-07。
+This status snapshot was updated on 2026-05-08 / 本状态快照更新于 2026-05-08。
 
 This file is the only global progress entry point under `docs/`. Component-level current facts live in each `docs/<component>/README.md`. Historical snapshots are traced through git history. Task management and backlog tracking live in Linear; this file keeps only current-state snapshots.
 
@@ -26,12 +26,10 @@ Current local evidence from 2026-05-07 commands:
 - `wc -l packages/agent-core/src/loop.ts` 报告 452 LOC；核心循环已超出最初 `<200 LOC` 契约，整个 loop 体系横跨 `loop.ts` (452) + `loop-tool-calls.ts` (565) + `loop-types.ts` (85) = 1,102 LOC。
 - `rg --files packages/agent-core/src -g '*.ts' | wc -l` reports 258 TypeScript files.
 - `rg --files packages/agent-core/src -g '*.ts' | wc -l` 报告 258 个 TypeScript 文件。
-- `rn --dir packages/agent-core test` reports 117 test files and 1,409 tests, all passing.
-- `pnpm --dir packages/agent-core test` 报告 117 个测试文件、1,409 个测试，全部通过。
+- `pnpm --dir packages/agent-core test` reports 129 test files and 1,711 tests, all passing.
+- `pnpm --dir packages/agent-core test` 报告 129 个测试文件、1,711 个测试，全部通过。
 - `pnpm --dir packages/agent-core exec tsc --noEmit --project tsconfig.json` exits cleanly.
 - `pnpm --dir packages/agent-core exec tsc --noEmit --project tsconfig.json` 零错误退出。
-- `pnpm --dir packages/agent-core lint` reports 259 files clean.
-- `pnpm --dir packages/agent-core lint` 报告 259 个文件全部通过。
 - `rg --files providers/memory/src providers/memory/tests -g '*.py' | wc -l` reports 55 Python files.
 - `rg --files providers/memory/src providers/memory/tests -g '*.py' | wc -l` 报告 55 个 Python 文件。
 - `rg --files crates/mesh-sdk | wc -l` reports 3 Rust files/config entries.
@@ -105,19 +103,19 @@ The cross-review posture is now: benchmark（standardized capability evaluation�
 
 | 组件 | 状态 |
 |---|---|
-| [00 Core Loop](00-core-loop/README.md) | 自研 TS loop 体系 1,102 LOC（loop.ts 452 + loop-tool-calls.ts 565 + loop-types.ts 85）；已超出最初 <200 LOC 契约，非阻塞实时追加输入已实现。 |
+| [00 Core Loop](00-core-loop/README.md) | 自研 TS loop 体系 1,102 LOC；实时追加输入、`/resume` + `/resume latest` 会话恢复、auto-checkpoint recovery 已实现；hook 体系（onTurnComplete/onIdle/onToolResult/onAssistantMessage）完善。 |
 | [01 LLM Integration](01-llm-integration/README.md) | AI SDK v6 client、`ThinkingMode`、provider-aware options、reasoning/tool stream extraction、cache usage basics 已实现；DeepSeek 全链路完整；Provider live matrix 已实现（API Key/OAuth 凭证状态，脱敏）；Anthropic/OpenAI/Gemini provider 均为 blocked/candidate。 |
-| [02 Context](02-context/README.md) | Prompt/session assembly、token budgeting、temporal awareness、memory bridge、injection scanner、skills catalog/restore wiring、compression、cache stability 已实现；Conversation Engineering parked。 |
-| [03 Memory](03-memory/README.md) | quilin-mem MCP、四层 memory、SQLite/FTS5、KG/vector retrieval hooks、profile store、scratchpad、dry-run consolidator 已实现；L3a observer blocked/deferred。 |
+| [02 Context](02-context/README.md) | Prompt/session assembly、token budgeting、temporal awareness、memory bridge、injection scanner、skills catalog/restore wiring、compression、cache stability、Conversation Engineering 6 层架构 + 7 种预设风格已实现。 |
+| [03 Memory](03-memory/README.md) | quilin-mem MCP（断连自动重连）、四层 memory、SQLite/FTS5+Bun 内置后端、KG/vector retrieval hooks、profile store、scratchpad、consolidator auto_schedule、L3a observer（flash 驱动）激活、user.md 自动同步。 |
 | [04 Planning](04-planning/README.md) | Main-LLM direct planning + audit/strategy contracts 已实现；tiny classifier 不是默认路径。 |
-| [05 Tool](05-tool/README.md) | Built-in tools（file_read/write/list、shell_exec、web_fetch、skill_search、skill_view、skill_manage）、MCP bridge、tool routing、DockerSandbox adapter、safety hooks active；Benchmark integration is frozen. |
+| [05 Tool](05-tool/README.md) | 10 built-in tools（file_read/write/list、shell_exec（sandbox auto/on/off）、web_fetch、skill_search（remote）、skill_view、skill_manage（merge）、image_describe、video_summarize、audio_transcribe、mcp_search）、MCP bridge、DockerSandbox（auto-detect + executeAuto）。 |
 | [06 Multi-Agent](06-multi-agent/README.md) | InProcessSupervisorRuntime 已实现：子 Agent 生命周期（append/send/interrupt/pause/resume/cancel）、heartbeat/stale 检测、recovery context 保留、`/agents` REPL 展示；mesh 分布式是后续。 |
-| [07 Safety Guardrails](07-safety-guardrails/README.md) | READ-ONLY default、opt-in AUTO、WriteAuthority、classifier layers、DockerSandbox MVP safety line 为当前口径。 |
-| [08 Observability](08-observability/README.md) | OTel span schema、metrics/logging hooks、coverage/trace gates 属于 Iter D closure；trace-to-eval work must not become Benchmark code unless requested. |
-| [09 Deployment Runtime](09-deployment-runtime/README.md) | CLI（`quilin config show/set`）、TOML config cascade、hot reload controller（Skills/MCP/Config 自动热更新）、first-run onboarding plan、session 恢复（--resume/--resume-latest）已实现。 |
-| [10 Self-Evolution](10-self-evolution/README.md) | Trajectory store、failure analyzer、patch proposal、proposal store、offline optimizer（local-noop）、content hash 等 14 个 TS 文件已实现；完整 trajectory-to-patch 人工审核闭环是后续。 |
+| [07 Safety Guardrails](07-safety-guardrails/README.md) | auto 默认模式（低中风险自动批）、`--yolo` 全自动、四级 WriteAuthority（auto/ask/yolo/read_only）、ActionVerifier、MetaVerifier、secret redaction、SSRF guard。 |
+| [08 Observability](08-observability/README.md) | Span/Metrics/Logs、Prometheus、JSON file exporter、SQLite 持久化 observability DB、Web Dashboard（/dashboard HTML 看板 + Web Chat）、Control Plane API（/snapshot、/sessions、/traces）。 |
+| [09 Deployment Runtime](09-deployment-runtime/README.md) | CLI（`quilin config show/set/service install`）、TOML config cascade、hot reload、first-run welcome、`/resume` + `/resume latest`、`/mcp`、systemd/launchd 开机自启、soul.md/user.md 配置文件。 |
+| [10 Self-Evolution](10-self-evolution/README.md) | Trajectory store、failure analyzer、patch proposal、proposal store（approve/reject/apply）、offline optimizer（runOptimizationCycle）、idle runner（每日配额控制）、content hash 等已实现；完整 trajectory→patch→proposal 闭环已串联到 main loop。 |
 | [11 Agent Mesh](11-agent-mesh/README.md) | Rust `crates/mesh-sdk` stub + CI wiring 已实现；runtime mesh 是 Iter F。 |
-| [13 Skills](13-skills/README.md) | SKILL.md catalog、`skill_view`、CRUD、guard、restore、watcher 已闭合到 M1；M2+ deferred。 |
+| [13 Skills](13-skills/README.md) | SKILL.md catalog、`skill_view`、CRUD + merge、guard、restore、watcher、`skill_search`（本地+远程 skills.sh）、provenance 签名验证已闭合到 M2。 |
 | [14 Benchmark Harness](14-benchmark-harness/README.md) | Existing harness code remains in-tree; component is frozen/read-only for future implementation unless the user asks. |
 
 ## 任务追踪 / Task Tracking
