@@ -8,7 +8,6 @@ import {
 	isRuntimeToolEnabled,
 	type RuntimeToolFilter,
 } from "./config/runtime.js";
-import type { UserConfig } from "./config/user-config-schema.js";
 import { createDefaultPromptSections } from "./context/default-sections.js";
 import {
 	BasicContextManager,

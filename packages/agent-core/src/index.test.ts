@@ -138,6 +138,15 @@ function expectedBuiltinMcpServers() {
 				cwd: expect.stringMatching(/providers\/memory$/u),
 			},
 		},
+		{
+			id: "quilin-web",
+			namespace: "quilin-web",
+			config: {
+				command: "uv",
+				args: ["run", "python", "-m", "quilin_web"],
+				cwd: expect.stringMatching(/providers\/web$/u),
+			},
+		},
 	];
 }
 

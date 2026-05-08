@@ -396,17 +396,25 @@ export function createDefaultCapabilitiesConfig(
 	workspaceRoot: string,
 ): CapabilitiesConfig {
 	const memoryProviderCwd = join(workspaceRoot, "providers", "memory");
+	const webProviderCwd = join(workspaceRoot, "providers", "web");
+	const mcpServers: NonNullable<CapabilitiesConfig["mcpServers"]> = {};
+	if (existsSync(memoryProviderCwd)) {
+		mcpServers["quilin-mem"] = {
+			command: "uv",
+			args: ["run", "python", "-m", "quilin_mem"],
+			cwd: memoryProviderCwd,
+		};
+	}
+	if (existsSync(webProviderCwd)) {
+		mcpServers["quilin-web"] = {
+			command: "uv",
+			args: ["run", "python", "-m", "quilin_web"],
+			cwd: webProviderCwd,
+		};
+	}
 	return {
 		schema_version: CAPABILITIES_SCHEMA_VERSION,
-		mcpServers: existsSync(memoryProviderCwd)
-			? {
-					"quilin-mem": {
-						command: "uv",
-						args: ["run", "python", "-m", "quilin_mem"],
-						cwd: memoryProviderCwd,
-					},
-				}
-			: {},
+		mcpServers,
 		skills: {
 			enabled: false,
 		},

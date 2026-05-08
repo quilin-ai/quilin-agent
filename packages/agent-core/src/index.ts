@@ -11,7 +11,10 @@ import { buildFirstRunOnboardingPlan } from "./config/first-run.js";
 import { LocalMemoryBackend } from "./memory/local-backend.js";
 import { startControlPlaneServer } from "./control-plane/handler.js";
 import { ensureMemoryBackend } from "./config/memory-setup.js";
-import { startQuilinMemMcp } from "./config/mcp-launcher.js";
+import {
+	startQuilinMemMcp,
+	startQuilinWebMcp,
+} from "./config/mcp-launcher.js";
 import {
 	type CapabilitiesHotReloadEvent,
 	createCapabilitiesHotReloadController,
@@ -705,6 +708,7 @@ export async function main(options: MainOptions = {}): Promise<void> {
 			dirname(fileURLToPath(import.meta.url)),
 		);
 		startQuilinMemMcp(workspaceRoot);
+		startQuilinWebMcp(workspaceRoot);
 	}
 
 	const envTrustMode = process.env.QUILIN_TRUST_MODE;
@@ -917,7 +921,6 @@ export async function main(options: MainOptions = {}): Promise<void> {
 				onProviderRunRecord: createProviderRunRecordLogger("repl_turn"),
 				onMcpReconnectApplied: () =>
 					capabilitiesHotReload.markMcpReconnectAppliedAtReplTurnBoundary(),
-				getUserConfig: () => userRuntime.result.config,
 			});
 			shouldExit = true;
 		} finally {
