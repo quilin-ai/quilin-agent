@@ -3,6 +3,7 @@ import { clearScreenDown, emitKeypressEvents, moveCursor } from "node:readline";
 import * as readline from "node:readline/promises";
 import type { CapabilitiesReloadStatus } from "./config/hot-reload.js";
 import type { CapabilitiesRuntime } from "./config/loader.js";
+import type { UserConfig } from "./config/user-config-schema.js";
 import {
 	isRuntimeToolEnabled,
 	type RuntimeToolFilter,
@@ -38,6 +39,7 @@ import type {
 import { logger } from "./logger.js";
 import { renderPanel, renderTable, type TableColumn } from "./tui/renderer.js";
 import { runAgentLoop } from "./loop.js";
+import { AgentLoopError } from "./loop-types.js";
 import {
 	type ChildRunStatusRecord,
 	InProcessSupervisorRuntime,
@@ -65,8 +67,6 @@ import type { AgentState, Message } from "./state/types.js";
 import type { JsonlTrajectoryStore } from "./self-evolution/trajectory-store.js";
 import type { TrajectoryRecordInput } from "./self-evolution/types.js";
 import { createBuiltinTools } from "./tools/builtin/index.js";
-import { createSubagentSpawnTool } from "./tools/builtin/subagent-spawn.js";
-import { createToolSearchTool } from "./tools/builtin/config-session-tools.js";
 import { MCPRegistry, type MCPServerEntry } from "./tools/registry.js";
 import type { SandboxApprovalRequest } from "./tools/router.js";
 import type { ToolWithMetadata } from "./tools/tool-metadata.js";
@@ -166,6 +166,7 @@ interface ReplOptions {
 		onIdle?: () => Promise<void>;
 	onProviderRunRecord?: (record: ProviderRunRecord) => void;
 	onMcpReconnectApplied?: () => void;
+	getUserConfig?: () => UserConfig | null;
 }
 
 interface SupervisorRuntimeControlPlane {
@@ -1886,6 +1887,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 		onIdle,
 		onProviderRunRecord,
 		onMcpReconnectApplied,
+		getUserConfig,
 	} = options;
 	const context = new BasicContextManager();
 	const ownsStaticSkillsManager =
@@ -2076,6 +2078,14 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 		let runtimeSurface: RuntimeSurface | undefined;
 		let catalogHintSkillsManager: SkillsManager | undefined;
 		const registeredMcpServerSignatures = new Map<string, string>();
+		// Forward declarations: subagent_spawn's getLoopConfig closure needs to
+		// read these lazily at execution time, so they live in scope before
+		// syncRuntimeSurface (which constructs the spawn tool).
+		let inferenceConfig: InferenceConfig = {
+			...DEFAULT_INFERENCE_CONFIG,
+			...initialInferenceConfig,
+		};
+		let llm: ProviderControlPlaneLLMClient | undefined;
 
 		const updateCatalogHintSubscription = (
 			currentSkillsManager: SkillsManager | undefined,
@@ -2122,6 +2132,38 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 					createBuiltinTools({
 						writeAuthority,
 						skillsManager: currentSkillsManager,
+						configView: {
+							getRuntimeState: () => {
+								const cfg = getUserConfig?.() ?? null;
+								return cfg == null ? null : { config: cfg };
+							},
+						},
+						sessionList: { checkpoint },
+						toolSearch: {
+							getTools: () => registry.getAllTools(),
+						},
+						subagentSpawn: {
+							getLoopConfig: () => {
+								if (llm == null || runtimeSurface == null) {
+									throw new AgentLoopError(
+										"subagent_spawn invoked before runtime is initialized",
+									);
+								}
+								return {
+									llm,
+									context,
+									sessionAssembler: runtimeSurface.sessionAssembler,
+									checkpoint,
+									modelId,
+									tools: runtimeSurface.tools,
+									toolRouterOptions: {
+										sandboxOrigin: "agent",
+										sandboxApproval: confirmSandboxApproval,
+									},
+									inferenceConfig,
+								};
+							},
+						},
 					}),
 					toolFilter,
 				);
@@ -2214,10 +2256,6 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 
 		runtimeSurface = await syncRuntimeSurface();
 		const baseModel = provider(modelId);
-		let inferenceConfig: InferenceConfig = {
-			...DEFAULT_INFERENCE_CONFIG,
-			...initialInferenceConfig,
-		};
 		let reasoningDisplay: ReasoningDisplayMode = "collapsed";
 		let streamRenderState = createStreamRenderState();
 		const streamingLlm = new StreamingLLMClient(
@@ -2247,7 +2285,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 				{ turnId: activeTurnId },
 			);
 		};
-		const llm = new ProviderControlPlaneLLMClient(streamingLlm, {
+		llm = new ProviderControlPlaneLLMClient(streamingLlm, {
 			routeRequest: {
 				provider: providerId,
 				model: modelId,
@@ -2255,6 +2293,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 			...(tierRouting == null ? {} : { tierRouting }),
 			onRunRecord: recordProviderRun,
 		});
+		const activeLlm = llm;
 
 		while (true) {
 			slashCommandHelpShownForPrompt = false;
@@ -2553,7 +2592,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 				let latestLoopMessages: readonly Message[] | undefined;
 				const response = await runAgentLoop(
 					{
-						llm,
+						llm: activeLlm,
 						context,
 						sessionAssembler: runtimeSurface.sessionAssembler,
 						checkpoint,

@@ -522,4 +522,71 @@ describe("builtin tool index", () => {
 
 		expect(tools.map((tool) => tool.name)).toContain("skill_manage");
 	});
+
+	it("does NOT register tool_search when toolSearch option is missing", () => {
+		const tools = createBuiltinTools();
+		expect(tools.map((tool) => tool.name)).not.toContain("tool_search");
+	});
+
+	it("does NOT register subagent_spawn when subagentSpawn option is missing", () => {
+		const tools = createBuiltinTools();
+		expect(tools.map((tool) => tool.name)).not.toContain("subagent_spawn");
+		// subagent_status is unconditional
+		expect(tools.map((tool) => tool.name)).toContain("subagent_status");
+	});
+
+	it("registers tool_search and exposes injected tools when getTools is wired", async () => {
+		const tools = createBuiltinTools({
+			toolSearch: {
+				getTools: () => createBuiltinTools(),
+			},
+		});
+
+		const toolSearch = getBuiltinTool(tools, "tool_search");
+		const result = await toolSearch.execute({ query: "" });
+
+		expect(result.isError).toBe(false);
+		const payload = JSON.parse(result.content) as {
+			query: string;
+			total: number;
+			tools: ReadonlyArray<{ name: string }>;
+		};
+		expect(payload.total).toBeGreaterThan(0);
+		const names = payload.tools.map((t) => t.name);
+		// Sanity: discovery returns the actual built-in surface, not an empty list
+		// (regression guard for commit a6925d3 which left tool_search wired to []).
+		expect(names).toContain("file_read");
+		expect(names).toContain("web_fetch");
+	});
+
+	it("filters tool_search results by query substring on name or description", async () => {
+		const tools = createBuiltinTools({
+			toolSearch: {
+				getTools: () => createBuiltinTools(),
+			},
+		});
+
+		const toolSearch = getBuiltinTool(tools, "tool_search");
+		const result = await toolSearch.execute({ query: "shell" });
+
+		const payload = JSON.parse(result.content) as {
+			tools: ReadonlyArray<{ name: string }>;
+		};
+		const names = payload.tools.map((t) => t.name);
+		expect(names).toContain("shell_exec");
+		expect(names).not.toContain("file_read");
+	});
+
+	it("registers subagent_spawn when subagentSpawn option is wired", () => {
+		const tools = createBuiltinTools({
+			subagentSpawn: {
+				// getLoopConfig is lazy; not invoked unless spawn.execute runs.
+				getLoopConfig: () => {
+					throw new Error("not used in this test");
+				},
+			},
+		});
+
+		expect(tools.map((tool) => tool.name)).toContain("subagent_spawn");
+	});
 });

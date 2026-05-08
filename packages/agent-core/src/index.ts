@@ -912,6 +912,7 @@ export async function main(options: MainOptions = {}): Promise<void> {
 				writeAuthorityMode: runtimeWriteAuthorityMode,
 				trajectoryStore,
 				onIdle: () => idleRunner.tryRun(),
+				getUserConfig: () => userRuntime.result.config,
 				toolFilter: runtimeToolFilter,
 				onProviderRunRecord: createProviderRunRecordLogger("repl_turn"),
 				onMcpReconnectApplied: () =>

@@ -544,6 +544,26 @@ describe("startRepl", () => {
 			sessionId: "00000000-0000-0000-0000-000000000000",
 		});
 		expect(mockCreateBuiltinTools).toHaveBeenCalledTimes(1);
+		// Regression guard: repl.ts must wire both toolSearch + subagentSpawn
+		// options into createBuiltinTools, otherwise tool_search and
+		// subagent_spawn never reach the registry (see git history around
+		// commits a6925d3 / ffcbc6a).
+		const builtinOptions = mockCreateBuiltinTools.mock.calls[0]?.[0] as
+			| {
+					toolSearch?: { getTools?: () => unknown };
+					subagentSpawn?: { getLoopConfig?: () => unknown };
+					configView?: { getRuntimeState?: () => unknown };
+					sessionList?: { checkpoint?: unknown };
+			  }
+			| undefined;
+		expect(typeof builtinOptions?.toolSearch?.getTools).toBe("function");
+		expect(typeof builtinOptions?.subagentSpawn?.getLoopConfig).toBe(
+			"function",
+		);
+		expect(typeof builtinOptions?.configView?.getRuntimeState).toBe(
+			"function",
+		);
+		expect(builtinOptions?.sessionList?.checkpoint).toBeDefined();
 		expect(mockRegistryRegisterBuiltin).toHaveBeenNthCalledWith(
 			1,
 			expect.arrayContaining([

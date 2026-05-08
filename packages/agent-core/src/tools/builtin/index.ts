@@ -67,6 +67,7 @@ export interface BuiltinToolOptions {
 		"skillsManager" | "writeAuthority"
 	>;
 	readonly subagentSpawn?: SubagentSpawnToolOptions;
+	readonly toolSearch?: ToolSearchToolOptions;
 	readonly configView?: ConfigViewToolOptions;
 	readonly sessionList?: SessionListToolOptions;
 }
@@ -93,6 +94,7 @@ export function createBuiltinTools(
 		createSubagentStatusTool(),
 		createConfigViewTool(options.configView ?? { getRuntimeState: () => null }),
 		createSessionListTool(options.sessionList),
+		...(options.toolSearch != null ? [createToolSearchTool(options.toolSearch)] : []),
 		createMcpSearchTool(),
 		createSkillSearchTool({
 			skillsManager: options.skillsManager,
