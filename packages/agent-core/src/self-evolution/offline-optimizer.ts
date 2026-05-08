@@ -22,6 +22,7 @@ import {
 	type GeneratedPatchProposal,
 	LOCAL_NOOP_OPTIMIZER_ID,
 	type NoProposalReason,
+	type OfflineOptimizer,
 	type OfflineOptimizerInput,
 	type OfflineOptimizerResult,
 	type OptimizationProposalDraft,
@@ -443,14 +444,19 @@ function analysisByTrajectoryRef(
 	);
 }
 
-export class LocalNoopOfflineOptimizer {
+export class LocalNoopOfflineOptimizer implements OfflineOptimizer {
+	readonly optimizerId = LOCAL_NOOP_OPTIMIZER_ID;
 	private readonly now: () => Date;
 
 	constructor(options: LocalNoopOfflineOptimizerOptions = {}) {
 		this.now = options.now ?? (() => new Date());
 	}
 
-	optimize(input: OfflineOptimizerInput): OfflineOptimizerResult {
+	optimize(input: OfflineOptimizerInput): Promise<OfflineOptimizerResult> {
+		return Promise.resolve(this.optimizeSync(input));
+	}
+
+	optimizeSync(input: OfflineOptimizerInput): OfflineOptimizerResult {
 		const createdAt = (input.now ?? this.now)().toISOString();
 		const providedAnalyses = analysisByTrajectoryRef(input.analyses ?? []);
 		const analyses = input.trajectories.map((trajectory) =>
@@ -493,7 +499,7 @@ export class LocalNoopOfflineOptimizer {
 		input: OfflineOptimizerInput,
 		proposalStore: JsonlProposalStore,
 	): Promise<readonly StoredProposalRecord[]> {
-		const result = this.optimize(input);
+		const result = this.optimizeSync(input);
 		const storedProposals: StoredProposalRecord[] = [];
 		for (const proposal of result.proposals) {
 			const stored = await proposalStore.append(proposal);

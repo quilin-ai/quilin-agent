@@ -1,5 +1,14 @@
 export const SELF_EVOLUTION_SCHEMA_VERSION = 1 as const;
 export const LOCAL_NOOP_OPTIMIZER_ID = "local-noop" as const;
+export const PROMPT_REWRITE_OPTIMIZER_ID = "prompt-rewrite" as const;
+
+/**
+ * Identifier for a concrete OfflineOptimizer implementation. Free-form string
+ * so new optimizers can register without expanding a closed enum.
+ *
+ * 离线优化器的实现标识。开放字符串，便于新增 optimizer 时无需扩展闭合枚举。
+ */
+export type OfflineOptimizerId = string;
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue =
@@ -215,15 +224,39 @@ export interface OfflineOptimizerInput {
 	readonly trajectories: readonly StoredTrajectoryRecord[];
 	readonly analyses?: readonly FailureAnalysis[];
 	readonly now?: () => Date;
+	/**
+	 * When true, the optimizer must build proposals deterministically without
+	 * persisting them to a store. Used by callers that want to inspect the
+	 * proposed candidates before deciding to write them.
+	 *
+	 * dryRun=true 表示 optimizer 必须确定性构造 proposal 而不写入 store，
+	 * 调用方可以先检查候选 proposal 再决定是否写入。
+	 */
+	readonly dryRun?: boolean;
 }
+
+export type OfflineOptimizerMode = "artifact_only" | "prompt_rewrite";
 
 export interface OfflineOptimizerResult {
 	readonly schemaVersion: typeof SELF_EVOLUTION_SCHEMA_VERSION;
-	readonly optimizerId: typeof LOCAL_NOOP_OPTIMIZER_ID;
-	readonly mode: "artifact_only";
+	readonly optimizerId: OfflineOptimizerId;
+	readonly mode: OfflineOptimizerMode;
 	readonly createdAt: string;
 	readonly proposals: readonly OptimizationProposalDraft[];
 	readonly noProposalReasons: readonly NoProposalReason[];
+}
+
+/**
+ * Public contract every offline optimizer must implement. Concrete impls may
+ * be sync or async; we expose `optimize` as a Promise so future optimizers can
+ * call out to LLMs without changing the interface.
+ *
+ * 所有离线优化器必须实现的公共契约。具体实现可以同步或异步；optimize 返回
+ * Promise，便于未来 optimizer 调用 LLM 而不修改接口。
+ */
+export interface OfflineOptimizer {
+	readonly optimizerId: OfflineOptimizerId;
+	optimize(input: OfflineOptimizerInput): Promise<OfflineOptimizerResult>;
 }
 
 export type ProposalStatus =
