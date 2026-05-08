@@ -199,6 +199,18 @@ interface ReplOptions {
 	// 自进化提案审核存储。提供后，REPL 暴露上述 slash 命令，
 	// 让用户能在终端查看 pending 提案、approve/reject、并触发 apply。
 	proposalStore?: JsonlProposalStore;
+	/**
+	 * Optional hook fired once the REPL has constructed its `WriteAuthority`
+	 * gate. Lets the embedder bind the live authority to dependencies that
+	 * were instantiated earlier (e.g. `IdleEvolutionRunner`, which must
+	 * route every idle proposal append through the gate per
+	 * docs/07 §2.6.4).
+	 *
+	 * REPL 构造好 WriteAuthority gate 后触发的可选钩子。让宿主把活的
+	 * authority 绑定到提前实例化的依赖（例如 IdleEvolutionRunner——按
+	 * docs/07 §2.6.4，每次 idle 提案 append 都必须走该 gate）。
+	 */
+	onWriteAuthorityReady?: (authority: WriteAuthority) => void;
 	onProviderRunRecord?: (record: ProviderRunRecord) => void;
 	onMcpReconnectApplied?: () => void;
 	// Provides the loaded user config so REPL can wire user-tuned
@@ -2192,6 +2204,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 		trajectoryStore,
 		onIdle,
 		proposalStore,
+		onWriteAuthorityReady,
 		onProviderRunRecord,
 		onMcpReconnectApplied,
 		getUserConfig,
@@ -2299,6 +2312,16 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 			}
 		},
 	});
+	if (onWriteAuthorityReady != null) {
+		try {
+			onWriteAuthorityReady(writeAuthority);
+		} catch (error) {
+			logger.warn(
+				{ err: error },
+				"startRepl: onWriteAuthorityReady hook threw — continuing",
+			);
+		}
+	}
 	const confirmSandboxApproval = async (
 		request: SandboxApprovalRequest,
 	): Promise<boolean> => {

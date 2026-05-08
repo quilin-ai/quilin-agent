@@ -1005,6 +1005,14 @@ export async function main(options: MainOptions = {}): Promise<void> {
 				proposalStore,
 				onIdle: () => idleRunner.tryRun(),
 				getUserConfig: () => userRuntime.result.config,
+				onWriteAuthorityReady: (authority) => {
+					// Wire the live WriteAuthority into IdleEvolutionRunner so every
+					// idle proposal append routes through the safety gate per
+					// docs/07-safety-guardrails/README.md §2.6.4.
+					// 把活的 WriteAuthority 绑定到 IdleEvolutionRunner，保证 idle
+					// 提案落盘前都经过 §2.6.4 的安全 gate。
+					idleRunner.setWriteAuthority(authority);
+				},
 				toolFilter: runtimeToolFilter,
 				onProviderRunRecord: createProviderRunRecordLogger("repl_turn"),
 				onMcpReconnectApplied: () =>

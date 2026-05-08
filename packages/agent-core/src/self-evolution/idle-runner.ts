@@ -1,4 +1,5 @@
 import { logger } from "../logger.js";
+import type { WriteAuthority } from "../safety/write-authority.js";
 import { LocalNoopOfflineOptimizer } from "./offline-optimizer.js";
 import type {
 	FailureAnalysis,
@@ -49,6 +50,31 @@ export interface IdleEvolutionRunnerOptions {
 	 * 可选的离线优化器；省略时回退到 LocalNoopOfflineOptimizer，保持向后兼容。
 	 */
 	readonly optimizer?: OfflineOptimizer;
+	/**
+	 * WriteAuthority gate enforcing the safety contract from
+	 * docs/07-safety-guardrails/README.md §2.6.4: every agent-initiated write
+	 * (including idle evolution proposal persistence) must be authorized
+	 * before reaching the underlying store.
+	 *
+	 * When omitted, idle proposal persistence is denied by default and the
+	 * runner logs a warning. Callers must wire a configured `WriteAuthority`
+	 * to actually persist proposals.
+	 *
+	 * WriteAuthority 强制执行 docs/07-safety-guardrails/README.md §2.6.4
+	 * 的安全契约：所有 agent-initiated write（包括 idle evolution 提案落盘）
+	 * 在写入底层存储前必须获得授权。未提供时默认拒绝并记录警告，调用方必须
+	 * 显式注入 WriteAuthority 才能真正持久化提案。
+	 */
+	readonly writeAuthority?: WriteAuthority;
+	/**
+	 * When true, the idle runner will build proposals through the optimizer
+	 * but skip persistence. Used for inspection / scripted dry runs without
+	 * touching the proposal store.
+	 *
+	 * 为 true 时，runner 仅通过 optimizer 构造提案而跳过持久化，便于人工
+	 * 检查或脚本化 dry-run，不写入 proposal store。
+	 */
+	readonly dryRun?: boolean;
 }
 
 /**
@@ -84,6 +110,8 @@ export class IdleEvolutionRunner {
 	private readonly proposalStore: IdleProposalStore;
 	private readonly now: () => Date;
 	private readonly optimizer: OfflineOptimizer;
+	private writeAuthority?: WriteAuthority;
+	private readonly dryRun: boolean;
 
 	private tokensUsedToday = 0;
 	private lastResetDate = "";
@@ -97,6 +125,22 @@ export class IdleEvolutionRunner {
 		this.now = options.now ?? (() => new Date());
 		this.optimizer =
 			options.optimizer ?? new LocalNoopOfflineOptimizer({ now: this.now });
+		this.writeAuthority = options.writeAuthority;
+		this.dryRun = options.dryRun ?? false;
+	}
+
+	/**
+	 * Late-binding setter for the WriteAuthority gate. Used when the gate is
+	 * constructed after the runner (e.g. inside the REPL bootstrap, after
+	 * `readline` is available for confirm prompts). Once set, every idle
+	 * proposal append routes through `WriteAuthority.authorize`.
+	 *
+	 * 后绑定 WriteAuthority gate。当 gate 在 runner 之后构造（例如 REPL
+	 * 启动后才有 readline 用于 confirm）时使用。设置后，每次 idle proposal
+	 * append 都会走 WriteAuthority.authorize。
+	 */
+	setWriteAuthority(authority: WriteAuthority): void {
+		this.writeAuthority = authority;
 	}
 
 	/**
@@ -139,10 +183,35 @@ export class IdleEvolutionRunner {
 			trajectories,
 			analyses,
 			now: this.now,
+			dryRun: this.dryRun,
 		});
 
-		for (const proposal of result.proposals) {
-			await this.proposalStore.append(proposal);
+		let appendedCount = 0;
+		let deniedCount = 0;
+		let failedCount = 0;
+
+		if (this.dryRun) {
+			logger.info(
+				{
+					optimizerId: this.optimizer.optimizerId,
+					proposalCount: result.proposals.length,
+				},
+				"IdleEvolutionRunner: dryRun=true — skipping proposal persistence",
+			);
+		} else {
+			for (const proposal of result.proposals) {
+				const authorized = await this.authorizeProposalAppend(proposal);
+				if (!authorized) {
+					deniedCount += 1;
+					continue;
+				}
+				const ok = await this.appendProposalSafely(proposal);
+				if (ok) {
+					appendedCount += 1;
+				} else {
+					failedCount += 1;
+				}
+			}
 		}
 
 		// Rough token estimation: each trajectory analysis costs ~100 tokens.
@@ -155,12 +224,103 @@ export class IdleEvolutionRunner {
 				optimizerId: this.optimizer.optimizerId,
 				trajectoryCount: trajectories.length,
 				proposalCount: result.proposals.length,
+				appendedCount,
+				deniedCount,
+				failedCount,
+				dryRun: this.dryRun,
 				noProposalReasonCount: result.noProposalReasons.length,
 				tokensUsedToday: this.tokensUsedToday,
 				dailyTokenQuota: this.dailyTokenQuota,
 			},
 			"IdleEvolutionRunner: cycle complete",
 		);
+	}
+
+	/**
+	 * Route a proposal append through WriteAuthority, returning whether the
+	 * write may proceed. When no WriteAuthority is configured, the runner
+	 * defaults to deny + warn (matching the safety spec's "no idle bypass"
+	 * rule in docs/07 §2.6.4).
+	 *
+	 * 通过 WriteAuthority 路由 proposal append，返回是否可以继续写入。
+	 * 未配置 WriteAuthority 时默认拒绝并告警，对齐 docs/07 §2.6.4 中
+	 * “idle 不得绕过 gate” 的硬约束。
+	 */
+	private async authorizeProposalAppend(
+		proposal: OptimizationProposalDraft,
+	): Promise<boolean> {
+		if (this.writeAuthority == null) {
+			logger.warn(
+				{
+					tool: "self_evolution_proposal_append",
+					origin: "idle",
+					proposalTitle: proposal.title,
+				},
+				"IdleEvolutionRunner: WriteAuthority not configured — denying idle proposal append (docs/07 §2.6.4)",
+			);
+			return false;
+		}
+
+		try {
+			const decision = await this.writeAuthority.authorize({
+				tool: "self_evolution_proposal_append",
+				riskLevel: "medium",
+				origin: "idle",
+				summary: `idle evolution proposal: ${proposal.title}`,
+				detail: proposal.summary,
+			});
+			if (decision.kind === "allow") {
+				return true;
+			}
+			logger.warn(
+				{
+					tool: "self_evolution_proposal_append",
+					origin: "idle",
+					proposalTitle: proposal.title,
+					decision: decision.kind,
+					reason: decision.kind === "deny" ? decision.reason : decision.prompt,
+				},
+				"IdleEvolutionRunner: WriteAuthority denied / requires confirmation — skipping idle proposal append",
+			);
+			return false;
+		} catch (error) {
+			logger.warn(
+				{
+					tool: "self_evolution_proposal_append",
+					origin: "idle",
+					proposalTitle: proposal.title,
+					err: error,
+				},
+				"IdleEvolutionRunner: WriteAuthority threw during authorize — skipping idle proposal append",
+			);
+			return false;
+		}
+	}
+
+	/**
+	 * Append a proposal to the store with defensive error handling. Idle
+	 * cycles must never bubble I/O errors (disk full, EROFS, permission
+	 * denied) up to the caller — the agent main loop must remain responsive.
+	 *
+	 * 容错地将 proposal 写入 store。Idle cycle 不允许把 I/O 错误（磁盘满、
+	 * 只读、权限不足）冒泡到调用方，主循环必须保持可响应。
+	 */
+	private async appendProposalSafely(
+		proposal: OptimizationProposalDraft,
+	): Promise<boolean> {
+		try {
+			await this.proposalStore.append(proposal);
+			return true;
+		} catch (error) {
+			logger.warn(
+				{
+					proposalTitle: proposal.title,
+					err: error,
+				},
+				"IdleEvolutionRunner: proposalStore.append failed — continuing idle cycle",
+			);
+			return false;
+		}
 	}
 
 	/**

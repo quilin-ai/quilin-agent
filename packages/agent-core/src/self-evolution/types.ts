@@ -225,12 +225,16 @@ export interface OfflineOptimizerInput {
 	readonly analyses?: readonly FailureAnalysis[];
 	readonly now?: () => Date;
 	/**
-	 * When true, the optimizer must build proposals deterministically without
-	 * persisting them to a store. Used by callers that want to inspect the
-	 * proposed candidates before deciding to write them.
+	 * Informational hint that the call is a dry run. Optimizers themselves
+	 * never persist proposals — `dryRun` is forwarded so callers (e.g.
+	 * `IdleEvolutionRunner`) can record the intent and skip persistence on
+	 * their side. Persistence is the caller's responsibility, not the
+	 * optimizer's; flipping `dryRun` does not change the optimizer's output.
 	 *
-	 * dryRun=true 表示 optimizer 必须确定性构造 proposal 而不写入 store，
-	 * 调用方可以先检查候选 proposal 再决定是否写入。
+	 * 信息性提示：表明本次调用为 dry-run。Optimizer 本身从不持久化提案，
+	 * `dryRun` 仅供调用方（例如 `IdleEvolutionRunner`）记录意图并在自己侧
+	 * 跳过持久化。是否写入 store 由调用方负责，与 optimizer 输出无关；
+	 * 翻转 `dryRun` 不会改变 optimizer 的产出。
 	 */
 	readonly dryRun?: boolean;
 }
