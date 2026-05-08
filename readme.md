@@ -6,162 +6,200 @@
 
 **愿景**：把 harness（包裹在 LLM 外面的一切）做到极致，让任何模型都能超水平发挥。我们从 Agent 工程的 **12 个关键维度** 深入研究领先框架的设计取舍，提炼跨方案的共性模式，形成统一的原生实现——每一次架构演进都走人工 review PR 流程，并优先用本地组件实证与交叉 review 验证。
 
-## 一句话定位
+## 一句话定位 / One-Liner
 
-**Quilin = 极简 Agent Loop + 12 领域 harness + 两语言运行时 + 研究驱动的持续演进**
+**Quilin = 自研 Agent Loop + 12 领域 harness + 两语言运行时 + 研究驱动的持续演进**
+
+**Quilin = self-built Agent Loop + 12-domain harness + two-language runtime + research-driven continuous evolution**
 
 不是 LangGraph 变体，不是 LangChain 上层封装，而是按 Harness Engineering 原则原生构建的、可被团队主导演进的 Agent 操作系统。
 
-## 核心架构
+Not a LangGraph variant or LangChain wrapper — a natively built Agent OS following Harness Engineering principles, owned and evolved by the team.
 
-- **自研极简 Agent Loop**（< 200 行 TS while-loop）—— 不依赖 LangGraph / LangChain / AutoGen 等外部 Agent 框架
-- **两语言运行时（Iter A..C）** —— TypeScript（Agent 核心 + E-T-C-S-L-V 六组件）+ Python（ML Provider 封装为 MCP Server）。**Rust**（mesh / WASM 沙箱）在 Iter D 引入。
-- **Harness Engineering 顶层组织原则** —— LLM 是发动机，12 领域是整辆车
-- **E-T-C-S-L-V 六组件** —— Execution / Tools / Context / State / Lifecycle / Verification 作为可调用能力层暴露给 LLM，而非固定状态图节点
-- **LLM 抽象** —— Vercel AI SDK v6（630M+ 周下载，25+ providers）
+## 当前状态 / Current State (2026-05-08)
+
+| 指标 / Metric | 值 / Value |
+|---|---|
+| TS source files | 258 |
+| Test files / cases | 129 / 1,711 (all passing) |
+| Loop LOC | 1,102 (loop.ts 452 + loop-tool-calls.ts 565 + loop-types.ts 85) |
+| Python source files (quilin-mem) | 55 |
+| Rust files (mesh-sdk stub) | 3 |
+| Active iterations completed | Phase 0, Iter A/B/C/M/D, Iter G1/G2/H/I/J/K |
+| Iter E (Benchmark) | **frozen / canceled** |
+
+详情见 [docs/STATUS.md](docs/STATUS.md)。
+
+## 核心架构 / Core Architecture
+
+- **自研 TypeScript Agent Loop** —— `loop.ts` + `loop-tool-calls.ts` + `loop-types.ts` 共 1,102 LOC（已超出最初 `<200 LOC` 契约），不依赖 LangGraph / LangChain / AutoGen
+- **两语言运行时** —— TypeScript（Agent 核心 + 12 领域 harness）+ Python（quilin-mem MCP Server）。Rust `crates/mesh-sdk` 仅是 Iter D stub，runtime mesh 延后到 Iter F
+- **Harness Engineering** —— LLM 是发动机，12 领域是整辆车
+- **极简 Agent Loop hooks** —— `onTurnComplete` / `onIdle` / `onToolResult` / `onAssistantMessage` / `onMessagesUpdated`
+- **LLM 抽象** —— Vercel AI SDK v6（25+ providers）；当前 DeepSeek 全链路完整，Anthropic / OpenAI / Gemini 为 blocked / candidate
 - **极简哲学** —— 约束悖论、Build to Delete、最小化然后迭代
 
 详见 [Core Loop](docs/00-core-loop/README.md) 与 [Harness Engineering](docs/00-core-loop/harness-engineering.md)。
 
-## 技术栈
+## 技术栈 / Tech Stack
 
-| 层 | 运行时 | 包管理 | 测试 | 构建 |
-|---|--------|-------|------|------|
-| TS（Agent 核心） | Bun | pnpm | Vitest（80% 覆盖率） | Bun bundler |
+| 层 / Layer | 运行时 / Runtime | 包管理 / Package | 测试 / Test | 构建 / Build |
+|---|---|---|---|---|
+| TS（Agent 核心） | Bun | pnpm | Vitest（80% 覆盖率门槛） | Bun bundler |
 | Python（ML Provider） | CPython 3.14 | uv（Astral） | pytest + pytest-asyncio | uv + hatchling |
-| Rust（Iter D 再启用） | — | — | — | — |
+| Rust（mesh-sdk stub） | Rust 1.94 | cargo | `cargo test --workspace` | cargo |
 
-**跨语言编排**：`just`（justfile）· **日志**：JSON schema 输出到 stdout · **开发环境**：本地裸机开发，`.devcontainer/` 留给 CI/CD
+**跨语言编排 / Orchestration**：`just`（justfile）· **日志 / Logging**：JSON schema 输出到 stdout · **本地开发 / Local Dev**：本地裸机开发，`.devcontainer/` 留给 CI/CD
 
-## 通信与 MCP 生态
+## 通信 / Communication
 
-- **MCP stdio**（TS↔Python，延迟 ~5ms）—— 跨语言调用主通道
-- **code-review-graph MCP** —— Tree-sitter 增量知识图谱，token 高效的代码审查基座
+- **MCP stdio**（TS↔Python，延迟 ~5ms）—— 跨语言调用主通道，断连自动重连
+- **code-review-graph MCP** —— Tree-sitter 增量知识图谱，token 高效的代码审查
 - **AgentBridge MCP** —— Claude（规划 / review）↔ Codex（执行 / 实现）双 Agent 协作桥
-- gRPC（Agent Mesh）/ HTTP SSE（前端流式）—— 跟随 Rust mesh-sdk 到 Iter D 再引入
+- **HTTP Control Plane** —— `/dashboard`、`/snapshot`、`/sessions`、`/traces`、`/api/chat`
+- gRPC（Agent Mesh）—— 跟随 Rust mesh-sdk 到 Iter F 引入
 
-## 12 个活跃工程领域
+## 12 个工程领域 / 12 Engineering Domains
 
-| # | 领域 | 关键设计 | Iter | Spec |
-|---|------|---------|------|------|
-| 01 | LLM 接入 | Vercel AI SDK v6、ThinkingMode、InferenceConfig | A | [01](docs/01-llm-integration/README.md) |
-| 02 | 上下文 | System prompt 组装、token 预算、KV-cache 优化、三层时间感知 | A | [02](docs/02-context/README.md) |
-| 03 | 记忆 | quilin-mem 4 层 + 向量+KG + 自反思 + User Profile Store | A-B | [03](docs/03-memory/README.md) |
-| 04 | 规划 | 意图识别、任务分解、推理策略切换、动态重规划 | C | [04](docs/04-planning/README.md) |
-| 05 | 工具 | 4 类混合动作空间、MCP 客户端、浏览器（Zoom-In）、CLI-Anything | B | [05](docs/05-tool/README.md) |
-| 06 | 多 Agent | 同构 spawn + 异构 mesh + 非阻塞 Supervisor + 进度汇报协议 | D | [06](docs/06-multi-agent/README.md) |
-| 07 | 安全护栏 | 4 层验证、**READ-ONLY 默认 + AUTO opt-in**、2-stage Classifier、Two-Strike Rule | B | [07](docs/07-safety-guardrails/README.md) |
-| 08 | 可观测性 | OTel 追踪、指标、结构化日志、WebUI Dashboard、评估驱动开发 | B-C | [08](docs/08-observability/README.md) |
-| 09 | 部署运行时 | CLI、配置管理、热更新 + 主动通知 | C | [09](docs/09-deployment-runtime/README.md) |
-| 10 | 自进化 | 轨迹分析、**human-in-loop scaffold patch**、技能自创、User Insight Engine | D | [10](docs/10-self-evolution/README.md) |
-| 11 | Agent Mesh | AgentMesh SDK 接入（Rust，Iter D） | D | [11](docs/11-agent-mesh/README.md) |
-| 13 | 技能工程 | SKILL.md + YAML frontmatter、catalog 索引 + 按需加载、Skill ≠ Tool、M0/M1/M2+ 分层 | B | [13](docs/13-skills/README.md) |
+| # | 领域 / Domain | 当前能力 / Current Capability | Spec |
+|---|---|---|---|
+| 01 | LLM 接入 / LLM Integration | AI SDK v6、ThinkingMode、provider live matrix、reasoning/tool stream extraction、cache usage；DeepSeek 完整。 | [01](docs/01-llm-integration/README.md) |
+| 02 | 上下文 / Context | Prompt/session assembly、token budgeting、temporal awareness、memory bridge、injection scanner、skills catalog/restore、compression、cache stability、Conversation Engineering 6 层 + 7 种风格预设。 | [02](docs/02-context/README.md) |
+| 03 | 记忆 / Memory | quilin-mem MCP（自动重连）、四层 memory、SQLite/FTS5+Bun 内置后端、KG/vector retrieval hooks、profile store、scratchpad、consolidator auto_schedule、L3a observer（flash 驱动）。 | [03](docs/03-memory/README.md) |
+| 04 | 规划 / Planning | Main-LLM direct planning + audit/strategy contracts；tiny classifier 不是默认路径。 | [04](docs/04-planning/README.md) |
+| 05 | 工具 / Tools | 15 built-in tools（file/web/shell/skill/mcp/multimodal/subagent/config/session）+ tool_search 网关、MCP bridge、DockerSandbox（auto/on/off）。 | [05](docs/05-tool/README.md) |
+| 06 | 多 Agent / Multi-Agent | InProcessSupervisorRuntime：子 Agent 生命周期、heartbeat/stale 检测、recovery context、`/agents` 展示；mesh 分布式延后。 | [06](docs/06-multi-agent/README.md) |
+| 07 | 安全护栏 / Safety | auto 默认（低中风险自动批）、`--yolo` 全自动、四级 WriteAuthority（auto/ask/yolo/read_only）、ActionVerifier、MetaVerifier、secret redaction、SSRF guard。 | [07](docs/07-safety-guardrails/README.md) |
+| 08 | 可观测性 / Observability | Span/Metrics/Logs、Prometheus、JSON file exporter、SQLite 持久化、Web Dashboard（HTML 看板 + Web Chat）、Control Plane API。 | [08](docs/08-observability/README.md) |
+| 09 | 部署运行时 / Deployment | CLI（`quilin config show/set/service install`）、TOML config cascade、hot reload、first-run welcome、`/resume` + `/resume latest`、`/mcp`、systemd/launchd 自启、soul.md/user.md。 | [09](docs/09-deployment-runtime/README.md) |
+| 10 | 自进化 / Self-Evolution | Trajectory store、failure analyzer、patch proposal、proposal store（approve/reject/apply）、offline optimizer、idle runner（每日配额）；trajectory→patch→proposal 闭环已串联。 | [10](docs/10-self-evolution/README.md) |
+| 11 | Agent Mesh | Rust `crates/mesh-sdk` stub + CI wiring；runtime mesh 是 Iter F。 | [11](docs/11-agent-mesh/README.md) |
+| 13 | 技能工程 / Skills | SKILL.md catalog、`skill_view`、CRUD + merge、guard、restore、watcher、`skill_search`（本地+远程 skills.sh）、provenance 签名验证；M2 已闭合。 | [13](docs/13-skills/README.md) |
+| 14 | Benchmark Harness | **frozen / read-only**；除非用户明确要求 Benchmark 工作，任何 Iter 都不得新增或修改。 | [14](docs/14-benchmark-harness/README.md) |
 
-> **Domain 12（Conversation Engineering / 对话工程）** —— 暂停到 Iter F+，保留为研究笔记。核心回路与依赖 runtime 组件有本地实证前，不投入"活人感"工程。
+> **Domain 12（Conversation Engineering / 对话工程）** —— 6 层架构 + 7 种风格预设已实现并集成到 ContextAssembler runtime（不再 parked）。
 
-## Quilin 独特优势
+## Built-in Tools（15 个）
 
-1. **Harness Engineering 顶层显式命名** —— 综合 18 篇行业文献的统一学科，把 12 领域组织成一等架构理念
-2. **融合 6 大模型架构精华** —— 7 个跨模型设计模式（分层记忆、混合动作空间、自进化闭环、两段式定位、成本感知、思考模式、内建验证）内化进框架
-3. **研究驱动的架构演进** —— 持续跟踪 Agent 框架前沿，提炼跨方案的共性模式与工程取舍，由团队评估后以原生方式纳入设计
-4. **quilin-mem 4 层分级记忆** —— working/episodic/semantic/skill + 向量检索 + 知识图谱 + 自反思 + User Profile Store + Departure Context
-5. **技能工程（第 13 领域）** —— Skill ≠ Tool 严格分离；SKILL.md + frontmatter 目录化；catalog 先行 + 按需 `skill_view` 加载；路径 / 大小 / symlink 多层安全；M0 → M1 → M2+ 分阶段落地
-6. **Agent Mesh 能力**（Iter D） —— AgentMesh SDK adapter 提供去中心化 Agent 通信
-7. **热更新 + 主动通知** —— 解决 OpenClaw / Hermes 更新断连痛点
-8. **自进化带验证 + 人在回路** —— Scaffold 修改走 propose-patch → human review → apply 流程，不盲目自信也不自动 apply
-9. **三层时间感知** —— 会话内间隔 + 绝对时间 + 跨 session 时间线，理解"沉默"本身是信息
-10. **显式权限分级** —— READ-ONLY 默认，AUTO 是 `--trust auto` opt-in；敏感操作（文件写、子进程 spawn、网络出站）始终可审计
-11. **CLI-Anything 工具全覆盖** —— GUI-only 工具自动生成 CLI wrapper（HKUDS/CLI-Anything）
-12. **WebUI Dashboard** —— 独立全局可视化面板（任务 / 记忆 / 指标 / Agent 拓扑）
-13. **非阻塞 Supervisor 架构** —— 主 Agent 永不阻塞，所有任务委派 Sub-Agent，checkpoint + heartbeat 汇报
-14. **Idle Evolution（opt-in）** —— 显式开启后才用闲置配额做记忆整合 / 浏览；默认 OFF，任何写入动作都需审批
-15. **AgentBridge 双 Agent 协作** —— Claude + Codex 分工，协作语言中文便于用户同步
+| Tool | Category | 功能 |
+|---|---|---|
+| `tool_search` | programmatic | 工具发现网关（system prompt 主入口）|
+| `skill_search` | programmatic | 技能搜索（本地 + 远程 skills.sh） |
+| `mcp_search` | programmatic | MCP 市场搜索（claudemarketplaces.com） |
+| `file_read` / `file_write` / `file_list` | programmatic | 文件 IO（敏感检测 + WriteAuthority） |
+| `shell_exec` | programmatic | Shell 执行（sandbox auto/on/off） |
+| `web_fetch` | programmatic | HTTP 请求（SSRF 防护） |
+| `skill_view` / `skill_manage` | interactive | 技能查看 / CRUD + merge |
+| `image_describe` / `video_summarize` / `audio_transcribe` | interactive | 多模态 |
+| `subagent_spawn` / `subagent_status` | interactive | 后台子 Agent 启动 / 状态查询 |
+| `config_view` / `session_list` | programmatic | 运行时配置 / 历史会话 |
 
-## 架构演进机制
+System prompt 只暴露三个搜索工具（`tool_search` / `skill_search` / `mcp_search`），其它工具通过搜索发现并直接调用。
 
-Quilin 不是定版即止，而是持续演进的平台：
-
-1. **研究** —— 跟踪 Agent 工程前沿（学术论文 + 主流框架的设计动向）
-2. **提炼** —— 识别跨方案的共性模式与工程取舍
-3. **设计** —— 结合自身架构约束，给出原生解决方案
-4. **落地** —— 所有变更走人工 review PR，优先用本地组件实证、测试和交叉 review 验证
-
-`scripts/sync-upstreams.py` 用作研究辅助——定时扫描领先框架的变更，生成摘要供 reviewer 参考。**不自动 apply 代码，不自动修改 scaffold**；所有架构变更必须经过团队 review 与本地实证验证。Benchmark 当前是全项目最低优先级，Iter E 已冻结；除非用户明确要求，任何 Iter 都不得新增或修改 Benchmark 代码。
-
-## 目录结构
+## 目录结构 / Directory Structure
 
 ```
 quilin-agent/
-├── packages/                       # TS — pnpm workspace
-│   └── agent-core/                 #   Agent Loop + LLM + Context + Tools
-├── providers/                      # Python — uv workspace
-│   └── memory/                     #   quilin-mem MCP Server（SQLite + FTS5 + 向量 + KG）
-# crates/                          # Rust — Iter D 引入（mesh-sdk）
-├── upstreams/                      # ~100 git submodules（tracked, --depth 1）
+├── packages/
+│   └── agent-core/                 # TS — pnpm workspace
+│       ├── src/
+│       │   ├── loop.ts             # Agent Loop（452 LOC）
+│       │   ├── loop-tool-calls.ts  # 工具调用（565 LOC）
+│       │   ├── loop-types.ts       # 类型契约（85 LOC）
+│       │   ├── repl.ts             # REPL + 命令派发
+│       │   ├── context/            # PromptBuilder + ContextManager + 6 层对话风格
+│       │   ├── llm/                # AI SDK v6 client + tier router
+│       │   ├── memory/             # LocalMemoryBackend + MemoryClient
+│       │   ├── multi-agent/        # InProcessSupervisorRuntime
+│       │   ├── observability/      # Spans/Metrics/Logs + Web Dashboard
+│       │   ├── planning/           # Intent + Plan + Replan + Routing
+│       │   ├── safety/             # WriteAuthority + ActionVerifier
+│       │   ├── self-evolution/     # Trajectory + Failure + Proposal + Idle Runner
+│       │   ├── skills/             # SkillsManager + SkillsGuard + Remote Registry
+│       │   ├── tools/              # 15 builtin tools + ToolRouter + MCPRegistry
+│       │   ├── tui/                # 终端 UI（panel/table/theme）
+│       │   ├── control-plane/      # Web 控制台 HTTP server
+│       │   └── ...
+│       └── package.json
+├── providers/
+│   └── memory/                     # Python — uv workspace
+│       └── src/quilin_mem/         # quilin-mem MCP Server
+├── crates/
+│   └── mesh-sdk/                   # Rust stub（Iter F runtime mesh）
 ├── docs/
-│   ├── README.md                   # docs/ 写入/查阅约定
-│   ├── STATUS.md                   # 当前全局状态
-│   ├── 00-core-loop/               # 核心循环 / harness / glossary
-│   ├── 01-llm-integration/ ... 11-agent-mesh/
-│   ├── 02-context/
-│   │   └── conversation-engineering/  # parked sub-module — Iter F+
-│   ├── 13-skills/                  # 技能工程
-│   └── 14-benchmark-harness/       # frozen/read-only unless user explicitly asks
-├── scripts/                        # 自动化脚本（sync-upstreams / merge-with-claude / release / setup-cron）
-├── .github/workflows/ci.yml        # CI（TS + Python 矩阵；Rust 在 Iter D 加入）
+│   ├── README.md                   # docs 入口与写入约定
+│   ├── STATUS.md                   # 全局状态快照
+│   └── <00-14>-<component>/        # 各组件当前架构与状态
+├── scripts/                        # 自动化脚本
 ├── justfile                        # 跨语言编排
-├── quilin.md                       # 共享指南（CLAUDE.md / AGENTS.md 符号链接指向它）
-└── readme.md
+├── quilin.md                       # 共享指南（CLAUDE.md / AGENTS.md 符号链接）
+└── readme.md                       # 本文件
 ```
 
-## 快速启动
+## 快速启动 / Quick Start
 
 ```bash
-# ===== 一键开发（推荐） =====
-just init          # 安装全部依赖（pnpm + uv）
-just start         # 启动全部服务（agent-core + quilin-mem）
+# 一键开发 / One-shot Dev
+just init          # 安装依赖（pnpm + uv）
+just start         # 启动全部服务（agent-core + quilin-mem MCP）
 just dev           # TS 开发模式（前台 + watch）
-just dev-memory    # Python quilin-mem 开发模式
-just test-all      # 一键测试（TS + Python）
-just check         # 一键 lint + format
+just dev-yolo      # 全自动模式（永不询问，仅本地实验用）
+just dev-ask       # 严格询问模式（每次写入都确认）
+just test-all      # 一键测试（TS + Python + Rust）
+just check         # lint + format
 just build         # TS 构建
 
-# ===== 上游同步（侦察 diff；融合走 PR） =====
+# Web Dashboard
+QUILIN_DASHBOARD_PORT=9000 just dev   # 浏览器访问 http://127.0.0.1:9000/dashboard
+
+# 上游研究（不自动 apply）
 python scripts/sync-upstreams.py              # 单次上游检查
-python scripts/sync-upstreams.py --daemon     # daemon 模式，每 5 分钟
-bash scripts/merge-with-claude.sh <submodule-name> [diff-summary]  # 生成融合 patch 建议
+python scripts/sync-upstreams.py --daemon     # daemon，每 5 分钟
 bash scripts/release.sh --dry-run             # 预览发布
-bash scripts/init-all-submodules.sh           # 首次初始化 submodule
 ```
 
-## Benchmark 冻结
+## 安全 / Trust Modes
+
+| 模式 / Mode | 行为 / Behavior |
+|---|---|
+| `read_only` | 完全只读，任何写入都拒绝 |
+| `ask` | 每次写入都询问 |
+| `auto`（默认）| 低中风险自动批，高风险询问 |
+| `yolo` | 全自动，永不询问（仅本地实验） |
+
+通过 `QUILIN_TRUST_MODE` 环境变量切换，或在 user config 中固化。
+
+## Benchmark 冻结 / Benchmark Freeze
 
 截至 2026-05-02，Benchmark 是全项目最低优先级。Iter E 已冻结并在 Linear 中取消；未完成的 Benchmark project / issue 已从活跃队列移出或降为低优先级。
 
 仓库中已有的 `benchmarks/` 与 `providers/memory/benchmarks/` 代码保留为当前代码事实和历史证据。除非用户明确要求 Benchmark 工作，任何 Iter 都不得新增或修改 Benchmark 代码，也不得重开已取消的 Benchmark 任务。当前口径见 [Benchmark Harness](docs/14-benchmark-harness/README.md)。
 
-## 多 Agent 协作
+## 多 Agent 协作 / Multi-Agent Collaboration
 
 本项目使用 **AgentBridge** 协调两个 AI agent：
 
-| 角色 | 职责 |
-|------|------|
-| **Claude Code** | Reviewer / Planner / Hypothesis Challenger — 架构设计、代码审查、任务分解、决策判断 |
+| 角色 / Role | 职责 / Responsibility |
+|---|---|
+| **Claude Code** | Reviewer / Planner / Hypothesis Challenger — 架构设计、代码审查、任务分解 |
 | **Codex CLI** | Implementer / Executor / Reproducer — 代码编写、修改、重构、沙箱验证 |
 
-协作语言中文，所有协作消息必须回复，避免单方面沉默。详见 [quilin.md](quilin.md) 的 AgentBridge 章节。
+协作语言中文，所有协作消息必须回复。详见 [quilin.md](quilin.md) 的 AgentBridge 章节。
 
-## 当前状态
+## 当前状态入口 / Status Entry Points
 
-- [全局状态](docs/STATUS.md)
-- [Core Loop](docs/00-core-loop/README.md)
-- 历史 ADR / research / review 不再作为 docs 入口；必要历史通过 git history 追溯。
+- **全局状态**：[docs/STATUS.md](docs/STATUS.md)
+- **Core Loop**：[docs/00-core-loop/README.md](docs/00-core-loop/README.md)
+- **任务管理**：[Linear: QuiLin Agent](https://linear.app/quilin-agent)
+- **历史**：必要历史通过 git history 追溯，docs 不再保留 ADR / research / review 档案
 
-## 为什么叫 Quilin？
+## 为什么叫 Quilin？/ Why Quilin?
 
 **麒麟**汇聚百兽之灵——鹿角、牛尾、龙鳞、马蹄，集多种灵性于一身，却是一种独立而完整的祥瑞。
 
 我们的 Agent 平台也是如此：工程团队主导研究 Agent 工程的最佳实践，提炼、设计、原生实现，最终构成一个完整统一的体系。名字本身即是这种精神——**Quilt**（拼布）+ **Qilin**（麒麟）= **Quilin**。
+
+The Qilin gathers virtues of many creatures — antlers of a deer, tail of an ox, scales of a dragon, hooves of a horse — yet remains a single, complete creature. Quilin Agent does the same: research the best of the Agent engineering field, distill it, design it, implement it natively, and emerge as one unified platform. The name says it: **Quilt** + **Qilin** = **Quilin**.
 
 ---
 
