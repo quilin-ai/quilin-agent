@@ -347,6 +347,16 @@ Because `IdleEvolutionRunner` is constructed before `startRepl` (per the launch 
 
 `OfflineOptimizerInput.dryRun` is **informational**: optimizers don't persist, so flipping `dryRun` doesn't change their output. The caller (`IdleEvolutionRunner`) observes `dryRun=true` and skips `proposalStore.append`, so a reviewer can dry-run the optimizer against a trajectory set without polluting the store.
 
+**Sandbox 强制点 / Sandbox enforcement on apply (QUI-97)**
+
+`scaffold_patch` 类提案的 `JsonlProposalStore.applyApproved(...)` 调用方必须传入 `sandboxPolicyGate: ProposalSandboxPolicyGate`（见 `packages/agent-core/src/self-evolution/sandbox-policy-gate.ts`）。`applyApproved` 在 WriteAuthority 返回 `allow` 之后会再咨询该闸门，按 [07 §2.6.4](../07-safety-guardrails/README.md#264-writeauthority-gate权限模式的运行时执行器) 高风险写路径走沙箱隔离的纪律选择 `docker` / `native+warning` / `deny`。`docker` 决策时 applier 收到 `{ sandbox: { kind: "docker", provider: "docker" } }` 上下文（在 `DockerSandboxRouter` 容器内执行）；Docker 不可达时降级到 `native` 并打 `logger.warn` audit；闸门显式 `deny` 时 `applyApproved` 跳过 applier，记录 `reasonCode: "sandbox_denied"`。
+
+For `scaffold_patch` proposals the caller of `JsonlProposalStore.applyApproved(...)` MUST pass `sandboxPolicyGate: ProposalSandboxPolicyGate` (see `packages/agent-core/src/self-evolution/sandbox-policy-gate.ts`). After `WriteAuthority` returns `allow`, `applyApproved` consults this gate and decides between `docker` / `native+warning` / `deny` per the high-risk-write sandbox-isolation rule in [07 §2.6.4](../07-safety-guardrails/README.md#264-writeauthority-gate权限模式的运行时执行器). On `docker`, the applier receives a `{ sandbox: { kind: "docker", provider: "docker" } }` context and runs the patch inside a `DockerSandboxRouter` container. On `native` (Docker unavailable), the gate logs a `logger.warn` audit entry and lets the applier run on the host. On `deny`, `applyApproved` skips the applier and records `reasonCode: "sandbox_denied"`.
+
+非 `scaffold_patch`（artifact-only review proposal）短路返回 `native`（warning 为空），保持既有 review-only 流程的零行为变化；caller 不传入 gate 时，`applyApproved` 完全保留既有 native applier 行为，便于单元测试与本地脚本调用。
+
+Non-`scaffold_patch` (artifact-only review) proposals short-circuit to `native` with an empty warning so the existing review-only flow is unchanged; when no gate is supplied, `applyApproved` preserves the original native-applier behavior so unit tests and local scripts can keep their current call sites.
+
 ### 2.4.1 提案审核 REPL 命令 / Proposal Review REPL Commands
 
 The four review actions (list / approve / reject / apply) are exposed as REPL slash commands so a reviewer can drive the human-in-loop gate from the same TUI that runs the agent. Each command operates on the JSONL `proposalStore` (see `packages/agent-core/src/self-evolution/proposal-store.ts`); when the store is not configured the commands print a clear "store not configured" message instead of silently no-ops.

@@ -13,10 +13,15 @@ import {
 import {
 	buildProposalReviewQueueView,
 	JsonlProposalStore,
+	type ProposalPatchApplierContext,
 	transitionProposalAppliedState,
 	transitionProposalReviewState,
 	UnsupportedPatchTypeError,
 } from "./proposal-store.js";
+import {
+	DockerProposalSandboxPolicyGate,
+	type ProposalSandboxPolicyGate,
+} from "./sandbox-policy-gate.js";
 import type {
 	CandidateArtifact,
 	ProposalRecordInput,
@@ -1726,6 +1731,197 @@ describe("JsonlProposalStore", () => {
 					reviewedAt: "2026-05-02" as never,
 				}),
 			).toThrow(/ISO 8601 UTC/u);
+		});
+
+		describe("sandbox policy gate", () => {
+			it("forwards a docker decision to the applier when Docker is available", async () => {
+				const store = new JsonlProposalStore({
+					filePath: path.join(tmpDir, "apply-sandbox-docker.jsonl"),
+					now: () => new Date("2026-05-02T02:00:00.000Z"),
+				});
+				const approved = await appendApprovedProposal(
+					store,
+					patchProposalInput(),
+				);
+
+				const authority = new WriteAuthority({
+					mode: "ask",
+					confirm: async () => true,
+				});
+				const gate = new DockerProposalSandboxPolicyGate({
+					isDockerAvailable: async () => true,
+				});
+				const applier = vi.fn(
+					async (
+						_record: StoredProposalRecord,
+						_context?: ProposalPatchApplierContext,
+					) => undefined,
+				);
+
+				const result = await store.applyApproved(authority, {
+					applier,
+					sandboxPolicyGate: gate,
+				});
+
+				expect(result.applied).toHaveLength(1);
+				expect(result.skipped).toEqual([]);
+				expect(result.failed).toEqual([]);
+				expect(applier).toHaveBeenCalledTimes(1);
+				const passedContext = applier.mock.calls[0]?.[1];
+				expect(passedContext?.sandbox).toEqual({
+					kind: "docker",
+					provider: "docker",
+				});
+
+				const fetched = await store.getById(approved.proposalId);
+				expect(fetched?.status).toBe("applied");
+			});
+
+			it("falls back to native with a warning when Docker is unavailable", async () => {
+				const store = new JsonlProposalStore({
+					filePath: path.join(tmpDir, "apply-sandbox-native.jsonl"),
+					now: () => new Date("2026-05-02T02:00:00.000Z"),
+				});
+				const approved = await appendApprovedProposal(
+					store,
+					patchProposalInput(),
+				);
+
+				const authority = new WriteAuthority({
+					mode: "ask",
+					confirm: async () => true,
+				});
+				const gate = new DockerProposalSandboxPolicyGate({
+					isDockerAvailable: async () => false,
+				});
+				const applier = vi.fn(
+					async (
+						_record: StoredProposalRecord,
+						_context?: ProposalPatchApplierContext,
+					) => undefined,
+				);
+
+				const result = await store.applyApproved(authority, {
+					applier,
+					sandboxPolicyGate: gate,
+				});
+
+				expect(result.applied).toHaveLength(1);
+				expect(result.skipped).toEqual([]);
+				expect(result.failed).toEqual([]);
+				expect(applier).toHaveBeenCalledTimes(1);
+				const passedContext = applier.mock.calls[0]?.[1];
+				expect(passedContext?.sandbox?.kind).toBe("native");
+				if (passedContext?.sandbox?.kind === "native") {
+					expect(passedContext.sandbox.warning.length).toBeGreaterThan(0);
+					expect(passedContext.sandbox.warning).toMatch(
+						/Docker sandbox unavailable/iu,
+					);
+				}
+
+				const fetched = await store.getById(approved.proposalId);
+				expect(fetched?.status).toBe("applied");
+			});
+
+			it("skips the applier when the sandbox gate denies the apply", async () => {
+				const denyFilePath = path.join(tmpDir, "apply-sandbox-deny.jsonl");
+				const store = new JsonlProposalStore({
+					filePath: denyFilePath,
+					now: () => new Date("2026-05-02T02:00:00.000Z"),
+				});
+				const approved = await appendApprovedProposal(
+					store,
+					patchProposalInput(),
+				);
+
+				const authority = new WriteAuthority({
+					mode: "ask",
+					confirm: async () => true,
+				});
+				const gate: ProposalSandboxPolicyGate = {
+					decide: async () => ({
+						kind: "deny",
+						reason: "ci-maintenance window",
+					}),
+				};
+				const applier = vi.fn(
+					async (
+						_record: StoredProposalRecord,
+						_context?: ProposalPatchApplierContext,
+					) => undefined,
+				);
+
+				const result = await store.applyApproved(authority, {
+					applier,
+					sandboxPolicyGate: gate,
+				});
+
+				expect(result.applied).toEqual([]);
+				expect(result.failed).toEqual([]);
+				expect(result.skipped).toHaveLength(1);
+				expect(result.skipped[0]).toMatchObject({
+					proposalId: approved.proposalId,
+					status: "skipped",
+					reasonCode: "sandbox_denied",
+					reason: "ci-maintenance window",
+				});
+				expect(applier).not.toHaveBeenCalled();
+
+				const fetched = await store.getById(approved.proposalId);
+				expect(fetched?.status).toBe("approved");
+
+				const persisted = (await readFile(denyFilePath, "utf8"))
+					.trim()
+					.split("\n")
+					.map((line) => JSON.parse(line) as { status: string });
+				expect(persisted.map((line) => line.status)).toEqual([
+					"pending_review",
+					"approved",
+				]);
+			});
+
+			it("skips sandbox enforcement for non scaffold_patch proposals (artifact-only)", async () => {
+				const store = new JsonlProposalStore({
+					filePath: path.join(tmpDir, "apply-sandbox-artifact-only.jsonl"),
+					now: () => new Date("2026-05-02T02:00:00.000Z"),
+				});
+				const approved = await appendApprovedProposal(store, proposal());
+
+				const authority = new WriteAuthority({
+					mode: "ask",
+					confirm: async () => true,
+				});
+				const isDockerAvailable = vi.fn(async () => true);
+				const gate = new DockerProposalSandboxPolicyGate({
+					isDockerAvailable,
+				});
+				const applier = vi.fn(
+					async (
+						_record: StoredProposalRecord,
+						_context?: ProposalPatchApplierContext,
+					) => undefined,
+				);
+
+				const result = await store.applyApproved(authority, {
+					applier,
+					sandboxPolicyGate: gate,
+				});
+
+				expect(result.applied).toHaveLength(1);
+				expect(result.skipped).toEqual([]);
+				expect(result.failed).toEqual([]);
+				expect(applier).toHaveBeenCalledTimes(1);
+				const passedContext = applier.mock.calls[0]?.[1];
+				expect(passedContext?.sandbox?.kind).toBe("native");
+				if (passedContext?.sandbox?.kind === "native") {
+					expect(passedContext.sandbox.warning).toBe("");
+				}
+				// Docker availability is never probed for non-scaffold kinds.
+				expect(isDockerAvailable).not.toHaveBeenCalled();
+
+				const fetched = await store.getById(approved.proposalId);
+				expect(fetched?.status).toBe("applied");
+			});
 		});
 	});
 });

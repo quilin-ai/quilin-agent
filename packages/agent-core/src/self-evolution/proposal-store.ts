@@ -1,4 +1,5 @@
 import { appendFile, readFile } from "node:fs/promises";
+import { logger } from "../logger.js";
 import type {
 	WriteAuthority,
 	WriteOrigin,
@@ -14,6 +15,10 @@ import {
 	assertBeforeAfterEvaluationBoundary,
 	assertGeneratedPatchProposalBoundary,
 } from "./patch-proposal.js";
+import type {
+	ProposalSandboxDecision,
+	ProposalSandboxPolicyGate,
+} from "./sandbox-policy-gate.js";
 import {
 	normalizeEvidenceRefs,
 	sanitizeForSelfEvolution,
@@ -128,7 +133,8 @@ export type ProposalApplyOutcomeStatus = "skipped" | "failed";
 export type ProposalApplySkippedReason =
 	| "user_rejected"
 	| "deny_all"
-	| "missing_confirm";
+	| "missing_confirm"
+	| "sandbox_denied";
 
 export type ProposalApplyFailedReason =
 	| "unsupported_patch_type"
@@ -147,8 +153,22 @@ export interface ProposalApplyResult {
 	readonly failed: readonly ProposalApplyOutcome[];
 }
 
+/**
+ * Sandbox routing context handed to a `ProposalPatchApplier`. Set when the
+ * caller provides a `ProposalSandboxPolicyGate` and the proposal is a
+ * `scaffold_patch` (07 §2.6.4 high-risk write paths route through sandbox
+ * isolation when available).
+ *
+ * 自进化 patch applier 接收的沙箱路由上下文：仅当调用方提供
+ * `ProposalSandboxPolicyGate` 且 proposal 类型为 `scaffold_patch` 时设置。
+ */
+export interface ProposalPatchApplierContext {
+	readonly sandbox?: ProposalSandboxDecision;
+}
+
 export type ProposalPatchApplier = (
 	record: StoredProposalRecord,
+	context?: ProposalPatchApplierContext,
 ) => Promise<void>;
 
 export interface ProposalApplyOptions {
@@ -156,6 +176,16 @@ export interface ProposalApplyOptions {
 	readonly reviewer?: string;
 	readonly reviewedAt?: string;
 	readonly applier?: ProposalPatchApplier;
+	/**
+	 * Optional sandbox policy gate consulted before the applier runs on a
+	 * `scaffold_patch` proposal. When omitted, existing behavior is preserved
+	 * (applier runs natively with no sandbox context). When provided, the
+	 * gate decides docker / native+warning / deny per 07 §2.6.4.
+	 *
+	 * 可选的沙箱策略闸门：仅在 `scaffold_patch` 类提案上生效。未提供时保持
+	 * 既有行为；提供时按 07 §2.6.4 决定 docker / native+warning / deny。
+	 */
+	readonly sandboxPolicyGate?: ProposalSandboxPolicyGate;
 }
 
 interface NormalizedCreatedAtQueryRange {
@@ -1014,6 +1044,7 @@ export class JsonlProposalStore {
 					reviewer,
 					reviewedAt: options.reviewedAt,
 					applier,
+					sandboxPolicyGate: options.sandboxPolicyGate,
 				});
 				if (outcome.kind === "applied") {
 					applied.push(outcome.record);
@@ -1041,12 +1072,21 @@ export class JsonlProposalStore {
 		readonly reviewer: string;
 		readonly reviewedAt?: string;
 		readonly applier: ProposalPatchApplier;
+		readonly sandboxPolicyGate?: ProposalSandboxPolicyGate;
 	}): Promise<
 		| { readonly kind: "applied"; readonly record: StoredProposalRecord }
 		| { readonly kind: "skipped"; readonly outcome: ProposalApplyOutcome }
 		| { readonly kind: "failed"; readonly outcome: ProposalApplyOutcome }
 	> {
-		const { record, authority, origin, reviewer, reviewedAt, applier } = input;
+		const {
+			record,
+			authority,
+			origin,
+			reviewer,
+			reviewedAt,
+			applier,
+			sandboxPolicyGate,
+		} = input;
 		const writeRequest = buildApplyWriteRequest(record, origin);
 		const decision = await authority.authorize(writeRequest);
 		if (decision.kind !== "allow") {
@@ -1069,8 +1109,56 @@ export class JsonlProposalStore {
 			};
 		}
 
+		let sandboxDecision: ProposalSandboxDecision | undefined;
+		if (sandboxPolicyGate !== undefined) {
+			const proposalKind =
+				record.generatedPatchProposal?.proposalKind ?? "artifact_only";
+			sandboxDecision = await sandboxPolicyGate.decide({
+				tool: writeRequest.tool,
+				riskLevel: writeRequest.riskLevel,
+				proposalKind,
+				proposalId: record.proposalId,
+				summary: writeRequest.summary,
+			});
+			if (sandboxDecision.kind === "deny") {
+				logger.warn(
+					{
+						proposalId: record.proposalId,
+						reason: sandboxDecision.reason,
+						proposalKind,
+					},
+					"Sandbox policy gate denied scaffold patch apply",
+				);
+				return {
+					kind: "skipped",
+					outcome: {
+						proposalId: record.proposalId,
+						status: "skipped",
+						reasonCode: "sandbox_denied",
+						reason: sandboxDecision.reason,
+					},
+				};
+			}
+			if (
+				sandboxDecision.kind === "native" &&
+				sandboxDecision.warning.length > 0
+			) {
+				logger.warn(
+					{
+						proposalId: record.proposalId,
+						proposalKind,
+					},
+					sandboxDecision.warning,
+				);
+			}
+		}
+
 		try {
-			await applier(record);
+			const applierContext: ProposalPatchApplierContext | undefined =
+				sandboxDecision === undefined
+					? undefined
+					: { sandbox: sandboxDecision };
+			await applier(record, applierContext);
 		} catch (error) {
 			const reasonCode: ProposalApplyFailedReason =
 				error instanceof UnsupportedPatchTypeError
@@ -1113,6 +1201,7 @@ export class UnsupportedPatchTypeError extends Error {
 
 async function defaultUnsupportedPatchApplier(
 	record: StoredProposalRecord,
+	_context?: ProposalPatchApplierContext,
 ): Promise<void> {
 	const detail =
 		record.generatedPatchProposal === undefined

@@ -565,11 +565,27 @@ type AuthorityMode = "ask" | "auto-low" | "auto-medium" | "deny-all";
 | `file_write`（非敏感路径） | ✅ MVP | `medium` |
 | `file_write`（敏感路径如 `~/.aws/*`） | ✅ MVP | `critical` |
 | `web_fetch` | ❌ 不接（`riskLevel="read"`） | — |
-| scaffold patch | 💭 Iter E+（10-self-evolution 落地后） | `critical` |
+| scaffold patch | ✅ MVP（WriteAuthority + `ProposalSandboxPolicyGate`，QUI-97） | `critical` |
 | skill create | ✅ 已接 `skill_manage` + WriteAuthority + skills_guard | `high` / sensitive allowedTools 升 `critical` |
 | idle evolution | 💭 默认 OFF；启用时走 `origin:"idle"` | 按单次操作 |
 
 **未接入 WriteAuthority 不得作为 "疏漏" 被 idle evolution 或 scaffold patch 绕过**——任何**新**自主写路径必须在上线前接入 gate。CI 层面通过 `scripts/lint-glossary.py` 扩展检查新 tool 的 `riskLevel` 字段。
+
+**Sandbox 强制点（scaffold patch apply）/ Sandbox enforcement (scaffold patch apply)**
+
+`self_evolution_patch_apply` 在拿到 WriteAuthority `allow` 之后，还要再过一道 **`ProposalSandboxPolicyGate`**（位于 `packages/agent-core/src/self-evolution/sandbox-policy-gate.ts`）。该 gate 是 §2.6.4 在 self-evolution `scaffold_patch` 类提案上的运行时延伸：高风险写路径在条件允许时必须走沙箱隔离，不允许"WriteAuthority 放行就直接 native apply"。
+
+After `WriteAuthority` returns `allow` for `self_evolution_patch_apply`, the apply path consults a second gate — **`ProposalSandboxPolicyGate`** (in `packages/agent-core/src/self-evolution/sandbox-policy-gate.ts`). This gate is the runtime extension of §2.6.4 for self-evolution `scaffold_patch` proposals: high-risk write paths must route through sandbox isolation when conditions allow; "WriteAuthority allowed, therefore apply natively" is forbidden.
+
+| Gate decision | 行为 / Behavior |
+|---|---|
+| `docker` | Docker 守护进程可达 → applier 收到 `{ sandbox: { kind: "docker", provider: "docker" } }` 上下文，由 applier 在 `DockerSandboxRouter` 容器内执行 patch / Docker daemon reachable; the applier receives a `docker` sandbox context and runs the patch inside a `DockerSandboxRouter` container |
+| `native` | Docker 不可用（或非 `scaffold_patch` 类型）→ applier 收到 `{ sandbox: { kind: "native", warning } }` 并落 `logger.warn` audit；保持现有行为不变 / Docker unavailable (or non-scaffold kind) → applier receives `native` context plus a `logger.warn` audit entry; legacy behavior preserved |
+| `deny` | Gate 显式拒绝（如 CI 维护期、policy override）→ `applyApproved` 跳过 applier，记录 `reasonCode: "sandbox_denied"` + `logger.warn` / Gate explicitly refuses (CI maintenance window, policy override, …) → `applyApproved` skips the applier and records `reasonCode: "sandbox_denied"` + a `logger.warn` audit entry |
+
+非 `scaffold_patch` 提案（artifact-only）短路返回 `native`（warning 为空字符串），不会触发可用性探测，等同于"未启用沙箱强制"——保留既有 review-only 提案路径不被破坏。
+
+Non-`scaffold_patch` proposals (artifact-only) short-circuit to `native` with an empty warning and never probe Docker, so the existing review-only proposal path is unaffected.
 
 **与 Layer 2（步骤验证）的关系**：
 
