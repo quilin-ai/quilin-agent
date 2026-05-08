@@ -1662,12 +1662,45 @@ type ReasoningDisplayMode = "collapsed" | "verbose";
 interface ReplStreamRenderState {
 	thinkingShown: boolean;
 	toolInputs: Map<string, string>;
+	// Tracks whether the most recent emission to stderr was a `text`
+	// delta (the LLM's natural-language reply). Used by the turn-end
+	// hook to ensure a trailing newline is emitted so that subsequent
+	// logger output / readline prompt does not collide with the reply's
+	// last character (QUI-141 Symptom A).
+	lastTextEndedWithNewline: boolean;
+	hasEmittedText: boolean;
+}
+
+/**
+ * Ensure the agent's reply stream ends on a newline. Called whenever an
+ * assistant message completes during a turn (which happens once per
+ * tool-call round in `loop.ts:392`, plus once for the final assistant
+ * message in `loop.ts:306`). If the agent emitted any `text` deltas
+ * since the last finalize AND the last byte was not a newline, we write
+ * one. This prevents the next stderr writer (logger, tool-call icon,
+ * REPL prompt) from concatenating onto the reply's final character.
+ * See QUI-141 Symptom A.
+ *
+ * Resets the flags after firing so the NEXT round's text deltas (or
+ * lack thereof, in a tool-only round) decide independently whether
+ * another newline is needed. Without the reset, `onAssistantMessage`
+ * for a tool-only round would write a stray `\n` on stale state from
+ * the previous round.
+ */
+function finalizeStreamRender(state: ReplStreamRenderState): void {
+	if (state.hasEmittedText && !state.lastTextEndedWithNewline) {
+		stderr.write("\n");
+	}
+	state.hasEmittedText = false;
+	state.lastTextEndedWithNewline = false;
 }
 
 function createStreamRenderState(): ReplStreamRenderState {
 	return {
 		thinkingShown: false,
 		toolInputs: new Map(),
+		lastTextEndedWithNewline: false,
+		hasEmittedText: false,
 	};
 }
 
@@ -1715,6 +1748,16 @@ function renderStreamEvent(
 	switch (event.type) {
 		case "text":
 			stderr.write(event.delta);
+			// Only update the trailing-newline flag for non-empty deltas:
+			// some providers emit a final empty `text` delta to flush state,
+			// and `"".endsWith("\n")` is false — that would incorrectly flip
+			// a previously-true flag and cause finalizeStreamRender to write
+			// a stray `\n` even when the reply already ended on `\n`.
+			if (event.delta.length > 0) {
+				renderState.hasEmittedText = true;
+				renderState.lastTextEndedWithNewline =
+					event.delta.endsWith("\n");
+			}
 			break;
 		case "reasoning":
 			if (reasoningDisplay === "verbose") {
@@ -3299,6 +3342,11 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 						hooks: {
 							onAssistantMessage: (message) => {
 								latestAssistantMessage = message;
+								// At this point the LLM stream has ended; ensure
+								// the reply ends on a newline before any logger
+								// output (e.g. provider run record) writes to
+								// stderr in between. QUI-141 Symptom A.
+								finalizeStreamRender(streamRenderState);
 							},
 							onMessagesUpdated: (loopMessages) => {
 								latestLoopMessages = [...loopMessages];
@@ -3366,7 +3414,12 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 						);
 					}
 				}
-				stderr.write("\n\n");
+				// Single trailing newline at turn end: `finalizeStreamRender`
+				// (called from `onAssistantMessage`) already guarantees the
+				// reply ends on `\n`. Adding `\n\n` here would produce two
+				// blank lines between the reply and the next prompt — keep
+				// just one for visual breathing room.
+				stderr.write("\n");
 			} catch (err) {
 				logger.error(
 					{ error: providerErrorLogFields(err) },
