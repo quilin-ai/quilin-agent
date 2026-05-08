@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { dirname, join, resolve, sep } from "node:path";
 
 // ---------------------------------------------------------------------------
 // Interfaces
@@ -94,6 +94,28 @@ const DEFAULT_USER_BODY = [
 
 function defaultQuilinDir(): string {
 	return QUILIN_DIR;
+}
+
+// Path traversal guard: a soul/user profile path passed by an external caller
+// must resolve into either ~/.quilin/ (the production default) or the OS
+// tmpdir (where tests stage isolated workspaces). Any other resolved path
+// — including ones that traverse via `..` — is rejected.
+const ALLOWED_PROFILE_ROOTS: readonly string[] = [
+	resolve(QUILIN_DIR),
+	resolve(tmpdir()),
+];
+
+function assertSafeProfilePath(filePath: string): void {
+	const absolute = resolve(filePath);
+	const isInsideAllowedRoot = ALLOWED_PROFILE_ROOTS.some((root) => {
+		const rootWithSep = root.endsWith(sep) ? root : root + sep;
+		return absolute === root || absolute.startsWith(rootWithSep);
+	});
+	if (!isInsideAllowedRoot) {
+		throw new Error(
+			`Refusing soul/user profile access outside ~/.quilin or tmpdir: ${filePath}`,
+		);
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -255,6 +277,7 @@ export function generateRandomSoul(): Omit<
 
 export function readSoulConfig(path?: string): SoulConfig | null {
 	const filePath = path ?? join(defaultQuilinDir(), "soul.md");
+	assertSafeProfilePath(filePath);
 	if (!existsSync(filePath)) {
 		return null;
 	}
@@ -278,6 +301,7 @@ export function readSoulConfig(path?: string): SoulConfig | null {
 
 export function readUserProfile(path?: string): UserProfileConfig | null {
 	const filePath = path ?? join(defaultQuilinDir(), "user.md");
+	assertSafeProfilePath(filePath);
 	if (!existsSync(filePath)) {
 		return null;
 	}
@@ -297,6 +321,7 @@ export function readUserProfile(path?: string): UserProfileConfig | null {
 
 export function writeSoulConfig(config: SoulConfig, path?: string): void {
 	const filePath = path ?? join(defaultQuilinDir(), "soul.md");
+	assertSafeProfilePath(filePath);
 	const dir = dirname(filePath);
 	if (!existsSync(dir)) {
 		mkdirSync(dir, { recursive: true });
@@ -315,6 +340,7 @@ export function writeUserProfile(
 	path?: string,
 ): void {
 	const filePath = path ?? join(defaultQuilinDir(), "user.md");
+	assertSafeProfilePath(filePath);
 	const dir = dirname(filePath);
 	if (!existsSync(dir)) {
 		mkdirSync(dir, { recursive: true });

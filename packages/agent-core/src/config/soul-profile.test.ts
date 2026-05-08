@@ -518,4 +518,65 @@ describe("soul-profile", () => {
 			expect(json).not.toContain("password");
 		});
 	});
+
+	// -----------------------------------------------------------------------
+	// path traversal guard (QUI-140 third-pass audit finding #9)
+	// -----------------------------------------------------------------------
+
+	describe("path traversal guard", () => {
+		const traversalPaths = [
+			"/etc/passwd",
+			"/etc/shadow",
+			join(homedir(), ".ssh", "id_rsa"),
+		];
+
+		const minimalSoul: SoulConfig = {
+			schema_version: 1,
+			persona_name: "x",
+			zodiac: "天蝎座",
+			gender: "无性别",
+			mbti: "INTJ",
+			core_values: [],
+			communication_style: "casual",
+			created_at: "2026-05-08T12:00:00Z",
+			last_updated_by: "test",
+			body: "x",
+		};
+
+		const minimalUser: UserProfileConfig = {
+			schema_version: 1,
+			profile_id: "default",
+			scope: "global_projection",
+			created_at: "2026-05-08T12:00:00Z",
+			last_updated: "2026-05-08T12:00:00Z",
+			body: "x",
+		};
+
+		for (const malicious of traversalPaths) {
+			it(`rejects readSoulConfig outside ~/.quilin or tmpdir: ${malicious}`, () => {
+				expect(() => readSoulConfig(malicious)).toThrow(/Refusing/);
+			});
+
+			it(`rejects writeSoulConfig outside ~/.quilin or tmpdir: ${malicious}`, () => {
+				expect(() => writeSoulConfig(minimalSoul, malicious)).toThrow(
+					/Refusing/,
+				);
+			});
+
+			it(`rejects readUserProfile outside ~/.quilin or tmpdir: ${malicious}`, () => {
+				expect(() => readUserProfile(malicious)).toThrow(/Refusing/);
+			});
+
+			it(`rejects writeUserProfile outside ~/.quilin or tmpdir: ${malicious}`, () => {
+				expect(() => writeUserProfile(minimalUser, malicious)).toThrow(
+					/Refusing/,
+				);
+			});
+		}
+
+		it("rejects path-traversal segments that escape ~/.quilin after resolution", () => {
+			const traversal = join(homedir(), ".quilin", "..", "..", "..", "etc", "passwd");
+			expect(() => readSoulConfig(traversal)).toThrow(/Refusing/);
+		});
+	});
 });
