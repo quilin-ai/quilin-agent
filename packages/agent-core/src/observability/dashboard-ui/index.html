@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Quilin Observability Dashboard</title>
+<link rel="stylesheet" href="./app.css">
+</head>
+<body>
+<header class="topbar">
+	<div class="brand">
+		<h1>Quilin Observability</h1>
+		<span class="subtitle">Control Plane Dashboard</span>
+	</div>
+	<div class="status">
+		<span id="last-refresh" class="muted">Loading...</span>
+		<button id="refresh-btn" type="button" class="btn">Refresh</button>
+	</div>
+</header>
+<nav class="tabs" role="tablist">
+	<button type="button" class="tab" role="tab" data-panel="tasks" aria-selected="true">Tasks</button>
+	<button type="button" class="tab" role="tab" data-panel="memory" aria-selected="false">Memory</button>
+	<button type="button" class="tab" role="tab" data-panel="tools" aria-selected="false">Tools</button>
+	<button type="button" class="tab" role="tab" data-panel="metrics" aria-selected="false">Metrics</button>
+	<button type="button" class="tab" role="tab" data-panel="topology" aria-selected="false">Topology</button>
+	<button type="button" class="tab" role="tab" data-panel="sessions" aria-selected="false">Sessions</button>
+	<button type="button" class="tab" role="tab" data-panel="skills" aria-selected="false">Skills / MCP / Config</button>
+</nav>
+<main>
+	<section class="panel" id="panel-tasks" data-panel="tasks" aria-hidden="false">
+		<h2>Active Sub-Agent Tasks</h2>
+		<p class="hint">Live runs reported by the supervisor runtime. Data source: <code>/api/dashboard/tasks</code>.</p>
+		<div class="kv-grid" id="tasks-summary"></div>
+		<div class="table-wrap">
+			<table id="tasks-table">
+				<thead><tr>
+					<th>Run ID</th><th>Task ID</th><th>Status</th><th>Severity</th>
+					<th>Title</th><th>Summary</th><th>Last Update</th>
+				</tr></thead>
+				<tbody></tbody>
+			</table>
+		</div>
+		<p class="empty" hidden>No active sub-agent runs reported.</p>
+	</section>
+
+	<section class="panel" id="panel-memory" data-panel="memory" aria-hidden="true" hidden>
+		<h2>Memory Tiers</h2>
+		<p class="hint">quilin-mem 4-tier counts (working / episodic / semantic / skill). Data source: <code>/api/dashboard/memory</code>.</p>
+		<div class="card-grid" id="memory-tiers"></div>
+		<p class="empty" hidden>Memory provider not connected.</p>
+	</section>
+
+	<section class="panel" id="panel-tools" data-panel="tools" aria-hidden="true" hidden>
+		<h2>Registered Tools</h2>
+		<p class="hint">Tools registered with ToolRouter / MCP. Data source: <code>/api/dashboard/tools</code>.</p>
+		<div class="kv-grid" id="tools-summary"></div>
+		<div class="table-wrap">
+			<table id="tools-table">
+				<thead><tr>
+					<th>Name</th><th>Namespace</th><th>Category</th><th>Risk</th>
+				</tr></thead>
+				<tbody></tbody>
+			</table>
+		</div>
+		<p class="empty" hidden>No tools registered.</p>
+	</section>
+
+	<section class="panel" id="panel-metrics" data-panel="metrics" aria-hidden="true" hidden>
+		<h2>Aggregated Span Metrics</h2>
+		<p class="hint">Tokens, turns, latency aggregated from trajectory spans. Data source: <code>/api/dashboard/metrics</code>.</p>
+		<div class="card-grid" id="metrics-headline"></div>
+		<h3>By Tool</h3>
+		<div class="table-wrap">
+			<table id="metrics-tools-table">
+				<thead><tr>
+					<th>Tool</th><th>Calls</th><th>Errors</th><th>Latency p50 (ms)</th><th>Latency p95 (ms)</th>
+				</tr></thead>
+				<tbody></tbody>
+			</table>
+		</div>
+		<p class="empty" hidden>No metrics available.</p>
+	</section>
+
+	<section class="panel" id="panel-topology" data-panel="topology" aria-hidden="true" hidden>
+		<h2>Agent Topology</h2>
+		<p class="hint">Supervisor + active sub-agent runs. Data source: <code>/api/dashboard/topology</code>.</p>
+		<div class="kv-grid" id="topology-summary"></div>
+		<div class="table-wrap">
+			<table id="topology-table">
+				<thead><tr>
+					<th>Run ID</th><th>Task ID</th><th>Worker</th><th>Status</th><th>Started</th>
+				</tr></thead>
+				<tbody></tbody>
+			</table>
+		</div>
+		<p class="empty" hidden>No active runs.</p>
+	</section>
+
+	<section class="panel" id="panel-sessions" data-panel="sessions" aria-hidden="true" hidden>
+		<h2>Saved Sessions</h2>
+		<p class="hint">SQLiteCheckpoint-listed sessions. Data source: <code>/api/dashboard/sessions</code>.</p>
+		<div class="kv-grid" id="sessions-summary"></div>
+		<div class="table-wrap">
+			<table id="sessions-table">
+				<thead><tr>
+					<th>Session ID</th><th>Status</th><th>Source</th><th>Turns</th>
+					<th>Messages</th><th>Last Active</th>
+				</tr></thead>
+				<tbody></tbody>
+			</table>
+		</div>
+		<p class="empty" hidden>No sessions saved.</p>
+	</section>
+
+	<section class="panel" id="panel-skills" data-panel="skills" aria-hidden="true" hidden>
+		<h2>Skills, MCP Servers, Config &amp; Providers</h2>
+		<p class="hint">Combined inventory. Data source: <code>/api/dashboard/skills-mcp</code>.</p>
+		<details open>
+			<summary><strong>Skills Catalog</strong> <span id="skills-count" class="muted"></span></summary>
+			<div class="table-wrap">
+				<table id="skills-table">
+					<thead><tr>
+						<th>Name</th><th>Source</th><th>Trust</th><th>Mandatory</th>
+					</tr></thead>
+					<tbody></tbody>
+				</table>
+			</div>
+		</details>
+		<details>
+			<summary><strong>MCP Servers</strong> <span id="mcp-count" class="muted"></span></summary>
+			<div class="table-wrap">
+				<table id="mcp-table">
+					<thead><tr>
+						<th>Server ID</th><th>Status</th><th>Command</th><th>Risk</th>
+					</tr></thead>
+					<tbody></tbody>
+				</table>
+			</div>
+		</details>
+		<details>
+			<summary><strong>User Config</strong></summary>
+			<pre id="config-block" class="code-block">(no config provider connected)</pre>
+		</details>
+		<details>
+			<summary><strong>Provider Matrix</strong> <span id="providers-count" class="muted"></span></summary>
+			<div class="table-wrap">
+				<table id="providers-table">
+					<thead><tr>
+						<th>Provider</th><th>Status</th><th>Sources</th><th>Credentials</th>
+					</tr></thead>
+					<tbody></tbody>
+				</table>
+			</div>
+		</details>
+	</section>
+</main>
+<footer class="footer">
+	<span>Quilin Agent &middot; Observability Dashboard &middot; <a href="/metrics">/metrics</a> &middot; <a href="/traces">/traces</a></span>
+</footer>
+<script src="./app.js" type="module"></script>
+</body>
+</html>

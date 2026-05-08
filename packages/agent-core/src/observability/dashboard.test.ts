@@ -11,6 +11,13 @@ import {
 import {
 	adaptSupervisorProgressEventsToDashboardRecords,
 	createObservabilityDashboardHandler,
+	type DashboardDataProviders,
+	type DashboardMemoryData,
+	type DashboardSessionsData,
+	type DashboardSkillsMcpData,
+	type DashboardTasksData,
+	type DashboardToolsData,
+	type DashboardTopologyData,
 	type SupervisorProgressDashboardRecord,
 	startObservabilityDashboard,
 } from "./dashboard.js";
@@ -321,5 +328,238 @@ describe("observability dashboard", () => {
 				port: address.port,
 			}),
 		).rejects.toMatchObject({ code: "EADDRINUSE" });
+	});
+});
+
+async function startDashboardWithProviders(
+	dataProviders: DashboardDataProviders,
+): Promise<string> {
+	const logsDir = await mkdtemp(join(tmpdir(), "quilin-dashboard-ui-"));
+	const server = createServer(
+		createObservabilityDashboardHandler({
+			logsDir,
+			dataProviders,
+		}),
+	);
+	servers.push(server);
+	await new Promise<void>((resolve) => {
+		server.listen(0, "127.0.0.1", resolve);
+	});
+	const address = server.address() as AddressInfo;
+	return `http://127.0.0.1:${address.port}`;
+}
+
+describe("observability dashboard 7-panel UI", () => {
+	it("serves the static dashboard ui index and assets under /ui", async () => {
+		const baseUrl = await startDashboardWithProviders({});
+
+		const indexResponse = await fetch(`${baseUrl}/ui/`);
+		expect(indexResponse.status).toBe(200);
+		expect(indexResponse.headers.get("content-type")).toContain("text/html");
+		const indexBody = await indexResponse.text();
+		expect(indexBody).toContain("Quilin Observability Dashboard");
+		expect(indexBody).toContain('data-panel="tasks"');
+		expect(indexBody).toContain('data-panel="memory"');
+		expect(indexBody).toContain('data-panel="tools"');
+		expect(indexBody).toContain('data-panel="metrics"');
+		expect(indexBody).toContain('data-panel="topology"');
+		expect(indexBody).toContain('data-panel="sessions"');
+		expect(indexBody).toContain('data-panel="skills"');
+
+		const cssResponse = await fetch(`${baseUrl}/ui/app.css`);
+		expect(cssResponse.status).toBe(200);
+		expect(cssResponse.headers.get("content-type")).toContain("text/css");
+
+		const jsResponse = await fetch(`${baseUrl}/ui/app.js`);
+		expect(jsResponse.status).toBe(200);
+		expect(jsResponse.headers.get("content-type")).toContain(
+			"application/javascript",
+		);
+	});
+
+	it("returns 404 for unknown ui assets and rejects path traversal", async () => {
+		const baseUrl = await startDashboardWithProviders({});
+
+		const missing = await fetch(`${baseUrl}/ui/does-not-exist.html`);
+		expect(missing.status).toBe(404);
+		expect(await missing.json()).toEqual({ error: "ui_asset_not_found" });
+
+		const traversal = await fetch(
+			`${baseUrl}/ui/${encodeURIComponent("../dashboard.ts")}`,
+		);
+		expect(traversal.status).toBe(404);
+	});
+
+	it("returns empty placeholders for all 7 panels when no providers wired", async () => {
+		const baseUrl = await startDashboardWithProviders({});
+
+		const tasks = (await (await fetch(`${baseUrl}/api/dashboard/tasks`)).json()) as DashboardTasksData;
+		expect(tasks).toEqual({ records: [], activeRunCount: 0, staleRunCount: 0 });
+
+		const memory = (await (await fetch(`${baseUrl}/api/dashboard/memory`)).json()) as DashboardMemoryData;
+		expect(memory.tiers.map((tier) => tier.name)).toEqual([
+			"working",
+			"episodic",
+			"semantic",
+			"skill",
+		]);
+
+		const tools = (await (await fetch(`${baseUrl}/api/dashboard/tools`)).json()) as DashboardToolsData;
+		expect(tools).toEqual({ tools: [], total: 0, byNamespace: {} });
+
+		const topology = (await (await fetch(`${baseUrl}/api/dashboard/topology`)).json()) as DashboardTopologyData;
+		expect(topology).toEqual({
+			supervisorStatus: "unknown",
+			activeRunCount: 0,
+			totalRunCount: 0,
+			runs: [],
+		});
+
+		const sessions = (await (await fetch(`${baseUrl}/api/dashboard/sessions`)).json()) as DashboardSessionsData;
+		expect(sessions).toEqual({
+			sessions: [],
+			total: 0,
+			activeCount: 0,
+			terminalCount: 0,
+		});
+
+		const skills = (await (await fetch(`${baseUrl}/api/dashboard/skills-mcp`)).json()) as DashboardSkillsMcpData;
+		expect(skills).toEqual({
+			skills: { catalog: [] },
+			mcp: { servers: [] },
+			config: null,
+			providers: [],
+		});
+
+		const metrics = await fetch(`${baseUrl}/api/dashboard/metrics`);
+		expect(metrics.status).toBe(200);
+		const metricsBody = (await metrics.json()) as {
+			totals: { spans: number };
+		};
+		expect(metricsBody.totals.spans).toBe(0);
+	});
+
+	it("invokes wired data providers and returns their payloads", async () => {
+		const tasksData: DashboardTasksData = {
+			records: [
+				{
+					childRunId: "run-1",
+					taskId: "task-1",
+					eventType: "child_heartbeat",
+					severity: "info",
+					title: "Child heartbeat",
+					summary: "running",
+					timestamp: "2026-05-09T00:00:00.000Z",
+				},
+			],
+			activeRunCount: 1,
+			staleRunCount: 0,
+		};
+		const toolsData: DashboardToolsData = {
+			tools: [
+				{ name: "shell_exec", namespace: "builtin", category: "shell", riskLevel: "high" },
+			],
+			total: 1,
+			byNamespace: { builtin: 1 },
+		};
+		const sessionsData: DashboardSessionsData = {
+			sessions: [
+				{
+					sessionId: "abc",
+					status: "active",
+					source: "checkpoint",
+					turnCount: 3,
+					messageCount: 6,
+					lastActiveAt: "2026-05-09T00:00:00.000Z",
+				},
+			],
+			total: 1,
+			activeCount: 1,
+			terminalCount: 0,
+		};
+		const baseUrl = await startDashboardWithProviders({
+			tasks: () => tasksData,
+			tools: async () => toolsData,
+			sessions: () => sessionsData,
+		});
+
+		expect(await (await fetch(`${baseUrl}/api/dashboard/tasks`)).json()).toEqual(
+			tasksData,
+		);
+		expect(await (await fetch(`${baseUrl}/api/dashboard/tools`)).json()).toEqual(
+			toolsData,
+		);
+		expect(
+			await (await fetch(`${baseUrl}/api/dashboard/sessions`)).json(),
+		).toEqual(sessionsData);
+	});
+
+	it("returns 404 for unknown panel route", async () => {
+		const baseUrl = await startDashboardWithProviders({});
+
+		const response = await fetch(`${baseUrl}/api/dashboard/unknown-panel`);
+		expect(response.status).toBe(404);
+		expect(await response.json()).toEqual({ error: "panel_not_found" });
+	});
+
+	it("aggregates metrics totals from trace store spans", async () => {
+		const logsDir = await mkdtemp(join(tmpdir(), "quilin-dashboard-metrics-"));
+		await mkdir(logsDir, { recursive: true });
+		const today = new Date().toISOString().slice(0, 10);
+		await writeFile(
+			join(logsDir, `traces-${today}.jsonl`),
+			[
+				JSON.stringify(
+					serializedSpan({
+						name: "llm.invoke",
+						attributes: {
+							"llm.tokens_input": 100,
+							"llm.tokens_output": 50,
+							"llm.total_latency_ms": 200,
+						},
+					}),
+				),
+				JSON.stringify(
+					serializedSpan({
+						name: "tool.invoke",
+						span_id: "f".repeat(16),
+						trace_id: "e".repeat(32),
+						status: "error",
+						duration_ms: 30,
+						attributes: { "tool.name": "shell_exec" },
+					}),
+				),
+			].join("\n") + "\n",
+		);
+		const server = createServer(
+			createObservabilityDashboardHandler({ logsDir }),
+		);
+		servers.push(server);
+		await new Promise<void>((resolve) => {
+			server.listen(0, "127.0.0.1", resolve);
+		});
+		const address = server.address() as AddressInfo;
+		const baseUrl = `http://127.0.0.1:${address.port}`;
+
+		const response = await fetch(`${baseUrl}/api/dashboard/metrics`);
+		expect(response.status).toBe(200);
+		const body = (await response.json()) as {
+			totals: {
+				spans: number;
+				llmCalls: number;
+				tokensIn: number;
+				tokensOut: number;
+				errors: number;
+			};
+			byTool: ReadonlyArray<{ tool: string; calls: number; errors: number }>;
+		};
+		expect(body.totals.spans).toBe(2);
+		expect(body.totals.llmCalls).toBe(1);
+		expect(body.totals.tokensIn).toBe(100);
+		expect(body.totals.tokensOut).toBe(50);
+		expect(body.totals.errors).toBe(1);
+		expect(body.byTool).toEqual([
+			{ tool: "shell_exec", calls: 1, errors: 1, p50LatencyMs: 30, p95LatencyMs: 30 },
+		]);
 	});
 });
