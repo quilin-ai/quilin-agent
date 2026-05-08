@@ -37,8 +37,10 @@ import {
 import {
 	type ConfigViewToolOptions,
 	type SessionListToolOptions,
+	type ToolSearchToolOptions,
 	createConfigViewTool,
 	createSessionListTool,
+	createToolSearchTool,
 } from "./config-session-tools.js";
 import {
 	type SubagentSpawnToolOptions,
@@ -90,6 +92,7 @@ export function createBuiltinTools(
 		createSubagentStatusTool(),
 		createConfigViewTool(options.configView ?? { getRuntimeState: () => null }),
 		createSessionListTool(options.sessionList),
+		createToolSearchTool({ getTools: () => [] }),
 		createSkillSearchTool({
 			skillsManager: options.skillsManager,
 			...options.skillSearch,

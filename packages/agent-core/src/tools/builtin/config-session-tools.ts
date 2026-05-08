@@ -113,3 +113,52 @@ export function createSessionListTool(
 		},
 	};
 }
+
+// ---------------------------------------------------------------------------
+// tool_search — search all available tools
+// ---------------------------------------------------------------------------
+
+export interface ToolSearchToolOptions {
+	readonly getTools: () => readonly ToolWithMetadata[];
+}
+
+export function createToolSearchTool(
+	options: ToolSearchToolOptions,
+): ToolWithMetadata {
+	return {
+		name: "tool_search",
+		description:
+			"Search all available tools by name or description. " +
+			"Returns tool names, descriptions, parameters, and categories. " +
+			"Use this to discover what tools are available before calling them.",
+		parameters: z.object({
+			query: z.string().optional().describe("Search query"),
+		}),
+		category: "programmatic",
+		riskLevel: "read",
+		execute: async (args: unknown): Promise<ToolResult> => {
+			const { query } = z.object({
+				query: z.string().optional(),
+			}).parse(args as Record<string, unknown>);
+			const tools = options.getTools();
+			const q = query?.toLowerCase() ?? "";
+			const matches = tools
+				.filter((t) => {
+					if (q === "") return true;
+					const n = t.name?.toLowerCase() ?? "";
+					const d = (typeof t.description === "string" ? t.description : "").toLowerCase();
+					return n.includes(q) || d.includes(q);
+				})
+				.map((t) => ({
+					name: t.name ?? "(unnamed)",
+					description: typeof t.description === "string" ? t.description.slice(0, 120) : "",
+					category: t.category ?? "unknown",
+				}));
+			return {
+				toolCallId: "tool_search",
+				content: JSON.stringify({ query: q || "(all)", total: matches.length, tools: matches }),
+				isError: false,
+			};
+		},
+	};
+}
