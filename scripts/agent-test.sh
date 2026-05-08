@@ -21,6 +21,25 @@
 #   caller-trusted code (same trust level as `eval`), never as untrusted
 #   data. Do not pipe LLM output or user-typed strings into <command>.
 #
+# Behavior notes:
+#   - `expect`'s ERE pattern matches against `tmux capture-pane -p -S -500`
+#     output. tmux strips ANSI escape sequences by default in capture mode,
+#     so callers should NOT include `\x1b\[...` codes in their patterns —
+#     match the plain visible text. The persisted log file (pipe-pane), in
+#     contrast, KEEPS raw ANSI codes; if you `grep` the log file directly
+#     you may need `sed -E 's/\x1b\[[0-9;]*[A-Za-z]//g'` first.
+#   - If `<command>` exits before the 0.3s pipe-pane attach, `start` still
+#     reports "started session 'X'" — but `tmux has-session` will return
+#     false on the next call. Always `expect` for a known startup marker
+#     (e.g. `quilin>`) right after `start`; if it times out, the command
+#     died at boot. `cmd_log` is purely lexical (no tmux call, no
+#     liveness check) — it always returns the path even when the session
+#     does not exist.
+#   - `cleanup` from one shell while `expect` is polling from another is
+#     race-safe: tmux session disappears, the next `pane_matches` call
+#     swallows the "no such pane" error via `2>/dev/null || true`, and
+#     `expect` times out cleanly. No leaked process, no hang.
+#
 # Env:
 #   AGENT_TEST_LOG_DIR   Log directory (default: /tmp/agent-test). Validated
 #                        against [A-Za-z0-9_./-]+ to prevent shell-metachar

@@ -427,6 +427,25 @@ export function createDefaultCapabilitiesConfig(
 	};
 }
 
+/**
+ * Load capabilities config from disk OR fall back to defaults.
+ *
+ * **Replace, not merge**: when a user-side capabilities config file is found
+ * (resolved from `options.path` / `options.workspaceRoot` per
+ * `resolveCapabilitiesCandidate`), this function returns it AS-IS without
+ * merging the bundled defaults. If the user's config omits `quilin-mem` or
+ * `quilin-web`, those servers will NOT be auto-added. Users wishing to
+ * extend (rather than replace) the defaults must copy the relevant
+ * `mcpServers` entries into their own config file.
+ *
+ * **Bilingual / 中文**：Replace 而非 merge：用户侧 capabilities config 存在
+ * 时，本函数原样返回，不和 bundled defaults 合并。用户 config 漏写
+ * `quilin-mem` / `quilin-web` 这些 server **不会**被自动加上。想继承
+ * defaults 的用户需自行把相关 `mcpServers` entry 复制进自己的 config。
+ *
+ * Pre-existing semantics (since the original Iter A config implementation);
+ * documented here to avoid future surprise. See QUI-144 S-3.
+ */
 export async function loadCapabilitiesConfig(
 	options: LoadCapabilitiesConfigOptions,
 ): Promise<LoadedCapabilitiesConfig> {
