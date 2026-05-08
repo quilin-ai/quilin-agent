@@ -1002,6 +1002,7 @@ export async function main(options: MainOptions = {}): Promise<void> {
 				tierRouting: runtimeTierRouting,
 				writeAuthorityMode: runtimeWriteAuthorityMode,
 				trajectoryStore,
+				proposalStore,
 				onIdle: () => idleRunner.tryRun(),
 				getUserConfig: () => userRuntime.result.config,
 				toolFilter: runtimeToolFilter,

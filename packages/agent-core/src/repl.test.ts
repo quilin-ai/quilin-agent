@@ -3323,4 +3323,811 @@ describe("startRepl", () => {
 			"No MCP servers registered.\n",
 		);
 	});
+
+	describe("self-evolution proposal review slash commands", () => {
+		interface MinimalProposalRecord {
+			readonly proposalId: string;
+			readonly status:
+				| "pending_review"
+				| "approved"
+				| "rejected"
+				| "applied"
+				| "superseded";
+			readonly createdAt: string;
+			readonly title: string;
+			readonly summary: string;
+			readonly artifacts: readonly { readonly kind: string }[];
+			readonly generatedPatchProposal?: {
+				readonly fileChanges: readonly {
+					readonly changeKind: string;
+					readonly path: string;
+				}[];
+			};
+		}
+
+		function buildProposal(
+			overrides: Partial<MinimalProposalRecord> = {},
+		): MinimalProposalRecord {
+			return {
+				proposalId: "proposal-1234567890ab-trailing",
+				status: "pending_review",
+				createdAt: "2026-05-08T00:00:00.000Z",
+				title: "Refactor tool registry",
+				summary: "Reduce duplication in tool registration",
+				artifacts: [{ kind: "doc" }],
+				...overrides,
+			};
+		}
+
+		function createFakeProposalStore(
+			records: readonly MinimalProposalRecord[] = [],
+			overrides: {
+				readonly applyApproved?: ReturnType<typeof vi.fn>;
+				readonly transitionReviewState?: ReturnType<typeof vi.fn>;
+				readonly query?: ReturnType<typeof vi.fn>;
+				readonly getById?: ReturnType<typeof vi.fn>;
+			} = {},
+		) {
+			const state: MinimalProposalRecord[] = [...records];
+			const defaultQuery = vi.fn(
+				async (filters: { reviewState?: string } = {}) => {
+					const reviewState = filters.reviewState;
+					if (reviewState === undefined) {
+						return [...state];
+					}
+					return state.filter((record) => record.status === reviewState);
+				},
+			);
+			const defaultGetById = vi.fn(async (id: string) => {
+				return state.find((record) => record.proposalId === id) ?? null;
+			});
+			const defaultTransition = vi.fn(
+				async (
+					proposalId: string,
+					input: {
+						readonly status: "approved" | "rejected" | "superseded";
+						readonly reviewer: string;
+						readonly reason: string;
+					},
+				) => {
+					const idx = state.findIndex((r) => r.proposalId === proposalId);
+					if (idx < 0) {
+						throw new TypeError("Proposal not found");
+					}
+					const current = state[idx] as MinimalProposalRecord;
+					const next: MinimalProposalRecord = {
+						...current,
+						status: input.status,
+					};
+					state[idx] = next;
+					return next;
+				},
+			);
+			const defaultApplyApproved = vi.fn(
+				async (
+					_authority: unknown,
+					_options: unknown,
+				) => ({
+					applied: state.filter((record) => record.status === "approved"),
+					skipped: [],
+					failed: [],
+				}),
+			);
+
+			return {
+				query: overrides.query ?? defaultQuery,
+				getById: overrides.getById ?? defaultGetById,
+				transitionReviewState:
+					overrides.transitionReviewState ?? defaultTransition,
+				applyApproved: overrides.applyApproved ?? defaultApplyApproved,
+				_state: state,
+			};
+		}
+
+		it("/proposals lists pending proposals as a TUI table", async () => {
+			const proposalStore = createFakeProposalStore([
+				buildProposal({
+					proposalId: "proposal-aaaaaaaaaaaa-1",
+					title: "Patch loop performance",
+					summary: "Cache prompt builder output across turns",
+					generatedPatchProposal: {
+						fileChanges: [
+							{
+								changeKind: "modify",
+								path: "src/loop.ts",
+							},
+						],
+					},
+				}),
+				buildProposal({
+					proposalId: "proposal-bbbbbbbbbbbb-2",
+					title: "Add memory recall doc",
+					summary: "Document memory recall pipeline",
+				}),
+			]);
+			mockQuestion
+				.mockResolvedValueOnce("/proposals")
+				.mockResolvedValueOnce("/exit");
+
+			const { startRepl } = await import("./repl.js");
+
+			await startRepl({
+				provider: createMockProvider(() => createMockLanguageModel()),
+				modelId: "deepseek-chat",
+				proposalStore: proposalStore as never,
+			});
+
+			const writes = stderrWriteSpy.mock.calls
+				.map((call) => String(call[0]))
+				.join("");
+			expect(writes).toContain("Pending proposals (2 of 2)");
+			expect(writes).toContain("proposal-aaa");
+			expect(writes).toContain("proposal-bbb");
+			expect(writes).toContain("modify:src/loop.ts");
+			expect(writes).toContain("artifact-only");
+			expect(proposalStore.query).toHaveBeenCalledWith({
+				reviewState: "pending_review",
+			});
+		});
+
+		it("/proposals shows an empty message when no pending proposals exist", async () => {
+			const proposalStore = createFakeProposalStore([]);
+			mockQuestion
+				.mockResolvedValueOnce("/proposals")
+				.mockResolvedValueOnce("/exit");
+
+			const { startRepl } = await import("./repl.js");
+
+			await startRepl({
+				provider: createMockProvider(() => createMockLanguageModel()),
+				modelId: "deepseek-chat",
+				proposalStore: proposalStore as never,
+			});
+
+			expect(stderrWriteSpy).toHaveBeenCalledWith("No pending proposals.\n");
+		});
+
+		it("/proposals respects --limit when more proposals exist", async () => {
+			const proposalStore = createFakeProposalStore([
+				buildProposal({ proposalId: "proposal-1111111111aa-x" }),
+				buildProposal({ proposalId: "proposal-2222222222aa-x" }),
+				buildProposal({ proposalId: "proposal-3333333333aa-x" }),
+			]);
+			mockQuestion
+				.mockResolvedValueOnce("/proposals --limit 1")
+				.mockResolvedValueOnce("/exit");
+
+			const { startRepl } = await import("./repl.js");
+
+			await startRepl({
+				provider: createMockProvider(() => createMockLanguageModel()),
+				modelId: "deepseek-chat",
+				proposalStore: proposalStore as never,
+			});
+
+			const writes = stderrWriteSpy.mock.calls
+				.map((call) => String(call[0]))
+				.join("");
+			expect(writes).toContain("Pending proposals (1 of 3)");
+			expect(writes).toContain("proposal-111");
+			expect(writes).not.toContain("proposal-222");
+			expect(writes).toContain(
+				"Showing first 1; pass --limit 3 to see all.",
+			);
+		});
+
+		it("/proposal-approve transitions a pending proposal when --yes is provided", async () => {
+			const proposalStore = createFakeProposalStore([
+				buildProposal({ proposalId: "proposal-approveme01-y" }),
+			]);
+			mockQuestion
+				.mockResolvedValueOnce(
+					"/proposal-approve proposal-approveme01-y --reviewer rayson --yes",
+				)
+				.mockResolvedValueOnce("/exit");
+
+			const { startRepl } = await import("./repl.js");
+
+			await startRepl({
+				provider: createMockProvider(() => createMockLanguageModel()),
+				modelId: "deepseek-chat",
+				proposalStore: proposalStore as never,
+			});
+
+			expect(proposalStore.transitionReviewState).toHaveBeenCalledWith(
+				"proposal-approveme01-y",
+				expect.objectContaining({
+					status: "approved",
+					reviewer: "rayson",
+					reason: "Approved via REPL slash command.",
+				}),
+			);
+			const writes = stderrWriteSpy.mock.calls
+				.map((call) => String(call[0]))
+				.join("");
+			expect(writes).toContain(
+				"Proposal approved: proposal-approveme01-y (reviewer=rayson).",
+			);
+			expect(writes).toContain("Use /proposal-apply");
+		});
+
+		it("/proposal-approve cancels when interactive prompt is rejected", async () => {
+			const proposalStore = createFakeProposalStore([
+				buildProposal({ proposalId: "proposal-confirmcanc-x" }),
+			]);
+			mockQuestion
+				.mockResolvedValueOnce(
+					"/proposal-approve proposal-confirmcanc-x",
+				)
+				.mockResolvedValueOnce("n")
+				.mockResolvedValueOnce("/exit");
+
+			const { startRepl } = await import("./repl.js");
+
+			await startRepl({
+				provider: createMockProvider(() => createMockLanguageModel()),
+				modelId: "deepseek-chat",
+				proposalStore: proposalStore as never,
+			});
+
+			expect(proposalStore.transitionReviewState).not.toHaveBeenCalled();
+			expect(stderrWriteSpy).toHaveBeenCalledWith("Approval cancelled.\n");
+		});
+
+		it("/proposal-approve reports when the proposal does not exist", async () => {
+			const proposalStore = createFakeProposalStore([]);
+			mockQuestion
+				.mockResolvedValueOnce(
+					"/proposal-approve proposal-missing00-x --yes",
+				)
+				.mockResolvedValueOnce("/exit");
+
+			const { startRepl } = await import("./repl.js");
+
+			await startRepl({
+				provider: createMockProvider(() => createMockLanguageModel()),
+				modelId: "deepseek-chat",
+				proposalStore: proposalStore as never,
+			});
+
+			expect(proposalStore.transitionReviewState).not.toHaveBeenCalled();
+			expect(stderrWriteSpy).toHaveBeenCalledWith(
+				"Proposal not found: proposal-missing00-x\n",
+			);
+		});
+
+		it("/proposal-approve rejects without a proposalId", async () => {
+			const proposalStore = createFakeProposalStore([]);
+			mockQuestion
+				.mockResolvedValueOnce("/proposal-approve")
+				.mockResolvedValueOnce("/exit");
+
+			const { startRepl } = await import("./repl.js");
+
+			await startRepl({
+				provider: createMockProvider(() => createMockLanguageModel()),
+				modelId: "deepseek-chat",
+				proposalStore: proposalStore as never,
+			});
+
+			const writes = stderrWriteSpy.mock.calls
+				.map((call) => String(call[0]))
+				.join("");
+			expect(writes).toContain("Usage: /proposal-approve <proposalId>");
+		});
+
+		it("/proposal-reject requires --reason", async () => {
+			const proposalStore = createFakeProposalStore([
+				buildProposal({ proposalId: "proposal-rejectone1-x" }),
+			]);
+			mockQuestion
+				.mockResolvedValueOnce("/proposal-reject proposal-rejectone1-x")
+				.mockResolvedValueOnce("/exit");
+
+			const { startRepl } = await import("./repl.js");
+
+			await startRepl({
+				provider: createMockProvider(() => createMockLanguageModel()),
+				modelId: "deepseek-chat",
+				proposalStore: proposalStore as never,
+			});
+
+			expect(proposalStore.transitionReviewState).not.toHaveBeenCalled();
+			expect(stderrWriteSpy).toHaveBeenCalledWith(
+				'Missing --reason "..." (rejection reason is required).\n',
+			);
+		});
+
+		it("/proposal-reject transitions a pending proposal with the supplied reason", async () => {
+			const proposalStore = createFakeProposalStore([
+				buildProposal({ proposalId: "proposal-rejectit012-x" }),
+			]);
+			mockQuestion
+				.mockResolvedValueOnce(
+					'/proposal-reject proposal-rejectit012-x --reason "duplicate of QUI-90"',
+				)
+				.mockResolvedValueOnce("/exit");
+
+			const { startRepl } = await import("./repl.js");
+
+			await startRepl({
+				provider: createMockProvider(() => createMockLanguageModel()),
+				modelId: "deepseek-chat",
+				proposalStore: proposalStore as never,
+			});
+
+			expect(proposalStore.transitionReviewState).toHaveBeenCalledWith(
+				"proposal-rejectit012-x",
+				expect.objectContaining({
+					status: "rejected",
+					reviewer: "repl-user",
+					reason: "duplicate of QUI-90",
+				}),
+			);
+			expect(stderrWriteSpy).toHaveBeenCalledWith(
+				"Proposal rejected: proposal-rejectit012-x (reviewer=repl-user).\n",
+			);
+		});
+
+		it("/proposal-apply renders apply outcomes for approved proposals", async () => {
+			const applyMock = vi.fn(async () => ({
+				applied: [
+					{ proposalId: "proposal-applied001-x" },
+				],
+				skipped: [
+					{
+						proposalId: "proposal-skipped001-x",
+						status: "skipped" as const,
+						reasonCode: "user_rejected" as const,
+						reason: "user denied confirm",
+					},
+				],
+				failed: [
+					{
+						proposalId: "proposal-failed001-x",
+						status: "failed" as const,
+						reasonCode: "unsupported_patch_type" as const,
+						reason: "synthetic patch needs custom applier",
+					},
+				],
+			}));
+			const proposalStore = createFakeProposalStore([], {
+				applyApproved: applyMock,
+			});
+			mockQuestion
+				.mockResolvedValueOnce("/proposal-apply")
+				.mockResolvedValueOnce("/exit");
+
+			const { startRepl } = await import("./repl.js");
+
+			await startRepl({
+				provider: createMockProvider(() => createMockLanguageModel()),
+				modelId: "deepseek-chat",
+				proposalStore: proposalStore as never,
+			});
+
+			expect(applyMock).toHaveBeenCalledTimes(1);
+			const callArgs = (applyMock.mock.calls[0] ?? []) as readonly unknown[];
+			const authorityArg = callArgs[0] as
+				| { authorize?: unknown }
+				| undefined;
+			const optionsArg = callArgs[1];
+			expect(authorityArg).toBeDefined();
+			expect(typeof authorityArg?.authorize).toBe("function");
+			expect(optionsArg).toEqual(
+				expect.objectContaining({
+					origin: "user",
+					reviewer: "repl-user",
+				}),
+			);
+			const writes = stderrWriteSpy.mock.calls
+				.map((call) => String(call[0]))
+				.join("");
+			expect(writes).toContain(
+				"Apply outcomes: applied=1 skipped=1 failed=1",
+			);
+			expect(writes).toContain("proposal-app");
+			expect(writes).toContain("proposal-ski");
+			expect(writes).toContain("proposal-fai");
+			expect(writes).toContain("user_rejected");
+			expect(writes).toContain("unsupported_patch_type");
+		});
+
+		it("/proposal-apply reports nothing-to-apply when no approved proposals exist", async () => {
+			const proposalStore = createFakeProposalStore([], {
+				applyApproved: vi.fn(async () => ({
+					applied: [],
+					skipped: [],
+					failed: [],
+				})),
+			});
+			mockQuestion
+				.mockResolvedValueOnce("/proposal-apply")
+				.mockResolvedValueOnce("/exit");
+
+			const { startRepl } = await import("./repl.js");
+
+			await startRepl({
+				provider: createMockProvider(() => createMockLanguageModel()),
+				modelId: "deepseek-chat",
+				proposalStore: proposalStore as never,
+			});
+
+			expect(stderrWriteSpy).toHaveBeenCalledWith(
+				"No approved proposals to apply.\n",
+			);
+		});
+
+		it("disables proposal commands when proposalStore is not configured", async () => {
+			mockQuestion
+				.mockResolvedValueOnce("/proposals")
+				.mockResolvedValueOnce("/exit");
+
+			const { startRepl } = await import("./repl.js");
+
+			await startRepl({
+				provider: createMockProvider(() => createMockLanguageModel()),
+				modelId: "deepseek-chat",
+			});
+
+			const writes = stderrWriteSpy.mock.calls
+				.map((call) => String(call[0]))
+				.join("");
+			expect(writes).toContain(
+				"Self-evolution proposal store is not configured.",
+			);
+		});
+
+		// Cross-review round 1: invalid --limit must reject early with a
+		// clear error and never call proposalStore.query.
+		// 交叉 review 第一轮：非法的 --limit 必须立即报错，不得调用 query。
+		it("/proposals rejects an invalid --limit value", async () => {
+			const proposalStore = createFakeProposalStore([
+				buildProposal({ proposalId: "proposal-shouldnotbe1-x" }),
+			]);
+			mockQuestion
+				.mockResolvedValueOnce("/proposals --limit foo")
+				.mockResolvedValueOnce("/exit");
+
+			const { startRepl } = await import("./repl.js");
+
+			await startRepl({
+				provider: createMockProvider(() => createMockLanguageModel()),
+				modelId: "deepseek-chat",
+				proposalStore: proposalStore as never,
+			});
+
+			expect(proposalStore.query).not.toHaveBeenCalled();
+			const writes = stderrWriteSpy.mock.calls
+				.map((call) => String(call[0]))
+				.join("");
+			expect(writes).toContain("Invalid --limit value: foo");
+		});
+
+		// Cross-review round 1 finding: previously, `--reason multi word`
+		// without quotes only captured `multi`, silently dropping `word`.
+		// `--reason` is now declared a greedy flag and consumes every
+		// following non-flag token, joining with spaces.
+		// 交叉 review 第一轮发现：未加引号的 `--reason multi word` 之前只取
+		// `multi`，丢失 `word`。现在 `--reason` 标记为 greedy，会消耗后续
+		// 非 flag token 并以空格 join。
+		it("/proposal-reject joins multi-word --reason without requiring quotes", async () => {
+			const proposalStore = createFakeProposalStore([
+				buildProposal({ proposalId: "proposal-greedyreason-x" }),
+			]);
+			mockQuestion
+				.mockResolvedValueOnce(
+					"/proposal-reject proposal-greedyreason-x --reason duplicate of QUI-90 --reviewer rayson",
+				)
+				.mockResolvedValueOnce("/exit");
+
+			const { startRepl } = await import("./repl.js");
+
+			await startRepl({
+				provider: createMockProvider(() => createMockLanguageModel()),
+				modelId: "deepseek-chat",
+				proposalStore: proposalStore as never,
+			});
+
+			expect(proposalStore.transitionReviewState).toHaveBeenCalledWith(
+				"proposal-greedyreason-x",
+				expect.objectContaining({
+					status: "rejected",
+					reviewer: "rayson",
+					reason: "duplicate of QUI-90",
+				}),
+			);
+		});
+
+		// Cross-review round 1 HIGH finding: writeAuthorityMode auto-low /
+		// auto-medium previously skipped the approval confirm prompt
+		// silently, violating docs/07-safety-guardrails §2.6.4 ("CRITICAL
+		// 永远 confirm" — proposal approve gates a CRITICAL scaffold-patch
+		// apply). Trust mode must NOT auto-skip; only --yes opts out.
+		// 交叉 review 第一轮 HIGH 发现：之前 auto-low / auto-medium 会静默
+		// 跳过 approve 确认，违反 07-safety §2.6.4 "CRITICAL 永远 confirm"。
+		// trust mode 不得自动跳过，只有显式 --yes 才能 opt-out。
+		// Cross-review round 1: action commands (approve/reject/apply) must
+		// also gracefully report missing-store, not just /proposals. Without
+		// proposalStore, none of the slash commands can mutate review state.
+		// 交叉 review 第一轮：approve/reject/apply 等动作命令同样必须在
+		// proposalStore 缺失时给出明确提示，而不是只覆盖 /proposals。
+		it("/proposal-approve reports missing store when proposalStore is not configured", async () => {
+			mockQuestion
+				.mockResolvedValueOnce("/proposal-approve proposal-anyid000000-x --yes")
+				.mockResolvedValueOnce("/exit");
+
+			const { startRepl } = await import("./repl.js");
+
+			await startRepl({
+				provider: createMockProvider(() => createMockLanguageModel()),
+				modelId: "deepseek-chat",
+			});
+
+			const writes = stderrWriteSpy.mock.calls
+				.map((call) => String(call[0]))
+				.join("");
+			expect(writes).toContain(
+				"Self-evolution proposal store is not configured.",
+			);
+		});
+
+		it("/proposal-approve still asks for confirmation under auto-medium trust mode", async () => {
+			const proposalStore = createFakeProposalStore([
+				buildProposal({ proposalId: "proposal-trustmodecnf-x" }),
+			]);
+			mockQuestion
+				.mockResolvedValueOnce(
+					"/proposal-approve proposal-trustmodecnf-x --reviewer rayson",
+				)
+				.mockResolvedValueOnce("n")
+				.mockResolvedValueOnce("/exit");
+
+			const { startRepl } = await import("./repl.js");
+
+			await startRepl({
+				provider: createMockProvider(() => createMockLanguageModel()),
+				modelId: "deepseek-chat",
+				proposalStore: proposalStore as never,
+				writeAuthorityMode: "auto-medium",
+			});
+
+			// User answered "n" at the confirm prompt — store must not transition.
+			// 用户在确认 prompt 处回答 n，因此存储不得发生 transition。
+			expect(proposalStore.transitionReviewState).not.toHaveBeenCalled();
+			expect(stderrWriteSpy).toHaveBeenCalledWith("Approval cancelled.\n");
+		});
+
+		// Cross-review round 2 MEDIUM finding (sanitizeProposalReason direct
+		// behavior): C0/DEL chars must be stripped before persistence so audit
+		// logs stay human-readable and resistant to terminal-injection style
+		// payloads. This test exercises the function directly instead of
+		// going through the slash-command parser, isolating the concern.
+		// 交叉 review 第二轮 MEDIUM 发现（sanitizeProposalReason 直接行为）：
+		// 持久化前必须剔除 C0/DEL 控制字符，让审计日志可读且免受终端注入风格
+		// 载荷影响。本测试直接调用函数，绕过 slash 命令解析，单独覆盖该约束。
+		it("sanitizeProposalReason strips C0 and DEL control characters", async () => {
+			const { sanitizeProposalReason } = await import("./repl.js");
+			// Mix printable chunks with C0 controls (NUL/BEL/BS/LF/CR/ESC) and
+			// DEL. Use String.fromCharCode to keep the source file free of
+			// embedded control bytes that would confuse editors and grep tools.
+			// 用 String.fromCharCode 注入控制字符，避免源文件本身夹杂控制字节
+			// 干扰编辑器和 grep；混入 NUL/BEL/BS/LF/CR/ESC/DEL。
+			const c0 = (...codes: readonly number[]): string =>
+				String.fromCharCode(...codes);
+			const raw =
+				`abc${c0(0x00)}def${c0(0x07)}g${c0(0x08)}h${c0(0x0a)}i${c0(0x0d)}j${c0(0x1b)}k${c0(0x7f)}l`;
+			const cleaned = sanitizeProposalReason(raw);
+			// All C0/DEL chars become spaces and the consecutive whitespace is
+			// collapsed to single spaces.
+			// 所有 C0/DEL 字符变为空格，连续空白被折叠为单个空格。
+			expect(cleaned).toBe("abc def g h i j k l");
+			expect(cleaned).not.toMatch(/[\x00-\x1f\x7f]/u);
+		});
+
+		// Cross-review round 2 MEDIUM finding (sanitizeProposalReason length cap):
+		// reason text longer than MAX_PROPOSAL_REASON_LENGTH (4096) must be
+		// truncated so audit log lines stay bounded.
+		// 交叉 review 第二轮 MEDIUM 发现（sanitizeProposalReason 长度上限）：
+		// 超过 MAX_PROPOSAL_REASON_LENGTH（4096）的 reason 必须被截断，
+		// 保证审计日志行长度可控。
+		it("sanitizeProposalReason caps length at 4096 chars", async () => {
+			const { sanitizeProposalReason } = await import("./repl.js");
+			const raw = "a".repeat(5000);
+			const cleaned = sanitizeProposalReason(raw);
+			expect(cleaned.length).toBeLessThanOrEqual(4096);
+			expect(cleaned.length).toBe(4096);
+			expect(cleaned).toBe("a".repeat(4096));
+		});
+
+		// Cross-review round 2 MEDIUM finding (greedyFlags boundary): a quoted
+		// multi-word `--reason` must NOT be over-consumed by the greedy parser;
+		// the slash tokenizer keeps the quoted string as a single token, so
+		// `--reason "quoted multi word"` must produce a single-string reason.
+		// 交叉 review 第二轮 MEDIUM 发现（greedyFlags 边界）：带引号的多词
+		// `--reason` 不应被 greedy parser 过度消耗；slash tokenizer 把引号内
+		// 字符串当作单 token，因此 `--reason "quoted multi word"` 必须保留为
+		// 单字符串 reason。
+		it("/proposal-reject preserves a quoted multi-word --reason as a single string", async () => {
+			const proposalStore = createFakeProposalStore([
+				buildProposal({ proposalId: "proposal-quotedreas-x" }),
+			]);
+			mockQuestion
+				.mockResolvedValueOnce(
+					'/proposal-reject proposal-quotedreas-x --reason "quoted multi word"',
+				)
+				.mockResolvedValueOnce("/exit");
+
+			const { startRepl } = await import("./repl.js");
+
+			await startRepl({
+				provider: createMockProvider(() => createMockLanguageModel()),
+				modelId: "deepseek-chat",
+				proposalStore: proposalStore as never,
+			});
+
+			expect(proposalStore.transitionReviewState).toHaveBeenCalledWith(
+				"proposal-quotedreas-x",
+				expect.objectContaining({
+					status: "rejected",
+					reason: "quoted multi word",
+				}),
+			);
+		});
+
+		// Cross-review round 2 MEDIUM finding (greedyFlags boundary): when
+		// `--reason word` is followed by another flag (`--reviewer me`),
+		// the greedy parser must STOP at the next `--`-prefixed token so
+		// reason="word" and reviewer="me" both survive. This guards against a
+		// regression where greedy collection swallows trailing flags.
+		// 交叉 review 第二轮 MEDIUM 发现（greedyFlags 边界）：当 `--reason word`
+		// 后跟另一个 flag（`--reviewer me`）时，greedy 解析器必须在遇到下一个
+		// `--` 前缀 token 时停止，让 reason="word" 与 reviewer="me" 同时保留。
+		// 这条测试防止 greedy 误吞后续 flag 的回归。
+		it("/proposal-reject stops greedy --reason at the next --flag boundary", async () => {
+			const proposalStore = createFakeProposalStore([
+				buildProposal({ proposalId: "proposal-greedybndy-x" }),
+			]);
+			mockQuestion
+				.mockResolvedValueOnce(
+					"/proposal-reject proposal-greedybndy-x --reason word --reviewer me",
+				)
+				.mockResolvedValueOnce("/exit");
+
+			const { startRepl } = await import("./repl.js");
+
+			await startRepl({
+				provider: createMockProvider(() => createMockLanguageModel()),
+				modelId: "deepseek-chat",
+				proposalStore: proposalStore as never,
+			});
+
+			expect(proposalStore.transitionReviewState).toHaveBeenCalledWith(
+				"proposal-greedybndy-x",
+				expect.objectContaining({
+					status: "rejected",
+					reviewer: "me",
+					reason: "word",
+				}),
+			);
+		});
+
+		// Cross-review round 2 MEDIUM finding (telemetry wiring): each of
+		// /proposal-approve, /proposal-reject, /proposal-apply must emit a
+		// distinct phase to agent-run JSONL so the audit trail can reconstruct
+		// human-in-loop decisions on CRITICAL scaffold-patch applies.
+		// 交叉 review 第二轮 MEDIUM 发现（遥测接线）：/proposal-approve、
+		// /proposal-reject、/proposal-apply 必须各自向 agent-run JSONL 发出不同
+		// phase 事件，让审计链路能够还原 CRITICAL scaffold-patch apply 的
+		// human-in-loop 决策。
+		it("emits proposal.approved / rejected / applied / apply_skipped / apply_failed telemetry", async () => {
+			const runLogRecords: Array<{
+				phase: string;
+				payload?: Record<string, unknown>;
+			}> = [];
+			const agentRunLogger = {
+				record: vi.fn(async (input) => {
+					runLogRecords.push(input);
+				}),
+				flush: vi.fn(async () => undefined),
+			};
+			const proposalStore = createFakeProposalStore(
+				[
+					buildProposal({ proposalId: "proposal-tlmapprove1-x" }),
+					buildProposal({ proposalId: "proposal-tlmrejectt1-x" }),
+				],
+				{
+					applyApproved: vi.fn(async () => ({
+						applied: [{ proposalId: "proposal-tlmapplied1-x" }],
+						skipped: [
+							{
+								proposalId: "proposal-tlmskipped1-x",
+								status: "skipped" as const,
+								reasonCode: "user_rejected" as const,
+								reason: "user denied confirm",
+							},
+						],
+						failed: [
+							{
+								proposalId: "proposal-tlmfailed01-x",
+								status: "failed" as const,
+								reasonCode: "apply_error" as const,
+								reason: "synthetic apply error",
+							},
+						],
+					})),
+				},
+			);
+			mockQuestion
+				.mockResolvedValueOnce(
+					"/proposal-approve proposal-tlmapprove1-x --reviewer rayson --yes",
+				)
+				.mockResolvedValueOnce(
+					"/proposal-reject proposal-tlmrejectt1-x --reason duplicate of QUI-90",
+				)
+				.mockResolvedValueOnce("/proposal-apply")
+				.mockResolvedValueOnce("/exit");
+
+			const { startRepl } = await import("./repl.js");
+
+			await startRepl({
+				provider: createMockProvider(() => createMockLanguageModel()),
+				modelId: "deepseek-chat",
+				proposalStore: proposalStore as never,
+				agentRunLogger,
+			});
+
+			const phases = runLogRecords.map((record) => record.phase);
+			expect(phases).toEqual(
+				expect.arrayContaining([
+					"proposal.approved",
+					"proposal.rejected",
+					"proposal.applied",
+					"proposal.apply_skipped",
+					"proposal.apply_failed",
+				]),
+			);
+			const approved = runLogRecords.find(
+				(record) => record.phase === "proposal.approved",
+			);
+			expect(approved?.payload).toMatchObject({
+				proposalId: "proposal-tlmapprove1-x",
+				reviewer: "rayson",
+				skipConfirm: true,
+			});
+			const rejected = runLogRecords.find(
+				(record) => record.phase === "proposal.rejected",
+			);
+			expect(rejected?.payload).toMatchObject({
+				proposalId: "proposal-tlmrejectt1-x",
+				reasonChars: "duplicate of QUI-90".length,
+			});
+			expect(typeof rejected?.payload?.reasonHash).toBe("string");
+			// reasonHash must be a hex prefix (12 chars), never the raw text.
+			// reasonHash 必须是 12 位十六进制摘要，不能包含原始文本。
+			expect(rejected?.payload?.reasonHash).toMatch(/^[0-9a-f]{12}$/u);
+			expect(String(rejected?.payload?.reasonHash)).not.toContain("QUI-90");
+			const applied = runLogRecords.find(
+				(record) => record.phase === "proposal.applied",
+			);
+			expect(applied?.payload).toMatchObject({
+				proposalId: "proposal-tlmapplied1-x",
+				reviewer: "repl-user",
+			});
+			const applySkipped = runLogRecords.find(
+				(record) => record.phase === "proposal.apply_skipped",
+			);
+			expect(applySkipped?.payload).toMatchObject({
+				proposalId: "proposal-tlmskipped1-x",
+				reasonCode: "user_rejected",
+			});
+			const applyFailed = runLogRecords.find(
+				(record) => record.phase === "proposal.apply_failed",
+			);
+			expect(applyFailed?.payload).toMatchObject({
+				proposalId: "proposal-tlmfailed01-x",
+				reasonCode: "apply_error",
+			});
+		});
+	});
 	});

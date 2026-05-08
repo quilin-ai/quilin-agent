@@ -308,6 +308,46 @@ ScaffoldModifier.generate_proposals(pattern_report)
 
 > **为什么砍掉 Level 1-2 的自动应用**？Ultra-review 发现原设计存在"静默 drift"风险（Agent 悄悄改自己行为但用户不知），且绕过了 safety-guardrails 的 4 层验证链。保留 human-in-loop 并不会削弱自进化能力——多数 Agent 框架的失败源于缺少高质量 pattern 分析，而不是缺少自动应用通道。
 
+### 2.4.1 提案审核 REPL 命令 / Proposal Review REPL Commands
+
+The four review actions (list / approve / reject / apply) are exposed as REPL slash commands so a reviewer can drive the human-in-loop gate from the same TUI that runs the agent. Each command operates on the JSONL `proposalStore` (see `packages/agent-core/src/self-evolution/proposal-store.ts`); when the store is not configured the commands print a clear "store not configured" message instead of silently no-ops.
+
+四个审核动作（list / approve / reject / apply）作为 REPL 斜杠命令暴露，评审人可以在运行 Agent 的同一 TUI 中操作 human-in-loop 闸门。每个命令都直接读写 JSONL `proposalStore`（见 `packages/agent-core/src/self-evolution/proposal-store.ts`）；若未配置 store，命令会打印明确的"store 未配置"提示，而不是静默 no-op。
+
+| Command 命令 | Purpose 用途 | Notes 说明 |
+|---|---|---|
+| `/proposals [--limit N]` | List pending proposals as a TUI table. 列出待审提案 | Default limit 20; pass `--limit N` to expand. 默认 20 条，使用 `--limit N` 扩展 |
+| `/proposal-approve <id> [--reviewer <name>] [--yes]` | Approve a pending proposal. 批准提案 | Approval is the human-in-loop gate for a CRITICAL scaffold-patch apply (07 §2.6.4): trust mode (`auto-low` / `auto-medium`) MUST NOT auto-skip the confirm prompt; only an explicit `--yes` opts out. 提案批准是 CRITICAL scaffold-patch apply 的 human-in-loop 闸门：trust mode 不会自动跳过确认，只有显式 `--yes` 才能 opt-out |
+| `/proposal-reject <id> --reason "..." [--reviewer <name>]` | Reject a pending proposal. 拒绝提案 | `--reason` is a greedy flag — multi-word reasons without quotes are joined with single spaces; the reason is sanitized (C0/DEL stripped, length capped at 4096) before persistence. `--reason` 为贪婪 flag，多词 reason 无需引号也会以空格 join；持久化前会清洗（剔除 C0/DEL，限长 4096）|
+| `/proposal-apply [--limit N]` | Apply approved proposals via WriteAuthority. 通过 WriteAuthority 应用已批准提案 | Each apply is gated by `WriteAuthority` with `origin:"user"` + `riskLevel:"critical"`; the gate's confirm decision is the merge-equivalent. 每次 apply 都通过 `WriteAuthority` 把关，`origin:"user"` + `riskLevel:"critical"`；gate 的 confirm 决策等价于合并 |
+
+The typical workflow ties trajectory analysis to scaffold-patch application:
+
+典型 workflow 把轨迹分析串到 scaffold-patch 应用：
+
+```
+trajectory failure
+      │
+      ▼ FailureAnalyzer + offline-optimizer
+proposal generated → proposalStore (status=pending_review)
+      │
+      ▼ user runs `/proposals`
+review pending list (TUI table)
+      │
+      ▼ user runs `/proposal-approve <id>`  or  `/proposal-reject <id> --reason "..."`
+status → approved / rejected
+      │
+      ▼ user runs `/proposal-apply`
+WriteAuthority gate (CRITICAL → confirm prompt unless --trust auto + --yes)
+      │
+      ▼ on confirm
+patch applied → proposalStore (status=applied)
+```
+
+Each command also emits a telemetry event into the agent-run JSONL log (`proposal.approved` / `proposal.rejected` / `proposal.applied` / `proposal.apply_skipped` / `proposal.apply_failed`) so the audit trail can reconstruct who approved / rejected / applied which proposal, with the rejection reason hashed (not stored verbatim) to keep the log free of free-form reviewer text.
+
+每个命令同时往 agent-run JSONL 日志写一条遥测事件（`proposal.approved` / `proposal.rejected` / `proposal.applied` / `proposal.apply_skipped` / `proposal.apply_failed`），让审计链路能够还原"谁批准/拒绝/应用了哪条提案"；拒绝 reason 以 hash 形式记录，不留自由文本，避免日志包含评审人原文。
+
 ### 2.5 技能自创系统（Voyager 启发）
 
 > **与 [13-技能工程](../13-skills/README.md) 的分工（D-05 合同）**：

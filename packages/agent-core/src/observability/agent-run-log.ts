@@ -61,7 +61,18 @@ export type AgentRunLogPhase =
 	| "mcp.unregister"
 	| "capabilities.surface_built"
 	| "capabilities.reload_applied"
-	| "capabilities.reload_failed";
+	| "capabilities.reload_failed"
+	// Self-evolution proposal review TUI (added 2026-05-09, QUI-128 round-3 cross-review:
+	// /proposal-approve | /proposal-reject | /proposal-apply must emit auditable telemetry
+	// so that human-in-loop decisions on CRITICAL scaffold-patch applies are observable).
+	// 自进化提案审核 TUI（2026-05-09 加入，QUI-128 round-3 交叉 review）：
+	// /proposal-approve | /proposal-reject | /proposal-apply 必须发出可审计的遥测事件，
+	// 让 CRITICAL 级别 scaffold-patch apply 的人工决策在审计日志中可观测。
+	| "proposal.approved"
+	| "proposal.rejected"
+	| "proposal.applied"
+	| "proposal.apply_skipped"
+	| "proposal.apply_failed";
 
 export interface AgentRunLogRecordOptions {
 	readonly turnId?: string;
