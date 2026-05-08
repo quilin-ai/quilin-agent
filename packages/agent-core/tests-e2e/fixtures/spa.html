@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Quilin E2E SPA Fixture</title>
+</head>
+<body>
+  <h1 id="title">Test Page</h1>
+  <p id="description">A minimal SPA fixture for web_browse E2E acceptance tests.</p>
+
+  <!--
+    The #load button drives two test scenarios:
+    1. wait_for test: after 500ms it injects <div id="price">$42</div>
+    2. act test: clicking #load increments data-count on #counter
+  -->
+  <button id="load" data-action="load-price">Load Price</button>
+
+  <div id="counter" data-count="0">Clicks: 0</div>
+
+  <div id="items">
+    <a href="#" class="item" data-id="1">Item One</a>
+    <a href="#" class="item" data-id="2">Item Two</a>
+    <input id="search" type="text" placeholder="Search…" />
+  </div>
+
+  <script>
+    document.getElementById('load').addEventListener('click', function () {
+      // increment counter
+      const counter = document.getElementById('counter');
+      const prev = parseInt(counter.getAttribute('data-count') || '0', 10);
+      const next = prev + 1;
+      counter.setAttribute('data-count', String(next));
+      counter.textContent = 'Clicks: ' + next;
+
+      // inject price after 500ms (drives wait_for test)
+      setTimeout(function () {
+        if (!document.getElementById('price')) {
+          const div = document.createElement('div');
+          div.id = 'price';
+          div.textContent = '$42';
+          document.body.appendChild(div);
+        }
+      }, 500);
+    });
+  </script>
+</body>
+</html>
