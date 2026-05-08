@@ -190,6 +190,49 @@ quilin-agent/
 
 结束 phase 或关闭 finding 的 commit，commit message 附实证片段（LOC / 测试通过数 / tsc 退出码）。给其他 agent 下任务书引用 review 条目时，标明"抽查 X 条 / Y 条已过时"。
 
+### Cross Code Review 循环（硬规则 / Hard rule）
+
+**任何新写的代码（无论主 agent 还是 subagent 写）落库前必须走 cross review 循环**。这是 quilin-agent 项目所有代码工作的硬约束，未经此流程不得 commit / push / 更新 Linear 状态。
+
+Any new code (whether written by main agent or subagent) must pass a cross-review loop before landing. This is a hard constraint for all code work in quilin-agent — no `git commit` / `git push` / Linear status change is permitted without this gate.
+
+**流程 / Procedure**:
+
+1. 写完新代码（或 subagent 在 worktree 完成 task）
+2. **派 2 个全新独立 subagent** 做 cross code review，角度尽量正交：
+   - Reviewer A: 类型 / 逻辑 / 算法 / 测试覆盖
+   - Reviewer B: 集成漂移 / 安全 / 边界 / 回归风险 / API 兼容
+3. 任一 reviewer 找出**真实 issue**（非 SUSPECT，非 RECOMMEND）→ **写代码的 agent**（主 agent 或原 worktree subagent）针对问题修复
+4. 修复完 → **再派 2 个全新 subagent** 做 review（不复用之前的 reviewer，避免 confirmation bias）
+5. 循环步骤 2-4，直到**两个新 reviewer 都报告 0 真实 issue**
+
+**只有 2 个 reviewer 都 clean 后**才允许：
+- `git commit` / `git push`
+- 更新 Linear issue 状态（特别是 In Progress → Done）
+- worktree subagent 的 commit cherry-pick 进 master
+
+**Why**: DeepSeek 笨蛋模型时期的虚假完成（Linear 标 Done 实际是 stub）+ 7 轮审计才挖出 13 个真 bug 的教训。单 reviewer 易报 false positive 或漏 bug；2 reviewer 交叉审 + 多轮迭代 = 收敛到真实质量底。"测试通过 + tsc EXIT=0" 不等于 ship-ready，必须有显式 review gate。
+
+**适用 / Applies to**:
+- Feature commit / fix commit / refactor / 跨文件修改
+- Tier 2 worktree subagent 返回的代码（cherry-pick 前必须先 review）
+- 主 agent 自己派 subagent 写的代码
+
+**不适用 / Does not apply**:
+- 纯文档修改（无代码逻辑）
+- 纯 lint format / 单行 typo
+- Memory / Linear 文本更新
+
+**SUSPECT 与 RECOMMEND 的处理**:
+- SUSPECT（reviewer 不 100% 确定）→ **主 agent 必须亲自实证（grep / Read / 跑测试）后判决**，不能口头驳回
+- RECOMMEND（建议性优化，非 bug）→ 不阻塞 cherry-pick，但应记录到 Linear backlog
+
+**收敛判定 / Convergence**:
+- 连续两个**新派**的 reviewer 都报 0 真实 issue（false positive 不算）→ 通过
+- 主 agent 反驳 reviewer 报错时，反驳必须附实证（grep 结果 / file:line / 测试通过数），写入对话上下文供后续 reviewer 参考
+
+> Per-language and per-skill cross-review patterns are also recorded in user memory `feedback_cross_review_loop.md`; the canonical source of truth is **this file**.
+
 ## Important Constraints
 
 - Do not modify local language environment versions (Go, Python, Node, etc.)
