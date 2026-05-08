@@ -43,6 +43,14 @@ Current component README files:
 - [13 Skills](../13-skills/README.md)
 - [14 Benchmark Harness](../14-benchmark-harness/README.md)
 
+## 深入文档 / Deep-Dive Docs
+
+- [intelligence-roadmap.md](./intelligence-roadmap.md) — Master index that maps the **10 puzzle pieces of "Claude-Code-level intelligence"** onto Quilin's domains, current state, gaps, and owning Linear iteration. Start here when planning any harness-engineering work. / 主索引：把"Claude Code 级智能感"的 10 块拼图映射到 Quilin 各领域、当前状态、差距、归属的 Linear iteration。规划任何 harness 工程改动从这里开始。
+- [reactive-execution.md](./reactive-execution.md) — Iter L: Core Loop's adaptive-execution model: foreground/background dispatch, observation-driven anomaly detection, fallback ladders, and the boundary between Loop's tactical decisions vs Planner's strategic re-plan. / Core Loop 的自适应执行模型。
+- [eval-driven-development.md](./eval-driven-development.md) — Iter L+0: lightweight self-owned trace-eval layer; **prerequisite gate** for all subsequent harness changes. Six core metrics, trace catalog, runner, CI hook. / 轻量自有 trace eval 层；后续所有 harness 改动的合入闸门。
+- [`../05-tool/tool-taste.md`](../05-tool/tool-taste.md) — Iter L+1: marketing-style descriptors, lint, subagent capability advertisement, tool selection trace. / 工具品味：卖货式 descriptor、lint、subagent 能力宣传、工具选择 trace。
+- [`../02-context/auto-context-curation.md`](../02-context/auto-context-curation.md) — Iter L+2: trigger table for what context to auto-load when, relevance matching, staleness detection. / 上下文自动装配：什么时候 load 哪些 context 的策略表、相关性匹配、失效检测。
+
 ## 决策 / Decisions
 
 - 不用 LangGraph；核心循环保持自研、小而可审计。
