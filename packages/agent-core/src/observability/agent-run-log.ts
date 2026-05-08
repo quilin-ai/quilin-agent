@@ -52,7 +52,16 @@ export type AgentRunLogPhase =
 	| "tool.provenance_recorded"
 	| "assistant.response_final"
 	| "turn.completed"
-	| "turn.failed";
+	| "turn.failed"
+	// MCP / capabilities lifecycle (added 2026-05-08, QUI-140 audit observability gap)
+	| "mcp.register_succeeded"
+	| "mcp.register_failed"
+	| "mcp.reconnect_succeeded"
+	| "mcp.reconnect_failed"
+	| "mcp.unregister"
+	| "capabilities.surface_built"
+	| "capabilities.reload_applied"
+	| "capabilities.reload_failed";
 
 export interface AgentRunLogRecordOptions {
 	readonly turnId?: string;

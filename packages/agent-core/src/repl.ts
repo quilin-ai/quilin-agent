@@ -2202,13 +2202,46 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 					}
 				}
 
-				for (const entry of changedMcpServers) { try {
-					const registeredTools = await registry.register(entry);
-					mcpServerToolCounts.set(entry.id, registeredTools.length); } catch (err) { logger.warn({ err, serverId: entry.id }, "MCP register failed"); mcpServerToolCounts.delete(entry.id); }
+				const isReconnect = (id: string): boolean =>
+					disconnectedMcpServers.some((entry) => entry.id === id);
+				for (const entry of changedMcpServers) {
+					try {
+						const registeredTools = await registry.register(entry);
+						mcpServerToolCounts.set(entry.id, registeredTools.length);
+						await recordAgentRunEvent(
+							runLogger,
+							isReconnect(entry.id)
+								? "mcp.reconnect_succeeded"
+								: "mcp.register_succeeded",
+							{
+								serverId: entry.id,
+								toolCount: registeredTools.length,
+							},
+						);
+					} catch (err) {
+						logger.warn(
+							{ err, serverId: entry.id },
+							"MCP register failed",
+						);
+						mcpServerToolCounts.delete(entry.id);
+						await recordAgentRunEvent(
+							runLogger,
+							isReconnect(entry.id)
+								? "mcp.reconnect_failed"
+								: "mcp.register_failed",
+							{
+								serverId: entry.id,
+								error: err instanceof Error ? err.message : String(err),
+							},
+						);
+					}
 				}
 				for (const serverId of removedMcpServerIds) {
 					await registry.unregister(serverId);
 					mcpServerToolCounts.delete(serverId);
+					await recordAgentRunEvent(runLogger, "mcp.unregister", {
+						serverId,
+					});
 				}
 
 				registry.clearBuiltinTools();
@@ -2236,11 +2269,26 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 				promptSession = nextPromptSession;
 				updateCatalogHintSubscription(currentSkillsManager);
 
+				const previousSurfaceKey = runtimeSurface?.key;
 				runtimeSurface = {
 					key: surfaceKey,
 					sessionAssembler: nextPromptSession.assembler,
 					tools: filterToolsByRuntimeConfig(registry.getAllTools(), toolFilter),
 				};
+				// Telemetry: hot-reload / first-build distinction lets dashboard
+				// see when capabilities config or skills catalog actually rotates.
+				await recordAgentRunEvent(
+					runLogger,
+					previousSurfaceKey == null
+						? "capabilities.surface_built"
+						: "capabilities.reload_applied",
+					{
+						previousKey: previousSurfaceKey,
+						nextKey: surfaceKey,
+						mcpServerCount: registeredMcpServerSignatures.size,
+						toolCount: runtimeSurface.tools.length,
+					},
+				);
 				return runtimeSurface;
 			} catch (err) {
 				if (runtimeSurface != null) {
@@ -2248,6 +2296,9 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 						{ error: providerErrorLogFields(err) },
 						"REPL: capabilities runtime sync failed; keeping previous surface",
 					);
+					await recordAgentRunEvent(runLogger, "capabilities.reload_failed", {
+						error: err instanceof Error ? err.message : String(err),
+					});
 					return runtimeSurface;
 				}
 				throw err;
