@@ -176,6 +176,53 @@ export const safetyConfigSchema = z
 	.strict()
 	.default({ trust_mode: "auto" });
 
+// Default token budget mirrors DEFAULT_CONTEXT_BUDGET in
+// ../context/manager.ts. Keep them in sync — Phase 0 only enforces
+// budget.total; per-section caps are reserved for Phase 1+.
+const DEFAULT_CONTEXT_BUDGET = {
+	total: 4096,
+	system: 1024,
+	memory: 1024,
+	tools: 512,
+	conversation: 1024,
+	reserved: 512,
+} as const;
+
+export const contextBudgetSchema = z
+	.object({
+		total: z.number().int().positive().default(DEFAULT_CONTEXT_BUDGET.total),
+		system: z
+			.number()
+			.int()
+			.nonnegative()
+			.default(DEFAULT_CONTEXT_BUDGET.system),
+		memory: z
+			.number()
+			.int()
+			.nonnegative()
+			.default(DEFAULT_CONTEXT_BUDGET.memory),
+		tools: z.number().int().nonnegative().default(DEFAULT_CONTEXT_BUDGET.tools),
+		conversation: z
+			.number()
+			.int()
+			.nonnegative()
+			.default(DEFAULT_CONTEXT_BUDGET.conversation),
+		reserved: z
+			.number()
+			.int()
+			.nonnegative()
+			.default(DEFAULT_CONTEXT_BUDGET.reserved),
+	})
+	.strict()
+	.default(DEFAULT_CONTEXT_BUDGET);
+
+export const contextConfigSchema = z
+	.object({
+		budget: contextBudgetSchema,
+	})
+	.strict()
+	.default({ budget: DEFAULT_CONTEXT_BUDGET });
+
 export const userConfigSchema = z
 	.object({
 		schema_version: z
@@ -199,6 +246,7 @@ export const userConfigSchema = z
 		tools: toolsConfigSchema,
 		idle_evolution: idleEvolutionConfigSchema,
 		safety: safetyConfigSchema,
+		context: contextConfigSchema,
 	})
 	.strict();
 

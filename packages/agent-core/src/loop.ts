@@ -101,12 +101,13 @@ export async function runAgentLoop(
 				baseSystemPrompt != null &&
 				config.sessionAssembler == null
 			) {
+				const contextBudget = config.contextBudget ?? DEFAULT_CONTEXT_BUDGET;
 				const systemPrompt = await turnTelemetry.runStateNode(
 					"build_context",
 					async () =>
 						config.context?.buildContext(
 							[createSystemContextSource(baseSystemPrompt)],
-							DEFAULT_CONTEXT_BUDGET,
+							contextBudget,
 						) ?? baseSystemPrompt,
 				);
 				workingMessages[0] = { role: "system", content: systemPrompt };
@@ -338,10 +339,10 @@ export async function runAgentLoop(
 					runLogContext,
 				);
 				loopSucceeded = true;
-				await config.hooks?.onTurnComplete?.(
-					turnCount,
-					[...workingMessages, assistantMessage],
-				);
+				await config.hooks?.onTurnComplete?.(turnCount, [
+					...workingMessages,
+					assistantMessage,
+				]);
 				await config.hooks?.onIdle?.();
 				await recordAgentRunEvent(
 					runLogger,

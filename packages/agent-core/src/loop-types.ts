@@ -1,6 +1,6 @@
 import type { ScanResult } from "./context/injection-scanner.js";
 import type { OutboundPromptRequest } from "./context/prompt-session-assembler.js";
-import type { ContextManager } from "./context/types.js";
+import type { ContextManager, TokenBudget } from "./context/types.js";
 import type { InferenceConfig, LLMClient } from "./llm/types.js";
 import type { AgentLoopObservability } from "./observability/loop.js";
 import type { ActionVerificationResult } from "./safety/action-verifier.js";
@@ -69,6 +69,7 @@ export function createAssistantMessage(
 export interface AgentLoopConfig {
 	readonly llm: LLMClient;
 	readonly context?: ContextManager;
+	readonly contextBudget?: TokenBudget;
 	readonly sessionAssembler?: {
 		readonly buildOutboundRequest: (input: {
 			readonly transcript: readonly Message[];

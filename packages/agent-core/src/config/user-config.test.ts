@@ -65,9 +65,74 @@ describe("user-config schema defaults", () => {
 		expect(result.sources["llm.default_model"]).toBe("default");
 		expect(result.sources["llm.tiers.flash.model"]).toBe("default");
 	});
+
+	// QUI-140 / QUI-90: user config must expose context.budget so the
+	// REPL can drive BasicContextManager budget from user.toml.
+	it("returns built-in context.budget defaults when absent", async () => {
+		const result = await loadUserConfig({
+			configPath: path.join(tmpDir, "missing.toml"),
+			env: {},
+		});
+
+		expect(result.config.context.budget).toEqual({
+			total: 4096,
+			system: 1024,
+			memory: 1024,
+			tools: 512,
+			conversation: 1024,
+			reserved: 512,
+		});
+	});
+
+	// QUI-140 / QUI-90: backwards compatibility — old user.toml files
+	// (schema_version=1) without [context] must still load without error.
+	it("loads schema_version=1 TOML without [context] and applies defaults", async () => {
+		// File deliberately omits the [context] table; loader must
+		// fall back to built-in budget defaults.
+		const file = path.join(tmpDir, "no-context.toml");
+		await fs.writeFile(
+			file,
+			`schema_version = 1\n\n[llm]\ndefault_model = "claude-opus-4-7"\n`,
+			{ mode: 0o600 },
+		);
+		await fs.chmod(file, 0o600);
+
+		const result = await loadUserConfig({ configPath: file, env: {} });
+
+		expect(result.config.llm.default_model).toBe("claude-opus-4-7");
+		expect(result.config.context.budget.total).toBe(4096);
+		expect(result.config.context.budget.system).toBe(1024);
+	});
 });
 
 describe("user-config TOML loading", () => {
+	// QUI-140 / QUI-90: user-customised context.budget must round-trip
+	// through TOML and get reported with source=file.
+	it("parses custom context.budget TOML and reports file as source", async () => {
+		const file = await writeConfig(`
+[context.budget]
+total = 8192
+system = 2048
+memory = 2048
+tools = 1024
+conversation = 2048
+reserved = 1024
+`);
+
+		const result = await loadUserConfig({ configPath: file, env: {} });
+
+		expect(result.config.context.budget).toEqual({
+			total: 8192,
+			system: 2048,
+			memory: 2048,
+			tools: 1024,
+			conversation: 2048,
+			reserved: 1024,
+		});
+		expect(result.sources["context.budget.total"]).toBe("file");
+		expect(result.sources["context.budget.system"]).toBe("file");
+	});
+
 	it("parses TOML and reports file as source", async () => {
 		const file = await writeConfig(`
 [llm]

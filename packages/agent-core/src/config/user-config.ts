@@ -254,6 +254,12 @@ function buildSchemaTree(): SchemaTreeNode {
 		"idle_evolution.allowed_hours": "string",
 		"idle_evolution.min_idle_minutes": "number",
 		"safety.trust_mode": "string",
+		"context.budget.total": "number",
+		"context.budget.system": "number",
+		"context.budget.memory": "number",
+		"context.budget.tools": "number",
+		"context.budget.conversation": "number",
+		"context.budget.reserved": "number",
 	};
 
 	const root: {

@@ -1174,6 +1174,58 @@ describe("startRepl", () => {
 		expect(spans.clear).toHaveBeenCalledTimes(1);
 	});
 
+	// QUI-140 / QUI-90: REPL must wire user config context.budget into
+	// runAgentLoop so user-tuned budgets actually flow to BasicContextManager.
+	it("forwards getUserConfig().context.budget to runAgentLoop as contextBudget", async () => {
+		mockQuestion.mockResolvedValueOnce("hello").mockResolvedValueOnce("/exit");
+		mockRunAgentLoop.mockResolvedValue("reply");
+
+		const customBudget = {
+			total: 12_000,
+			system: 3000,
+			memory: 3000,
+			tools: 1500,
+			conversation: 3000,
+			reserved: 1500,
+		} as const;
+		const userConfigStub = {
+			schema_version: 1,
+			context: { budget: customBudget },
+		} as never;
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: createMockProvider(() => createMockLanguageModel()),
+			modelId: "deepseek-chat",
+			getUserConfig: () => userConfigStub,
+		});
+
+		expect(mockRunAgentLoop).toHaveBeenCalledWith(
+			expect.objectContaining({ contextBudget: customBudget }),
+			expect.any(Array),
+		);
+	});
+
+	// QUI-140 / QUI-90: REPL without a getUserConfig wiring must NOT
+	// inject contextBudget — runAgentLoop falls back to DEFAULT_CONTEXT_BUDGET.
+	it("omits contextBudget from runAgentLoop when getUserConfig is absent", async () => {
+		mockQuestion.mockResolvedValueOnce("hello").mockResolvedValueOnce("/exit");
+		mockRunAgentLoop.mockResolvedValue("reply");
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: createMockProvider(() => createMockLanguageModel()),
+			modelId: "deepseek-chat",
+		});
+
+		expect(mockRunAgentLoop).toHaveBeenCalledWith(
+			expect.not.objectContaining({ contextBudget: expect.anything() }),
+			expect.any(Array),
+		);
+	});
+
 	it("resets stream render state on /clear", async () => {
 		mockQuestion
 			.mockResolvedValueOnce("hello")

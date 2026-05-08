@@ -1180,6 +1180,69 @@ describe("runAgentLoop", () => {
 		);
 	});
 
+	// QUI-140 / QUI-90: contextBudget on AgentLoopConfig must override
+	// DEFAULT_CONTEXT_BUDGET when buildContext is invoked.
+	it("forwards config.contextBudget to ContextManager.buildContext", async () => {
+		vi.mocked(getLoggerRuntimeMode).mockReturnValue("repl");
+
+		const buildContext = vi
+			.fn<(...args: unknown[]) => Promise<string>>()
+			.mockResolvedValue("custom-budget system prompt");
+		const chat = vi.fn().mockResolvedValueOnce({
+			content: "ok",
+			usage: { inputTokens: 1, outputTokens: 1 },
+			finishReason: "stop",
+		});
+
+		const customBudget = {
+			total: 9999,
+			system: 1234,
+			memory: 2345,
+			tools: 3456,
+			conversation: 4567,
+			reserved: 567,
+		} as const;
+
+		await runAgentLoop(
+			{
+				llm: { chat },
+				context: { buildContext },
+				contextBudget: customBudget,
+				inferenceConfig: {
+					temperature: 0.5,
+					maxTokens: 256,
+					thinkingMode: "disabled",
+				},
+			},
+			[
+				{ role: "system", content: "base prompt" },
+				{ role: "user", content: "hi" },
+			],
+		);
+
+		expect(buildContext).toHaveBeenCalledTimes(1);
+		expect(buildContext).toHaveBeenNthCalledWith(
+			1,
+			[
+				expect.objectContaining({
+					type: "system",
+					content: "base prompt",
+					priority: 100,
+				}),
+			],
+			customBudget,
+		);
+		expect(chat).toHaveBeenCalledWith(
+			[
+				{ role: "system", content: "custom-budget system prompt" },
+				{ role: "user", content: "hi" },
+			],
+			[],
+			expect.any(Object),
+			undefined,
+		);
+	});
+
 	it("在 thinking disabled 时不回放 DeepSeek tool-call reasoning", async () => {
 		vi.mocked(getLoggerRuntimeMode).mockReturnValue("repl");
 

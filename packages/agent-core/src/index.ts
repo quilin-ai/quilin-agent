@@ -917,6 +917,7 @@ export async function main(options: MainOptions = {}): Promise<void> {
 				onProviderRunRecord: createProviderRunRecordLogger("repl_turn"),
 				onMcpReconnectApplied: () =>
 					capabilitiesHotReload.markMcpReconnectAppliedAtReplTurnBoundary(),
+				getUserConfig: () => userRuntime.result.config,
 			});
 			shouldExit = true;
 		} finally {

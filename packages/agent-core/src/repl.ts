@@ -8,6 +8,7 @@ import {
 	isRuntimeToolEnabled,
 	type RuntimeToolFilter,
 } from "./config/runtime.js";
+import type { UserConfig } from "./config/user-config-schema.js";
 import { createDefaultPromptSections } from "./context/default-sections.js";
 import {
 	BasicContextManager,
@@ -166,6 +167,9 @@ interface ReplOptions {
 		onIdle?: () => Promise<void>;
 	onProviderRunRecord?: (record: ProviderRunRecord) => void;
 	onMcpReconnectApplied?: () => void;
+	// Provides the loaded user config so REPL can wire user-tuned
+	// settings (e.g. context.budget, config_view) into runAgentLoop.
+	// Optional — when null, runAgentLoop falls back to defaults.
 	getUserConfig?: () => UserConfig | null;
 }
 
@@ -1890,6 +1894,8 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 		getUserConfig,
 	} = options;
 	const context = new BasicContextManager();
+	const resolveContextBudget = (): TokenBudget | undefined =>
+		getUserConfig?.()?.context?.budget;
 	const ownsStaticSkillsManager =
 		capabilitiesRuntime == null && skillsManager != null;
 	if (ownsStaticSkillsManager) {
@@ -2641,10 +2647,14 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 				runtimeSurface = await syncRuntimeSurface();
 				let latestAssistantMessage: Message | undefined;
 				let latestLoopMessages: readonly Message[] | undefined;
+				const userContextBudget = resolveContextBudget();
 				const response = await runAgentLoop(
 					{
 						llm: activeLlm,
 						context,
+						...(userContextBudget == null
+							? {}
+							: { contextBudget: userContextBudget }),
 						sessionAssembler: runtimeSurface.sessionAssembler,
 						checkpoint,
 						state,
