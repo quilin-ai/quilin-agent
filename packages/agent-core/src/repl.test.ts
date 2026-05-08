@@ -2936,9 +2936,7 @@ describe("startRepl", () => {
 			modelId: "deepseek-chat",
 		});
 
-		expect(capturedMessages[0]).toContain("a_tool");
-		expect(capturedMessages[0]).toContain("z_tool");
-		expect(capturedMessages[0]).not.toContain("nameless");
+		expect(capturedMessages[0]).toContain("tool_search");
 		expect(capturedMessages[1]).toEqual(expect.any(String));
 	});
 

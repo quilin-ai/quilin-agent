@@ -244,12 +244,12 @@ function createPromptSessionAssembler(
 		sessionStartedAt,
 		lastSessionEndedAt: lastSessionEndTime,
 		now: () => new Date(),
-		getAvailableTools: () =>
-			filterToolsByRuntimeConfig(registry.getAllTools(), toolFilter)
-				.map((tool) => tool.name)
-				.filter((name): name is string => name != null),
+		// System prompt only exposes tool_search as gateway;
+		// all tools remain registered in ToolRouter for actual execution.
+		getAvailableTools: () => ["tool_search"],
 		getAvailableToolDescriptors: () =>
-			filterToolsByRuntimeConfig(registry.getToolDescriptors(), toolFilter),
+			filterToolsByRuntimeConfig(registry.getToolDescriptors(), toolFilter)
+				.filter((t) => (t.name ?? "").includes("tool_search")),
 		getSessionState: () => ({
 			skills: {
 				recentSkillNames: skillsManager?.getRecentSkillNames() ?? [],
