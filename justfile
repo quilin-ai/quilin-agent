@@ -43,37 +43,43 @@ clean:
 
 # ============ TS (packages/) ============
 
-# 开发模式：日常评估能力 / 演示用（INFO 级日志，过滤掉 debug 噪音）
-dev:
-    LOG_LEVEL=info QUILIN_ENV=dev QUILIN_RUNTIME_MODE=repl bun --env-file=.env --watch packages/agent-core/src/index.ts
+# 日志档语义（所有 dev 系列 recipe 共用）：
+#   不传     → 默认级别日志（info） — 评估能力 / 跟 agent 对话用
+#   quiet    → 没有日志（silent）   — 演示 / 截图 / 日志噪音掩盖回答时
+#   verbose  → 详细日志（debug）    — 找 bug / 排查 LLM provider 问题
+#   也接受任意 LOG_LEVEL 原始值：silent / fatal / error / warn / info / debug / trace
 
-# 安静模式：只看 WARN 和 ERROR — 评估对话能力或给人演示时用，能看到 sanitizer / MCP 异常
+# 开发模式（默认 ASK 模式：CRITICAL 才确认）
+# 例：just dev / just dev quiet / just dev verbose
+dev log="info":
+    LOG_LEVEL={{ if log == "quiet" { "silent" } else if log == "verbose" { "debug" } else { log } }} QUILIN_ENV=dev QUILIN_RUNTIME_MODE=repl bun --env-file=.env --watch packages/agent-core/src/index.ts
+
+# 兼容别名：dev-quiet / dev-debug 仍可用
 dev-quiet:
-    LOG_LEVEL=warn QUILIN_ENV=dev QUILIN_RUNTIME_MODE=repl bun --env-file=.env --watch packages/agent-core/src/index.ts
+    @just dev quiet
 
-# 调试模式：完整 debug 日志 — 找 bug / 排查 LLM provider 问题用
 dev-debug:
-    LOG_LEVEL=debug QUILIN_ENV=dev QUILIN_RUNTIME_MODE=repl bun --env-file=.env --watch packages/agent-core/src/index.ts
+    @just dev verbose
 
 # Yolo 模式：全自动放行，不询问任何确认（CRITICAL 操作仍会确认）
-# 日志档可选：info（默认）/ warn / debug — just dev-yolo  /  just dev-yolo warn  /  just dev-yolo debug
+# 例：just dev-yolo / just dev-yolo quiet / just dev-yolo verbose
 dev-yolo log="info":
-    LOG_LEVEL={{log}} QUILIN_ENV=dev QUILIN_RUNTIME_MODE=repl bun --env-file=.env --watch packages/agent-core/src/index.ts -- --yolo
+    LOG_LEVEL={{ if log == "quiet" { "silent" } else if log == "verbose" { "debug" } else { log } }} QUILIN_ENV=dev QUILIN_RUNTIME_MODE=repl bun --env-file=.env --watch packages/agent-core/src/index.ts -- --yolo
 
 # Ask 模式：所有写入都需确认
-# 日志档可选：info（默认）/ warn / debug
+# 例：just dev-ask / just dev-ask quiet / just dev-ask verbose
 dev-ask log="info":
-    LOG_LEVEL={{log}} QUILIN_TRUST_MODE=ask QUILIN_ENV=dev QUILIN_RUNTIME_MODE=repl bun --env-file=.env --watch packages/agent-core/src/index.ts
+    LOG_LEVEL={{ if log == "quiet" { "silent" } else if log == "verbose" { "debug" } else { log } }} QUILIN_TRUST_MODE=ask QUILIN_ENV=dev QUILIN_RUNTIME_MODE=repl bun --env-file=.env --watch packages/agent-core/src/index.ts
 
 # 恢复最近会话（前台，带 watch）
-# 日志档可选：info（默认）/ warn / debug
+# 例：just dev-resume / just dev-resume quiet / just dev-resume verbose
 dev-resume log="info":
-    LOG_LEVEL={{log}} QUILIN_ENV=dev QUILIN_RUNTIME_MODE=repl bun --env-file=.env --watch packages/agent-core/src/index.ts --resume-latest
+    LOG_LEVEL={{ if log == "quiet" { "silent" } else if log == "verbose" { "debug" } else { log } }} QUILIN_ENV=dev QUILIN_RUNTIME_MODE=repl bun --env-file=.env --watch packages/agent-core/src/index.ts --resume-latest
 
 # 恢复最近会话（前台，无 watch）
-# 日志档可选：info（默认）/ warn / debug
+# 例：just resume / just resume quiet / just resume verbose
 resume log="info":
-    LOG_LEVEL={{log}} QUILIN_ENV=dev QUILIN_RUNTIME_MODE=repl bun --env-file=.env packages/agent-core/src/index.ts --resume-latest
+    LOG_LEVEL={{ if log == "quiet" { "silent" } else if log == "verbose" { "debug" } else { log } }} QUILIN_ENV=dev QUILIN_RUNTIME_MODE=repl bun --env-file=.env packages/agent-core/src/index.ts --resume-latest
 
 # 测试
 test:
