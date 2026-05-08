@@ -32,6 +32,12 @@ export interface DashboardTasksData {
 	readonly records: readonly DashboardTaskRecord[];
 	readonly activeRunCount: number;
 	readonly staleRunCount: number;
+	/**
+	 * Optional human-readable status hint surfaced when the panel is empty.
+	 * Mirrors `DashboardMemoryTier.note` so the UI can distinguish "no data
+	 * yet" from "no tasks provider wired" — see QUI-105 round-2 D1.
+	 */
+	readonly message?: string;
 }
 
 export interface DashboardMemoryTier {
@@ -542,7 +548,12 @@ function buildMetricsData(
 }
 
 function emptyTasksData(): DashboardTasksData {
-	return { records: [], activeRunCount: 0, staleRunCount: 0 };
+	return {
+		records: [],
+		activeRunCount: 0,
+		staleRunCount: 0,
+		message: "tasks provider not connected (TODO QUI-105 round 2)",
+	};
 }
 
 function emptyMemoryData(): DashboardMemoryData {

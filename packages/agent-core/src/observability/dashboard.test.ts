@@ -396,7 +396,12 @@ describe("observability dashboard 7-panel UI", () => {
 		const tasks = (await (
 			await fetch(`${baseUrl}/api/dashboard/tasks`)
 		).json()) as DashboardTasksData;
-		expect(tasks).toEqual({ records: [], activeRunCount: 0, staleRunCount: 0 });
+		expect(tasks).toEqual({
+			records: [],
+			activeRunCount: 0,
+			staleRunCount: 0,
+			message: "tasks provider not connected (TODO QUI-105 round 2)",
+		});
 
 		const memory = (await (
 			await fetch(`${baseUrl}/api/dashboard/memory`)

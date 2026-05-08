@@ -46,6 +46,15 @@ interface DashboardModule {
 			byTool: ReadonlyArray<Record<string, unknown>>;
 		},
 	) => void;
+	readonly renderTasks: (
+		panel: ChildElement,
+		data: {
+			records?: ReadonlyArray<Record<string, unknown>>;
+			activeRunCount?: number;
+			staleRunCount?: number;
+			message?: string;
+		},
+	) => void;
 }
 
 async function loadAppModule(): Promise<DashboardModule> {
@@ -70,7 +79,7 @@ async function loadAppModule(): Promise<DashboardModule> {
 	};
 	// app.js has no module exports — append a return that lifts the renderers we
 	// need into the sandbox so we can call them from tests.
-	const wrapped = `${source}\n;exports.renderMemory = renderMemory;\nexports.renderMetrics = renderMetrics;\n`;
+	const wrapped = `${source}\n;exports.renderMemory = renderMemory;\nexports.renderMetrics = renderMetrics;\nexports.renderTasks = renderTasks;\n`;
 	runInNewContext(wrapped, sandbox);
 	return sandbox.exports as DashboardModule;
 }
@@ -112,6 +121,30 @@ function metricsPanelStub(): {
 		},
 	};
 	return { panel, headline, tbody };
+}
+
+function tasksPanelStub(): {
+	panel: ChildElement;
+	summary: ChildElement;
+	tbody: ChildElement;
+	empty: ChildElement;
+	tableWrap: ChildElement;
+} {
+	const summary = createElement();
+	const tbody = createElement();
+	const empty = createElement();
+	const tableWrap = createElement();
+	const panel: ChildElement = {
+		...createElement(),
+		querySelector: (selector: string) => {
+			if (selector === "#tasks-summary") return summary;
+			if (selector === "#tasks-table tbody") return tbody;
+			if (selector === ".empty") return empty;
+			if (selector === ".table-wrap") return tableWrap;
+			return null;
+		},
+	};
+	return { panel, summary, tbody, empty, tableWrap };
 }
 
 describe("dashboard-ui app.js", () => {
@@ -158,5 +191,53 @@ describe("dashboard-ui app.js", () => {
 		// And does not double-escape the safe numeric values.
 		expect(headline.innerHTML).toContain(">1<");
 		expect(headline.innerHTML).not.toContain("&amp;amp;");
+	});
+
+	it("surfaces backend message hint in the tasks panel when records are empty (QUI-105 round-2 D1)", async () => {
+		const mod = await loadAppModule();
+		const { panel, empty, tbody } = tasksPanelStub();
+		mod.renderTasks(panel, {
+			records: [],
+			activeRunCount: 0,
+			staleRunCount: 0,
+			message: "tasks provider not connected (TODO QUI-105 round 2)",
+		});
+		// Empty placeholder text reflects the backend hint, not the static
+		// "No active sub-agent runs" copy in index.html.
+		expect(empty.innerHTML).toContain("tasks provider not connected");
+		expect(empty.hidden).toBe(false);
+		// And the table body remains empty.
+		expect(tbody.innerHTML).toBe("");
+	});
+
+	it("escapes hostile message hint payloads in renderTasks (QUI-105 round-2 D1)", async () => {
+		const mod = await loadAppModule();
+		const { panel, empty } = tasksPanelStub();
+		mod.renderTasks(panel, {
+			records: [],
+			activeRunCount: 0,
+			staleRunCount: 0,
+			// A misconfigured provider could send markup; the dashboard must
+			// not splice it as raw HTML.
+			message: "<img src=x onerror=alert(1)>",
+		});
+		expect(empty.innerHTML).toContain("&lt;img src=x onerror=alert(1)&gt;");
+		expect(empty.innerHTML).not.toContain("<img src=x");
+	});
+
+	it("leaves the static empty copy alone when no message hint is provided (QUI-105 round-2 D1)", async () => {
+		const mod = await loadAppModule();
+		const { panel, empty } = tasksPanelStub();
+		// Pre-seed the empty element with the static index.html copy so we
+		// can assert renderTasks does not mutate it when the backend omits
+		// `data.message` (which is the case once the supervisor runtime is
+		// wired in for real).
+		empty.innerHTML = "No active sub-agent runs reported.";
+		mod.renderTasks(panel, {
+			records: [],
+			activeRunCount: 0,
+			staleRunCount: 0,
+		});
+		expect(empty.innerHTML).toBe("No active sub-agent runs reported.");
 	});
 });

@@ -157,17 +157,22 @@ Logs（日志）        →  结构化 JSON 日志（携带 trace_id/span_id 关
 
 > **Dashboard vs Chat UI**：Dashboard 是独立的全局可视化应用，不是 Streaming Chat UI 的附属。Chat UI 是单线程对话交互；Dashboard 提供全局视角——任务全景、记忆内容、工具统计、Agent 拓扑、token 指标。两者并行存在，数据共享但功能互补。
 
-### 2.1.1 WebUI Dashboard 面板定义
+### 2.1.1 WebUI Dashboard 面板定义 / WebUI Dashboard Panel Inventory
 
-| 面板 | 数据源 | 核心指标 | 刷新策略 |
-|------|--------|---------|---------|
-| **任务面板** | TaskState + OTel Session Spans | 任务状态分布（进行中/完成/失败）、任务耗时分布、步骤效率 | 实时（WebSocket） |
-| **记忆面板** | quilin-mem 4 层存储 | 各层记忆条数、存储大小、最近访问时间、检索命中率 | 按需刷新 |
-| **工具面板** | OTel Tool Spans | 工具调用频率 Top 10、成功率、平均延迟、成本分摊 | 5s 轮询 |
-| **指标面板** | OTel Metrics + Prometheus | Token 消耗趋势（input/output/thinking）、成本累计、Prompt Cache 命中率 | 5s 轮询 |
-| **Sub-Agent 进度面板** | ProgressAggregator (06-multi-agent) | 各 Sub-Agent 实时状态、进度百分比、当前步骤、预估剩余时间；整体任务进度总览 | 实时（WebSocket） |
-| **拓扑面板** | Agent Mesh SDK | 在线 Agent 列表、连接拓扑图、消息流量热力图 | 10s 轮询 |
-| **用户面板** | User Profile Store + Insight Engine | 用户画像摘要、洞察历史、时间模式可视化 | 按需刷新 |
+> **当前实现状态 / Current implementation status (QUI-105 round 2, 2026-05-09)**
+>
+> 当前 7 个面板中，4 个已经接通真实数据源、3 个还在 round 2 接线中。
+> Of the seven panels below, four are wired to live data sources and three are still being wired in round 2.
+
+| 面板 / Panel | 数据源 / Data source | 核心指标 / Core metrics | 刷新策略 / Refresh | 状态 / Status |
+|------|--------|---------|---------|---------|
+| **任务面板 / Tasks** | TaskState + OTel Session Spans | 任务状态分布（进行中/完成/失败）、任务耗时分布、步骤效率 / task status distribution, duration, step efficiency | 实时（WebSocket）/ realtime (WebSocket) | 🚧 pending round 2 — 后端 placeholder 已带 `message: "tasks provider not connected"` 提示，等待 supervisor runtime 真实接线 / backend placeholder ships a `message` hint, awaiting supervisor runtime wiring |
+| **记忆面板 / Memory** | quilin-mem 4 层存储 / quilin-mem 4-tier store | 各层记忆条数、存储大小、最近访问时间、检索命中率 / per-tier counts, storage size, recency, retrieval hit rate | 按需刷新 / on-demand | 🚧 pending round 2 — 4 层 tier 占位符携带 "memory provider not connected" 文案，等待 quilin-mem MCP provider 真实接线 / four tier placeholders carry a "memory provider not connected" note, awaiting the quilin-mem MCP provider |
+| **工具面板 / Tools** | OTel Tool Spans | 工具调用频率 Top 10、成功率、平均延迟、成本分摊 / top-10 tool invocations, success rate, latency, cost share | 5s 轮询 / 5s polling | 🚧 pending round 2 — registry 占位符 `{ tools: [], total: 0 }`，等待运行期工具登记表接线 / registry placeholder shipped, awaiting live registry wiring |
+| **指标面板 / Metrics** | OTel Metrics + TraceStore | Token 消耗趋势（input/output/thinking）、成本累计、Prompt Cache 命中率 / token usage trend, cost accumulation, prompt cache hit rate | 5s 轮询 / 5s polling | ✅ shipped — TraceStore 自动聚合，无需 provider / auto-aggregated from TraceStore, no provider needed |
+| **Sub-Agent 进度面板 / Sub-Agent topology** | ProgressAggregator (06-multi-agent) | 各 Sub-Agent 实时状态、进度百分比、当前步骤、预估剩余时间；整体任务进度总览 / per-agent status, progress %, current step, ETA | 实时（WebSocket）/ realtime (WebSocket) | ✅ shipped — 通过 topology provider 接 ProgressAggregator / wired via topology provider |
+| **会话面板 / Sessions** | TraceStore session index | 会话列表、活跃数、终态计数、token 与成本汇总 / session list, active count, terminal count, token and cost rollup | 按需刷新 / on-demand | ✅ shipped — TraceStore 自动汇总 / auto-aggregated from TraceStore |
+| **Skills + MCP Providers 面板 / Skills + MCP** | Skills catalog + MCP server registry | skill 列表、MCP server 状态、provider 健康度 / skill catalog, MCP server status, provider health | 按需刷新 / on-demand | ✅ shipped — provider 已接线（原"用户面板"暂搁置，被 skills+MCP 面板取代）/ wired via providers (legacy "user panel" parked; replaced by skills + MCP) |
 
 ### 2.2 Span 层级设计
 

@@ -9,7 +9,9 @@
   },
   "files": [
     "dist",
-    "src/observability/dashboard-ui"
+    "src/observability/dashboard-ui/index.html",
+    "src/observability/dashboard-ui/app.js",
+    "src/observability/dashboard-ui/app.css"
   ],
   "scripts": {
     "build": "bun build src/index.ts --outdir dist --target node",

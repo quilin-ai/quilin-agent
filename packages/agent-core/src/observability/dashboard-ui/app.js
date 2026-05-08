@@ -87,12 +87,29 @@ function renderKvGrid(container, entries) {
 		.join("");
 }
 
-// Render metric cards.
-// `card.value` is treated as text and is auto-escaped (default safe path).
-// `card.valueHtml` is treated as already-escaped HTML for callers that need
-// inline layout markup (e.g. `<br>` between count and note). Callers that opt
-// into `valueHtml` are responsible for escaping every dynamic substring inside
-// it; the helper does NOT escape it. When both are provided, `valueHtml` wins.
+/**
+ * Render a row of metric cards into `container`.
+ *
+ * SECURITY CONTRACT — read before adding a new caller:
+ *
+ *   - `card.value` is the SAFE default path. It is coerced to a string and
+ *     auto-escaped by this helper. Use it whenever you only need plain text.
+ *
+ *   - `card.valueHtml` is the OPT-IN raw-HTML path for callers that need
+ *     inline layout markup (e.g. `<br>` between a count and a note). This
+ *     helper does NOT escape `valueHtml`. CALLERS MUST PRE-ESCAPE every
+ *     dynamic substring (any value that originated from MCP, TraceStore,
+ *     user input, or any other untrusted source) using the module-level
+ *     `escape()` helper before splicing it into `valueHtml`. Failing to
+ *     pre-escape will create an XSS sink — see QUI-105 round-1 #1 and the
+ *     `renderMemory` call site for the canonical pattern.
+ *
+ *   - When both `value` and `valueHtml` are provided, `valueHtml` wins.
+ *
+ * @param {{ innerHTML: string }} container
+ * @param {ReadonlyArray<{ label: string, value?: unknown, valueHtml?: string }>} cards
+ *   `valueHtml`, when provided, MUST be pre-escaped by the caller.
+ */
 function renderMetricCards(container, cards) {
 	container.innerHTML = cards
 		.map((card) => {
@@ -135,7 +152,19 @@ function renderTasks(panel, data) {
 		`,
 		)
 		.join("");
-	setEmpty(panel, records.length === 0);
+	const isEmpty = records.length === 0;
+	// When the backend signals that no provider is wired, surface that hint
+	// in place of the static "No active sub-agent runs" copy so operators can
+	// distinguish "running but quiet" from "tasks provider not connected".
+	// `data.message` originates from the dashboard JSON envelope, so escape it
+	// before splicing into innerHTML — see QUI-105 round-2 D1.
+	if (isEmpty && typeof data.message === "string" && data.message.length > 0) {
+		const emptyEl = panel.querySelector(".empty");
+		if (emptyEl != null) {
+			emptyEl.innerHTML = escape(data.message);
+		}
+	}
+	setEmpty(panel, isEmpty);
 }
 
 // === Memory panel ===
