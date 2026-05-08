@@ -197,6 +197,32 @@ dependencies:
 		});
 	});
 
+	it("estimates CJK skill body tokens with the CJK-aware estimator (QUI-140 round-1 finding)", async () => {
+		// Regression: skills/manager.ts previously used `Math.ceil(body.length / 4)`
+		// which under-counted CJK by ~4x. After QUI-140 round-1 cross-review, the
+		// load() path must call estimateTokens(body) so CJK skill bodies get the
+		// correct ~1 token per character estimate.
+		const userRoot = await createTempDir();
+		const cjkBody = "调试程序解决问题"; // 8 CJK ideographs
+		await writeSkill(userRoot, "cjk-skill", "CJK skill", cjkBody);
+		const manager = new SkillsManager({ userRoots: [userRoot] });
+
+		await manager.discover();
+		const loaded = await manager.load("cjk-skill");
+
+		// Body includes a trailing newline from writeSkill's template, so it's
+		// 8 CJK chars (1.0 each) + 1 LF (0.25) = 8.25 → ceil = 9 tokens.
+		expect(loaded.body).toContain(cjkBody);
+		expect(loaded.tokenEstimate).toBe(9);
+
+		// Legacy `Math.ceil(body.length / 4)` would have under-counted to ~3
+		// (ceil(9/4) = 3). The CJK-aware estimator must NOT match that.
+		expect(loaded.tokenEstimate).not.toBe(Math.ceil(loaded.body.length / 4));
+		expect(loaded.tokenEstimate).toBeGreaterThan(
+			Math.ceil(loaded.body.length / 4),
+		);
+	});
+
 	it("records viewed skills as newest-first unique recentSkillNames", async () => {
 		const userRoot = await createTempDir();
 		await writeSkill(userRoot, "alpha", "Alpha", "# alpha");

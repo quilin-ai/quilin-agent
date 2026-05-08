@@ -65,6 +65,19 @@ describe("estimateTokens", () => {
 			expect(estimateTokens("调试程序 BUG")).toBeGreaterThanOrEqual(5);
 		});
 
+		it("estimates CJK Extension B (U+20000+) at ~1 token per character", () => {
+			// U+20000 is the first code point of CJK Unified Ideographs Extension B,
+			// which lives in the supplementary plane and is encoded as a UTF-16
+			// surrogate pair. The estimator must iterate by code point and apply
+			// the CJK weight (1.0), not the "other non-ASCII" weight (1/3).
+			const extB = "\u{20000}"; // single Extension B ideograph
+			expect(estimateTokens(extB)).toBe(1);
+
+			// Three Extension B ideographs → 3 tokens (not 1 from rounding 3 * 1/3).
+			const threeExtB = "\u{20000}\u{20001}\u{20002}";
+			expect(estimateTokens(threeExtB)).toBe(3);
+		});
+
 		it("handles emoji and surrogate pairs without crashing", () => {
 			// Emoji "🤖" is in the supplementary plane (U+1F916). `for..of`
 			// iterates one code point per emoji, so length reported here is in

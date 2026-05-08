@@ -248,7 +248,7 @@ export class SkillsManager {
 		return {
 			descriptor,
 			body,
-			tokenEstimate: Math.max(1, Math.ceil(body.length / 4)),
+			tokenEstimate: Math.max(1, estimateTokens(body)),
 		};
 	}
 
