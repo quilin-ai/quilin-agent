@@ -55,21 +55,25 @@ dev-quiet:
 dev-debug:
     LOG_LEVEL=debug QUILIN_ENV=dev QUILIN_RUNTIME_MODE=repl bun --env-file=.env --watch packages/agent-core/src/index.ts
 
-# 调试（全自动 yolo 模式，不询问任何确认）
-dev-yolo:
-    LOG_LEVEL=debug QUILIN_ENV=dev QUILIN_RUNTIME_MODE=repl bun --env-file=.env --watch packages/agent-core/src/index.ts -- --yolo
+# Yolo 模式：全自动放行，不询问任何确认（CRITICAL 操作仍会确认）
+# 日志档可选：info（默认）/ warn / debug — just dev-yolo  /  just dev-yolo warn  /  just dev-yolo debug
+dev-yolo log="info":
+    LOG_LEVEL={{log}} QUILIN_ENV=dev QUILIN_RUNTIME_MODE=repl bun --env-file=.env --watch packages/agent-core/src/index.ts -- --yolo
 
-# 调试（ask 模式，所有写入都需确认）
-dev-ask:
-    LOG_LEVEL=debug QUILIN_TRUST_MODE=ask QUILIN_ENV=dev QUILIN_RUNTIME_MODE=repl bun --env-file=.env --watch packages/agent-core/src/index.ts
+# Ask 模式：所有写入都需确认
+# 日志档可选：info（默认）/ warn / debug
+dev-ask log="info":
+    LOG_LEVEL={{log}} QUILIN_TRUST_MODE=ask QUILIN_ENV=dev QUILIN_RUNTIME_MODE=repl bun --env-file=.env --watch packages/agent-core/src/index.ts
 
 # 恢复最近会话（前台，带 watch）
-dev-resume:
-    LOG_LEVEL=debug QUILIN_ENV=dev QUILIN_RUNTIME_MODE=repl bun --env-file=.env --watch packages/agent-core/src/index.ts --resume-latest
+# 日志档可选：info（默认）/ warn / debug
+dev-resume log="info":
+    LOG_LEVEL={{log}} QUILIN_ENV=dev QUILIN_RUNTIME_MODE=repl bun --env-file=.env --watch packages/agent-core/src/index.ts --resume-latest
 
-# 恢复最近会话（前台）
-resume:
-    LOG_LEVEL=debug QUILIN_ENV=dev QUILIN_RUNTIME_MODE=repl bun --env-file=.env packages/agent-core/src/index.ts --resume-latest
+# 恢复最近会话（前台，无 watch）
+# 日志档可选：info（默认）/ warn / debug
+resume log="info":
+    LOG_LEVEL={{log}} QUILIN_ENV=dev QUILIN_RUNTIME_MODE=repl bun --env-file=.env packages/agent-core/src/index.ts --resume-latest
 
 # 测试
 test:
