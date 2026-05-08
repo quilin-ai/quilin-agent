@@ -246,13 +246,13 @@ function createPromptSessionAssembler(
 		now: () => new Date(),
 		// System prompt only exposes tool_search as gateway;
 		// all tools remain registered in ToolRouter for actual execution.
-		// Core tools always visible; tool_search discovers the rest.
-		// All tools remain registered in ToolRouter for execution.
-		getAvailableTools: () => ["tool_search", "subagent_spawn", "subagent_status"],
+		// Only expose search/discovery tools; use them to find everything else.
+		// All tools are registered in ToolRouter and callable once discovered.
+		getAvailableTools: () => ["tool_search", "skill_search", "mcp_search"],
 		getAvailableToolDescriptors: () =>
 			filterToolsByRuntimeConfig(registry.getToolDescriptors(), toolFilter)
 				.filter((t) =>
-					["tool_search", "subagent_spawn", "subagent_status"].includes(t.name ?? ""),
+					["tool_search", "skill_search", "mcp_search"].includes(t.name ?? ""),
 				),
 		getSessionState: () => ({
 			skills: {

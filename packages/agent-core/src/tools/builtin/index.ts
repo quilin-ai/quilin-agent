@@ -42,6 +42,7 @@ import {
 	createSessionListTool,
 	createToolSearchTool,
 } from "./config-session-tools.js";
+import { createMcpSearchTool } from "../mcp-marketplace.js";
 import {
 	type SubagentSpawnToolOptions,
 	createSubagentSpawnTool,
@@ -93,6 +94,7 @@ export function createBuiltinTools(
 		createConfigViewTool(options.configView ?? { getRuntimeState: () => null }),
 		createSessionListTool(options.sessionList),
 		createToolSearchTool({ getTools: () => [] }),
+		createMcpSearchTool(),
 		createSkillSearchTool({
 			skillsManager: options.skillsManager,
 			...options.skillSearch,
