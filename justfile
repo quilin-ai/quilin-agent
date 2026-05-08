@@ -43,8 +43,16 @@ clean:
 
 # ============ TS (packages/) ============
 
-# 开发模式（前台，直接看日志）
+# 开发模式：日常评估能力 / 演示用（INFO 级日志，过滤掉 debug 噪音）
 dev:
+    LOG_LEVEL=info QUILIN_ENV=dev QUILIN_RUNTIME_MODE=repl bun --env-file=.env --watch packages/agent-core/src/index.ts
+
+# 安静模式：只看 WARN 和 ERROR — 评估对话能力或给人演示时用，能看到 sanitizer / MCP 异常
+dev-quiet:
+    LOG_LEVEL=warn QUILIN_ENV=dev QUILIN_RUNTIME_MODE=repl bun --env-file=.env --watch packages/agent-core/src/index.ts
+
+# 调试模式：完整 debug 日志 — 找 bug / 排查 LLM provider 问题用
+dev-debug:
     LOG_LEVEL=debug QUILIN_ENV=dev QUILIN_RUNTIME_MODE=repl bun --env-file=.env --watch packages/agent-core/src/index.ts
 
 # 调试（全自动 yolo 模式，不询问任何确认）
