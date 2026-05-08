@@ -17,7 +17,7 @@ Quilin Agent（麒麟）is a self-evolving Agent framework that tracks **curated
 - **Layered Memory**: quilin-mem 4-tier (working/episodic/semantic/skill) with auto-reflect + User Profile Store + Departure Context
 - **Communication**: MCP stdio (TS↔Python). Agent Mesh (gRPC) and HTTP SSE streaming land in Iter D+.
 - **Temporal Awareness**: 3-layer time perception (intra-session gap, absolute time, cross-session timeline)
-- **Permission Model**: Default **READ-ONLY + ASK-ON-WRITE**. The `AUTO` tier that auto-approves non-CRITICAL ops is **opt-in per session** and gated by an explicit `--trust auto` flag; no global "max trust" default. All agent-initiated writes (shell_exec / file_write / scaffold patch / skill_create / idle evolution) route through a single **`WriteAuthority`** gate (07 §2.6.4, Task #90)—CRITICAL always confirms, `origin:"idle"` writes require explicit `--trust auto` opt-in. See 07-safety.
+- **Permission Model**: Default **AUTO** (matches user preference "默认最大权限"). AUTO auto-approves non-CRITICAL operations so the agent flows without prompting on every routine action. **CRITICAL operations always confirm** via the `WriteAuthority` ask gate regardless of trust mode — CRITICAL covers file_write outside the project root, destructive shell_exec (`rm -rf` / `git push --force` / database migrations), self-evolution scaffold patch apply, and skill_create / skill_update with cross-project effects. `origin:"idle"` writes (idle-evolution patches) require explicit `--trust auto` opt-in (cannot run silently even under AUTO default). To opt out per session pass `--trust ask`, or persist `safety.trust_mode: "ask"` in user config. All agent-initiated writes (shell_exec / file_write / scaffold patch / skill_create / idle evolution) route through a single **`WriteAuthority`** gate (07 §2.6.4, Task #90). See 07-safety.
 - **CLI-Anything**: GUI tools auto-wrapped as CLI via HKUDS/CLI-Anything for universal tool access
 - **WebUI Dashboard**: Independent global visualization panel (tasks, memory, metrics, Agent topology)
 - **Benchmark Freeze**: Benchmark is the lowest project priority as of 2026-05-02. Iter E is frozen/canceled, and no Iter may add or modify Benchmark code unless the user explicitly asks for Benchmark work.
@@ -123,7 +123,7 @@ quilin-agent/
 | 04 | Planning | Intent recognition, task decomposition, strategy switching | [04](docs/04-planning/README.md) |
 | 05 | Tools | 4-type hybrid action space, MCP client, browser, CLI-Anything | [05](docs/05-tool/README.md) |
 | 06 | Multi-Agent | Homogeneous spawn + heterogeneous mesh, non-blocking supervisor | [06](docs/06-multi-agent/README.md) |
-| 07 | Safety | 4-layer verification, READ-ONLY default + opt-in AUTO, 2-stage classifier | [07](docs/07-safety-guardrails/README.md) |
+| 07 | Safety | 4-layer verification, AUTO default + CRITICAL always-asks gate, 2-stage classifier | [07](docs/07-safety-guardrails/README.md) |
 | 08 | Observability | OTel tracing, metrics, structured logs, WebUI Dashboard | [08](docs/08-observability/README.md) |
 | 09 | Deployment | CLI, config management, hot update | [09](docs/09-deployment-runtime/README.md) |
 | 10 | Self-Evolution | Trajectory analysis, opt-in idle evolution, human-in-loop scaffold patches, skill creation, User Insight Engine | [10](docs/10-self-evolution/README.md) |
