@@ -308,6 +308,45 @@ ScaffoldModifier.generate_proposals(pattern_report)
 
 > **为什么砍掉 Level 1-2 的自动应用**？Ultra-review 发现原设计存在"静默 drift"风险（Agent 悄悄改自己行为但用户不知），且绕过了 safety-guardrails 的 4 层验证链。保留 human-in-loop 并不会削弱自进化能力——多数 Agent 框架的失败源于缺少高质量 pattern 分析，而不是缺少自动应用通道。
 
+### 2.4.0 Phase 0 实现：PromptRewriteOptimizer + IdleEvolutionRunner
+
+The Phase 0 implementation of §2.4 (`ScaffoldModifier.generate_proposals(...)`) ships as a native TypeScript module `PromptRewriteOptimizer` rather than the DSPy/GEPA Python framework hinted at in the original spec. Phase 1+ may swap in DSPy/GEPA, but Phase 0 stays dependency-free and deterministic so the proposal pipeline can run on the same Bun process as the REPL.
+
+§2.4 中 `ScaffoldModifier.generate_proposals(...)` 的 Phase 0 实现是原生 TypeScript 模块 `PromptRewriteOptimizer`，**不是**原 spec 暗示的 DSPy/GEPA Python 框架。Phase 1+ 可能切换到 DSPy/GEPA，但 Phase 0 保持零依赖、确定性，让提案流水线能跟 REPL 跑在同一个 Bun 进程里。
+
+**位置 / Location**:
+- Optimizer 接口：`packages/agent-core/src/self-evolution/types.ts` 的 `OfflineOptimizer`
+- 默认 noop 实现：`packages/agent-core/src/self-evolution/offline-optimizer.ts` `LocalNoopOfflineOptimizer`
+- Phase 0 真实实现：`packages/agent-core/src/self-evolution/prompt-rewrite-optimizer.ts`
+- 调用方：`packages/agent-core/src/self-evolution/idle-runner.ts` `IdleEvolutionRunner.tryRun()`
+
+**算法 / Algorithm**: PromptRewriteOptimizer 按 `FailureCategory`（来自 §2.3 FailureAnalyzer）对 trajectories 做聚类，每个 cluster 用 deterministic 模板生成一条 prompt-rewrite candidate（不调 LLM），写入 proposal 草稿。`estimatedFailureReduction` 是基于 cluster 大小 / confidence 的启发式估计，封顶 0.9。`maxCandidates` 限制每次 optimize 的 fan-out。
+
+PromptRewriteOptimizer clusters trajectories by `FailureCategory` (from §2.3 FailureAnalyzer) and emits one prompt-rewrite candidate per cluster via a deterministic template (no LLM call), producing draft proposals. `estimatedFailureReduction` is a heuristic capped at 0.9 driven by cluster size + confidence; `maxCandidates` bounds fan-out per `optimize()` call.
+
+**Persistence 责任 / Persistence responsibility**: `optimize()` 不直接写 store——它只产 `OptimizationProposalDraft[]` 草稿。持久化是 caller 的职责（`IdleEvolutionRunner.tryRun()`）。这个分工有意为之，确保 **WriteAuthority gate 是单一写入闸门**，optimizer 实现层无法绕过。
+
+`optimize()` does **not** write to the store itself — it only returns `OptimizationProposalDraft[]`. Persistence is the caller's responsibility (`IdleEvolutionRunner.tryRun()`). This split is intentional: it keeps **WriteAuthority gate as the single write entry**, so no optimizer implementation can bypass it.
+
+**WriteAuthority gate（强制 / mandatory）**: 按 [07 §2.6.4](../07-safety-guardrails/README.md#264-writeauthority-gate权限模式的运行时执行器) invariant 3，**任何 idle 触发的 proposal append 都必须经 WriteAuthority 授权**。`IdleEvolutionRunner` 在调 `proposalStore.append(proposal)` **之前**先调 `writeAuthority.authorize({ tool: "self_evolution_proposal_append", origin: "idle", riskLevel: "medium", summary, detail })`：
+
+Per [07 §2.6.4](../07-safety-guardrails/README.md#264-writeauthority-gate权限模式的运行时执行器) invariant 3, **every idle-triggered proposal append must route through WriteAuthority**. `IdleEvolutionRunner` calls `writeAuthority.authorize({ tool: "self_evolution_proposal_append", origin: "idle", riskLevel: "medium", summary, detail })` **before** invoking `proposalStore.append(proposal)`:
+
+| WriteAuthority decision | IdleRunner 行为 / behavior |
+|---|---|
+| `allow` | append 执行 / append proceeds |
+| `deny` (e.g. `ask` mode + idle origin) | append 被跳过，logger.warn 记录 reason / skipped, reason logged via logger.warn |
+| `requires_confirmation` | 当前 idle 路径不展示 prompt（idle 是后台 tick），等价 deny / current idle path does not show prompts (it's a background tick), treated as deny |
+| `writeAuthority` 未注入（null） | **default-deny**：跳过 append + warn — 不允许"漏配置就静默写入" / **default-deny**: skip + warn — "miswiring silently writes" is forbidden |
+
+**Late-binding hook**: 因为 `IdleEvolutionRunner` 在 `startRepl` 之前就被构造（`packages/agent-core/src/index.ts` 启动序列要求），WriteAuthority 在 REPL 启动后才创建。我们用 `ReplOptions.onWriteAuthorityReady?: (authority) => void` 钩子让宿主在 REPL 构造好 WriteAuthority 后调 `idleRunner.setWriteAuthority(authority)`。这样既不破坏构造序列，也保证 idle 启动前 gate 已就位。
+
+Because `IdleEvolutionRunner` is constructed before `startRepl` (per the launch sequence in `packages/agent-core/src/index.ts`), but the WriteAuthority instance is created inside `startRepl`, we use the `ReplOptions.onWriteAuthorityReady?: (authority) => void` hook so the embedder can call `idleRunner.setWriteAuthority(authority)` once the gate is live. This preserves construction order without sacrificing the rule that the gate must be in place before any idle tick fires.
+
+**dryRun semantics**: `OfflineOptimizerInput.dryRun` 是**信息性**字段，optimizer 自己不持久化所以 dryRun 不影响其输出。caller (`IdleEvolutionRunner`) 收到 `dryRun=true` 时跳过 `proposalStore.append`，这样人类可以观察 optimizer 在某条 trajectory 集合上的输出而不污染 store。
+
+`OfflineOptimizerInput.dryRun` is **informational**: optimizers don't persist, so flipping `dryRun` doesn't change their output. The caller (`IdleEvolutionRunner`) observes `dryRun=true` and skips `proposalStore.append`, so a reviewer can dry-run the optimizer against a trajectory set without polluting the store.
+
 ### 2.4.1 提案审核 REPL 命令 / Proposal Review REPL Commands
 
 The four review actions (list / approve / reject / apply) are exposed as REPL slash commands so a reviewer can drive the human-in-loop gate from the same TUI that runs the agent. Each command operates on the JSONL `proposalStore` (see `packages/agent-core/src/self-evolution/proposal-store.ts`); when the store is not configured the commands print a clear "store not configured" message instead of silently no-ops.
