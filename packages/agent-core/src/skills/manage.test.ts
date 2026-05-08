@@ -1705,4 +1705,109 @@ describe("SkillManager", () => {
 			}),
 		).rejects.toThrow("permission denied");
 	});
+
+	// -----------------------------------------------------------------------
+	// merge action — body strategy implementation (QUI-98 audit fix)
+	// -----------------------------------------------------------------------
+
+	describe("merge action body strategies", () => {
+		async function setupMergeFixture(): Promise<{
+			subject: SkillManager;
+			userRoot: string;
+			targetPath: string;
+		}> {
+			const userRoot = await createTempDir();
+			// Source skill: distinct frontmatter + meaningful body content
+			const srcDir = join(userRoot, "src-skill");
+			await mkdir(srcDir, { recursive: true });
+			await writeFile(
+				join(srcDir, "SKILL.md"),
+				[
+					"---",
+					"name: src-skill",
+					"description: Source skill",
+					"whenToUse: When source matters",
+					"---",
+					"# Source body",
+					"",
+					"This is the source skill's unique content.",
+					"",
+				].join("\n"),
+				"utf8",
+			);
+			// Target skill: distinct body content
+			const tgtDir = join(userRoot, "tgt-skill");
+			await mkdir(tgtDir, { recursive: true });
+			const targetPath = join(tgtDir, "SKILL.md");
+			await writeFile(
+				targetPath,
+				[
+					"---",
+					"name: tgt-skill",
+					"description: Target skill",
+					"whenToUse: When target matters",
+					"---",
+					"# Target body",
+					"",
+					"Target's original content.",
+					"",
+				].join("\n"),
+				"utf8",
+			);
+			const skillsManager = new SkillsManager({ userRoots: [userRoot] });
+			await skillsManager.discover();
+			const subject = createSubject({ userRoot, skillsManager });
+			return { subject, userRoot, targetPath };
+		}
+
+		it("strategy=keep_target keeps target body unchanged", async () => {
+			const { subject, targetPath } = await setupMergeFixture();
+			const result = await subject.manage({
+				action: "merge",
+				sourceName: "src-skill",
+				targetName: "tgt-skill",
+				strategy: "keep_target",
+			});
+			expect(result).toMatchObject({ ok: true });
+
+			const content = await readFile(targetPath, "utf8");
+			expect(content).toContain("Target's original content");
+			expect(content).not.toContain("source skill's unique content");
+		});
+
+		it("strategy=keep_source replaces target body with source body", async () => {
+			const { subject, targetPath } = await setupMergeFixture();
+			const result = await subject.manage({
+				action: "merge",
+				sourceName: "src-skill",
+				targetName: "tgt-skill",
+				strategy: "keep_source",
+			});
+			expect(result).toMatchObject({ ok: true });
+
+			const content = await readFile(targetPath, "utf8");
+			expect(content).toContain("source skill's unique content");
+			expect(content).not.toContain("Target's original content");
+		});
+
+		it("strategy=combine concatenates both bodies with a merge marker", async () => {
+			const { subject, targetPath } = await setupMergeFixture();
+			const result = await subject.manage({
+				action: "merge",
+				sourceName: "src-skill",
+				targetName: "tgt-skill",
+				strategy: "combine",
+			});
+			expect(result).toMatchObject({ ok: true });
+
+			const content = await readFile(targetPath, "utf8");
+			expect(content).toContain("Target's original content");
+			expect(content).toContain("source skill's unique content");
+			expect(content).toContain("merged from skill: src-skill");
+			// Order: target first, then source after the marker
+			const targetIdx = content.indexOf("Target's original content");
+			const sourceIdx = content.indexOf("source skill's unique content");
+			expect(targetIdx).toBeLessThan(sourceIdx);
+		});
+	});
 });

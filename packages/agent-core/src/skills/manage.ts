@@ -509,8 +509,22 @@ export class SkillManager {
 
 		const content = await this.fsOps.readFile(resolvedPath.path, "utf8");
 		const parsed = parseSkillMarkdown(content);
+
+		// Read the source skill's body too — without this the merge silently
+		// drops anything the user wrote in the source file (QUI-98 audit fix).
+		const resolvedSourcePath = await this.resolveExistingPath(source.path);
+		if ("error" in resolvedSourcePath) {
+			return resolvedSourcePath.error;
+		}
+		const sourceContent = await this.fsOps.readFile(
+			resolvedSourcePath.path,
+			"utf8",
+		);
+		const sourceParsed = parseSkillMarkdown(sourceContent);
+
 		const nextBody = mergeSkillBody(
 			parsed.body,
+			sourceParsed.body,
 			action.strategy,
 			action.sourceName,
 		);
@@ -908,10 +922,35 @@ function isFsErrorCode(error: unknown, code: string): boolean {
 
 function mergeSkillBody(
 	targetBody: string,
+	sourceBody: string,
 	strategy: "keep_source" | "keep_target" | "combine",
 	sourceName: string,
 ): string {
-	return targetBody;
+	switch (strategy) {
+		case "keep_target":
+			return targetBody;
+		case "keep_source":
+			return sourceBody;
+		case "combine": {
+			const targetTrim = targetBody.trimEnd();
+			const sourceTrim = sourceBody.trim();
+			if (sourceTrim.length === 0) {
+				return targetBody;
+			}
+			if (targetTrim.length === 0) {
+				return sourceBody;
+			}
+			return [
+				targetTrim,
+				"",
+				`---`,
+				`<!-- merged from skill: ${sourceName} -->`,
+				"",
+				sourceTrim,
+				"",
+			].join("\n");
+		}
+	}
 }
 
 function mergeSkillFrontmatter(
