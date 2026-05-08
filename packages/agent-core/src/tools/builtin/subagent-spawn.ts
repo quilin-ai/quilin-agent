@@ -46,10 +46,27 @@ export function createSubagentSpawnTool(
 			void (async () => {
 				try {
 					const loopConfig = options.getLoopConfig();
-					const result = await runAgentLoop({ ...loopConfig, state: {
-						messages: [{ role: "system", content: `Subagent [${worker}]. Task: ${task}. Work independently, report concisely.` }, { role: "user", content: task }],
-						isTerminal: false, turnCount: 0, createdAt: new Date().toISOString(), lastActiveAt: new Date().toISOString(),
-					} }, []);
+					const subMessages = [
+						{
+							role: "system" as const,
+							content: `Subagent [${worker}]. Task: ${task}. Work independently, report concisely.`,
+						},
+						{ role: "user" as const, content: task },
+					];
+					const now = new Date().toISOString();
+					const result = await runAgentLoop(
+						{
+							...loopConfig,
+							state: {
+								messages: subMessages,
+								isTerminal: false,
+								turnCount: 0,
+								createdAt: now,
+								lastActiveAt: now,
+							},
+						},
+						subMessages,
+					);
 					record.status = "completed"; record.result = result;
 				} catch (err) { record.status = "failed"; record.error = String(err); }
 			})();

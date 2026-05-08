@@ -28,7 +28,7 @@ export function createConfigViewTool(
 		execute: async (): Promise<ToolResult> => {
 			const state = options.getRuntimeState();
 			if (state == null) {
-				return { toolCallId: "config-view", content: "Runtime is not booted yet. No config available.", isError: false };
+				return { toolCallId: "config_view", content: "Runtime is not booted yet. No config available.", isError: false };
 			}
 
 			const c = state.config;
@@ -59,7 +59,7 @@ export function createConfigViewTool(
 				idleEvolution: { enabled: c.idle_evolution.enabled, mode: c.idle_evolution.mode },
 			};
 
-			return { toolCallId: "config-view", content: JSON.stringify(summary, null, 2), isError: false };
+			return { toolCallId: "config_view", content: JSON.stringify(summary, null, 2), isError: false };
 		},
 	};
 }
@@ -85,13 +85,13 @@ export function createSessionListTool(
 		riskLevel: "read",
 		execute: async (): Promise<ToolResult> => {
 			if (options.checkpoint == null) {
-				return { toolCallId: "config-view", content: "Session storage is not available.", isError: false };
+				return { toolCallId: "session_list", content: "Session storage is not available.", isError: false };
 			}
 
 			try {
 				const sessions = await options.checkpoint.listSessions();
 				if (sessions.length === 0) {
-					return { toolCallId: "config-view", content: "No saved sessions found.", isError: false };
+					return { toolCallId: "session_list", content: "No saved sessions found.", isError: false };
 				}
 
 				const list = sessions.slice(0, 20).map((s) => ({
@@ -108,7 +108,7 @@ export function createSessionListTool(
 				};
 			} catch (err) {
 				logger.warn({ err }, "session_list tool failed");
-				return { toolCallId: "config-view", content: "Failed to read session data.", isError: false };
+				return { toolCallId: "session_list", content: "Failed to read session data.", isError: false };
 			}
 		},
 	};
