@@ -233,6 +233,33 @@ describe("JsonlTrajectoryStore", () => {
 		).toThrow(/within dataRoot/u);
 	});
 
+	it("serializes concurrent appends so jsonl lines stay one-per-line (queue guard)", async () => {
+		const filePath = path.join(tmpDir, "concurrent.jsonl");
+		const store = new JsonlTrajectoryStore({
+			filePath,
+			now: () => new Date("2026-05-08T00:00:00.000Z"),
+		});
+
+		// Fire 20 appends simultaneously. Without the transitionQueue the writes
+		// could interleave at chunk boundaries; with it, every line stays atomic.
+		const writes = Array.from({ length: 20 }, (_, i) =>
+			store.append(makeTrajectory({ runId: `concurrent-${i}` })),
+		);
+		const records = await Promise.all(writes);
+
+		const fileContent = await readFile(filePath, "utf8");
+		const lines = fileContent.trim().split("\n");
+		expect(lines).toHaveLength(20);
+		// Each line must be valid JSON — interleaved writes would corrupt some.
+		for (const line of lines) {
+			expect(() => JSON.parse(line)).not.toThrow();
+		}
+		// All run IDs from the records appear exactly once in the file.
+		for (const record of records) {
+			expect(fileContent).toContain(record.runId);
+		}
+	});
+
 	it("rejects JSONL writes through symlink paths", async () => {
 		const dataRoot = path.join(tmpDir, "data");
 		const outsideRoot = path.join(tmpDir, "outside");

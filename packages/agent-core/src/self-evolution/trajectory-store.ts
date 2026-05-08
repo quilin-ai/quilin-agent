@@ -180,6 +180,10 @@ function parseJsonl<T>(content: string): T[] {
 export class JsonlTrajectoryStore {
 	private readonly persistencePath: SafeJsonlPersistencePath;
 	private readonly now: () => Date;
+	// Serialize concurrent mutations so two parallel `append` calls can't
+	// interleave their `appendFile` writes mid-line. Mirrors the same pattern
+	// used by JsonlProposalStore (transitionQueue + enqueueMutation).
+	private transitionQueue: Promise<void> = Promise.resolve();
 
 	constructor(options: TrajectoryStoreOptions) {
 		this.persistencePath = resolveJsonlPersistencePath(options);
@@ -187,6 +191,26 @@ export class JsonlTrajectoryStore {
 	}
 
 	async append(input: TrajectoryRecordInput): Promise<StoredTrajectoryRecord> {
+		return this.enqueueMutation(() => this.appendInternal(input));
+	}
+
+	private async enqueueMutation<T>(operation: () => Promise<T>): Promise<T> {
+		const previousTransition = this.transitionQueue;
+		let releaseTransition!: () => void;
+		this.transitionQueue = new Promise<void>((resolve) => {
+			releaseTransition = resolve;
+		});
+		await previousTransition;
+		try {
+			return await operation();
+		} finally {
+			releaseTransition();
+		}
+	}
+
+	private async appendInternal(
+		input: TrajectoryRecordInput,
+	): Promise<StoredTrajectoryRecord> {
 		if (
 			input.schemaVersion !== undefined &&
 			input.schemaVersion !== SELF_EVOLUTION_SCHEMA_VERSION
