@@ -2,15 +2,35 @@ import { lookup } from "node:dns/promises";
 import { createRequire } from "node:module";
 import { BlockList, isIP } from "node:net";
 import { z } from "zod";
+import type { InferenceConfig, LLMClient } from "../../llm/types.js";
 import { logger } from "../../logger.js";
 import type { SandboxPolicy, SandboxRequest } from "../sandbox.js";
 import type { ToolWithMetadata } from "../tool-metadata.js";
 import type { ToolResult } from "../types.js";
+import {
+	createWebFetchCache,
+	type WebFetchCache,
+} from "./web-fetch-cache.js";
 
-const DEFAULT_MAX_BODY_CHARS = 16_384;
-const DEFAULT_MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
-const DEFAULT_TIMEOUT_MS = 30_000;
-const DEFAULT_MAX_REDIRECTS = 3;
+export {
+	createWebFetchCache,
+	type WebFetchCache,
+} from "./web-fetch-cache.js";
+import {
+	createDefaultHtmlToMarkdown,
+	extractWithLLM,
+	type HtmlToMarkdown,
+} from "./web-fetch-extract.js";
+
+const DEFAULT_MAX_BODY_CHARS = 100_000;
+const DEFAULT_MAX_RESPONSE_BYTES = 10 * 1024 * 1024;
+const DEFAULT_TIMEOUT_MS = 60_000;
+const DEFAULT_MAX_REDIRECTS = 10;
+const DEFAULT_EXTRACTION_INFERENCE: InferenceConfig = {
+	temperature: 0,
+	maxTokens: 1024,
+	thinkingMode: "disabled",
+};
 const DEFAULT_REQUEST_HEADERS = {
 	accept:
 		"text/html,application/xhtml+xml,application/xml;q=0.9,application/json;q=0.8,text/plain;q=0.7,*/*;q=0.5",
@@ -223,6 +243,10 @@ async function resolveAndCheckIP(
 	return addresses[0];
 }
 
+export function __test_createPinnedLookup(resolvedAddress: ResolvedAddress) {
+	return createPinnedLookup(resolvedAddress);
+}
+
 function createPinnedLookup(resolvedAddress: ResolvedAddress) {
 	return (
 		_hostname: string,
@@ -233,6 +257,7 @@ function createPinnedLookup(resolvedAddress: ResolvedAddress) {
 	};
 }
 
+/* c8 ignore start -- only used when no dispatcherFactory is injected; constructs a real undici Agent that hits the network */
 function createDefaultDispatcherFactory(): DispatcherFactory {
 	return (resolvedAddress) => {
 		const { Agent } = require("undici") as {
@@ -246,6 +271,7 @@ function createDefaultDispatcherFactory(): DispatcherFactory {
 		});
 	};
 }
+/* c8 ignore stop */
 
 async function cleanupDispatcher(dispatcher: unknown): Promise<void> {
 	if (dispatcher == null || typeof dispatcher !== "object") {
@@ -528,6 +554,20 @@ async function readResponseText(
 	return chunks.join("");
 }
 
+/** Decide whether a redirect from `from` to `to` should be auto-followed.
+ * Default policy: same host (with optional `www.` prefix toggle), same protocol, same port.
+ */
+export type RedirectChecker = (from: URL, to: URL) => boolean;
+
+export const sameHostRedirectChecker: RedirectChecker = (from, to) => {
+	if (from.protocol !== to.protocol) return false;
+	if (from.port !== to.port) return false;
+	const strip = (host: string) => host.replace(/^www\./, "");
+	return strip(from.hostname.toLowerCase()) === strip(to.hostname.toLowerCase());
+};
+
+export const allowAllRedirectChecker: RedirectChecker = () => true;
+
 export interface WebFetchToolOptions {
 	readonly allowedAuthHosts?: readonly string[];
 	readonly dispatcherFactory?: DispatcherFactory;
@@ -537,6 +577,11 @@ export interface WebFetchToolOptions {
 	readonly resolver?: IPResolver;
 	readonly timeoutMs?: number;
 	readonly maxRedirects?: number;
+	readonly redirectChecker?: RedirectChecker;
+	readonly cache?: WebFetchCache;
+	readonly htmlToMarkdown?: HtmlToMarkdown;
+	readonly llmClient?: LLMClient;
+	readonly extractionInferenceConfig?: InferenceConfig;
 }
 
 export function createWebFetchTool(
@@ -544,12 +589,14 @@ export function createWebFetchTool(
 ): ToolWithMetadata {
 	return {
 		name: "web_fetch",
-		description: "Fetch HTTP(S) resources with optional POST body and headers.",
+		description:
+			"Fetch HTTP(S) resources and return clean markdown. Optionally pass `prompt` to ask a sub-LLM to extract a focused answer from the page instead of the full markdown.",
 		parameters: z.object({
 			url: z.string(),
 			method: z.enum(["GET", "POST"]).optional(),
 			body: z.string().optional(),
 			headers: z.record(z.string(), z.string()).optional(),
+			prompt: z.string().optional(),
 		}),
 		category: "programmatic",
 		riskLevel: "read",
@@ -561,11 +608,13 @@ export function createWebFetchTool(
 				method = "GET",
 				body,
 				headers,
+				prompt,
 			} = args as {
 				url: string;
 				method?: "GET" | "POST";
 				body?: string;
 				headers?: Record<string, string>;
+				prompt?: string;
 			};
 
 			let parsedUrl: URL;
@@ -602,6 +651,30 @@ export function createWebFetchTool(
 			const maxRedirects = options.maxRedirects ?? DEFAULT_MAX_REDIRECTS;
 			const maxResponseBytes =
 				options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
+			const maxBodyChars = options.maxBodyChars ?? DEFAULT_MAX_BODY_CHARS;
+			const redirectChecker =
+				options.redirectChecker ?? sameHostRedirectChecker;
+			const cache = options.cache;
+			const htmlToMarkdown =
+				options.htmlToMarkdown ?? createDefaultHtmlToMarkdown();
+			const cacheable =
+				method === "GET" &&
+				(body == null || body === "") &&
+				cache != null;
+
+			if (cacheable) {
+				const cached = cache.get(parsedUrl.toString());
+				if (cached) {
+					return createSuccessResult("builtin-web-fetch", {
+						url: cached.url,
+						status: cached.status,
+						contentType: cached.contentType,
+						body: cached.markdown,
+						truncated: cached.truncated,
+						fromCache: true,
+					});
+				}
+			}
 
 			let currentUrl = parsedUrl;
 			let currentMethod = method;
@@ -645,18 +718,27 @@ export function createWebFetchTool(
 							});
 						}
 
-						currentUrl = new URL(location, currentUrl);
-						if (!["http:", "https:"].includes(currentUrl.protocol)) {
+						const nextUrl = new URL(location, currentUrl);
+						if (!["http:", "https:"].includes(nextUrl.protocol)) {
 							return createErrorResult("builtin-web-fetch", {
-								error: `Only http and https URLs are allowed: ${currentUrl.toString()}`,
+								error: `Only http and https URLs are allowed: ${nextUrl.toString()}`,
 							});
 						}
-						if (hasUrlUserinfo(currentUrl)) {
+						if (hasUrlUserinfo(nextUrl)) {
 							return createErrorResult("builtin-web-fetch", {
 								error:
 									"URL userinfo credentials are not supported; pass credentials through approved headers instead.",
 							});
 						}
+						if (!redirectChecker(currentUrl, nextUrl)) {
+							return createSuccessResult("builtin-web-fetch", {
+								type: "redirect",
+								originalUrl: currentUrl.toString(),
+								redirectUrl: nextUrl.toString(),
+								status: response.status,
+							});
+						}
+						currentUrl = nextUrl;
 
 						const redirectRequest = getRedirectRequest(
 							response.status,
@@ -674,16 +756,51 @@ export function createWebFetchTool(
 						response,
 						maxResponseBytes,
 					);
-					const truncatedBody = truncateText(
-						responseBody,
-						options.maxBodyChars ?? DEFAULT_MAX_BODY_CHARS,
-					);
+
+					const isHtml =
+						(contentType.split(";")[0]?.trim().toLowerCase() ?? "") ===
+						"text/html";
+					const renderedBody = isHtml
+						? await htmlToMarkdown(responseBody)
+						: responseBody;
+					const truncatedBody = truncateText(renderedBody, maxBodyChars);
 
 					if (!response.ok) {
 						return createErrorResult("builtin-web-fetch", {
 							error: `HTTP ${response.status}`,
 							status: response.status,
 							body: truncatedBody.value,
+						});
+					}
+
+					if (cacheable && cache != null) {
+						cache.set(parsedUrl.toString(), {
+							bytes: Buffer.byteLength(truncatedBody.value, "utf8"),
+							status: response.status,
+							contentType,
+							markdown: truncatedBody.value,
+							truncated: truncatedBody.truncated,
+							url: currentUrl.toString(),
+						});
+					}
+
+					if (prompt != null && prompt.length > 0 && options.llmClient) {
+						const extracted = await extractWithLLM({
+							llmClient: options.llmClient,
+							inferenceConfig:
+								options.extractionInferenceConfig ?? DEFAULT_EXTRACTION_INFERENCE,
+							markdown: truncatedBody.value,
+							prompt,
+							maxMarkdownLength: maxBodyChars,
+						});
+						return createSuccessResult("builtin-web-fetch", {
+							url: currentUrl.toString(),
+							status: response.status,
+							contentType,
+							body: extracted,
+							truncated: truncatedBody.truncated,
+							rawMarkdownLength: truncatedBody.value.length,
+							extracted: true,
 						});
 					}
 
@@ -696,6 +813,7 @@ export function createWebFetchTool(
 					});
 				}
 
+				/* c8 ignore next 3 -- unreachable: the redirect branch above returns at hop === maxRedirects, so the loop never falls through */
 				return createErrorResult("builtin-web-fetch", {
 					error: `Redirect limit exceeded for ${url}`,
 				});

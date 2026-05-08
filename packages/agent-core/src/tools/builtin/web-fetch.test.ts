@@ -1,7 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
+import type { LLMClient, LLMResponse } from "../../llm/types.js";
 import { ToolRouter } from "../router.js";
 import { resolveSandboxPolicy } from "../sandbox.js";
-import { createWebFetchTool } from "./web-fetch.js";
+import {
+	__test_createPinnedLookup,
+	allowAllRedirectChecker,
+	createWebFetchCache,
+	createWebFetchTool,
+	sameHostRedirectChecker,
+} from "./web-fetch.js";
 
 function createResolver(records: Record<string, readonly string[]>) {
 	return vi.fn(
@@ -379,7 +386,7 @@ describe("builtin web_fetch tool", () => {
 		expect(fetcher).not.toHaveBeenCalled();
 	});
 
-	it("re-validates redirects and blocks redirects into private targets", async () => {
+	it("re-validates redirects and blocks redirects into private targets when cross-host redirects are explicitly allowed", async () => {
 		const fetcher = vi.fn().mockResolvedValueOnce(
 			new Response(null, {
 				status: 302,
@@ -392,7 +399,11 @@ describe("builtin web_fetch tool", () => {
 			"safe.example": ["93.184.216.34"],
 			"169.254.169.254": ["169.254.169.254"],
 		});
-		const tool = createWebFetchTool({ fetcher, resolver });
+		const tool = createWebFetchTool({
+			fetcher,
+			resolver,
+			redirectChecker: allowAllRedirectChecker,
+		});
 
 		const result = await tool.execute({
 			url: "https://safe.example/start",
@@ -403,6 +414,71 @@ describe("builtin web_fetch tool", () => {
 			error: expect.stringContaining("not allowed"),
 		});
 		expect(fetcher).toHaveBeenCalledTimes(1);
+	});
+
+	it("returns a structured redirect response for cross-host redirects under the default same-host policy", async () => {
+		const fetcher = vi.fn().mockResolvedValueOnce(
+			new Response(null, {
+				status: 302,
+				headers: {
+					location: "https://other.example/landing",
+				},
+			}),
+		);
+		const resolver = createResolver({
+			"safe.example": ["93.184.216.34"],
+			"other.example": ["93.184.216.35"],
+		});
+		const tool = createWebFetchTool({ fetcher, resolver });
+
+		const result = await tool.execute({
+			url: "https://safe.example/start",
+		});
+
+		expect(result.isError).toBe(false);
+		expect(JSON.parse(result.content)).toEqual({
+			type: "redirect",
+			originalUrl: "https://safe.example/start",
+			redirectUrl: "https://other.example/landing",
+			status: 302,
+		});
+		expect(fetcher).toHaveBeenCalledTimes(1);
+	});
+
+	it("auto-follows same-host redirects with www. toggle by default", async () => {
+		const fetcher = vi
+			.fn()
+			.mockResolvedValueOnce(
+				new Response(null, {
+					status: 301,
+					headers: { location: "https://www.example.com/landing" },
+				}),
+			)
+			.mockResolvedValueOnce(
+				new Response("<h1>Landed</h1>", {
+					status: 200,
+					headers: { "content-type": "text/html" },
+				}),
+			);
+		const resolver = createResolver({
+			"example.com": ["93.184.216.34"],
+			"www.example.com": ["93.184.216.34"],
+		});
+		const tool = createWebFetchTool({
+			fetcher,
+			resolver,
+			htmlToMarkdown: async (html) => html,
+		});
+
+		const result = await tool.execute({
+			url: "https://example.com/start",
+		});
+
+		expect(result.isError).toBe(false);
+		expect(fetcher).toHaveBeenCalledTimes(2);
+		const payload = JSON.parse(result.content);
+		expect(payload.url).toBe("https://www.example.com/landing");
+		expect(payload.body).toContain("Landed");
 	});
 
 	it("rejects redirects that introduce URL userinfo credentials", async () => {
@@ -1011,5 +1087,338 @@ describe("builtin web_fetch tool", () => {
 		expect(JSON.parse(result.content)).toEqual({
 			error: "Fetch failed",
 		});
+	});
+
+	it("converts HTML responses to markdown via the injected converter", async () => {
+		const fetcher = vi.fn().mockResolvedValue(
+			new Response("<h1>Hello</h1><p>world</p>", {
+				status: 200,
+				headers: { "content-type": "text/html; charset=utf-8" },
+			}),
+		);
+		const tool = createWebFetchTool({
+			fetcher,
+			resolver: createResolver({ "example.com": ["93.184.216.34"] }),
+			htmlToMarkdown: async (html) => `MD:${html}`,
+		});
+
+		const result = await tool.execute({ url: "https://example.com/page" });
+
+		expect(result.isError).toBe(false);
+		const payload = JSON.parse(result.content);
+		expect(payload.body).toBe("MD:<h1>Hello</h1><p>world</p>");
+		expect(payload.contentType).toContain("text/html");
+	});
+
+	it("returns non-html responses without markdown conversion", async () => {
+		const fetcher = vi.fn().mockResolvedValue(
+			new Response('{"price": 42}', {
+				status: 200,
+				headers: { "content-type": "application/json" },
+			}),
+		);
+		const tool = createWebFetchTool({
+			fetcher,
+			resolver: createResolver({ "api.example.com": ["93.184.216.34"] }),
+			htmlToMarkdown: async () => {
+				throw new Error("should not convert non-html");
+			},
+		});
+
+		const result = await tool.execute({ url: "https://api.example.com/data" });
+
+		expect(result.isError).toBe(false);
+		expect(JSON.parse(result.content).body).toBe('{"price": 42}');
+	});
+
+	it("returns cached responses without re-fetching", async () => {
+		const fetcher = vi.fn().mockResolvedValue(
+			new Response("<p>fresh</p>", {
+				status: 200,
+				headers: { "content-type": "text/html" },
+			}),
+		);
+		const cache = createWebFetchCache();
+		const tool = createWebFetchTool({
+			fetcher,
+			resolver: createResolver({ "example.com": ["93.184.216.34"] }),
+			cache,
+			htmlToMarkdown: async (html) => html,
+		});
+
+		const first = await tool.execute({ url: "https://example.com/cached" });
+		const second = await tool.execute({ url: "https://example.com/cached" });
+
+		expect(fetcher).toHaveBeenCalledTimes(1);
+		const firstPayload = JSON.parse(first.content);
+		const secondPayload = JSON.parse(second.content);
+		expect(firstPayload.body).toBe("<p>fresh</p>");
+		expect(secondPayload.body).toBe("<p>fresh</p>");
+		expect(secondPayload.fromCache).toBe(true);
+	});
+
+	it("does not cache POST responses", async () => {
+		const fetcher = vi.fn().mockResolvedValue(
+			new Response("<p>posted</p>", {
+				status: 200,
+				headers: { "content-type": "text/html" },
+			}),
+		);
+		const cache = createWebFetchCache();
+		const tool = createWebFetchTool({
+			fetcher,
+			resolver: createResolver({ "example.com": ["93.184.216.34"] }),
+			cache,
+			htmlToMarkdown: async (html) => html,
+		});
+
+		await tool.execute({
+			url: "https://example.com/submit",
+			method: "POST",
+			body: "payload",
+		});
+		await tool.execute({
+			url: "https://example.com/submit",
+			method: "POST",
+			body: "payload",
+		});
+
+		expect(fetcher).toHaveBeenCalledTimes(2);
+	});
+
+	it("invokes sub-LLM extraction when prompt is provided and llmClient is configured", async () => {
+		const fetcher = vi.fn().mockResolvedValue(
+			new Response("<h1>Pricing</h1><p>$42</p>", {
+				status: 200,
+				headers: { "content-type": "text/html" },
+			}),
+		);
+		const llmResponse: LLMResponse = {
+			content: "the price is $42",
+			usage: { inputTokens: 10, outputTokens: 5 },
+			finishReason: "stop",
+		};
+		const chat = vi.fn().mockResolvedValue(llmResponse);
+		const llmClient: LLMClient = {
+			chat: chat as unknown as LLMClient["chat"],
+		};
+
+		const tool = createWebFetchTool({
+			fetcher,
+			resolver: createResolver({ "example.com": ["93.184.216.34"] }),
+			htmlToMarkdown: async (html) => `MD:${html}`,
+			llmClient,
+		});
+
+		const result = await tool.execute({
+			url: "https://example.com/pricing",
+			prompt: "What is the price?",
+		});
+
+		expect(result.isError).toBe(false);
+		const payload = JSON.parse(result.content);
+		expect(payload.body).toBe("the price is $42");
+		expect(payload.extracted).toBe(true);
+		expect(payload.rawMarkdownLength).toBeGreaterThan(0);
+		expect(chat).toHaveBeenCalledTimes(1);
+	});
+
+	it("ignores empty prompts and returns raw markdown", async () => {
+		const fetcher = vi.fn().mockResolvedValue(
+			new Response("<h1>Hi</h1>", {
+				status: 200,
+				headers: { "content-type": "text/html" },
+			}),
+		);
+		const chat = vi.fn();
+		const tool = createWebFetchTool({
+			fetcher,
+			resolver: createResolver({ "example.com": ["93.184.216.34"] }),
+			htmlToMarkdown: async (html) => `MD:${html}`,
+			llmClient: { chat: chat as unknown as LLMClient["chat"] },
+		});
+
+		const result = await tool.execute({
+			url: "https://example.com/page",
+			prompt: "",
+		});
+
+		expect(result.isError).toBe(false);
+		expect(JSON.parse(result.content).extracted).toBeUndefined();
+		expect(chat).not.toHaveBeenCalled();
+	});
+
+	it("skips sub-LLM extraction when prompt is provided but no llmClient is configured", async () => {
+		const fetcher = vi.fn().mockResolvedValue(
+			new Response("<h1>Hi</h1>", {
+				status: 200,
+				headers: { "content-type": "text/html" },
+			}),
+		);
+		const tool = createWebFetchTool({
+			fetcher,
+			resolver: createResolver({ "example.com": ["93.184.216.34"] }),
+			htmlToMarkdown: async (html) => html,
+		});
+
+		const result = await tool.execute({
+			url: "https://example.com/page",
+			prompt: "Extract title",
+		});
+
+		expect(result.isError).toBe(false);
+		expect(JSON.parse(result.content).extracted).toBeUndefined();
+	});
+
+	it("returns an error result when the URL string fails to parse", async () => {
+		const tool = createWebFetchTool();
+
+		const result = await tool.execute({ url: "ht!tp://??" });
+
+		expect(result.isError).toBe(true);
+		expect(JSON.parse(result.content).error).toMatch(/Invalid URL/i);
+	});
+
+	it("falls through to a raw destination when sandbox policy URL parsing throws on a GET", async () => {
+		const tool = createWebFetchTool();
+		if (tool.sandboxPolicy == null) {
+			throw new Error("web_fetch sandbox policy is not configured");
+		}
+
+		const request = await resolveSandboxPolicy(tool.sandboxPolicy, {
+			toolCallId: "call-bad-url-get",
+			requestedToolName: "web_fetch",
+			resolvedToolName: "web_fetch",
+			parsedArguments: { url: "not a url at all" },
+			origin: "agent",
+			category: "programmatic",
+			riskLevel: "read",
+			sandboxOperation: "network",
+		});
+
+		expect(request.operation).toBe("network");
+		const network = request.signals?.network;
+		expect(network?.destination).toBe("not a url at all");
+		expect(network?.method).toBe("GET");
+	});
+
+	it("hides the raw destination when sandbox policy URL parsing throws on a write that does not bear credentials", async () => {
+		const tool = createWebFetchTool();
+		if (tool.sandboxPolicy == null) {
+			throw new Error("web_fetch sandbox policy is not configured");
+		}
+
+		const request = await resolveSandboxPolicy(tool.sandboxPolicy, {
+			toolCallId: "call-bad-url-post",
+			requestedToolName: "web_fetch",
+			resolvedToolName: "web_fetch",
+			parsedArguments: {
+				url: "not a url at all",
+				method: "POST",
+				body: "payload",
+			},
+			origin: "agent",
+			category: "programmatic",
+			riskLevel: "read",
+			sandboxOperation: "network",
+		});
+
+		const network = request.signals?.network;
+		expect(network?.destination).toBeUndefined();
+		expect(network?.method).toBe("POST");
+		expect(network?.sendsCredentials).toBe(false);
+	});
+});
+
+describe("__test_createPinnedLookup", () => {
+	it("invokes the callback with the pinned address and family", () => {
+		const lookup = __test_createPinnedLookup({
+			address: "203.0.113.7",
+			family: 4,
+		});
+
+		const calls: Array<[Error | null, string, number]> = [];
+		lookup("ignored.example", undefined, (err, addr, family) => {
+			calls.push([err, addr, family]);
+		});
+
+		expect(calls).toEqual([[null, "203.0.113.7", 4]]);
+	});
+});
+
+describe("isKnownPrivateDestination via sandbox policy", () => {
+	it("preserves localhost destination for write requests because the host is private", async () => {
+		const tool = createWebFetchTool();
+		if (tool.sandboxPolicy == null) {
+			throw new Error("web_fetch sandbox policy is not configured");
+		}
+
+		const request = await resolveSandboxPolicy(tool.sandboxPolicy, {
+			toolCallId: "call-localhost",
+			requestedToolName: "web_fetch",
+			resolvedToolName: "web_fetch",
+			parsedArguments: {
+				url: "http://localhost:8080/internal",
+				method: "POST",
+				body: "ping",
+			},
+			origin: "agent",
+			category: "programmatic",
+			riskLevel: "read",
+			sandboxOperation: "network",
+		});
+
+		expect(request.signals?.network?.destination).toBe("localhost:8080");
+	});
+
+	it("preserves a sub-domain of localhost too", async () => {
+		const tool = createWebFetchTool();
+		if (tool.sandboxPolicy == null) {
+			throw new Error("web_fetch sandbox policy is not configured");
+		}
+
+		const request = await resolveSandboxPolicy(tool.sandboxPolicy, {
+			toolCallId: "call-sub-localhost",
+			requestedToolName: "web_fetch",
+			resolvedToolName: "web_fetch",
+			parsedArguments: {
+				url: "http://api.localhost/svc",
+				method: "POST",
+				body: "ping",
+			},
+			origin: "agent",
+			category: "programmatic",
+			riskLevel: "read",
+			sandboxOperation: "network",
+		});
+
+		expect(request.signals?.network?.destination).toBe("api.localhost");
+	});
+});
+
+describe("sameHostRedirectChecker", () => {
+	it("treats www. and bare host as equivalent", () => {
+		const from = new URL("https://example.com/a");
+		const to = new URL("https://www.example.com/b");
+		expect(sameHostRedirectChecker(from, to)).toBe(true);
+		expect(sameHostRedirectChecker(to, from)).toBe(true);
+	});
+
+	it("rejects protocol downgrade", () => {
+		const from = new URL("https://example.com/a");
+		const to = new URL("http://example.com/a");
+		expect(sameHostRedirectChecker(from, to)).toBe(false);
+	});
+
+	it("rejects port mismatch", () => {
+		const from = new URL("https://example.com:443/a");
+		const to = new URL("https://example.com:8443/a");
+		expect(sameHostRedirectChecker(from, to)).toBe(false);
+	});
+
+	it("rejects different hostnames", () => {
+		const from = new URL("https://example.com/a");
+		const to = new URL("https://other.example/a");
+		expect(sameHostRedirectChecker(from, to)).toBe(false);
 	});
 });
