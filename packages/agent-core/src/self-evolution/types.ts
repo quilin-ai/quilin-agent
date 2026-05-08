@@ -230,8 +230,13 @@ export type ProposalStatus =
 	| "pending_review"
 	| "approved"
 	| "rejected"
-	| "superseded";
-export type ReviewedProposalStatus = Exclude<ProposalStatus, "pending_review">;
+	| "superseded"
+	| "applied";
+export type ReviewedProposalStatus = Exclude<
+	ProposalStatus,
+	"pending_review" | "applied"
+>;
+export type AppliedProposalStatus = "applied";
 
 export interface ProposalCreatedAtQueryRange {
 	readonly from?: string;
@@ -276,14 +281,16 @@ export type ProposalReviewQueueNextActionKind =
 	| "review_pending"
 	| "record_approved_review"
 	| "record_rejected_review"
-	| "record_superseded_review";
+	| "record_superseded_review"
+	| "record_applied_review";
 
 export type ProposalReviewQueueNextActionReasonCode =
 	| "pending_review_stale"
 	| "pending_review_waiting_for_human"
 	| "approved_review_recorded"
 	| "rejected_review_recorded"
-	| "superseded_review_recorded";
+	| "superseded_review_recorded"
+	| "applied_review_recorded";
 
 export interface ProposalReviewQueueNextAction {
 	readonly kind: ProposalReviewQueueNextActionKind;

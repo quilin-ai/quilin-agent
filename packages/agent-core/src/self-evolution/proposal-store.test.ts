@@ -1,7 +1,11 @@
 import { mkdir, readFile, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	WriteAuthority,
+	type WriteRequest,
+} from "../safety/write-authority.js";
 import {
 	createBeforeAfterEvaluation,
 	createGeneratedPatchProposal,
@@ -9,7 +13,9 @@ import {
 import {
 	buildProposalReviewQueueView,
 	JsonlProposalStore,
+	transitionProposalAppliedState,
 	transitionProposalReviewState,
+	UnsupportedPatchTypeError,
 } from "./proposal-store.js";
 import type {
 	CandidateArtifact,
@@ -858,12 +864,14 @@ describe("JsonlProposalStore", () => {
 				approved: 1,
 				rejected: 1,
 				superseded: 1,
+				applied: 0,
 			},
 			byReviewState: {
 				pending_review: expectedPending,
 				approved: [reviewQueueItem(approved)],
 				rejected: [reviewQueueItem(rejected)],
 				superseded: [reviewQueueItem(superseded)],
+				applied: [],
 			},
 			nextActions: [
 				{
@@ -1005,12 +1013,14 @@ describe("JsonlProposalStore", () => {
 				approved: 0,
 				rejected: 0,
 				superseded: 0,
+				applied: 0,
 			},
 			byReviewState: {
 				pending_review: [],
 				approved: [],
 				rejected: [],
 				superseded: [],
+				applied: [],
 			},
 			nextActions: [],
 		});
@@ -1252,5 +1262,470 @@ describe("JsonlProposalStore", () => {
 		});
 
 		await expect(store.append(proposal())).rejects.toThrow(/symlink/u);
+	});
+
+	describe("applyApproved", () => {
+		async function appendApprovedProposal(
+			store: JsonlProposalStore,
+			input: ProposalRecordInput,
+			reviewedAt = "2026-05-02T01:00:00.000Z",
+		): Promise<StoredProposalRecord> {
+			const stored = await store.append(input);
+			return store.transitionReviewState(stored.proposalId, {
+				status: "approved",
+				reviewer: "Reviewer",
+				reason: "Approved for apply.",
+				reviewedAt,
+			});
+		}
+
+		function patchProposalInput(): ProposalRecordInput {
+			const evaluation = beforeAfterEvaluation();
+			return proposal({
+				riskPreview: {
+					level: "critical",
+					reasons: ["synthetic patch proposal"],
+					touchesRuntime: true,
+					requiresHumanReview: true,
+				},
+				beforeAfterEvaluation: evaluation,
+				generatedPatchProposal: generatedPatchProposal(evaluation.evaluationId),
+			});
+		}
+
+		it("authorizes an approved proposal via WriteAuthority and transitions to applied", async () => {
+			const filePath = path.join(tmpDir, "apply-success.jsonl");
+			const store = new JsonlProposalStore({
+				filePath,
+				now: () => new Date("2026-05-02T02:00:00.000Z"),
+			});
+			const approved = await appendApprovedProposal(
+				store,
+				patchProposalInput(),
+			);
+
+			const confirm = vi.fn(async (_request: WriteRequest) => true);
+			const authority = new WriteAuthority({
+				mode: "ask",
+				confirm,
+				actor: "test-actor",
+			});
+			const applier = vi.fn(async (_record: StoredProposalRecord) => undefined);
+
+			const result = await store.applyApproved(authority, {
+				origin: "agent",
+				reviewer: "Apply Bot",
+				applier,
+			});
+
+			expect(result.applied).toHaveLength(1);
+			expect(result.applied[0]?.status).toBe("applied");
+			expect(result.applied[0]?.proposalId).toBe(approved.proposalId);
+			expect(result.applied[0]?.review?.reviewer).toBe("Apply Bot");
+			expect(result.applied[0]?.review?.reviewedAt).toBe(
+				"2026-05-02T02:00:00.000Z",
+			);
+			expect(result.skipped).toEqual([]);
+			expect(result.failed).toEqual([]);
+
+			expect(confirm).toHaveBeenCalledTimes(1);
+			const confirmArg = confirm.mock.calls[0]?.[0];
+			expect(confirmArg?.tool).toBe("self_evolution_patch_apply");
+			expect(confirmArg?.riskLevel).toBe("critical");
+			expect(confirmArg?.origin).toBe("agent");
+			expect(confirmArg?.summary).toContain(approved.proposalId);
+			expect(confirmArg?.detail).toContain("paths=");
+			expect(applier).toHaveBeenCalledTimes(1);
+
+			const fetched = await store.getById(approved.proposalId);
+			expect(fetched?.status).toBe("applied");
+
+			const persisted = (await readFile(filePath, "utf8"))
+				.trim()
+				.split("\n")
+				.map((line) => JSON.parse(line) as { status: string });
+			expect(persisted.map((line) => line.status)).toEqual([
+				"pending_review",
+				"approved",
+				"applied",
+			]);
+		});
+
+		it("records a skipped outcome when WriteAuthority rejects the apply request", async () => {
+			const filePath = path.join(tmpDir, "apply-rejected.jsonl");
+			const store = new JsonlProposalStore({
+				filePath,
+				now: () => new Date("2026-05-02T02:00:00.000Z"),
+			});
+			const approved = await appendApprovedProposal(
+				store,
+				patchProposalInput(),
+			);
+
+			const authority = new WriteAuthority({
+				mode: "ask",
+				confirm: async () => false,
+			});
+			const applier = vi.fn(async (_record: StoredProposalRecord) => undefined);
+
+			const result = await store.applyApproved(authority, { applier });
+
+			expect(result.applied).toEqual([]);
+			expect(result.failed).toEqual([]);
+			expect(result.skipped).toHaveLength(1);
+			expect(result.skipped[0]).toMatchObject({
+				proposalId: approved.proposalId,
+				status: "skipped",
+				reasonCode: "user_rejected",
+			});
+			expect(applier).not.toHaveBeenCalled();
+
+			const fetched = await store.getById(approved.proposalId);
+			expect(fetched?.status).toBe("approved");
+		});
+
+		it("records unsupported_patch_type for the default applier and keeps state at approved", async () => {
+			const filePath = path.join(tmpDir, "apply-unsupported.jsonl");
+			const store = new JsonlProposalStore({
+				filePath,
+				now: () => new Date("2026-05-02T02:00:00.000Z"),
+			});
+			const approved = await appendApprovedProposal(
+				store,
+				patchProposalInput(),
+			);
+
+			const authority = new WriteAuthority({
+				mode: "ask",
+				confirm: async () => true,
+			});
+
+			const result = await store.applyApproved(authority);
+
+			expect(result.applied).toEqual([]);
+			expect(result.skipped).toEqual([]);
+			expect(result.failed).toHaveLength(1);
+			expect(result.failed[0]).toMatchObject({
+				proposalId: approved.proposalId,
+				status: "failed",
+				reasonCode: "unsupported_patch_type",
+			});
+
+			const fetched = await store.getById(approved.proposalId);
+			expect(fetched?.status).toBe("approved");
+		});
+
+		it("rolls back to approved when a custom applier throws an apply_error", async () => {
+			const filePath = path.join(tmpDir, "apply-error.jsonl");
+			const store = new JsonlProposalStore({
+				filePath,
+				now: () => new Date("2026-05-02T02:00:00.000Z"),
+			});
+			const approved = await appendApprovedProposal(
+				store,
+				patchProposalInput(),
+			);
+
+			const authority = new WriteAuthority({
+				mode: "ask",
+				confirm: async () => true,
+			});
+			const applier = vi.fn(async (_record: StoredProposalRecord) => {
+				throw new Error("disk full");
+			});
+
+			const result = await store.applyApproved(authority, { applier });
+
+			expect(result.applied).toEqual([]);
+			expect(result.skipped).toEqual([]);
+			expect(result.failed).toHaveLength(1);
+			expect(result.failed[0]).toMatchObject({
+				proposalId: approved.proposalId,
+				status: "failed",
+				reasonCode: "apply_error",
+				reason: "disk full",
+			});
+			expect(applier).toHaveBeenCalledTimes(1);
+
+			const fetched = await store.getById(approved.proposalId);
+			expect(fetched?.status).toBe("approved");
+
+			const persisted = (await readFile(filePath, "utf8"))
+				.trim()
+				.split("\n")
+				.map((line) => JSON.parse(line) as { status: string });
+			expect(persisted.map((line) => line.status)).toEqual([
+				"pending_review",
+				"approved",
+			]);
+		});
+
+		it("processes multiple approved proposals serially with mixed outcomes", async () => {
+			const filePath = path.join(tmpDir, "apply-multiple.jsonl");
+			const store = new JsonlProposalStore({
+				filePath,
+				now: () => new Date("2026-05-02T02:00:00.000Z"),
+			});
+			const first = await appendApprovedProposal(
+				store,
+				{
+					...patchProposalInput(),
+					title: "First approved proposal",
+					createdAt: "2026-05-01T00:00:00.000Z",
+				},
+				"2026-05-01T01:00:00.000Z",
+			);
+			const second = await appendApprovedProposal(
+				store,
+				{
+					...patchProposalInput(),
+					title: "Second approved proposal",
+					createdAt: "2026-05-01T00:00:30.000Z",
+				},
+				"2026-05-01T01:00:30.000Z",
+			);
+			const third = await appendApprovedProposal(
+				store,
+				{
+					...patchProposalInput(),
+					title: "Third approved proposal",
+					createdAt: "2026-05-01T00:01:00.000Z",
+				},
+				"2026-05-01T01:01:00.000Z",
+			);
+
+			const seenIds: string[] = [];
+			const applier = vi.fn(async (record: StoredProposalRecord) => {
+				seenIds.push(record.proposalId);
+				if (record.proposalId === second.proposalId) {
+					throw new Error("flaky filesystem");
+				}
+				if (record.proposalId === third.proposalId) {
+					throw new UnsupportedPatchTypeError("only add changes supported");
+				}
+			});
+			const authority = new WriteAuthority({
+				mode: "ask",
+				confirm: async () => true,
+			});
+
+			const result = await store.applyApproved(authority, { applier });
+
+			expect(seenIds).toEqual([
+				first.proposalId,
+				second.proposalId,
+				third.proposalId,
+			]);
+			expect(result.applied.map((record) => record.proposalId)).toEqual([
+				first.proposalId,
+			]);
+			expect(result.failed).toHaveLength(2);
+			expect(result.failed.map((entry) => entry.reasonCode).toSorted()).toEqual(
+				["apply_error", "unsupported_patch_type"],
+			);
+			expect(result.skipped).toEqual([]);
+
+			expect((await store.getById(first.proposalId))?.status).toBe("applied");
+			expect((await store.getById(second.proposalId))?.status).toBe("approved");
+			expect((await store.getById(third.proposalId))?.status).toBe("approved");
+		});
+
+		it("denies idle origin apply requests when WriteAuthority is in ask mode", async () => {
+			const filePath = path.join(tmpDir, "apply-idle-denied.jsonl");
+			const store = new JsonlProposalStore({
+				filePath,
+				now: () => new Date("2026-05-02T02:00:00.000Z"),
+			});
+			await appendApprovedProposal(store, patchProposalInput());
+
+			const confirm = vi.fn(async (_request: WriteRequest) => true);
+			const authority = new WriteAuthority({ mode: "ask", confirm });
+			const applier = vi.fn(async (_record: StoredProposalRecord) => undefined);
+
+			const result = await store.applyApproved(authority, {
+				origin: "idle",
+				applier,
+			});
+
+			expect(result.applied).toEqual([]);
+			expect(result.failed).toEqual([]);
+			expect(result.skipped).toHaveLength(1);
+			expect(result.skipped[0]?.reasonCode).toBe("user_rejected");
+			expect(result.skipped[0]?.reason).toMatch(/idle/u);
+			expect(confirm).not.toHaveBeenCalled();
+			expect(applier).not.toHaveBeenCalled();
+		});
+
+		it("requires a WriteAuthority gate", async () => {
+			const store = new JsonlProposalStore({
+				filePath: path.join(tmpDir, "apply-no-authority.jsonl"),
+			});
+
+			await expect(store.applyApproved(undefined as never)).rejects.toThrow(
+				/WriteAuthority/u,
+			);
+		});
+
+		it("rejects an empty reviewer override", async () => {
+			const store = new JsonlProposalStore({
+				filePath: path.join(tmpDir, "apply-empty-reviewer.jsonl"),
+			});
+			const authority = new WriteAuthority({
+				mode: "ask",
+				confirm: async () => true,
+			});
+
+			await expect(
+				store.applyApproved(authority, { reviewer: "   " }),
+			).rejects.toThrow(/reviewer/u);
+		});
+
+		it("returns empty result when no approved proposals exist", async () => {
+			const store = new JsonlProposalStore({
+				filePath: path.join(tmpDir, "apply-none.jsonl"),
+			});
+			await store.append(proposal());
+			const authority = new WriteAuthority({
+				mode: "ask",
+				confirm: async () => true,
+			});
+
+			const result = await store.applyApproved(authority);
+
+			expect(result.applied).toEqual([]);
+			expect(result.skipped).toEqual([]);
+			expect(result.failed).toEqual([]);
+		});
+
+		it("classifies deny_all skip reasons when WriteAuthority is disabled", async () => {
+			const filePath = path.join(tmpDir, "apply-deny-all.jsonl");
+			const store = new JsonlProposalStore({
+				filePath,
+				now: () => new Date("2026-05-02T02:00:00.000Z"),
+			});
+			const approved = await appendApprovedProposal(
+				store,
+				patchProposalInput(),
+			);
+
+			const authority = new WriteAuthority({ mode: "deny-all" });
+			const applier = vi.fn(async (_record: StoredProposalRecord) => undefined);
+
+			const result = await store.applyApproved(authority, { applier });
+
+			expect(result.applied).toEqual([]);
+			expect(result.failed).toEqual([]);
+			expect(result.skipped).toHaveLength(1);
+			expect(result.skipped[0]).toMatchObject({
+				proposalId: approved.proposalId,
+				status: "skipped",
+				reasonCode: "deny_all",
+			});
+			expect(applier).not.toHaveBeenCalled();
+		});
+
+		it("classifies missing_confirm skips when no confirm hook is provided", async () => {
+			const filePath = path.join(tmpDir, "apply-missing-confirm.jsonl");
+			const store = new JsonlProposalStore({
+				filePath,
+				now: () => new Date("2026-05-02T02:00:00.000Z"),
+			});
+			const approved = await appendApprovedProposal(
+				store,
+				patchProposalInput(),
+			);
+
+			const authority = new WriteAuthority({ mode: "ask" });
+			const applier = vi.fn(async (_record: StoredProposalRecord) => undefined);
+
+			const result = await store.applyApproved(authority, { applier });
+
+			expect(result.applied).toEqual([]);
+			expect(result.failed).toEqual([]);
+			expect(result.skipped).toHaveLength(1);
+			expect(result.skipped[0]).toMatchObject({
+				proposalId: approved.proposalId,
+				status: "skipped",
+				reasonCode: "missing_confirm",
+			});
+			expect(applier).not.toHaveBeenCalled();
+		});
+
+		it("describes artifact-only proposals with the artifact-only summary", async () => {
+			const filePath = path.join(tmpDir, "apply-artifact-only.jsonl");
+			const store = new JsonlProposalStore({
+				filePath,
+				now: () => new Date("2026-05-02T02:00:00.000Z"),
+			});
+			const approved = await appendApprovedProposal(store, proposal());
+
+			const confirm = vi.fn(async (_request: WriteRequest) => true);
+			const authority = new WriteAuthority({ mode: "ask", confirm });
+
+			const result = await store.applyApproved(authority);
+
+			expect(result.applied).toEqual([]);
+			expect(result.skipped).toEqual([]);
+			expect(result.failed).toHaveLength(1);
+			expect(result.failed[0]).toMatchObject({
+				proposalId: approved.proposalId,
+				status: "failed",
+				reasonCode: "unsupported_patch_type",
+				reason: expect.stringContaining("artifact-only"),
+			});
+			expect(confirm).toHaveBeenCalledTimes(1);
+			const detail = confirm.mock.calls[0]?.[0]?.detail ?? "";
+			expect(detail).toContain("paths=artifact-only");
+		});
+
+		it("rejects applied transitions from non-approved states", async () => {
+			const store = new JsonlProposalStore({
+				filePath: path.join(tmpDir, "apply-transition-guard.jsonl"),
+			});
+			const stored = await store.append(proposal());
+
+			expect(() =>
+				transitionProposalAppliedState(stored, {
+					reviewer: "Apply Bot",
+					reason: "Apply attempt.",
+					reviewedAt: "2026-05-02T01:00:00.000Z",
+				}),
+			).toThrow(/approved/u);
+		});
+
+		it("validates applied transition metadata is non-empty and ISO timestamps", async () => {
+			const store = new JsonlProposalStore({
+				filePath: path.join(tmpDir, "apply-transition-metadata.jsonl"),
+			});
+			const stored = await store.append(proposal());
+			const approved = transitionProposalReviewState(stored, {
+				status: "approved",
+				reviewer: "Reviewer",
+				reason: "Approved.",
+				reviewedAt: "2026-05-02T01:00:00.000Z",
+			});
+
+			expect(() =>
+				transitionProposalAppliedState(approved, {
+					reviewer: "  ",
+					reason: "Apply.",
+					reviewedAt: "2026-05-02T01:00:00.000Z",
+				}),
+			).toThrow(/reviewer/u);
+			expect(() =>
+				transitionProposalAppliedState(approved, {
+					reviewer: "Apply Bot",
+					reason: "  ",
+					reviewedAt: "2026-05-02T01:00:00.000Z",
+				}),
+			).toThrow(/reason/u);
+			expect(() =>
+				transitionProposalAppliedState(approved, {
+					reviewer: "Apply Bot",
+					reason: "Apply.",
+					reviewedAt: "2026-05-02" as never,
+				}),
+			).toThrow(/ISO 8601 UTC/u);
+		});
 	});
 });

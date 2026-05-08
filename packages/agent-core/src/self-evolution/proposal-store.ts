@@ -1,4 +1,9 @@
 import { appendFile, readFile } from "node:fs/promises";
+import type {
+	WriteAuthority,
+	WriteOrigin,
+	WriteRequest,
+} from "../safety/write-authority.js";
 import { createStableHash, createStableRef } from "./hash.js";
 import {
 	ensureJsonlPersistencePath,
@@ -36,6 +41,7 @@ const PROPOSAL_STATUSES = [
 	"approved",
 	"rejected",
 	"superseded",
+	"applied",
 ] as const satisfies readonly ProposalStatus[];
 
 const PROPOSAL_STATUS_SET = new Set<string>(PROPOSAL_STATUSES);
@@ -87,6 +93,12 @@ const PROPOSAL_REVIEW_QUEUE_NEXT_ACTIONS = {
 		reasonCode: "superseded_review_recorded",
 		reviewState: "superseded",
 	},
+	record_applied_review: {
+		kind: "record_applied_review",
+		priority: 110,
+		reasonCode: "applied_review_recorded",
+		reviewState: "applied",
+	},
 } as const satisfies Record<
 	ProposalReviewQueueNextActionKind,
 	Omit<ProposalReviewQueueNextAction, "proposalIds">
@@ -109,6 +121,41 @@ export interface ProposalReviewTransitionInput {
 export interface ProposalStoreReviewTransitionInput
 	extends Omit<ProposalReviewTransitionInput, "reviewedAt"> {
 	readonly reviewedAt?: string;
+}
+
+export type ProposalApplyOutcomeStatus = "skipped" | "failed";
+
+export type ProposalApplySkippedReason =
+	| "user_rejected"
+	| "deny_all"
+	| "missing_confirm";
+
+export type ProposalApplyFailedReason =
+	| "unsupported_patch_type"
+	| "apply_error";
+
+export interface ProposalApplyOutcome {
+	readonly proposalId: string;
+	readonly status: ProposalApplyOutcomeStatus;
+	readonly reason: string;
+	readonly reasonCode: ProposalApplySkippedReason | ProposalApplyFailedReason;
+}
+
+export interface ProposalApplyResult {
+	readonly applied: readonly StoredProposalRecord[];
+	readonly skipped: readonly ProposalApplyOutcome[];
+	readonly failed: readonly ProposalApplyOutcome[];
+}
+
+export type ProposalPatchApplier = (
+	record: StoredProposalRecord,
+) => Promise<void>;
+
+export interface ProposalApplyOptions {
+	readonly origin?: WriteOrigin;
+	readonly reviewer?: string;
+	readonly reviewedAt?: string;
+	readonly applier?: ProposalPatchApplier;
 }
 
 interface NormalizedCreatedAtQueryRange {
@@ -582,6 +629,7 @@ function createEmptyProposalReviewQueueCounts(): Record<
 		approved: 0,
 		rejected: 0,
 		superseded: 0,
+		applied: 0,
 	};
 }
 
@@ -594,6 +642,7 @@ function createEmptyProposalReviewQueueGroups(): Record<
 		approved: [],
 		rejected: [],
 		superseded: [],
+		applied: [],
 	};
 }
 
@@ -626,6 +675,9 @@ function proposalReviewQueueNextActionKindForRecord(
 	if (record.status === "rejected") {
 		return "record_rejected_review";
 	}
+	if (record.status === "applied") {
+		return "record_applied_review";
+	}
 	return "record_superseded_review";
 }
 
@@ -654,6 +706,49 @@ export function transitionProposalReviewState(
 			reason: review.reason,
 			reviewedAt: review.reviewedAt,
 			metadata: review.metadata,
+		},
+	};
+	assertProposalShape(transitioned);
+	assertStoredPatchBoundary(transitioned);
+	return transitioned;
+}
+
+interface AppliedTransitionInput {
+	readonly reviewer: string;
+	readonly reason: string;
+	readonly reviewedAt: string;
+	readonly metadata?: JsonRecord;
+}
+
+function sanitizeAppliedTransition(
+	input: AppliedTransitionInput,
+): AppliedTransitionInput {
+	return {
+		reviewer: assertNonEmptyReviewString(input.reviewer, "Proposal reviewer"),
+		reason: assertNonEmptyReviewString(input.reason, "Proposal review reason"),
+		reviewedAt: assertIsoTimestamp(input.reviewedAt),
+		metadata: sanitizeReviewMetadataObject(input.metadata),
+	};
+}
+
+export function transitionProposalAppliedState(
+	record: StoredProposalRecord,
+	input: AppliedTransitionInput,
+): StoredProposalRecord {
+	if (record.status !== "approved") {
+		throw new TypeError(
+			`Proposal apply transition requires approved, got ${record.status}`,
+		);
+	}
+	const sanitized = sanitizeAppliedTransition(input);
+	const transitioned: StoredProposalRecord = {
+		...record,
+		status: "applied",
+		review: {
+			reviewer: sanitized.reviewer,
+			reason: sanitized.reason,
+			reviewedAt: sanitized.reviewedAt,
+			metadata: sanitized.metadata,
 		},
 	};
 	assertProposalShape(transitioned);
@@ -883,7 +978,190 @@ export class JsonlProposalStore {
 		});
 	}
 
-	async applyApproved(): Promise<readonly StoredProposalRecord[]> {
-		return this.query({ reviewState: "approved" });
+	async applyApproved(
+		authority: WriteAuthority,
+		options: ProposalApplyOptions = {},
+	): Promise<ProposalApplyResult> {
+		if (authority == null || typeof authority.authorize !== "function") {
+			throw new TypeError(
+				"applyApproved requires a WriteAuthority gate to authorize patch apply",
+			);
+		}
+		const origin: WriteOrigin = options.origin ?? "agent";
+		const reviewer = sanitizeSelfEvolutionString(
+			options.reviewer ?? "self-evolution-applier",
+		).trim();
+		if (reviewer.length === 0) {
+			throw new TypeError("applyApproved reviewer must be a non-empty string");
+		}
+		const applier: ProposalPatchApplier =
+			options.applier ?? defaultUnsupportedPatchApplier;
+
+		return this.enqueueMutation(async () => {
+			const approvedRecords = (await this.list()).filter(
+				(record) => record.status === "approved",
+			);
+
+			const applied: StoredProposalRecord[] = [];
+			const skipped: ProposalApplyOutcome[] = [];
+			const failed: ProposalApplyOutcome[] = [];
+
+			for (const record of approvedRecords) {
+				const outcome = await this.applyApprovedRecord({
+					record,
+					authority,
+					origin,
+					reviewer,
+					reviewedAt: options.reviewedAt,
+					applier,
+				});
+				if (outcome.kind === "applied") {
+					applied.push(outcome.record);
+					continue;
+				}
+				if (outcome.kind === "skipped") {
+					skipped.push(outcome.outcome);
+					continue;
+				}
+				failed.push(outcome.outcome);
+			}
+
+			return {
+				applied,
+				skipped,
+				failed,
+			};
+		});
 	}
+
+	private async applyApprovedRecord(input: {
+		readonly record: StoredProposalRecord;
+		readonly authority: WriteAuthority;
+		readonly origin: WriteOrigin;
+		readonly reviewer: string;
+		readonly reviewedAt?: string;
+		readonly applier: ProposalPatchApplier;
+	}): Promise<
+		| { readonly kind: "applied"; readonly record: StoredProposalRecord }
+		| { readonly kind: "skipped"; readonly outcome: ProposalApplyOutcome }
+		| { readonly kind: "failed"; readonly outcome: ProposalApplyOutcome }
+	> {
+		const { record, authority, origin, reviewer, reviewedAt, applier } = input;
+		const writeRequest = buildApplyWriteRequest(record, origin);
+		const decision = await authority.authorize(writeRequest);
+		if (decision.kind !== "allow") {
+			const reason =
+				decision.kind === "deny"
+					? decision.reason
+					: "write request requires interactive confirmation";
+			const reasonCode =
+				decision.kind === "deny"
+					? classifySkippedReason(decision.reason)
+					: "missing_confirm";
+			return {
+				kind: "skipped",
+				outcome: {
+					proposalId: record.proposalId,
+					status: "skipped",
+					reasonCode,
+					reason,
+				},
+			};
+		}
+
+		try {
+			await applier(record);
+		} catch (error) {
+			const reasonCode: ProposalApplyFailedReason =
+				error instanceof UnsupportedPatchTypeError
+					? "unsupported_patch_type"
+					: "apply_error";
+			return {
+				kind: "failed",
+				outcome: {
+					proposalId: record.proposalId,
+					status: "failed",
+					reasonCode,
+					reason: error instanceof Error ? error.message : String(error),
+				},
+			};
+		}
+
+		const transitioned = transitionProposalAppliedState(record, {
+			reviewer,
+			reason: "Approved patch applied via WriteAuthority gate.",
+			reviewedAt: reviewedAt ?? this.now().toISOString(),
+		});
+
+		await ensureJsonlPersistencePath(this.persistencePath, "write");
+		await appendFile(
+			this.persistencePath.filePath,
+			`${JSON.stringify(transitioned)}\n`,
+			"utf8",
+		);
+
+		return { kind: "applied", record: transitioned };
+	}
+}
+
+export class UnsupportedPatchTypeError extends Error {
+	constructor(message = "patch type is not supported by the default applier") {
+		super(message);
+		this.name = "UnsupportedPatchTypeError";
+	}
+}
+
+async function defaultUnsupportedPatchApplier(
+	record: StoredProposalRecord,
+): Promise<void> {
+	const detail =
+		record.generatedPatchProposal === undefined
+			? "artifact-only proposal cannot be auto-applied"
+			: "synthetic patch proposals require a custom applier";
+	throw new UnsupportedPatchTypeError(detail);
+}
+
+function classifySkippedReason(reason: string): ProposalApplySkippedReason {
+	const normalized = reason.toLowerCase();
+	if (normalized.includes("disabled") || normalized.includes("deny-all")) {
+		return "deny_all";
+	}
+	if (normalized.includes("interactive confirmation")) {
+		return "missing_confirm";
+	}
+	return "user_rejected";
+}
+
+function summarizeAffectedPaths(record: StoredProposalRecord): string {
+	if (record.generatedPatchProposal === undefined) {
+		return "artifact-only";
+	}
+	const paths = record.generatedPatchProposal.fileChanges
+		.map((change) => `${change.changeKind}:${change.path}`)
+		.slice(0, 4);
+	const more =
+		record.generatedPatchProposal.fileChanges.length > paths.length
+			? ` +${record.generatedPatchProposal.fileChanges.length - paths.length} more`
+			: "";
+	return `${paths.join(",")}${more}`;
+}
+
+function buildApplyWriteRequest(
+	record: StoredProposalRecord,
+	origin: WriteOrigin,
+): WriteRequest {
+	const summary = `self_evolution.apply ${record.proposalId}`;
+	const detail = [
+		`title=${sanitizeSelfEvolutionString(record.title)}`,
+		`paths=${summarizeAffectedPaths(record)}`,
+		`risk=${record.riskPreview.level}`,
+	].join(" | ");
+
+	return {
+		tool: "self_evolution_patch_apply",
+		origin,
+		riskLevel: "critical",
+		summary,
+		detail,
+	};
 }
