@@ -88,13 +88,19 @@ build:
 dev-memory:
     cd providers/memory && LOG_LEVEL=debug QUILIN_ENV=dev uv run python -m quilin_mem
 
+dev-web:
+    cd providers/web && LOG_LEVEL=debug QUILIN_ENV=dev uv run python -m quilin_web
+
 test-py:
     cd providers/memory && QUILIN_ENV=test uv run pytest
+    cd providers/web && QUILIN_ENV=test uv run pytest
 
 lint-py:
     cd providers/memory && uv run ruff check src/ tests/
+    cd providers/web && uv run ruff check src/ tests/
 fmt-py:
     cd providers/memory && uv run ruff format src/ tests/
+    cd providers/web && uv run ruff format src/ tests/
 
 # ============ Rust (crates/) ============
 
