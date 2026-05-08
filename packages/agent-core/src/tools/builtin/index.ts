@@ -34,6 +34,17 @@ import {
 	type ImageDescribeToolOptions,
 	type VideoSummarizeToolOptions,
 } from "./multimodal.js";
+import {
+	type ConfigViewToolOptions,
+	type SessionListToolOptions,
+	createConfigViewTool,
+	createSessionListTool,
+} from "./config-session-tools.js";
+import {
+	type SubagentSpawnToolOptions,
+	createSubagentSpawnTool,
+	createSubagentStatusTool,
+} from "./subagent-spawn.js";
 
 export interface BuiltinToolOptions {
 	readonly fileRead?: FileReadToolOptions;
@@ -52,6 +63,9 @@ export interface BuiltinToolOptions {
 		SkillManageToolOptions,
 		"skillsManager" | "writeAuthority"
 	>;
+	readonly subagentSpawn?: SubagentSpawnToolOptions;
+	readonly configView?: ConfigViewToolOptions;
+	readonly sessionList?: SessionListToolOptions;
 }
 
 export function createBuiltinTools(
@@ -72,6 +86,10 @@ export function createBuiltinTools(
 		createImageDescribeTool(options.imageDescribe),
 		createVideoSummarizeTool(options.videoSummarize),
 		createAudioTranscribeTool(options.audioTranscribe),
+		...(options.subagentSpawn != null ? [createSubagentSpawnTool(options.subagentSpawn)] : []),
+		createSubagentStatusTool(),
+		createConfigViewTool(options.configView ?? { getRuntimeState: () => null }),
+		createSessionListTool(options.sessionList),
 		createSkillSearchTool({
 			skillsManager: options.skillsManager,
 			...options.skillSearch,
