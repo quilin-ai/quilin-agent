@@ -41,11 +41,17 @@
 #     `expect` times out cleanly. No leaked process, no hang.
 #
 # Env:
-#   AGENT_TEST_LOG_DIR   Log directory (default: /tmp/agent-test). Validated
-#                        against [A-Za-z0-9_./-]+ to prevent shell-metachar
-#                        injection through the pipe-pane shell command.
-#   AGENT_TEST_PANE_W    tmux pane width  (default: 200)
-#   AGENT_TEST_PANE_H    tmux pane height (default: 50)
+#   AGENT_TEST_LOG_DIR              Log directory (default: /tmp/agent-test).
+#                                   Validated against [A-Za-z0-9_./-]+ to
+#                                   prevent shell-metachar injection through
+#                                   the pipe-pane shell command.
+#   AGENT_TEST_PANE_W               tmux pane width  (default: 200)
+#   AGENT_TEST_PANE_H               tmux pane height (default: 50)
+#   AGENT_TEST_SCROLLBACK_LINES     Scrollback lines `expect`'s capture-pane
+#                                   poll inspects per iteration (default 500).
+#                                   Bump for high-volume agents (e.g. LLM
+#                                   streaming >500 lines / poll interval) to
+#                                   avoid missing matches scrolled past.
 #
 # Example E2E flow (web_crawl repro):
 #   ./scripts/agent-test.sh start qx 'just dev-yolo 2>&1'
@@ -66,6 +72,14 @@ set -euo pipefail
 LOG_DIR="${AGENT_TEST_LOG_DIR:-/tmp/agent-test}"
 PANE_W="${AGENT_TEST_PANE_W:-200}"
 PANE_H="${AGENT_TEST_PANE_H:-50}"
+SCROLLBACK_LINES="${AGENT_TEST_SCROLLBACK_LINES:-500}"
+
+# SCROLLBACK_LINES validation — must be a positive integer to avoid the
+# `-S -0` "whole visible pane" semantics (see cmd_capture).
+if [[ ! "$SCROLLBACK_LINES" =~ ^[1-9][0-9]*$ ]]; then
+	echo "agent-test: AGENT_TEST_SCROLLBACK_LINES must be a positive integer (got: $SCROLLBACK_LINES)" >&2
+	exit 1
+fi
 
 # LOG_DIR is interpolated into a tmux pipe-pane shell command and into
 # `mkdir -p` / `: > $logfile`. Three independent hardenings:
@@ -128,7 +142,10 @@ pane_matches() {
 	local session="$1"
 	local pattern="$2"
 	local out
-	out="$(tmux capture-pane -t "$session" -p -S -500 2>/dev/null || true)"
+	# Scrollback depth governed by AGENT_TEST_SCROLLBACK_LINES (default 500).
+	# Higher values cost slightly more CPU per poll but reduce risk of
+	# missing matches that scroll past during high-volume LLM streaming.
+	out="$(tmux capture-pane -t "$session" -p -S -"$SCROLLBACK_LINES" 2>/dev/null || true)"
 	printf '%s' "$out" | grep -qE -- "$pattern"
 }
 
@@ -238,18 +255,24 @@ cmd_capture() {
 	local session="${1-}"
 	local lines="${2-500}"
 	require_session_name "$session"
-	# `lines` must be ≥ 1: tmux interprets `-S -0` as "start at the top of
-	# the visible pane" (i.e. dump the whole on-screen buffer ~50 lines),
-	# NOT "give me zero lines". Reject 0 to avoid surprising the caller —
-	# anyone asking for zero lines almost certainly mistyped a timeout or
-	# similar argument.
-	[[ "$lines" =~ ^[1-9][0-9]*$ ]] || die "capture: lines must be a positive integer ≥ 1 (got: $lines; tmux -S -0 means whole visible pane, not zero lines)"
+	# `lines` must be ≥ 1 OR the literal sentinel `all` (tmux's full
+	# scrollback). `0` is rejected because tmux interprets `-S -0` as
+	# "whole visible pane" not "zero lines" — likely a caller typo.
+	# `all` maps to `tmux capture-pane -S -` (start at the top of the
+	# entire pane history).
+	if [[ "$lines" != "all" && ! "$lines" =~ ^[1-9][0-9]*$ ]]; then
+		die "capture: lines must be a positive integer or the literal 'all' (got: $lines)"
+	fi
 
 	if ! session_exists "$session"; then
 		die "capture: no such session '$session'"
 	fi
 
-	tmux capture-pane -t "$session" -p -S -"$lines"
+	if [[ "$lines" == "all" ]]; then
+		tmux capture-pane -t "$session" -p -S -
+	else
+		tmux capture-pane -t "$session" -p -S -"$lines"
+	fi
 }
 
 cmd_log() {
@@ -274,18 +297,31 @@ cmd_cleanup() {
 	require_session_name "$session"
 	local logfile
 	logfile="$(log_path_for "$session")"
+	# Track each side independently so the user sees both outcomes
+	# (G-1 from cross review): a partial cleanup where kill-session
+	# succeeds but rm fails — or vice versa — was previously hidden by
+	# a single "killed" / "already gone" message that did not mention
+	# the log file at all.
+	local session_status="absent"
+	local log_status="absent"
 	if session_exists "$session"; then
-		tmux kill-session -t "=$session" 2>/dev/null || tmux kill-session -t "$session"
-		echo "agent-test: killed session '$session'"
-	else
-		echo "agent-test: no live session '$session' (already gone)"
+		if tmux kill-session -t "=$session" 2>/dev/null || tmux kill-session -t "$session" 2>/dev/null; then
+			session_status="killed"
+		else
+			session_status="kill-failed"
+		fi
 	fi
-	# Always remove the persistent log on cleanup so callers running many
-	# test cases do not leak files into $LOG_DIR. If a caller wants to keep
-	# the log, they should `cp` it before cleanup or read via `log` first.
+	# Always attempt log removal so callers running many test cases do
+	# not leak files into $LOG_DIR. If a caller wants to keep the log,
+	# they should `cp` it before cleanup or read via `log` first.
 	if [[ -f "$logfile" ]]; then
-		rm -f "$logfile"
+		if rm -f "$logfile"; then
+			log_status="removed"
+		else
+			log_status="rm-failed"
+		fi
 	fi
+	echo "agent-test: cleanup '$session' — session=$session_status log=$log_status"
 }
 
 # Self-test: round-trip start/send/expect/cleanup against a fresh bash REPL.
@@ -298,8 +334,15 @@ cmd_selftest() {
 
 	# Trap cleanup so a failing assertion does not leak the tmux session
 	# or its log file. Removed via `trap - EXIT` on success path.
+	# Use printf -v %q to defensively shell-quote the session name even
+	# though our session_name regex already excludes shell-metachars —
+	# G-3 hardening, costs nothing and locks the API contract: future
+	# changes that loosen the session-name regex will not silently
+	# create a trap injection vulnerability.
+	local safe_s
+	printf -v safe_s '%q' "$s"
 	# shellcheck disable=SC2064
-	trap "cmd_cleanup '$s' 2>/dev/null || true" EXIT
+	trap "cmd_cleanup $safe_s 2>/dev/null || true" EXIT
 
 	# Use an interactive bash with no rc files so prompt is deterministic.
 	cmd_start "$s" 'env PS1="\$ " bash --norc --noprofile -i 2>&1'
@@ -433,7 +476,11 @@ main() {
 			usage
 			;;
 		*)
-			usage
+			# G-2: invalid subcommand — usage to stderr so CI wrappers
+			# parsing stderr see the error, not stdout (which a chained
+			# pipeline might be reading for parseable output).
+			echo "agent-test: unknown subcommand: $sub" >&2
+			usage >&2
 			exit 1
 			;;
 	esac
