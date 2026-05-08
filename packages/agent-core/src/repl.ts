@@ -65,6 +65,7 @@ import type { AgentState, Message } from "./state/types.js";
 import type { JsonlTrajectoryStore } from "./self-evolution/trajectory-store.js";
 import type { TrajectoryRecordInput } from "./self-evolution/types.js";
 import { createBuiltinTools } from "./tools/builtin/index.js";
+import { createSubagentSpawnTool } from "./tools/builtin/subagent-spawn.js";
 import { MCPRegistry, type MCPServerEntry } from "./tools/registry.js";
 import type { SandboxApprovalRequest } from "./tools/router.js";
 import type { ToolWithMetadata } from "./tools/tool-metadata.js";
@@ -2249,6 +2250,20 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 			...(tierRouting == null ? {} : { tierRouting }),
 			onRunRecord: recordProviderRun,
 		});
+
+		// Register subagent_spawn tool — needs llm which is now initialized
+		registry.registerBuiltin([
+			createSubagentSpawnTool({
+				loopConfig: {
+					llm,
+					context,
+					checkpoint,
+					tools: filterToolsByRuntimeConfig(registry.getAllTools(), toolFilter),
+					inferenceConfig,
+					toolRouterOptions: { sandboxOrigin: "agent" as const },
+				},
+			}),
+		]);
 
 		while (true) {
 			slashCommandHelpShownForPrompt = false;
