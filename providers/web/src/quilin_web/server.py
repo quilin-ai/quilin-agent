@@ -145,12 +145,43 @@ class _Crawl4AIAdapter:
         word_count_threshold: int = DEFAULT_WORD_COUNT_THRESHOLD,
         timeout_ms: int = DEFAULT_TIMEOUT_MS,
     ) -> CrawlResult:
-        async with self._cls() as crawler:  # pragma: no cover - real network path
-            result = await crawler.arun(
-                url=url,
-                word_count_threshold=word_count_threshold,
-                page_timeout=timeout_ms,
-            )
+        # `verbose=False` 走 BrowserConfig + CrawlerRunConfig 两条路径才生效。
+        # 直接传 `AsyncWebCrawler(verbose=False)` 会落入 **kwargs 被静默丢弃
+        # （AsyncWebCrawler.__init__ 签名只有 crawler_strategy / config /
+        # base_directory / thread_safe / logger / **kwargs，没有 verbose）。
+        # 真正的 verbose 控制在 BrowserConfig.verbose（initial logger 配置）
+        # 和 CrawlerRunConfig.verbose（per-call 覆写 self.logger.verbose）。
+        # 不抑制时 Crawl4AI 把进度行写到 stdout（如 `| ✓ | ⏱: 2.64s`），
+        # 当 quilin-web 作为 MCP stdio 子进程跑时这些非-JSON 行污染 JSON-RPC
+        # 通道，触发 agent-core 的 StdioClientTransport 抛 SyntaxError —
+        # 实测一次 web_crawl 触发 152 次 parse error。See QUI-134.
+        #
+        # `verbose=False` must be set on BOTH BrowserConfig and
+        # CrawlerRunConfig to be effective. Passing `verbose=False`
+        # directly to `AsyncWebCrawler()` lands in **kwargs and is
+        # silently dropped (the signature is crawler_strategy / config /
+        # base_directory / thread_safe / logger / **kwargs — no verbose).
+        # The real verbose control lives on BrowserConfig.verbose
+        # (initial logger seed) and CrawlerRunConfig.verbose (per-arun
+        # override of self.logger.verbose). Without this suppression,
+        # Crawl4AI writes progress lines to stdout (e.g. `| ✓ | ⏱: 2.64s`);
+        # when quilin-web runs as an MCP stdio subprocess those non-JSON
+        # lines pollute the JSON-RPC channel and trigger agent-core's
+        # StdioClientTransport to throw SyntaxError — a single web_crawl
+        # empirically triggered 152 parse errors. See QUI-134.
+        from crawl4ai import (  # type: ignore[import-not-found]
+            BrowserConfig,
+            CrawlerRunConfig,
+        )
+
+        browser_cfg = BrowserConfig(verbose=False)
+        run_cfg = CrawlerRunConfig(
+            verbose=False,
+            word_count_threshold=word_count_threshold,
+            page_timeout=timeout_ms,
+        )
+        async with self._cls(config=browser_cfg) as crawler:  # pragma: no cover - real network path
+            result = await crawler.arun(url=url, config=run_cfg)
             markdown = (
                 getattr(getattr(result, "markdown_v2", None), "fit_markdown", None)
                 or getattr(result, "markdown", None)

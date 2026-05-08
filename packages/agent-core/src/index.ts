@@ -12,7 +12,11 @@ import {
 	type CapabilitiesHotReloadEvent,
 	createCapabilitiesHotReloadController,
 } from "./config/hot-reload.js";
-import { startQuilinMemMcp, startQuilinWebMcp } from "./config/mcp-launcher.js";
+// startQuilinMemMcp / startQuilinWebMcp import removed — MCPRegistry
+// already spawns these servers from the default capabilities config
+// (loader.ts). The mcp-launcher.ts module is retained for tests and
+// potential future service-mode use, but its REPL-mode invocation was
+// double-spawning every server.
 import { ensureMemoryBackend } from "./config/memory-setup.js";
 import {
 	bootstrapUserRuntime,
@@ -701,11 +705,12 @@ export async function main(options: MainOptions = {}): Promise<void> {
 	// Guard against test-mode runs so index.test.ts call-index assertions stay stable.
 	if (process.env.NODE_ENV !== "test") {
 		ensureMemoryBackend();
-		const workspaceRoot = resolveWorkspaceRoot(
-			dirname(fileURLToPath(import.meta.url)),
-		);
-		startQuilinMemMcp(workspaceRoot);
-		startQuilinWebMcp(workspaceRoot);
+		// NOTE: explicit startQuilinMemMcp / startQuilinWebMcp removed —
+		// MCPRegistry already spawns these servers automatically via
+		// StdioClientTransport when it reads them from the default
+		// capabilities config (loader.ts). Calling them here was
+		// double-spawning every MCP server (4 Python children instead
+		// of 2). See docs/05-tool/README.md for the trajectory.
 	}
 
 	const envTrustMode = process.env.QUILIN_TRUST_MODE;

@@ -397,7 +397,13 @@ export function createDefaultCapabilitiesConfig(
 ): CapabilitiesConfig {
 	const memoryProviderCwd = join(workspaceRoot, "providers", "memory");
 	const webProviderCwd = join(workspaceRoot, "providers", "web");
-	const mcpServers: NonNullable<CapabilitiesConfig["mcpServers"]> = {};
+	// Build as a mutable Record then assign to the readonly field once
+	// — `CapabilitiesConfig["mcpServers"]` is `Readonly<Record<...>>` so
+	// direct index-write on the typed `NonNullable<...>` slot fails tsc.
+	type McpServerEntry = NonNullable<
+		CapabilitiesConfig["mcpServers"]
+	>[string];
+	const mcpServers: Record<string, McpServerEntry> = {};
 	if (existsSync(memoryProviderCwd)) {
 		mcpServers["quilin-mem"] = {
 			command: "uv",

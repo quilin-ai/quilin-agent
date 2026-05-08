@@ -44,7 +44,7 @@ describe("mcp-launcher", () => {
 		existsFn = vi.fn().mockReturnValue(true);
 		__test_replaceRunners({
 			spawnFn: spawnFn as unknown as typeof import("node:child_process").spawn,
-			existsFn,
+			existsFn: existsFn as unknown as (path: string) => boolean,
 		});
 	});
 
