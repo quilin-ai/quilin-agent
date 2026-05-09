@@ -8,8 +8,11 @@ the network.
 from __future__ import annotations
 
 import json
+import sys
 from collections.abc import Callable
 from dataclasses import replace
+from types import ModuleType
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -22,6 +25,7 @@ from quilin_web.server import (
     Crawler,
     CrawlResult,
     WebOperationError,
+    _Crawl4AIAdapter,
     _normalize_link,
     _same_host,
     _summarize_markdown,
@@ -468,3 +472,97 @@ def _extract_text(raw: object) -> str:
     if isinstance(text_attr, str):
         return text_attr
     raise AssertionError(f"could not extract text from {raw!r}")
+
+
+# -----------------------------------------------------------------------------
+# _Crawl4AIAdapter regression test (QUI-144 R-1 / S-9)
+# -----------------------------------------------------------------------------
+# The adapter previously called `AsyncWebCrawler(verbose=False)` — `verbose`
+# is NOT a named param of __init__ (signature: crawler_strategy / config /
+# base_directory / thread_safe / logger / **kwargs), so the kwarg was silently
+# dropped and a single web_crawl triggered ~150 JSON parse errors when stdout
+# leaked into the MCP stdio JSON-RPC channel. Fix: route verbose=False
+# through BOTH BrowserConfig and CrawlerRunConfig. This test pins that wiring
+# so a future refactor that drops one of the two configs (or reverts to the
+# kwarg form) fails CI immediately.
+
+@pytest.mark.asyncio
+async def test_crawl4ai_adapter_passes_verbose_false_via_browser_and_run_configs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, dict[str, object] | None] = {
+        "browser_args": None,
+        "run_args": None,
+    }
+
+    class CapturedBrowserConfig:
+        def __init__(self, **kwargs: object) -> None:
+            captured["browser_args"] = kwargs
+
+    class CapturedRunConfig:
+        def __init__(self, **kwargs: object) -> None:
+            captured["run_args"] = kwargs
+
+    fake_crawl4ai = ModuleType("crawl4ai")
+    fake_crawl4ai.BrowserConfig = CapturedBrowserConfig  # type: ignore[attr-defined]
+    fake_crawl4ai.CrawlerRunConfig = CapturedRunConfig  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "crawl4ai", fake_crawl4ai)
+
+    arun_result = MagicMock(
+        url="https://example.com/page",
+        status_code=200,
+        markdown="# Example",
+        markdown_v2=None,
+        metadata={"title": "Example"},
+        links={"internal": [{"href": "https://example.com/about"}, {"text": "no-href"}]},
+    )
+    arun_mock = AsyncMock(return_value=arun_result)
+    crawler_instance = MagicMock()
+    crawler_instance.arun = arun_mock
+
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=crawler_instance)
+    cm.__aexit__ = AsyncMock(return_value=None)
+    cls_mock = MagicMock(return_value=cm)
+
+    adapter = _Crawl4AIAdapter(cls_mock)
+    result = await adapter.fetch(
+        "https://example.com/page",
+        word_count_threshold=42,
+        timeout_ms=12_345,
+    )
+
+    # 1. BrowserConfig MUST receive verbose=False (initial logger seed).
+    assert captured["browser_args"] == {"verbose": False}, (
+        f"BrowserConfig must receive verbose=False; got {captured['browser_args']}"
+    )
+
+    # 2. CrawlerRunConfig MUST receive verbose=False (per-call override).
+    run_args = captured["run_args"]
+    assert run_args is not None
+    assert run_args["verbose"] is False, (
+        f"CrawlerRunConfig must receive verbose=False; got {run_args}"
+    )
+    assert run_args["word_count_threshold"] == 42
+    assert run_args["page_timeout"] == 12_345
+
+    # 3. AsyncWebCrawler called with config=browser_cfg (NOT verbose=...).
+    cls_mock.assert_called_once()
+    _, cls_kwargs = cls_mock.call_args
+    assert isinstance(cls_kwargs["config"], CapturedBrowserConfig)
+    # Critical: verbose must NOT be passed directly to AsyncWebCrawler — it's
+    # silently dropped in **kwargs. This locks the contract.
+    assert "verbose" not in cls_kwargs
+
+    # 4. arun called with url + config (the new non-deprecated API).
+    arun_mock.assert_called_once()
+    arun_kwargs = arun_mock.call_args.kwargs
+    assert arun_kwargs["url"] == "https://example.com/page"
+    assert isinstance(arun_kwargs["config"], CapturedRunConfig)
+
+    # 5. CrawlResult preserves URL / status / markdown / title / links.
+    assert result.url == "https://example.com/page"
+    assert result.status == 200
+    assert result.markdown == "# Example"
+    assert result.title == "Example"
+    assert result.links == ("https://example.com/about",)
