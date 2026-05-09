@@ -371,4 +371,31 @@ describe("DspyOfflineOptimizer", () => {
 
 		expect(result.createdAt).toBe("2030-01-01T00:00:00.000Z");
 	});
+
+	it("forwards optimizer_choice='mipro' by default", async () => {
+		const client = new FakeMCPClient(stubServerPayload({ proposals: [] }));
+		const optimizer = new DspyOfflineOptimizer({
+			client,
+			now: FIXED_NOW,
+		});
+
+		await optimizer.optimize({ trajectories: [trajectory()] });
+
+		const call = client.calls[0];
+		expect(call?.args.optimizer_choice).toBe("mipro");
+	});
+
+	it("forwards optimizer_choice='gepa' when configured", async () => {
+		const client = new FakeMCPClient(stubServerPayload({ proposals: [] }));
+		const optimizer = new DspyOfflineOptimizer({
+			client,
+			now: FIXED_NOW,
+			optimizerChoice: "gepa",
+		});
+
+		await optimizer.optimize({ trajectories: [trajectory()] });
+
+		const call = client.calls[0];
+		expect(call?.args.optimizer_choice).toBe("gepa");
+	});
 });

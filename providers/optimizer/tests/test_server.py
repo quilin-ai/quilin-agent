@@ -1,19 +1,22 @@
-"""Tests for the Stage A placeholder optimizer MCP server.
+"""Tests for the Stage C real-DSPy optimizer MCP server.
 
-These tests cover the contract that the TS-side ``DspyOfflineOptimizer``
-relies on. Stage C will add coverage for the real DSPy pipeline; until
-then we only verify:
+Stage A placeholder tests have been migrated to the Stage C contract:
+    - ``OPTIMIZER_ID`` is now ``"dspy"`` (was ``"dspy-stub"``).
+    - ``stage`` is now ``"C"`` (was ``"A"``).
+    - Happy-path proposal generation requires DSPy + judge key + ≥5 trajectories;
+      smaller inputs return structured ``no_proposal_reasons`` instead.
 
-1. ``create_server()`` registers the ``optimize`` tool.
-2. The tool responds with a deterministic stub matching the
-   ``OfflineOptimizerResult`` shape.
-3. Validation rejects malformed inputs without crashing the server.
+Stage A 占位测试已迁移到 Stage C 契约：
+    - ``OPTIMIZER_ID`` 现在是 ``"dspy"``（原 ``"dspy-stub"``）。
+    - ``stage`` 现在是 ``"C"``（原 ``"A"``）。
+    - happy-path 提案生成需要 DSPy + judge key + ≥5 条轨迹；
+      不达条件时返回结构化 ``no_proposal_reasons``。
 
-下列测试覆盖 TS 端 ``DspyOfflineOptimizer`` 依赖的契约。Stage C 将补充
-真实 DSPy 流程的覆盖；当前阶段只验证：
-1. ``create_server()`` 注册了 ``optimize`` 工具；
-2. 工具返回与 ``OfflineOptimizerResult`` 形状一致的确定性占位；
-3. 输入校验拒绝非法输入且不会让 server 崩溃。
+These tests focus on input validation + graceful-degradation contract;
+real DSPy compile coverage lives in ``test_server_real_dspy.py``.
+
+本文件聚焦输入校验 + 优雅降级契约；
+真实 DSPy 编译路径覆盖在 ``test_server_real_dspy.py``。
 """
 
 from __future__ import annotations
@@ -26,6 +29,7 @@ from quilin_optimizer.server import (
     OPTIMIZER_ID,
     OPTIMIZER_MODE,
     SCHEMA_VERSION,
+    OptimizerConfig,
     OptimizerOperationError,
     create_server,
     optimize,
@@ -80,75 +84,15 @@ def test_main_invokes_mcp_run(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_optimize_tool_round_trip_with_valid_inputs() -> None:
-    server = create_server()
-    handler = server._tool_manager.get_tool("optimize")
-    assert handler is not None
-
-    raw = await handler.run(
-        {
-            "trajectories": [
-                {
-                    "trajectoryRef": "trajectory:run-001",
-                    "runId": "run-001",
-                    "taskRef": "QUI-118",
-                },
-                {
-                    "trajectoryRef": "trajectory:run-002",
-                    "runId": "run-002",
-                },
-            ],
-            "failure_categories": ["tool_error", "schema_violation"],
-            "dry_run": False,
-        }
-    )
-    payload = json.loads(_extract_text(raw))
-
-    assert payload["schema_version"] == SCHEMA_VERSION
-    assert payload["optimizer_id"] == OPTIMIZER_ID
-    assert payload["mode"] == OPTIMIZER_MODE
-    assert payload["stage"] == "A"
-    assert payload["dry_run"] is False
-    assert payload["no_proposal_reasons"] == []
-    assert isinstance(payload["created_at"], str)
-    assert payload["created_at"].endswith("Z")
-
-    assert len(payload["proposals"]) == 1
-    proposal = payload["proposals"][0]
-    assert proposal["title"].startswith("DSPy placeholder")
-    assert proposal["riskPreview"]["level"] == "medium"
-    assert proposal["riskPreview"]["touchesRuntime"] is False
-    assert proposal["riskPreview"]["requiresHumanReview"] is True
-    assert proposal["metadata"]["optimizer_id"] == OPTIMIZER_ID
-    assert proposal["metadata"]["application_mode"] == "proposal_only"
-    assert proposal["metadata"]["stage"] == "A"
-    assert proposal["metadata"]["trajectory_refs"] == [
-        "trajectory:run-001",
-        "trajectory:run-002",
-    ]
-    assert proposal["metadata"]["failure_categories"] == [
-        "tool_error",
-        "schema_violation",
-    ]
-    assert len(proposal["artifacts"]) == 2
-    kinds = sorted(a["kind"] for a in proposal["artifacts"])
-    assert kinds == ["json", "markdown"]
-    for artifact in proposal["artifacts"]:
-        assert artifact["sourceRefs"] == [
-            "trajectory:run-001",
-            "trajectory:run-002",
-        ]
-        assert isinstance(artifact["contentHash"], str)
-        assert len(artifact["contentHash"]) == 64
-    assert proposal["evidenceHashes"] == [a["contentHash"] for a in proposal["artifacts"]]
-
-
-@pytest.mark.asyncio
 async def test_optimize_returns_no_failure_detected_when_trajectories_empty() -> None:
     raw = await optimize(trajectories=[], failure_categories=["tool_error"])
     payload = json.loads(raw)
 
     assert payload["proposals"] == []
+    assert payload["schema_version"] == SCHEMA_VERSION
+    assert payload["optimizer_id"] == OPTIMIZER_ID
+    assert payload["mode"] == OPTIMIZER_MODE
+    assert payload["stage"] == "C"
     codes = [reason["code"] for reason in payload["no_proposal_reasons"]]
     assert codes == ["no_failure_detected"]
 
@@ -169,15 +113,15 @@ async def test_optimize_returns_insufficient_signal_when_categories_empty() -> N
 
 @pytest.mark.asyncio
 async def test_optimize_dry_run_flag_is_forwarded_to_metadata() -> None:
+    """Even on the no-proposal path, ``dry_run`` must round-trip."""
     raw = await optimize(
-        trajectories=[{"trajectoryRef": "trajectory:run-y", "runId": "run-y"}],
+        trajectories=[],
         failure_categories=["tool_error"],
         dry_run=True,
     )
     payload = json.loads(raw)
 
     assert payload["dry_run"] is True
-    assert payload["proposals"][0]["metadata"]["dry_run"] is True
 
 
 @pytest.mark.asyncio
@@ -240,16 +184,36 @@ async def test_optimize_rejects_overlong_string_field() -> None:
 
 
 @pytest.mark.asyncio
+async def test_optimize_rejects_invalid_optimizer_choice() -> None:
+    with pytest.raises(OptimizerOperationError, match="optimizer_choice must be one of"):
+        await optimize(
+            trajectories=[{"trajectoryRef": "t", "runId": "r"}],
+            failure_categories=["tool_error"],
+            optimizer_choice="random_invalid_choice",
+        )
+
+
+@pytest.mark.asyncio
+async def test_optimize_rejects_non_string_optimizer_choice() -> None:
+    with pytest.raises(OptimizerOperationError, match="optimizer_choice must be a string"):
+        await optimize(
+            trajectories=[{"trajectoryRef": "t", "runId": "r"}],
+            failure_categories=["tool_error"],
+            optimizer_choice=123,
+        )
+
+
+@pytest.mark.asyncio
 async def test_optimize_wraps_unexpected_errors_as_operation_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Generic exceptions inside ``_optimize`` are wrapped, not leaked."""
     from quilin_optimizer import server as server_module
 
-    def _explode(*_args: object, **_kwargs: object) -> object:
+    async def _explode(*_args: object, **_kwargs: object) -> object:
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(server_module, "_build_placeholder_proposal", _explode)
+    monkeypatch.setattr(server_module, "_optimize", _explode)
 
     with pytest.raises(OptimizerOperationError, match="optimize failed"):
         await optimize(
@@ -258,28 +222,62 @@ async def test_optimize_wraps_unexpected_errors_as_operation_error(
         )
 
 
-@pytest.mark.asyncio
-async def test_optimize_is_deterministic_for_repeated_inputs() -> None:
-    payload1 = json.loads(
-        await optimize(
-            trajectories=[
-                {"trajectoryRef": "trajectory:a", "runId": "a"},
-                {"trajectoryRef": "trajectory:b", "runId": "b"},
-            ],
-            failure_categories=["tool_error"],
-        )
+def test_optimizer_config_from_env_reads_all_three_keys() -> None:
+    config = OptimizerConfig.from_env(
+        env={
+            "QUILIN_OPTIMIZER_JUDGE_MODEL": "openai/gpt-4o",
+            "QUILIN_OPTIMIZER_JUDGE_API_KEY": "sk-fake",
+            "QUILIN_OPTIMIZER_JUDGE_BASE_URL": "https://example.com/v1",
+        }
     )
-    payload2 = json.loads(
-        await optimize(
-            trajectories=[
-                {"trajectoryRef": "trajectory:a", "runId": "a"},
-                {"trajectoryRef": "trajectory:b", "runId": "b"},
-            ],
-            failure_categories=["tool_error"],
-        )
-    )
+    assert config.judge_model == "openai/gpt-4o"
+    assert config.judge_api_key == "sk-fake"
+    assert config.judge_base_url == "https://example.com/v1"
+    assert config.is_ready() is True
 
-    # created_at differs between calls; everything else is deterministic.
-    payload1.pop("created_at")
-    payload2.pop("created_at")
-    assert payload1 == payload2
+
+def test_optimizer_config_is_not_ready_without_api_key() -> None:
+    config = OptimizerConfig.from_env(env={})
+    assert config.is_ready() is False
+    assert config.judge_api_key is None
+
+
+def test_optimizer_config_treats_empty_string_as_missing() -> None:
+    config = OptimizerConfig.from_env(env={"QUILIN_OPTIMIZER_JUDGE_API_KEY": ""})
+    assert config.is_ready() is False
+
+
+@pytest.mark.asyncio
+async def test_optimize_with_no_judge_key_returns_insufficient_signal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the judge API key is missing, fall back to a structured warning.
+
+    Injects a minimal fake ``dspy`` module so the lazy-import gate
+    succeeds and the judge-key gate is the one that fires.
+    """
+    import sys
+    import types
+
+    fake_dspy = types.ModuleType("dspy")
+    monkeypatch.setitem(sys.modules, "dspy", fake_dspy)
+
+    monkeypatch.delenv("QUILIN_OPTIMIZER_JUDGE_API_KEY", raising=False)
+    monkeypatch.delenv("QUILIN_OPTIMIZER_JUDGE_MODEL", raising=False)
+    monkeypatch.delenv("QUILIN_OPTIMIZER_JUDGE_BASE_URL", raising=False)
+
+    raw = await optimize(
+        trajectories=[
+            {"trajectoryRef": f"trajectory:run-{i}", "runId": f"run-{i}"} for i in range(6)
+        ],
+        failure_categories=["tool_error"],
+    )
+    payload = json.loads(raw)
+
+    assert payload["proposals"] == []
+    codes = [reason["code"] for reason in payload["no_proposal_reasons"]]
+    assert codes == ["insufficient_signal"]
+    message = payload["no_proposal_reasons"][0]["message"]
+    assert "QUILIN_OPTIMIZER_JUDGE_API_KEY" in message
+    # API key value must NEVER appear in the message body.
+    assert "sk-" not in message

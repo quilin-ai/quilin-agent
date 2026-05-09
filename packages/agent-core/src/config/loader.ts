@@ -397,6 +397,7 @@ export function createDefaultCapabilitiesConfig(
 ): CapabilitiesConfig {
 	const memoryProviderCwd = join(workspaceRoot, "providers", "memory");
 	const webProviderCwd = join(workspaceRoot, "providers", "web");
+	const optimizerProviderCwd = join(workspaceRoot, "providers", "optimizer");
 	// Build as a mutable Record then assign to the readonly field once
 	// — `CapabilitiesConfig["mcpServers"]` is `Readonly<Record<...>>` so
 	// direct index-write on the typed `NonNullable<...>` slot fails tsc.
@@ -416,6 +417,30 @@ export function createDefaultCapabilitiesConfig(
 			command: "uv",
 			args: ["run", "python", "-m", "quilin_web"],
 			cwd: webProviderCwd,
+		};
+	}
+	// Stage C — DSPy optimizer MCP server is **opt-in**: spawn only when
+	// (a) the provider directory exists AND (b) the user has wired a judge
+	// API key via `QUILIN_OPTIMIZER_JUDGE_API_KEY`. Without the key the
+	// server's lazy-import path returns empty proposals + structured
+	// warning, so spawning it would waste a child process. Users who want
+	// to override this gate (e.g. integration tests with mocked DSPy) can
+	// add the entry to their own capabilities.toml manually.
+	//
+	// Stage C —— DSPy 优化器 MCP server 默认 **不**自动起：仅当
+	// （a）provider 目录存在 **并且**（b）用户配置了
+	// `QUILIN_OPTIMIZER_JUDGE_API_KEY` 时才加进默认 mcpServers。缺失 key
+	// 时 server 走 lazy-import 降级返回空提案 + 结构化告警，自动起会浪费
+	// 子进程。希望绕过这个门控（例如 integration test 用 mock DSPy）的
+	// 用户，可以在自己的 capabilities.toml 里手动加入此 entry。
+	const judgeApiKeyConfigured =
+		typeof process.env.QUILIN_OPTIMIZER_JUDGE_API_KEY === "string" &&
+		process.env.QUILIN_OPTIMIZER_JUDGE_API_KEY.length > 0;
+	if (existsSync(optimizerProviderCwd) && judgeApiKeyConfigured) {
+		mcpServers["quilin-optimizer"] = {
+			command: "uv",
+			args: ["run", "python", "-m", "quilin_optimizer"],
+			cwd: optimizerProviderCwd,
 		};
 	}
 	return {

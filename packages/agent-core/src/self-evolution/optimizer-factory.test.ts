@@ -93,4 +93,73 @@ describe("createOfflineOptimizer", () => {
 		});
 		expect(calls[0]?.name).toBe("optimize_v2");
 	});
+
+	it("forwards dspyOptimizerChoice='gepa' as optimizer_choice arg", async () => {
+		const calls: { name: string; args: Record<string, unknown> }[] = [];
+		const optimizer = createOfflineOptimizer({
+			choice: "dspy",
+			dspyClientFactory: () => ({
+				async callTool(name, args) {
+					calls.push({ name, args });
+					return JSON.stringify({
+						schema_version: 1,
+						optimizer_id: "dspy",
+						mode: "prompt_rewrite",
+						created_at: "2026-05-09T00:00:00.000Z",
+						proposals: [],
+						no_proposal_reasons: [],
+					});
+				},
+			}),
+			dspyOptimizerChoice: "gepa",
+		});
+		await optimizer.optimize({
+			trajectories: [
+				{
+					schemaVersion: 1,
+					runId: "r1",
+					trajectoryRef: "trajectory:r1",
+					contentHash: "x".repeat(64),
+					outcome: "failure",
+					createdAt: "2026-05-09T00:00:00.000Z",
+					steps: [],
+				},
+			],
+		});
+		expect(calls[0]?.args.optimizer_choice).toBe("gepa");
+	});
+
+	it("defaults optimizer_choice to 'mipro' when not specified", async () => {
+		const calls: { name: string; args: Record<string, unknown> }[] = [];
+		const optimizer = createOfflineOptimizer({
+			choice: "dspy",
+			dspyClientFactory: () => ({
+				async callTool(name, args) {
+					calls.push({ name, args });
+					return JSON.stringify({
+						schema_version: 1,
+						optimizer_id: "dspy",
+						mode: "prompt_rewrite",
+						created_at: "2026-05-09T00:00:00.000Z",
+						proposals: [],
+						no_proposal_reasons: [],
+					});
+				},
+			}),
+		});
+		await optimizer.optimize({
+			trajectories: [
+				{
+					schemaVersion: 1,
+					runId: "r1",
+					trajectoryRef: "trajectory:r1",
+					contentHash: "x".repeat(64),
+					outcome: "failure",
+					createdAt: "2026-05-09T00:00:00.000Z",
+					steps: [],
+				},
+			],
+		});
+		expect(calls[0]?.args.optimizer_choice).toBe("mipro");
+	});
 });

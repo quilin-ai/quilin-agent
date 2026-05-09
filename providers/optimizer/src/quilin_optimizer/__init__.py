@@ -1,22 +1,38 @@
-"""Quilin offline optimizer MCP server — Stage A+B placeholder.
+"""Quilin offline optimizer MCP server — Stage C real DSPy integration.
 
-This package exposes a single MCP tool, ``optimize``, that returns a
-deterministic stub matching the TS-side ``DspyOfflineOptimizer`` contract.
-Stage C will swap the placeholder body for a real DSPy/GEPA optimization
-loop without changing the tool surface.
+This package exposes a single MCP tool, ``optimize``, that runs a real
+DSPy compiler (``MIPROv2`` or ``GEPA``) over input trajectories. ``dspy-ai``
+is opt-in via the ``dspy`` extra; the server falls back to structured
+"DSPy unavailable" warnings when the extra is missing rather than crashing.
 
-本包暴露唯一的 MCP 工具 ``optimize``，返回与 TS 端 ``DspyOfflineOptimizer``
-契约一致的占位结果。Stage C 将在保持工具签名不变的前提下，把占位逻辑
-替换为真实的 DSPy/GEPA 优化循环。
+本包暴露唯一的 MCP 工具 ``optimize``：在输入轨迹上跑真实 DSPy 编译器
+（``MIPROv2`` 或 ``GEPA``）。``dspy-ai`` 通过 ``dspy`` extra 选装；
+extra 缺失时返回结构化"DSPy unavailable"告警，不会让 server 崩溃。
 """
 
-from .server import OPTIMIZER_ID, SCHEMA_VERSION, create_server, main, optimize
+from .server import (
+    DEFAULT_OPTIMIZER_CHOICE,
+    MIN_TRAJECTORIES,
+    OPTIMIZER_ID,
+    SCHEMA_VERSION,
+    SUPPORTED_OPTIMIZER_CHOICES,
+    OptimizerConfig,
+    OptimizerOperationError,
+    create_server,
+    main,
+    optimize,
+)
 
 __all__ = [
+    "DEFAULT_OPTIMIZER_CHOICE",
+    "MIN_TRAJECTORIES",
     "OPTIMIZER_ID",
     "SCHEMA_VERSION",
+    "SUPPORTED_OPTIMIZER_CHOICES",
+    "OptimizerConfig",
+    "OptimizerOperationError",
     "create_server",
     "main",
     "optimize",
 ]
-__version__ = "0.0.1"
+__version__ = "0.0.2"

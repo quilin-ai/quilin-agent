@@ -207,23 +207,37 @@ export const safetyConfigSchema = z
  * - `prompt_rewrite` (default): heuristic, dependency-free TS optimizer.
  * - `noop`: opt-out for evaluation runs that explicitly want no proposals.
  * - `dspy`: DSPy/GEPA-backed optimizer that talks to
- *   `providers/optimizer` over MCP. Stage A returns a deterministic stub;
- *   Stage C will swap in real DSPy compilation.
+ *   `providers/optimizer` over MCP. Stage C runs real DSPy with lazy
+ *   import + graceful degrade when the `dspy-ai` extra is missing.
  *
  * Optimizer 选项：
  * - `prompt_rewrite`（默认）：零依赖的启发式 TS 优化器。
  * - `noop`：评估场景下显式禁用提案的 opt-out。
  * - `dspy`：经 MCP 调用 `providers/optimizer` 的 DSPy/GEPA 优化器；
- *   Stage A 返回确定性占位，Stage C 接入真实 DSPy 编译。
+ *   Stage C 跑真实 DSPy，缺失 `dspy-ai` extra 时 lazy import + 优雅降级。
+ *
+ * `optimizer_choice` selects which DSPy compiler to run when
+ * `optimizer === "dspy"`. Both compilers ship in the same Python MCP
+ * server; the field is ignored for `prompt_rewrite` / `noop`.
+ *
+ * `optimizer_choice` 选择 `optimizer === "dspy"` 时使用的 DSPy 编译器。
+ * 两种编译器都在同一个 Python MCP server 中提供；
+ * `prompt_rewrite` / `noop` 模式下该字段被忽略。
+ *
+ * - `mipro` (default): MIPROv2 — Bayesian search over instruction +
+ *   few-shot subsets, the DSPy 2.x flagship algorithm.
+ * - `gepa`: Genetic-Pareto — emits a Pareto frontier so
+ *   accuracy / cost trade-offs can be inspected.
  */
 export const selfEvolutionConfigSchema = z
 	.object({
 		optimizer: z
 			.enum(["noop", "prompt_rewrite", "dspy"])
 			.default("prompt_rewrite"),
+		optimizer_choice: z.enum(["mipro", "gepa"]).default("mipro"),
 	})
 	.strict()
-	.default({ optimizer: "prompt_rewrite" });
+	.default({ optimizer: "prompt_rewrite", optimizer_choice: "mipro" });
 
 // Default token budget mirrors DEFAULT_CONTEXT_BUDGET in
 // ../context/manager.ts. Keep them in sync — Phase 0 only enforces

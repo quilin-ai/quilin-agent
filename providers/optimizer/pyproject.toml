@@ -1,21 +1,26 @@
 [project]
 name = "quilin-optimizer"
-version = "0.0.1"
-description = "Quilin offline optimizer — DSPy/GEPA placeholder MCP Server (Stage A+B; real integration deferred to Stage C+)"
+version = "0.0.2"
+description = "Quilin offline optimizer — DSPy/GEPA-backed MCP server (Stage C: real integration with lazy import + graceful degrade)"
 requires-python = ">=3.14"
 dependencies = [
     "mcp[cli]>=1.27.0",
     "structlog>=25.5.0",
 ]
 
-# IMPORTANT: Stage A intentionally does NOT depend on dspy-ai.
-# Stage C will add `dspy-ai` to a `dspy` optional-dependency extra and swap the
-# placeholder `optimize` implementation in for a real prompt-optimization run.
+# IMPORTANT: dspy-ai is OPT-IN via the `dspy` extra. The default install MUST
+# NOT pull dspy-ai (heavy dep tree: torch/litellm/optuna/...). The optimizer
+# server imports `dspy` lazily inside the `optimize` tool body so a missing
+# extra produces a structured "DSPy unavailable" warning instead of an
+# import-time crash.
 #
-# 关键约束：Stage A 故意不引入 dspy-ai 依赖。
-# Stage C 才会将 `dspy-ai` 加到 `dspy` 这一可选依赖 extra 中，
-# 并把 `optimize` 占位实现替换为真实 prompt 优化逻辑。
+# 关键约束：dspy-ai 通过 `dspy` extra 选装。默认安装不拉 dspy-ai
+# （依赖树包含 torch/litellm/optuna 等重型依赖）。server 在 `optimize` 工具
+# 内部 lazy import `dspy`，缺失 extra 时产生结构化告警，不会在导入期崩溃。
 [project.optional-dependencies]
+dspy = [
+    "dspy-ai>=2.5",
+]
 dev = [
     "pytest>=9.0.3",
     "pytest-asyncio>=1.3.0",

@@ -2,6 +2,7 @@ import { logger } from "../logger.js";
 import {
 	DspyOfflineOptimizer,
 	type DspyOfflineOptimizerOptions,
+	type DspyOptimizerChoice,
 	type DspyOptimizerMCPClient,
 } from "./dspy-offline-optimizer.js";
 import { LocalNoopOfflineOptimizer } from "./offline-optimizer.js";
@@ -41,6 +42,16 @@ export interface OfflineOptimizerFactoryOptions {
 	 * `optimize_v2` 可在此修改而无需触及调用方。
 	 */
 	readonly dspyToolName?: string;
+	/**
+	 * DSPy compiler choice forwarded to the Python `optimize` tool. Only
+	 * consulted when `choice === "dspy"`. Mirrors the
+	 * `[self_evolution] optimizer_choice = "..."` user-config field.
+	 *
+	 * 转发给 Python `optimize` 工具的 DSPy 编译器选择。
+	 * 仅在 `choice === "dspy"` 时使用。
+	 * 与 `[self_evolution] optimizer_choice = "..."` 用户配置字段对齐。
+	 */
+	readonly dspyOptimizerChoice?: DspyOptimizerChoice;
 }
 
 /**
@@ -78,6 +89,9 @@ export function createOfflineOptimizer(
 				...(options.dspyToolName == null
 					? {}
 					: { toolName: options.dspyToolName }),
+				...(options.dspyOptimizerChoice == null
+					? {}
+					: { optimizerChoice: options.dspyOptimizerChoice }),
 			};
 			return new DspyOfflineOptimizer(dspyOptions);
 		}

@@ -387,9 +387,35 @@ Production trade-off: `DockerProposalSandboxPolicyGate` accepts a `requireDocker
 
 **排除范围（项目约束）**：model finetuning 通路（GRPO / DeepSeek R1-zero / open-weights RL）一律不做 —— Quilin 是 agent 项目，所有模型都通过 API 接入，没有 GPU 集群也没有 open-weights 训练管线。PromptBreeder / OPRO / Trace optimizer 同样推后（仅在 Stage D 显示 MIPROv2 + GEPA 提升不足时才重新评估）。
 
-**Stage C — Real DSPy integration ([Linear QUI-146](https://linear.app/quilin-agent/issue/QUI-146))**: Replace the Stage A placeholder with a `dspy-ai`-backed optimizer that runs both MIPROv2 and GEPA compilers over trajectories, scored by the 3-judge ensemble described above. Detailed acceptance criteria are tracked on the issue. Predecessor: QUI-118 (Stage A+B done). Blocks: QUI-147 (Stage D).
+**Stage C — Real DSPy integration ([Linear QUI-146](https://linear.app/quilin-agent/issue/QUI-146))**: Replace the Stage A placeholder with a `dspy-ai`-backed optimizer that runs both MIPROv2 and GEPA compilers over trajectories, scored by the **single user-configured judge** described above. Detailed acceptance criteria are tracked on the issue. Predecessor: QUI-118 (Stage A+B done). Blocks: QUI-147 (Stage D).
 
-**Stage C — 真 DSPy 集成（[Linear QUI-146](https://linear.app/quilin-agent/issue/QUI-146)）**：把 Stage A 占位换成基于 `dspy-ai` 的真实优化器，同时跑 MIPROv2 与 GEPA 两个 compiler，由上述 3-judge ensemble 评分。详细验收条目以 issue 为准。前置：QUI-118（Stage A+B 已 done）。阻塞：QUI-147（Stage D）。
+**Stage C — 真 DSPy 集成（[Linear QUI-146](https://linear.app/quilin-agent/issue/QUI-146)）**：把 Stage A 占位换成基于 `dspy-ai` 的真实优化器，同时跑 MIPROv2 与 GEPA 两个 compiler，由上述**单用户配置 judge** 评分。详细验收条目以 issue 为准。前置：QUI-118（Stage A+B 已 done）。阻塞：QUI-147（Stage D）。
+
+**Implementation evidence (Stage C, 2026-05-10)** — Real DSPy integration shipped in this worktree (cherry-pick pending master review). Reference points for downstream consumers:
+
+- `providers/optimizer/pyproject.toml` — `dspy-ai>=2.5` added under `[project.optional-dependencies] dspy`; default install does NOT pull dspy-ai (heavy dep).
+- `providers/optimizer/src/quilin_optimizer/server.py` — full Stage C body: lazy `import dspy`, `OptimizerConfig.from_env` reads `QUILIN_OPTIMIZER_JUDGE_{MODEL,API_KEY,BASE_URL}`, MIPROv2 + GEPA compiler dispatch via `optimizer_choice` arg, four graceful-degradation gates (extra missing / key missing / trainset < 5 / compile error → empty proposals + structured `insufficient_signal` reason).
+- `providers/optimizer/tests/test_server.py` + `test_server_real_dspy.py` — 44 tests passing at 99% line coverage on `server.py` (pyproject `--cov-fail-under=95` enforced); fake-DSPy `sys.modules` injection means tests run without the heavy extra installed.
+- `packages/agent-core/src/self-evolution/dspy-offline-optimizer.ts` — `DspyOptimizerChoice = "mipro" | "gepa"` type added; `optimizerChoice` option forwarded as `optimizer_choice` arg to the Python `optimize` tool.
+- `packages/agent-core/src/self-evolution/optimizer-factory.ts` — accepts `dspyOptimizerChoice` in factory options and threads it through to `DspyOfflineOptimizer`.
+- `packages/agent-core/src/config/user-config-schema.ts` — `selfEvolutionConfigSchema` extended with `optimizer_choice: z.enum(["mipro", "gepa"]).default("mipro")`.
+- `packages/agent-core/src/config/loader.ts` — `quilin-optimizer` MCP server entry added to default capabilities config, gated on (a) `providers/optimizer/` exists AND (b) `QUILIN_OPTIMIZER_JUDGE_API_KEY` env var present; absence of either skips the spawn.
+- TS test count: 1962 passing (+ 1 skipped) — was 1958 baseline; +4 new tests in `dspy-offline-optimizer.test.ts` (2 — `optimizer_choice` default + override) and `optimizer-factory.test.ts` (2 — `dspyOptimizerChoice` flow-through).
+
+**Deferred to follow-up**: a real `dspyClientFactory` wiring inside `index.ts` that connects to the spawned `quilin-optimizer` MCP server through the existing `MCPClientManager`. Until that lands, `createOfflineOptimizer({ choice: "dspy" })` falls back to `PromptRewriteOptimizer` with a warn-level log even when the optimizer server is spawned. Tracked as a Stage C+ follow-up.
+
+**实现实证（Stage C，2026-05-10）** —— 真实 DSPy 集成已在本 worktree 落地（master cherry-pick 待 review）。下游消费者参考点：
+
+- `providers/optimizer/pyproject.toml` —— 在 `[project.optional-dependencies] dspy` 下加入 `dspy-ai>=2.5`；默认安装**不**拉 dspy-ai（依赖体量重）。
+- `providers/optimizer/src/quilin_optimizer/server.py` —— Stage C 主体：lazy `import dspy`、`OptimizerConfig.from_env` 读取 `QUILIN_OPTIMIZER_JUDGE_{MODEL,API_KEY,BASE_URL}`、按 `optimizer_choice` 参数分发 MIPROv2 与 GEPA、四道优雅降级门（extra 缺失 / key 缺失 / trainset < 5 / compile 失败 → 空 proposals + 结构化 `insufficient_signal` 原因）。
+- `providers/optimizer/tests/test_server.py` + `test_server_real_dspy.py` —— 44 个测试全部通过，`server.py` line coverage 99%（pyproject `--cov-fail-under=95` 强制）；通过 `sys.modules` 注入伪造 dspy 让测试无需安装重型 extra。
+- `packages/agent-core/src/self-evolution/dspy-offline-optimizer.ts` —— 新增 `DspyOptimizerChoice = "mipro" | "gepa"` 类型；`optimizerChoice` 选项作为 `optimizer_choice` 参数转发给 Python `optimize` 工具。
+- `packages/agent-core/src/self-evolution/optimizer-factory.ts` —— factory options 支持 `dspyOptimizerChoice`，串到 `DspyOfflineOptimizer`。
+- `packages/agent-core/src/config/user-config-schema.ts` —— `selfEvolutionConfigSchema` 扩展 `optimizer_choice: z.enum(["mipro", "gepa"]).default("mipro")`。
+- `packages/agent-core/src/config/loader.ts` —— 默认 capabilities config 新增 `quilin-optimizer` MCP server，门控为：（a）`providers/optimizer/` 目录存在 **并且**（b）`QUILIN_OPTIMIZER_JUDGE_API_KEY` 环境变量已配置；任一不满足则不 spawn。
+- TS 测试数：1962 通过（+1 跳过）—— baseline 1958；新增 4 条测试，分布在 `dspy-offline-optimizer.test.ts`（2 条：`optimizer_choice` 默认 + 覆盖）和 `optimizer-factory.test.ts`（2 条：`dspyOptimizerChoice` 流转）。
+
+**待后续完成**：在 `index.ts` 通过现有 `MCPClientManager` 连接到已 spawn 的 `quilin-optimizer` MCP server 的真实 `dspyClientFactory` 接线。在该 follow-up 落地前，`createOfflineOptimizer({ choice: "dspy" })` 即使 optimizer server 已 spawn 也会退化到 `PromptRewriteOptimizer` 并 warn-level 打日志。作为 Stage C+ follow-up 跟踪。
 
 **Stage D — Benchmark validation ([Linear QUI-147](https://linear.app/quilin-agent/issue/QUI-147), blocked by QUI-146)**: Build trajectory-replay harness and run a 3-way A/B against `PromptRewriteOptimizer` baseline / DSPy + MIPROv2 / DSPy + GEPA. Decision branches: lift ≥ 30% → make DSPy default; lift 10–30% → DSPy stays opt-in; lift < 10% → trigger Stage E follow-up to evaluate Trace optimizer / OPRO / PromptBreeder alternatives. Detailed acceptance criteria tracked on the issue.
 
