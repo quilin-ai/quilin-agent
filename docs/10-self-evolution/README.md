@@ -429,6 +429,20 @@ Production trade-off: `DockerProposalSandboxPolicyGate` accepts a `requireDocker
 
 **为什么把 C 和 D 拆成独立 Linear issue**：Stage D 被 Stage C 阻塞（不存在的代码无法被 benchmark），但它有独立的验收证据（benchmark 数据集 + 验证报告），且数据策划那一段可以与 Stage C 工程实现并行。拆分让 Stage C 落地 cherry-pick 不必等到 benchmark 数据策划完成。
 
+**Stage D Validation Outcome (2026-05-10, mocked harness only)** — Trajectory-replay harness `packages/agent-core/src/self-evolution/replay-harness.ts` and bench script `scripts/bench-self-evolution.ts` shipped on 2026-05-10. The first end-to-end run on a synthetic 50-trajectory corpus (`docs/10-self-evolution/benchmark/trajectories.jsonl`, covering 4 `FailureCategory` types — `tool_error`, `schema_violation`, `budget_exhaustion`, `missing_evidence`, plus one `unknown`) measured a baseline `PromptRewriteOptimizer` failure rate of 26.0% and DSPy MIPROv2 / GEPA failure rates of 22.0% each, for a relative lift of 15.4%. **Important caveat**: both DSPy arms used a deterministic mock MCP client (no real `dspy-ai` install, no real LLM call). The 15.4% lift is therefore a mocked harness sanity number, not a production benchmark; it lands in the **10–30%** bucket which would keep DSPy opt-in if the lift were real. **Decision recorded as provisional** — real-LLM benchmarking against a curated production-trace corpus is the actual gate for the default-flip decision, and is deferred to a follow-up. The full report including Wilson 95% CI, ASCII chart, and per-category breakdown is at [`docs/10-self-evolution/dspy-validation-report.md`](./dspy-validation-report.md). Linear issue: [QUI-147](https://linear.app/quilin-agent/issue/QUI-147).
+
+**Stage D 验证产出（2026-05-10，仅 mock harness）** —— 轨迹回放 harness `packages/agent-core/src/self-evolution/replay-harness.ts` 与 bench 脚本 `scripts/bench-self-evolution.ts` 已于 2026-05-10 落地。在合成的 50 条轨迹语料（`docs/10-self-evolution/benchmark/trajectories.jsonl`，覆盖 4 个 `FailureCategory` —— `tool_error` / `schema_violation` / `budget_exhaustion` / `missing_evidence`，外加一条 `unknown`）上首跑 end-to-end，得到 baseline `PromptRewriteOptimizer` 失败率 26.0%，DSPy MIPROv2 与 GEPA 失败率均为 22.0%，相对 lift = 15.4%。**关键限制**：两个 DSPy arm 都用了确定性 mock MCP client（没有装真实 `dspy-ai`，也没有调用真实 LLM）。因此 15.4% lift 只是 mock harness 的接线 sanity 数字，不能视为生产级 benchmark；按 lift bucket 划分落在 **10–30%**，即"DSPy 仍 opt-in"。**决策记录为暂定** —— 在策划好的真实 prod-trace 语料上跑真实 LLM 才是默认切换决策的正式 gate，推后到 follow-up。完整报告（Wilson 95% CI、ASCII 条形图、按类别拆分）见 [`docs/10-self-evolution/dspy-validation-report.md`](./dspy-validation-report.md)。Linear issue：[QUI-147](https://linear.app/quilin-agent/issue/QUI-147)。
+
+**Next steps for Stage D follow-up / Stage D follow-up 的下一步**:
+
+1. Curate ≥ 200 real production failure trajectories (current dataset is synthetic, 50 entries). Real prod traces are needed to make lift numbers meaningful.
+2. Run the bench against a real `quilin-optimizer` MCP server connected to a real judge LLM (requires `QUILIN_OPTIMIZER_JUDGE_API_KEY` configured and `dspy-ai` installed). The Stage C+ wiring of `dspyClientFactory` in `index.ts` is the prerequisite.
+3. Re-evaluate the lift bucket against the §2.4.0.1 decision rule with real numbers and decide whether to flip DSPy default, keep opt-in, or trigger Stage E.
+
+1. 策划 ≥ 200 条真实生产失败轨迹（当前语料是合成的 50 条）。真实 prod trace 才能让 lift 数字有意义。
+2. 在真实 `quilin-optimizer` MCP server（连真实 judge LLM）上跑 bench（需要配置 `QUILIN_OPTIMIZER_JUDGE_API_KEY` 并安装 `dspy-ai`）。前置条件是 Stage C+ 把 `dspyClientFactory` 接到 `index.ts`。
+3. 用真实数字根据 §2.4.0.1 决策规则重新评估 lift bucket，决定是否把 DSPy 转默认 / 保持 opt-in / 触发 Stage E。
+
 ### 2.4.1 提案审核 REPL 命令 / Proposal Review REPL Commands
 
 The four review actions (list / approve / reject / apply) are exposed as REPL slash commands so a reviewer can drive the human-in-loop gate from the same TUI that runs the agent. Each command operates on the JSONL `proposalStore` (see `packages/agent-core/src/self-evolution/proposal-store.ts`); when the store is not configured the commands print a clear "store not configured" message instead of silently no-ops.
