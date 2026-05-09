@@ -135,7 +135,7 @@ class _Crawl4AIAdapter:
     """Default crawler that delegates to crawl4ai.AsyncWebCrawler."""
 
     def __init__(self, async_web_crawler_cls: Any) -> None:
-        self._cls = async_web_crawler_cls  # pragma: no cover -- constructed only via _default_crawler_factory
+        self._cls = async_web_crawler_cls  # pragma: no cover -- factory-only construction
 
     async def fetch(
         self,
