@@ -400,10 +400,10 @@ export function createDefaultCapabilitiesConfig(
 	// Build as a mutable Record then assign to the readonly field once
 	// — `CapabilitiesConfig["mcpServers"]` is `Readonly<Record<...>>` so
 	// direct index-write on the typed `NonNullable<...>` slot fails tsc.
-	type McpServerEntry = NonNullable<
-		CapabilitiesConfig["mcpServers"]
-	>[string];
-	const mcpServers: Record<string, McpServerEntry> = {};
+	const mcpServers: Record<
+		string,
+		NonNullable<CapabilitiesConfig["mcpServers"]>[string]
+	> = {};
 	if (existsSync(memoryProviderCwd)) {
 		mcpServers["quilin-mem"] = {
 			command: "uv",

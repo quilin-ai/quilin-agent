@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { stderr, stdin } from "node:process";
+import { stderr, stdin, stdout } from "node:process";
 import { clearScreenDown, emitKeypressEvents, moveCursor } from "node:readline";
 import * as readline from "node:readline/promises";
 import type { CapabilitiesReloadStatus } from "./config/hot-reload.js";
@@ -1710,11 +1710,12 @@ type ReasoningDisplayMode = "collapsed" | "verbose";
 interface ReplStreamRenderState {
 	thinkingShown: boolean;
 	toolInputs: Map<string, string>;
-	// Tracks whether the most recent emission to stderr was a `text`
+	// Tracks whether the most recent emission to stdout was a `text`
 	// delta (the LLM's natural-language reply). Used by the turn-end
 	// hook to ensure a trailing newline is emitted so that subsequent
 	// logger output / readline prompt does not collide with the reply's
-	// last character (QUI-141 Symptom A).
+	// last character (QUI-141 Symptom A). Reply content is on stdout
+	// (QUI-141 Symptom B); operational icons / banner stay on stderr.
 	lastTextEndedWithNewline: boolean;
 	hasEmittedText: boolean;
 }
@@ -1725,9 +1726,10 @@ interface ReplStreamRenderState {
  * tool-call round in `loop.ts:392`, plus once for the final assistant
  * message in `loop.ts:306`). If the agent emitted any `text` deltas
  * since the last finalize AND the last byte was not a newline, we write
- * one. This prevents the next stderr writer (logger, tool-call icon,
- * REPL prompt) from concatenating onto the reply's final character.
- * See QUI-141 Symptom A.
+ * one. This prevents the next stream writer (logger on stderr,
+ * tool-call icon on stderr, readline prompt on stdout) from
+ * concatenating onto the reply's final character. See QUI-141
+ * Symptom A. Reply text + trailing `\n` go to stdout (Symptom B).
  *
  * Resets the flags after firing so the NEXT round's text deltas (or
  * lack thereof, in a tool-only round) decide independently whether
@@ -1737,7 +1739,7 @@ interface ReplStreamRenderState {
  */
 function finalizeStreamRender(state: ReplStreamRenderState): void {
 	if (state.hasEmittedText && !state.lastTextEndedWithNewline) {
-		stderr.write("\n");
+		stdout.write("\n");
 	}
 	state.hasEmittedText = false;
 	state.lastTextEndedWithNewline = false;
@@ -1795,7 +1797,11 @@ function renderStreamEvent(
 ): void {
 	switch (event.type) {
 		case "text":
-			stderr.write(event.delta);
+			// Reply content goes to stdout so a downstream pipe consumer
+			// (e.g. `just dev 2>/tmp/log`) can capture the natural-language
+			// reply separate from the operational stderr surface.
+			// (QUI-141 Symptom B.)
+			stdout.write(event.delta);
 			// Only update the trailing-newline flag for non-empty deltas:
 			// some providers emit a final empty `text` delta to flush state,
 			// and `"".endsWith("\n")` is false — that would incorrectly flip
@@ -1959,7 +1965,11 @@ function renderPromptLine(line: string): string {
 }
 
 function getTerminalColumns(): number {
-	return Math.max(1, stderr.columns ?? 80);
+	// Slash-command help block + prompt are rendered on stdout (same
+	// stream as readline). Use the stdout column count so wrap math
+	// matches the actual rendering surface. Fall back to stderr.columns
+	// then 80 to retain previous behaviour when stdout is not a TTY.
+	return Math.max(1, stdout.columns ?? stderr.columns ?? 80);
 }
 
 function measureDisplayPosition(
@@ -2003,14 +2013,18 @@ function moveToBlockTop(
 	cursorPos: ReadlineDisplayPosition,
 	helpRows: number,
 ): void {
-	moveCursor(stderr, -cursorPos.cols, -(cursorPos.rows + helpRows));
+	// Cursor manipulation must target the same stream as the prompt
+	// rendering (stdout, after QUI-141 Symptom B). Otherwise the
+	// cursor moves on stderr while the visible prompt is on stdout
+	// and the help block / prompt rendering desyncs.
+	moveCursor(stdout, -cursorPos.cols, -(cursorPos.rows + helpRows));
 }
 
 function restoreCursorPosition(
 	from: ReadlineDisplayPosition,
 	to: ReadlineDisplayPosition,
 ): void {
-	moveCursor(stderr, to.cols - from.cols, to.rows - from.rows);
+	moveCursor(stdout, to.cols - from.cols, to.rows - from.rows);
 }
 
 function clearPromptBlock(
@@ -2018,7 +2032,7 @@ function clearPromptBlock(
 	helpRows: number,
 ): void {
 	moveToBlockTop(cursorPos, helpRows);
-	clearScreenDown(stderr);
+	clearScreenDown(stdout);
 }
 
 interface SlashCommandInputSnapshot {
@@ -2176,7 +2190,10 @@ function renderSlashCommandHelpBlock(
 		cols: cursorPos.cols,
 		rows: helpRows + cursorPos.rows,
 	};
-	stderr.write(fullBlockText);
+	// Prompt + slash-help block share the readline output stream
+	// (stdout) so the cursor stays in sync with the visible prompt.
+	// (QUI-141 Symptom B.)
+	stdout.write(fullBlockText);
 	restoreCursorPosition(measureDisplayPosition(fullBlockText), targetCursorPos);
 	state.renderedLine = line;
 	state.renderedCursorPos = { ...cursorPos };
@@ -2192,7 +2209,10 @@ function updateSlashCommandHelpBlock(
 		if (state.renderedLine != null) {
 			const promptText = renderPromptLine(line);
 			clearPromptBlock(cursorPos, state.renderedHelpRows);
-			stderr.write(promptText);
+			// Prompt re-render after backing out of slash mode goes to
+			// stdout (matches readline's output stream after QUI-141
+			// Symptom B).
+			stdout.write(promptText);
 			restoreCursorPosition(measureDisplayPosition(promptText), cursorPos);
 			resetSlashCommandHelpRenderState(state);
 		}
@@ -2217,7 +2237,10 @@ function installSlashCommandHelp(options: {
 		dispose: () => undefined,
 	};
 
-	if (stdin.isTTY !== true || stderr.isTTY !== true) {
+	// Slash-command help renders on stdout (matches readline's output
+	// stream after QUI-141 Symptom B). Cursor manipulation requires
+	// stdout to be a TTY; otherwise skip the live-help overlay.
+	if (stdin.isTTY !== true || stdout.isTTY !== true) {
 		return noopController;
 	}
 
@@ -2485,7 +2508,11 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 			hasTierRouting: tierRouting != null,
 		});
 
-		rl = readline.createInterface({ input: stdin, output: stderr });
+		// readline's prompt rendering and user-input echo go to stdout so
+		// the user keeps seeing the prompt even when stderr is redirected
+		// (e.g. `just dev 2>/tmp/log`). Operational surface (banner, tool
+		// icons, errors) remains on stderr. (QUI-141 Symptom B.)
+		rl = readline.createInterface({ input: stdin, output: stdout });
 		rl.on?.("line", handleLiveInputLine);
 		slashCommandHelpController = installSlashCommandHelp({
 			isActive: () => mainPromptActive,
@@ -3362,7 +3389,10 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 				messages: [...messages],
 				lastActiveAt: new Date().toISOString(),
 			});
-			stderr.write("\n");
+			// Visual gap between user input echo and the LLM reply belongs
+			// on the reply stream (stdout) — same channel as `case "text"`
+			// and the readline prompt. (QUI-141 Symptom B.)
+			stdout.write("\n");
 
 			try {
 				streamRenderState = createStreamRenderState();
@@ -3471,8 +3501,10 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 				// (called from `onAssistantMessage`) already guarantees the
 				// reply ends on `\n`. Adding `\n\n` here would produce two
 				// blank lines between the reply and the next prompt — keep
-				// just one for visual breathing room.
-				stderr.write("\n");
+				// just one for visual breathing room. Goes to stdout because
+				// it is part of the reply visual that precedes the next
+				// (stdout-rendered) readline prompt. (QUI-141 Symptom B.)
+				stdout.write("\n");
 			} catch (err) {
 				logger.error(
 					{ error: providerErrorLogFields(err) },

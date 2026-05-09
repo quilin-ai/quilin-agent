@@ -78,7 +78,10 @@ const registryServerToolsById = new Map<string, ToolWithMetadata[]>();
 const registryChangeListeners: Array<() => void> = [];
 
 function setProcessTty(
-	stream: typeof process.stdin | typeof process.stderr,
+	stream:
+		| typeof process.stdin
+		| typeof process.stderr
+		| typeof process.stdout,
 	value: boolean,
 ): () => void {
 	const descriptor = Object.getOwnPropertyDescriptor(stream, "isTTY");
@@ -513,9 +516,11 @@ describe("startRepl", () => {
 			tools: tools as never,
 		});
 
+		// readline output is now stdout so the prompt + user-input echo
+		// stays visible even when stderr is redirected (QUI-141 Symptom B).
 		expect(mockCreateInterface).toHaveBeenCalledWith({
 			input: process.stdin,
-			output: process.stderr,
+			output: process.stdout,
 		});
 		expect(mockStreamingClient).toHaveBeenCalledWith(
 			{
@@ -1502,7 +1507,11 @@ describe("startRepl", () => {
 
 	it("shows slash command help while / is typed without submitting input", async () => {
 		const restoreStdinTty = setProcessTty(process.stdin, true);
+		// Slash-help install + render now target stdout (matches readline's
+		// output stream after QUI-141 Symptom B). Both stderr (legacy) and
+		// stdout TTY flags are flipped so the install path is hit.
 		const restoreStderrTty = setProcessTty(process.stderr, true);
+		const restoreStdoutTty = setProcessTty(process.stdout, true);
 		const readlineLineAccess = vi.fn(() => {
 			throw new Error("slash command help must not read readline.line");
 		});
@@ -1545,10 +1554,13 @@ describe("startRepl", () => {
 			expect(mockQuestion).toHaveBeenCalledTimes(1);
 			expect(readlineLineAccess).not.toHaveBeenCalled();
 			expect(getCursorPos).not.toHaveBeenCalled();
-			expect(stderrWriteSpy).toHaveBeenCalledWith(
+			// Slash-help block + prompt now render on stdout (QUI-141
+			// Symptom B). Help text and prompt line are part of the
+			// readline visual surface.
+			expect(stdoutWriteSpy).toHaveBeenCalledWith(
 				expect.stringContaining("Slash commands:"),
 			);
-			expect(stderrWriteSpy).toHaveBeenCalledWith(
+			expect(stdoutWriteSpy).toHaveBeenCalledWith(
 				expect.stringContaining("quilin> /"),
 			);
 			expect(mockInteractiveInterface.prompt).not.toHaveBeenCalled();
@@ -1557,6 +1569,7 @@ describe("startRepl", () => {
 			resolvePrompt("/");
 			await replPromise;
 		} finally {
+			restoreStdoutTty();
 			restoreStderrTty();
 			restoreStdinTty();
 		}
@@ -1565,6 +1578,7 @@ describe("startRepl", () => {
 	it("filters slash command help by the typed prefix", async () => {
 		const restoreStdinTty = setProcessTty(process.stdin, true);
 		const restoreStderrTty = setProcessTty(process.stderr, true);
+		const restoreStdoutTty = setProcessTty(process.stdout, true);
 		const readlineLineAccess = vi.fn(() => {
 			throw new Error("slash command help must not read readline.line");
 		});
@@ -1608,7 +1622,8 @@ describe("startRepl", () => {
 
 			expect(readlineLineAccess).not.toHaveBeenCalled();
 			expect(getCursorPos).not.toHaveBeenCalled();
-			const writes = stderrWriteSpy.mock.calls
+			// Help block now renders on stdout (QUI-141 Symptom B).
+			const writes = stdoutWriteSpy.mock.calls
 				.map(([value]) => String(value))
 				.join("\n");
 			expect(writes).toContain("Slash commands:");
@@ -1619,6 +1634,7 @@ describe("startRepl", () => {
 			resolvePrompt("/");
 			await replPromise;
 		} finally {
+			restoreStdoutTty();
 			restoreStderrTty();
 			restoreStdinTty();
 		}
@@ -2779,7 +2795,9 @@ describe("startRepl", () => {
 			modelId: "deepseek-chat",
 		});
 
-		expect(stderrWriteSpy).toHaveBeenCalledWith("hello");
+		// Reply text deltas now go to stdout (QUI-141 Symptom B); tool
+		// icons remain on stderr (operational surface).
+		expect(stdoutWriteSpy).toHaveBeenCalledWith("hello");
 		expect(stderrWriteSpy).toHaveBeenCalledWith(
 			'\n🔧 calling lookup({"q":"cache"})\n',
 		);
