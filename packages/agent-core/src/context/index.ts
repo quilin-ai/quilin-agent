@@ -52,6 +52,7 @@ export * from "./manager.js";
 export * from "./prompt-builder.js";
 export * from "./prompt-session-assembler.js";
 export * from "./prompt-types.js";
+export * from "./relevance-selector.js";
 export * from "./skills-catalog-section.js";
 export * from "./temporal.js";
 export * from "./tokens.js";

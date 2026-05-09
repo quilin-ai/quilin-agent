@@ -1,8 +1,12 @@
 # 上下文工程（Context Engineering）
 
-> **实现状态（2026-05-08 校准）**
-> - ✅ **已实现**：PromptBuilder / PromptSessionAssembler、ContextManager、TokenBudgetAllocator、cache stability、TemporalAwareness、MemoryBridge、InjectionScanner、skills catalog/restore wiring、compression、reasoning sanitizer、Conversation Engineering 6 层架构 + 7 种风格预设（conversation-style.ts 注入 system prompt）。
-> - 🚧 **部分实现 / 延期**：完整相关性选择、token-aware compressor、runtime delta channel 仍未作为独立模块落地。
+> **实现状态（2026-05-09 校准）**
+> - ✅ **已实现**：PromptBuilder / PromptSessionAssembler、ContextManager、TokenBudgetAllocator、cache stability、TemporalAwareness、MemoryBridge、InjectionScanner、skills catalog/restore wiring、compression、reasoning sanitizer、Conversation Engineering 6 层架构 + 7 种风格预设（conversation-style.ts 注入 system prompt）、**RelevanceSelector（QUI-145）**：3 种评分策略（keyword BM25 / vector / llm_rerank）+ threshold + topK，由 [`packages/agent-core/src/context/relevance-selector.ts`](../../packages/agent-core/src/context/relevance-selector.ts) 实现，并通过 [`packages/agent-core/src/context/manager.ts`](../../packages/agent-core/src/context/manager.ts) 的 `BasicContextManager.buildContext()` 接入流水线（先相关性过滤，再优先级排序，最后 first-fit 装填）。
+> - 🚧 **部分实现 / 延期**：token-aware compressor、runtime delta channel 仍未作为独立模块落地。
+>
+> **Implementation status (2026-05-09 calibration)**
+> - ✅ **Shipped**: PromptBuilder / PromptSessionAssembler, ContextManager, TokenBudgetAllocator, cache stability, TemporalAwareness, MemoryBridge, InjectionScanner, skills catalog/restore wiring, compression, reasoning sanitizer, Conversation Engineering 6-layer architecture + 7 preset styles (`conversation-style.ts` injects system prompt), **RelevanceSelector (QUI-145)**: 3 scoring strategies (keyword BM25 / vector / llm_rerank) + threshold + topK, implemented in [`packages/agent-core/src/context/relevance-selector.ts`](../../packages/agent-core/src/context/relevance-selector.ts) and wired into the pipeline through [`packages/agent-core/src/context/manager.ts`](../../packages/agent-core/src/context/manager.ts) `BasicContextManager.buildContext()` (relevance filter → priority sort → first-fit fill).
+> - 🚧 **Partial / deferred**: token-aware compressor, runtime delta channel remain not yet landed as standalone modules.
 
 > **ADR-001 对齐说明**：核心语言已决策为 TypeScript（见 [Core Loop](../00-core-loop/README.md)）。本文档中的 Python 代码示例仅表达设计意图，实施时将以 TS 重写。`quilin/` 路径为规划参考，最终目录结构以实施时为准。
 >
@@ -115,6 +119,23 @@ Quilin Agent 的核心本质是一个**上下文工程自动化流水线**，11 
 拿到信息后判断**跟当前任务的相关性**：
 - 向量相似度、关键词匹配、LLM rerank
 - **该丢的信息比该留的重要** — 噪音会严重干扰推理质量
+
+**实现 / Implementation**（QUI-145）：[`packages/agent-core/src/context/relevance-selector.ts`](../../packages/agent-core/src/context/relevance-selector.ts) `RelevanceSelector` 类暴露 3 种可注入的评分策略——`keyword`（手写 BM25，零依赖）、`vector`（通过 quilin-mem MCP 走向量召回，不引入额外 embedding 模型）、`llm_rerank`（cross-encoder 风格的单次 LLM 评分调用，opt-in）。BasicContextManager 在 [`packages/agent-core/src/context/manager.ts`](../../packages/agent-core/src/context/manager.ts) `buildContext()` 中先调用 selector 做相关性过滤，然后才进行 priority 排序与 first-fit 装填，对应职责 2-筛选 在职责 4-排布 之前。
+
+The selector ships in [`packages/agent-core/src/context/relevance-selector.ts`](../../packages/agent-core/src/context/relevance-selector.ts) with three injectable scoring strategies: `keyword` (hand-rolled BM25, zero deps), `vector` (delegates to the existing quilin-mem MCP retriever — no new embedding model dependency), and `llm_rerank` (cross-encoder-style single LLM call, opt-in due to cost). [`BasicContextManager.buildContext()`](../../packages/agent-core/src/context/manager.ts) runs the selector before the existing priority sort and first-fit budget fill, so relevance (responsibility 2) gates arrangement (responsibility 4).
+
+**配置示例 / Config example** (`~/.quilin/config.toml`):
+
+```toml
+[context.relevance]
+threshold = 0.65        # drop sources scoring below this normalized cutoff
+rerankEnabled = false   # opt-in LLM cross-encoder pass on top of base strategy
+strategy = "keyword"    # "keyword" | "vector" | "llm_rerank"
+```
+
+调用方通过 `AgentLoopConfig.relevanceQuery` 触发筛选；当字段为 `undefined` 时 `BasicContextManager` 完全跳过相关性步骤，回退到 Phase 0 的 priority-only 行为，保证向后兼容。
+
+Callers opt in by setting `AgentLoopConfig.relevanceQuery`; when the field is `undefined`, `BasicContextManager` skips the relevance step entirely and falls back to the Phase 0 priority-only behavior — fully backward compatible.
 
 #### 3. 压缩（Compression）
 

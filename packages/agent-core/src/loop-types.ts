@@ -104,4 +104,13 @@ export interface AgentLoopConfig {
 	readonly observerUserId?: string;
 	/** Optional session identifier passed through to the observer. */
 	readonly observerSessionId?: string;
+	/**
+	 * Optional natural-language query used by `BasicContextManager` to drive
+	 * its relevance pre-filter (QUI-145). When undefined, the context manager
+	 * falls back to Phase 0 priority-only behavior — fully backward compatible.
+	 *
+	 * 当未提供时（`undefined`），ContextManager 退化为 Phase 0 的 priority-only
+	 * 行为，保持完全向后兼容。
+	 */
+	readonly relevanceQuery?: string;
 }

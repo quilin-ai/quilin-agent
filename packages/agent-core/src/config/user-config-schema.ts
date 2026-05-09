@@ -265,12 +265,41 @@ export const contextBudgetSchema = z
 	.strict()
 	.default(DEFAULT_CONTEXT_BUDGET);
 
+// Relevance selection defaults — keep in sync with
+// DEFAULT_RELEVANCE_THRESHOLD / DEFAULT_RELEVANCE_STRATEGY in
+// ../context/relevance-selector.ts. docs/02-context/README.md line 468
+// pins threshold = 0.65; rerank is opt-in because of LLM call cost.
+const DEFAULT_RELEVANCE_CONFIG = {
+	threshold: 0.65,
+	rerankEnabled: false,
+	strategy: "keyword" as const,
+};
+
+export const contextRelevanceSchema = z
+	.object({
+		threshold: z
+			.number()
+			.min(0)
+			.max(1)
+			.default(DEFAULT_RELEVANCE_CONFIG.threshold),
+		rerankEnabled: z.boolean().default(DEFAULT_RELEVANCE_CONFIG.rerankEnabled),
+		strategy: z
+			.enum(["keyword", "vector", "llm_rerank"])
+			.default(DEFAULT_RELEVANCE_CONFIG.strategy),
+	})
+	.strict()
+	.default(DEFAULT_RELEVANCE_CONFIG);
+
 export const contextConfigSchema = z
 	.object({
 		budget: contextBudgetSchema,
+		relevance: contextRelevanceSchema,
 	})
 	.strict()
-	.default({ budget: DEFAULT_CONTEXT_BUDGET });
+	.default({
+		budget: DEFAULT_CONTEXT_BUDGET,
+		relevance: DEFAULT_RELEVANCE_CONFIG,
+	});
 
 export const userConfigSchema = z
 	.object({

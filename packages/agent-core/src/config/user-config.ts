@@ -260,6 +260,9 @@ function buildSchemaTree(): SchemaTreeNode {
 		"context.budget.tools": "number",
 		"context.budget.conversation": "number",
 		"context.budget.reserved": "number",
+		"context.relevance.threshold": "number",
+		"context.relevance.rerankEnabled": "boolean",
+		"context.relevance.strategy": "string",
 	};
 
 	const root: {

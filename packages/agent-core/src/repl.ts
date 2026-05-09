@@ -2329,7 +2329,9 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 		onMcpReconnectApplied,
 		getUserConfig,
 	} = options;
-	const context = new BasicContextManager();
+	// Forward the production logger so RelevanceSelector fallback warnings
+	// (e.g. "vector strategy without retriever") surface on stdout.
+	const context = new BasicContextManager({ log: logger });
 	const resolveContextBudget = (): TokenBudget | undefined =>
 		getUserConfig?.()?.context?.budget;
 	const ownsStaticSkillsManager =

@@ -121,13 +121,25 @@ export async function runAgentLoop(
 				config.sessionAssembler == null
 			) {
 				const contextBudget = config.contextBudget ?? DEFAULT_CONTEXT_BUDGET;
+				// Pass relevanceQuery only when set so existing test fakes that
+				// assert on a strict 2-arg signature keep working.
+				const buildOptions =
+					config.relevanceQuery == null
+						? undefined
+						: { relevanceQuery: config.relevanceQuery };
 				const systemPrompt = await turnTelemetry.runStateNode(
 					"build_context",
 					async () =>
-						config.context?.buildContext(
-							[createSystemContextSource(baseSystemPrompt)],
-							contextBudget,
-						) ?? baseSystemPrompt,
+						(buildOptions == null
+							? config.context?.buildContext(
+									[createSystemContextSource(baseSystemPrompt)],
+									contextBudget,
+								)
+							: config.context?.buildContext(
+									[createSystemContextSource(baseSystemPrompt)],
+									contextBudget,
+									buildOptions,
+								)) ?? baseSystemPrompt,
 				);
 				workingMessages[0] = { role: "system", content: systemPrompt };
 			}
