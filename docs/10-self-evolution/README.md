@@ -375,31 +375,13 @@ Production trade-off: `DockerProposalSandboxPolicyGate` accepts a `requireDocker
 
 **决策：直接做真 DSPy + benchmark，不走 Phase 0.5 跳板**。在权衡之后 ——（a）DSPy 是 4+ 年的 Stanford NLP 优化器研究，BootstrapFewShot + MIPROv2 是 prompt + few-shot 搜索的当前 SOTA；（b）Stage A 骨架本就为 DSPy 设计；（c）项目偏向"最强可行方案"而非分阶段实验 —— 下一轮迭代在 `providers/optimizer/` 安装真 DSPy，并接入 LLM-judge 评分通路。我们刻意拒绝了"Phase 0.5（先 TS 自研 LLM 优化器验证假设）→ Stage C（按证据再上 DSPy）"的路线，因为用户优先选择"最高上限"而非"最快验证"；由此带来的风险（Python 依赖体量、跨语言协作开销）已被接受。
 
-**Optimizer scope** — within DSPy 2.5+, ship both `MIPROv2` (Bayesian search over instruction + few-shot subsets, the DSPy 2.x flagship) and `GEPA` (Genetic-Pareto, available as `dspy.GEPA` since 2.5; emits a Pareto frontier so accuracy / cost trade-offs can be inspected). LLM-judge ensemble = up to 3 distinct judge models (default candidate list: deepseek-v4-flash / gpt-4o-mini / claude-haiku-4-5) with majority vote, to dampen single-judge scoring variance which is GEPA's known weak spot. All judges accessed through Vercel AI SDK on the TS side via callback hook — no provider hardcoded in Python.
+**Optimizer scope** — within DSPy 2.5+, ship both `MIPROv2` (Bayesian search over instruction + few-shot subsets, the DSPy 2.x flagship) and `GEPA` (Genetic-Pareto, available as `dspy.GEPA` since 2.5; emits a Pareto frontier so accuracy / cost trade-offs can be inspected). Both compilers use DSPy's default single-judge scoring path: one user-configured judge LLM (default = user's primary LLM via Vercel AI SDK). **Multi-judge ensemble is intentionally deferred** — Stage C ships single-judge first to keep the implementation small enough for one user-key path; if Stage D's benchmark shows GEPA's known single-judge variance hurts lift, ensemble is revisited in Stage E together with Trace optimizer evaluation.
 
-**Optimizer 范围** —— 在 DSPy 2.5+ 框架内同时接入 `MIPROv2`（在 instruction + few-shot 子集两维上跑 Bayesian 搜索，DSPy 2.x 旗舰算法）与 `GEPA`（Genetic-Pareto，DSPy 2.5+ 已内置 `dspy.GEPA`；输出 Pareto 前沿，可以看到 accuracy / cost 的权衡）。LLM-judge ensemble = 至多 3 个不同 judge 模型（默认候选 deepseek-v4-flash / gpt-4o-mini / claude-haiku-4-5）的 majority vote，专门抵消 GEPA 已知弱点：单 judge 评分方差大。Judge 全部通过 TS 侧的 Vercel AI SDK callback hook 调用 —— Python 端不硬编码任何 provider。
+**Optimizer 范围** —— 在 DSPy 2.5+ 框架内同时接入 `MIPROv2`（在 instruction + few-shot 子集两维上跑 Bayesian 搜索，DSPy 2.x 旗舰算法）与 `GEPA`（Genetic-Pareto，DSPy 2.5+ 已内置 `dspy.GEPA`；输出 Pareto 前沿，可以看到 accuracy / cost 的权衡）。两个 compiler 都走 DSPy 的默认单 judge 评分路径：一个用户配置的 judge LLM（默认 = 用户主 LLM，经 Vercel AI SDK 调用）。**Multi-judge ensemble 刻意推后** —— Stage C 先做单 judge 版，让实现规模适配单 user-key 用户；如果 Stage D 的 benchmark 显示 GEPA 已知的单 judge 方差伤到 lift，再在 Stage E 与 Trace optimizer 评估一起重启 ensemble。
 
-**Graceful degradation when fewer providers are available** — most users have only one or two LLM API keys. The optimizer probes available keys at startup (env vars + `self_evolution.judges` user-config override) and adapts:
+**单 judge 即可用 / Single judge keeps it usable**: only one LLM provider key is required. If no key is configured, the optimizer is disabled and `IdleEvolutionRunner` falls back to the `PromptRewriteOptimizer` baseline with a warn-level log.
 
-| Available judges | Mode | Variance reduction |
-|---|---|---|
-| 3 distinct providers | Full multi-model ensemble — majority vote across 3 models | Best (eliminates both single-call noise and per-model bias) |
-| 2 distinct providers | 2-judge with strict-agreement / low-confidence skip | Good |
-| 1 provider | **Multi-temperature single-model ensemble** — same model sampled 3× at temperatures `[0.0, 0.3, 0.6]`, scores averaged | Reduces ~40% of scoring variance per Self-Consistency (Wang et al. 2023) — weaker than multi-provider but still meaningful |
-| 0 LLM keys | Optimizer disabled — `IdleEvolutionRunner` falls back to `PromptRewriteOptimizer` baseline + warn | No optimization |
-
-This means **users with a single API key still get a usable DSPy + ensemble**, just on the multi-temperature path. The optimizer logs the active mode at info-level on startup (no API key leakage). Users who want the strongest ceiling can opt into 2 or 3 providers via `self_evolution.judges`.
-
-**少 provider 的优雅降级** —— 多数用户只有一两个 LLM API key。optimizer 启动时探测可用 key（环境变量 + `self_evolution.judges` 用户配置覆盖），按可用情况自适应：
-
-| 可用 judge | 模式 | 方差降低效果 |
-|---|---|---|
-| 3 个不同 provider | 完整多模型 ensemble —— 3 模型 majority vote | 最佳（同时消除单次调用噪声与单模型偏见）|
-| 2 个不同 provider | 2-judge + 严格一致 / 低 confidence 跳过 | 良好 |
-| 1 个 provider | **同模型多温度 ensemble** —— 同一模型按 `[0.0, 0.3, 0.6]` 温度采样 3 次，分数取均值 | 按 Self-Consistency 论文（Wang et al. 2023）降约 40% 评分方差 —— 比多 provider 弱但仍有意义 |
-| 0 个 LLM key | optimizer 禁用 —— `IdleEvolutionRunner` 回退到 `PromptRewriteOptimizer` 基线 + warn | 无优化 |
-
-这意味着**单 API key 用户仍能用上 DSPy + ensemble**，只是走多温度路径。optimizer 启动时按 info-level 打印当前模式（不泄漏 API key）。想要最强上限的用户可在 `self_evolution.judges` 中显式配置 2-3 个 provider。
+**单 judge 即可用**：用户只需配置任意一个 LLM provider key 即可使用。如果没有可用 key，optimizer 自动禁用，`IdleEvolutionRunner` 回退到 `PromptRewriteOptimizer` 基线并 warn-level 打日志。
 
 **Excluded from scope (项目约束 / project constraint)**: model finetuning paths (GRPO / DeepSeek R1-zero / open-weights RL) are off-limits — Quilin is an agent project that consumes models through API only, with no GPU cluster or open-weights training pipeline. PromptBreeder / OPRO / Trace optimizer also deferred (only revisited if Stage D shows MIPROv2 + GEPA lift insufficient).
 
