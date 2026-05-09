@@ -365,6 +365,62 @@ Round-2 hardening (QUI-97, 2026-05-09): `scaffold_patch` proposals **must** pass
 
 Production trade-off: `DockerProposalSandboxPolicyGate` accepts a `requireDocker?: boolean` option. `true` (recommended for production) → `deny` whenever Docker is unreachable, hard-failing scaffold-patch apply if the container runtime is missing; `false` (default) → `native + warning` fallback, friendlier for local dev / tests. Every gate decision (including `no_gate` and `probe_error`) emits a `proposal.sandbox_decision` agent-run event for audit.
 
+### 2.4.0.1 Phase 1+ 决策：DSPy 路径 / Phase 1+ Decision: DSPy Path
+
+**Status (2026-05-09)**: Stage A (`providers/optimizer/` Python MCP server skeleton) and Stage B/B+ (`DspyOfflineOptimizer` + IoC factory + `self_evolution.optimizer` config) are sealed at master commits `7dc076c` and `70eba77` (QUI-118 closed Done). The DSPy path is **placeholder-only** — `providers/optimizer/src/quilin_optimizer/server.py` returns deterministic stub proposals; no `dspy-ai` dependency is imported.
+
+**状态（2026-05-09）**：Stage A（`providers/optimizer/` Python MCP server 骨架）和 Stage B/B+（`DspyOfflineOptimizer` + IoC factory + `self_evolution.optimizer` 配置）已封存于 master 提交 `7dc076c` 和 `70eba77`（QUI-118 已 Done）。DSPy 通路目前仅是 **占位实现** —— `providers/optimizer/src/quilin_optimizer/server.py` 返回确定性 stub 提案，没有引入 `dspy-ai` 依赖。
+
+**Decision: go straight to real DSPy + benchmark, not Phase 0.5 stepping-stone.** After weighing the trade-offs — (a) DSPy ($\geq 4$ years of Stanford NLP optimizer research, BootstrapFewShot + MIPROv2 are SOTA for prompt + few-shot search), (b) Stage A scaffolding already shaped for DSPy, (c) project preference for the strongest practical solution over staged experimentation — the next iteration installs real DSPy in `providers/optimizer/` with an LLM-judge scoring path. We deliberately reject the "Phase 0.5 (LLM-driven TS optimizer first, validate hypothesis) → Stage C (DSPy after evidence)" route because the user has prioritized maximum ceiling over fastest validation; the resulting risk (Python dependency weight, cross-language coordination) is accepted.
+
+**决策：直接做真 DSPy + benchmark，不走 Phase 0.5 跳板**。在权衡之后 ——（a）DSPy 是 4+ 年的 Stanford NLP 优化器研究，BootstrapFewShot + MIPROv2 是 prompt + few-shot 搜索的当前 SOTA；（b）Stage A 骨架本就为 DSPy 设计；（c）项目偏向"最强可行方案"而非分阶段实验 —— 下一轮迭代在 `providers/optimizer/` 安装真 DSPy，并接入 LLM-judge 评分通路。我们刻意拒绝了"Phase 0.5（先 TS 自研 LLM 优化器验证假设）→ Stage C（按证据再上 DSPy）"的路线，因为用户优先选择"最高上限"而非"最快验证"；由此带来的风险（Python 依赖体量、跨语言协作开销）已被接受。
+
+**Optimizer scope** — within DSPy 2.5+, ship both `MIPROv2` (Bayesian search over instruction + few-shot subsets, the DSPy 2.x flagship) and `GEPA` (Genetic-Pareto, available as `dspy.GEPA` since 2.5; emits a Pareto frontier so accuracy / cost trade-offs can be inspected). LLM-judge ensemble = up to 3 distinct judge models (default candidate list: deepseek-v4-flash / gpt-4o-mini / claude-haiku-4-5) with majority vote, to dampen single-judge scoring variance which is GEPA's known weak spot. All judges accessed through Vercel AI SDK on the TS side via callback hook — no provider hardcoded in Python.
+
+**Optimizer 范围** —— 在 DSPy 2.5+ 框架内同时接入 `MIPROv2`（在 instruction + few-shot 子集两维上跑 Bayesian 搜索，DSPy 2.x 旗舰算法）与 `GEPA`（Genetic-Pareto，DSPy 2.5+ 已内置 `dspy.GEPA`；输出 Pareto 前沿，可以看到 accuracy / cost 的权衡）。LLM-judge ensemble = 至多 3 个不同 judge 模型（默认候选 deepseek-v4-flash / gpt-4o-mini / claude-haiku-4-5）的 majority vote，专门抵消 GEPA 已知弱点：单 judge 评分方差大。Judge 全部通过 TS 侧的 Vercel AI SDK callback hook 调用 —— Python 端不硬编码任何 provider。
+
+**Graceful degradation when fewer providers are available** — most users have only one or two LLM API keys. The optimizer probes available keys at startup (env vars + `self_evolution.judges` user-config override) and adapts:
+
+| Available judges | Mode | Variance reduction |
+|---|---|---|
+| 3 distinct providers | Full multi-model ensemble — majority vote across 3 models | Best (eliminates both single-call noise and per-model bias) |
+| 2 distinct providers | 2-judge with strict-agreement / low-confidence skip | Good |
+| 1 provider | **Multi-temperature single-model ensemble** — same model sampled 3× at temperatures `[0.0, 0.3, 0.6]`, scores averaged | Reduces ~40% of scoring variance per Self-Consistency (Wang et al. 2023) — weaker than multi-provider but still meaningful |
+| 0 LLM keys | Optimizer disabled — `IdleEvolutionRunner` falls back to `PromptRewriteOptimizer` baseline + warn | No optimization |
+
+This means **users with a single API key still get a usable DSPy + ensemble**, just on the multi-temperature path. The optimizer logs the active mode at info-level on startup (no API key leakage). Users who want the strongest ceiling can opt into 2 or 3 providers via `self_evolution.judges`.
+
+**少 provider 的优雅降级** —— 多数用户只有一两个 LLM API key。optimizer 启动时探测可用 key（环境变量 + `self_evolution.judges` 用户配置覆盖），按可用情况自适应：
+
+| 可用 judge | 模式 | 方差降低效果 |
+|---|---|---|
+| 3 个不同 provider | 完整多模型 ensemble —— 3 模型 majority vote | 最佳（同时消除单次调用噪声与单模型偏见）|
+| 2 个不同 provider | 2-judge + 严格一致 / 低 confidence 跳过 | 良好 |
+| 1 个 provider | **同模型多温度 ensemble** —— 同一模型按 `[0.0, 0.3, 0.6]` 温度采样 3 次，分数取均值 | 按 Self-Consistency 论文（Wang et al. 2023）降约 40% 评分方差 —— 比多 provider 弱但仍有意义 |
+| 0 个 LLM key | optimizer 禁用 —— `IdleEvolutionRunner` 回退到 `PromptRewriteOptimizer` 基线 + warn | 无优化 |
+
+这意味着**单 API key 用户仍能用上 DSPy + ensemble**，只是走多温度路径。optimizer 启动时按 info-level 打印当前模式（不泄漏 API key）。想要最强上限的用户可在 `self_evolution.judges` 中显式配置 2-3 个 provider。
+
+**Excluded from scope (项目约束 / project constraint)**: model finetuning paths (GRPO / DeepSeek R1-zero / open-weights RL) are off-limits — Quilin is an agent project that consumes models through API only, with no GPU cluster or open-weights training pipeline. PromptBreeder / OPRO / Trace optimizer also deferred (only revisited if Stage D shows MIPROv2 + GEPA lift insufficient).
+
+**排除范围（项目约束）**：model finetuning 通路（GRPO / DeepSeek R1-zero / open-weights RL）一律不做 —— Quilin 是 agent 项目，所有模型都通过 API 接入，没有 GPU 集群也没有 open-weights 训练管线。PromptBreeder / OPRO / Trace optimizer 同样推后（仅在 Stage D 显示 MIPROv2 + GEPA 提升不足时才重新评估）。
+
+**Stage C — Real DSPy integration ([Linear QUI-146](https://linear.app/quilin-agent/issue/QUI-146))**: Replace the Stage A placeholder with a `dspy-ai`-backed optimizer that runs both MIPROv2 and GEPA compilers over trajectories, scored by the 3-judge ensemble described above. Detailed acceptance criteria are tracked on the issue. Predecessor: QUI-118 (Stage A+B done). Blocks: QUI-147 (Stage D).
+
+**Stage C — 真 DSPy 集成（[Linear QUI-146](https://linear.app/quilin-agent/issue/QUI-146)）**：把 Stage A 占位换成基于 `dspy-ai` 的真实优化器，同时跑 MIPROv2 与 GEPA 两个 compiler，由上述 3-judge ensemble 评分。详细验收条目以 issue 为准。前置：QUI-118（Stage A+B 已 done）。阻塞：QUI-147（Stage D）。
+
+**Stage D — Benchmark validation ([Linear QUI-147](https://linear.app/quilin-agent/issue/QUI-147), blocked by QUI-146)**: Build trajectory-replay harness and run a 3-way A/B against `PromptRewriteOptimizer` baseline / DSPy + MIPROv2 / DSPy + GEPA. Decision branches: lift ≥ 30% → make DSPy default; lift 10–30% → DSPy stays opt-in; lift < 10% → trigger Stage E follow-up to evaluate Trace optimizer / OPRO / PromptBreeder alternatives. Detailed acceptance criteria tracked on the issue.
+
+**Stage D — Benchmark 验证（[Linear QUI-147](https://linear.app/quilin-agent/issue/QUI-147)，blocked by QUI-146）**：建立 trajectory-replay 框架并跑 3-way A/B：`PromptRewriteOptimizer` 基线 / DSPy + MIPROv2 / DSPy + GEPA。决策分支：lift ≥ 30% → DSPy 转默认；lift 10–30% → DSPy 仍 opt-in；lift < 10% → 触发 Stage E follow-up 评估 Trace optimizer / OPRO / PromptBreeder 等替代算法。详细验收以 issue 为准。
+
+**Stage E (conditional, not pre-created)**: only kicked off if Stage D shows MIPROv2 + GEPA lift insufficient. Will evaluate Trace optimizer (UCSD 2024, multi-step trace-level feedback — agent-flow-friendly but unverified), OPRO (Google 2023, simpler LLM-as-optimizer), or PromptBreeder (DeepMind 2023, self-referential mutation operators). Per Linear free-plan budget discipline, this issue is not pre-created.
+
+**Stage E（条件触发，未预创建）**：仅当 Stage D 显示 MIPROv2 + GEPA 提升不够时才启动。届时评估 Trace optimizer（UCSD 2024，多步 trace-level 反馈 —— 对 agent flow 友好但未广泛验证）、OPRO（Google 2023，更简单的 LLM-as-optimizer）或 PromptBreeder（DeepMind 2023，自指 mutation 算子）。按 Linear 免费额度纪律，本 issue 暂不预创建。
+
+**Why split C and D into separate Linear issues**: Stage D is blocked by Stage C (you can't benchmark code that doesn't exist), but it has independent acceptance evidence (benchmark dataset + validation report) and can run in parallel with Stage C development for the dataset-curation slice. The split lets Stage C land + cherry-pick before benchmark data is fully curated.
+
+**为什么把 C 和 D 拆成独立 Linear issue**：Stage D 被 Stage C 阻塞（不存在的代码无法被 benchmark），但它有独立的验收证据（benchmark 数据集 + 验证报告），且数据策划那一段可以与 Stage C 工程实现并行。拆分让 Stage C 落地 cherry-pick 不必等到 benchmark 数据策划完成。
+
 ### 2.4.1 提案审核 REPL 命令 / Proposal Review REPL Commands
 
 The four review actions (list / approve / reject / apply) are exposed as REPL slash commands so a reviewer can drive the human-in-loop gate from the same TUI that runs the agent. Each command operates on the JSONL `proposalStore` (see `packages/agent-core/src/self-evolution/proposal-store.ts`); when the store is not configured the commands print a clear "store not configured" message instead of silently no-ops.
