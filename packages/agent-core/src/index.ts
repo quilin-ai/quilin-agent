@@ -12,11 +12,11 @@ import {
 	type CapabilitiesHotReloadEvent,
 	createCapabilitiesHotReloadController,
 } from "./config/hot-reload.js";
-// startQuilinMemMcp / startQuilinWebMcp import removed — MCPRegistry
-// already spawns these servers from the default capabilities config
-// (loader.ts). The mcp-launcher.ts module is retained for tests and
-// potential future service-mode use, but its REPL-mode invocation was
-// double-spawning every server.
+// MCPRegistry spawns quilin-mem / quilin-web servers automatically
+// from the default capabilities config (loader.ts) via
+// StdioClientTransport. The previous mcp-launcher.ts module was
+// removed in 2026-05-09 (QUI-144 S-2) after the QUI-142 fix proved
+// it was redundant and double-spawning every server.
 import { ensureMemoryBackend } from "./config/memory-setup.js";
 import {
 	bootstrapUserRuntime,
@@ -712,12 +712,9 @@ export async function main(options: MainOptions = {}): Promise<void> {
 	// Guard against test-mode runs so index.test.ts call-index assertions stay stable.
 	if (process.env.NODE_ENV !== "test") {
 		ensureMemoryBackend();
-		// NOTE: explicit startQuilinMemMcp / startQuilinWebMcp removed —
-		// MCPRegistry already spawns these servers automatically via
-		// StdioClientTransport when it reads them from the default
-		// capabilities config (loader.ts). Calling them here was
-		// double-spawning every MCP server (4 Python children instead
-		// of 2). See docs/05-tool/README.md for the trajectory.
+		// MCPRegistry spawns the configured servers (quilin-mem,
+		// quilin-web) from loader.ts defaults via StdioClientTransport.
+		// See docs/05-tool/README.md for the QUI-142 / QUI-144 trajectory.
 	}
 
 	const envTrustMode = process.env.QUILIN_TRUST_MODE;
