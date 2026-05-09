@@ -66,6 +66,10 @@ import type {
 	ProposalApplyOutcome,
 	ProposalApplyResult,
 } from "./self-evolution/proposal-store.js";
+import {
+	createDockerProposalSandboxPolicyGate,
+	type ProposalSandboxPolicyGate,
+} from "./self-evolution/sandbox-policy-gate.js";
 import type { JsonlTrajectoryStore } from "./self-evolution/trajectory-store.js";
 import type {
 	StoredProposalRecord,
@@ -215,6 +219,20 @@ interface ReplOptions {
 	// 自进化提案审核存储。提供后，REPL 暴露上述 slash 命令，
 	// 让用户能在终端查看 pending 提案、approve/reject、并触发 apply。
 	proposalStore?: JsonlProposalStore;
+	/**
+	 * Sandbox policy gate consulted by `/proposal-apply` before scaffold-patch
+	 * applies (round-2 cross-review fix QUI-97). The REPL passes this gate to
+	 * `JsonlProposalStore.applyApproved`; when omitted, the default
+	 * `DockerProposalSandboxPolicyGate` is used so scaffold_patch applies are
+	 * never silently bypassed (07 §2.6.5). Tests / embedders that want to
+	 * keep the legacy "no gate" behavior on artifact-only proposals can pass
+	 * a no-op gate.
+	 *
+	 * sandbox 策略闸门：`/proposal-apply` 在 scaffold patch apply 之前咨询此
+	 * 闸门（QUI-97 round-2 修复）。未提供时使用默认 Docker gate，避免静默
+	 * 绕过沙箱（07 §2.6.5）。
+	 */
+	proposalSandboxPolicyGate?: ProposalSandboxPolicyGate;
 	/**
 	 * Optional hook fired once the REPL has constructed its `WriteAuthority`
 	 * gate. Lets the embedder bind the live authority to dependencies that
@@ -2277,6 +2295,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 		trajectoryStore,
 		onIdle,
 		proposalStore,
+		proposalSandboxPolicyGate,
 		onWriteAuthorityReady,
 		onRuntimeReady,
 		onProviderRunRecord,
@@ -3099,9 +3118,21 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 					continue;
 				}
 				try {
+					// Resolve the sandbox gate per QUI-97 round-2: scaffold_patch
+					// proposals require an explicit gate, so the REPL falls back
+					// to the default Docker gate when the embedder did not pass
+					// one. Embedders that want stricter behavior (require Docker)
+					// can supply their own gate via `proposalSandboxPolicyGate`.
+					// 解析 sandbox gate（QUI-97 round-2）：未注入时回退到默认
+					// Docker gate，避免 scaffold_patch 被静默 deny。
+					const sandboxGate =
+						proposalSandboxPolicyGate ??
+						createDockerProposalSandboxPolicyGate();
 					const result = await proposalStore.applyApproved(writeAuthority, {
 						origin: "user",
 						reviewer: "repl-user",
+						sandboxPolicyGate: sandboxGate,
+						runLogger,
 					});
 					const totalOutcomes =
 						result.applied.length +

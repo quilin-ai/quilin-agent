@@ -1298,6 +1298,20 @@ describe("JsonlProposalStore", () => {
 			});
 		}
 
+		// Test-only no-op gate: round-2 cross-review (QUI-97) requires
+		// scaffold_patch applies to pass through a SandboxPolicyGate, but
+		// these existing tests are exercising orthogonal apply concerns
+		// (WriteAuthority, applier errors, multi-record sequencing) and
+		// don't need full Docker probe behavior. The no-op gate returns
+		// the same `native + ""` decision a non-scaffold proposal would
+		// produce, keeping behavior backward-compatible for the caller.
+		// 测试用 no-op gate：让原有测试聚焦于 WriteAuthority / applier 错误 /
+		// 串行处理等关注点，绕过 round-2 强制的"scaffold_patch 必须有 gate"
+		// 检查（行为等价于无 sandbox 隔离的 native 返回）。
+		const noopSandboxGate: ProposalSandboxPolicyGate = {
+			decide: async () => ({ kind: "native", warning: "" }),
+		};
+
 		it("authorizes an approved proposal via WriteAuthority and transitions to applied", async () => {
 			const filePath = path.join(tmpDir, "apply-success.jsonl");
 			const store = new JsonlProposalStore({
@@ -1321,6 +1335,7 @@ describe("JsonlProposalStore", () => {
 				origin: "agent",
 				reviewer: "Apply Bot",
 				applier,
+				sandboxPolicyGate: noopSandboxGate,
 			});
 
 			expect(result.applied).toHaveLength(1);
@@ -1405,7 +1420,9 @@ describe("JsonlProposalStore", () => {
 				confirm: async () => true,
 			});
 
-			const result = await store.applyApproved(authority);
+			const result = await store.applyApproved(authority, {
+				sandboxPolicyGate: noopSandboxGate,
+			});
 
 			expect(result.applied).toEqual([]);
 			expect(result.skipped).toEqual([]);
@@ -1439,7 +1456,10 @@ describe("JsonlProposalStore", () => {
 				throw new Error("disk full");
 			});
 
-			const result = await store.applyApproved(authority, { applier });
+			const result = await store.applyApproved(authority, {
+				applier,
+				sandboxPolicyGate: noopSandboxGate,
+			});
 
 			expect(result.applied).toEqual([]);
 			expect(result.skipped).toEqual([]);
@@ -1514,7 +1534,10 @@ describe("JsonlProposalStore", () => {
 				confirm: async () => true,
 			});
 
-			const result = await store.applyApproved(authority, { applier });
+			const result = await store.applyApproved(authority, {
+				applier,
+				sandboxPolicyGate: noopSandboxGate,
+			});
 
 			expect(seenIds).toEqual([
 				first.proposalId,
@@ -1921,6 +1944,239 @@ describe("JsonlProposalStore", () => {
 
 				const fetched = await store.getById(approved.proposalId);
 				expect(fetched?.status).toBe("applied");
+			});
+
+			// HIGH-1 (round-2 cross-review): caller must pass sandboxPolicyGate
+			// for scaffold_patch proposals — silently bypassing sandbox
+			// enforcement is forbidden by 07 §2.6.5.
+			it("denies scaffold_patch apply with sandbox_gate_missing when no gate is provided", async () => {
+				const denyFilePath = path.join(
+					tmpDir,
+					"apply-sandbox-gate-missing.jsonl",
+				);
+				const store = new JsonlProposalStore({
+					filePath: denyFilePath,
+					now: () => new Date("2026-05-02T02:00:00.000Z"),
+				});
+				const approved = await appendApprovedProposal(
+					store,
+					patchProposalInput(),
+				);
+
+				const authority = new WriteAuthority({
+					mode: "ask",
+					confirm: async () => true,
+				});
+				const applier = vi.fn(
+					async (
+						_record: StoredProposalRecord,
+						_context?: ProposalPatchApplierContext,
+					) => undefined,
+				);
+
+				const result = await store.applyApproved(authority, {
+					applier,
+					// sandboxPolicyGate intentionally omitted — fix must deny.
+				});
+
+				expect(result.applied).toEqual([]);
+				expect(result.failed).toEqual([]);
+				expect(result.skipped).toHaveLength(1);
+				expect(result.skipped[0]).toMatchObject({
+					proposalId: approved.proposalId,
+					status: "skipped",
+					reasonCode: "sandbox_gate_missing",
+				});
+				expect(result.skipped[0]?.reason).toMatch(/sandboxPolicyGate/u);
+				expect(applier).not.toHaveBeenCalled();
+
+				// State remains "approved" — denied apply must not transition.
+				const fetched = await store.getById(approved.proposalId);
+				expect(fetched?.status).toBe("approved");
+			});
+
+			// HIGH-1 negative case: artifact-only proposals keep the legacy
+			// optional-gate behavior (we can't break existing call sites).
+			it("still applies artifact-only proposals without a sandbox gate", async () => {
+				const store = new JsonlProposalStore({
+					filePath: path.join(
+						tmpDir,
+						"apply-artifact-only-no-gate.jsonl",
+					),
+					now: () => new Date("2026-05-02T02:00:00.000Z"),
+				});
+				await appendApprovedProposal(store, proposal());
+
+				const authority = new WriteAuthority({
+					mode: "ask",
+					confirm: async () => true,
+				});
+				const applier = vi.fn(
+					async (
+						_record: StoredProposalRecord,
+						_context?: ProposalPatchApplierContext,
+					) => undefined,
+				);
+
+				const result = await store.applyApproved(authority, {
+					applier,
+				});
+
+				expect(result.applied).toHaveLength(1);
+				expect(result.skipped).toEqual([]);
+				expect(applier).toHaveBeenCalledTimes(1);
+				// No sandbox context when no gate was supplied for artifact-only.
+				const passedContext = applier.mock.calls[0]?.[1];
+				expect(passedContext).toBeUndefined();
+			});
+
+			// MEDIUM-6 (round-2 cross-review): all five gate paths must emit a
+			// `proposal.sandbox_decision` agent-run event so the audit trail
+			// distinguishes docker / native / deny / probe_error / no_gate.
+			it("emits proposal.sandbox_decision telemetry for all five gate paths", async () => {
+				type Recorded = {
+					readonly phase: string;
+					readonly payload?: Record<string, unknown>;
+				};
+				const collected: Recorded[] = [];
+				const sink = {
+					record: async (input: {
+						phase: string;
+						payload?: Record<string, unknown>;
+					}) => {
+						collected.push({ phase: input.phase, payload: input.payload });
+					},
+				};
+
+				const authority = new WriteAuthority({
+					mode: "ask",
+					confirm: async () => true,
+				});
+
+				// Path 1: docker
+				{
+					const store = new JsonlProposalStore({
+						filePath: path.join(tmpDir, "telemetry-docker.jsonl"),
+						now: () => new Date("2026-05-02T02:00:00.000Z"),
+					});
+					await appendApprovedProposal(store, patchProposalInput());
+					const gate = new DockerProposalSandboxPolicyGate({
+						isDockerAvailable: async () => true,
+					});
+					await store.applyApproved(authority, {
+						applier: async () => undefined,
+						sandboxPolicyGate: gate,
+						runLogger: sink,
+					});
+				}
+
+				// Path 2: native (Docker unavailable, requireDocker=false default)
+				{
+					const store = new JsonlProposalStore({
+						filePath: path.join(tmpDir, "telemetry-native.jsonl"),
+						now: () => new Date("2026-05-02T02:00:00.000Z"),
+					});
+					await appendApprovedProposal(store, patchProposalInput());
+					const gate = new DockerProposalSandboxPolicyGate({
+						isDockerAvailable: async () => false,
+					});
+					await store.applyApproved(authority, {
+						applier: async () => undefined,
+						sandboxPolicyGate: gate,
+						runLogger: sink,
+					});
+				}
+
+				// Path 3: deny (explicit policy override)
+				{
+					const store = new JsonlProposalStore({
+						filePath: path.join(tmpDir, "telemetry-deny.jsonl"),
+						now: () => new Date("2026-05-02T02:00:00.000Z"),
+					});
+					await appendApprovedProposal(store, patchProposalInput());
+					const gate: ProposalSandboxPolicyGate = {
+						decide: async () => ({
+							kind: "deny",
+							reason: "ci-maintenance window",
+						}),
+					};
+					await store.applyApproved(authority, {
+						applier: async () => undefined,
+						sandboxPolicyGate: gate,
+						runLogger: sink,
+					});
+				}
+
+				// Path 4: probe_error (gate's deny reason flags probe failure)
+				{
+					const store = new JsonlProposalStore({
+						filePath: path.join(tmpDir, "telemetry-probe.jsonl"),
+						now: () => new Date("2026-05-02T02:00:00.000Z"),
+					});
+					await appendApprovedProposal(store, patchProposalInput());
+					const gate = new DockerProposalSandboxPolicyGate({
+						isDockerAvailable: async () => {
+							throw new Error("docker socket missing");
+						},
+					});
+					await store.applyApproved(authority, {
+						applier: async () => undefined,
+						sandboxPolicyGate: gate,
+						runLogger: sink,
+					});
+				}
+
+				// Path 5: no_gate (caller omitted gate for scaffold_patch)
+				{
+					const store = new JsonlProposalStore({
+						filePath: path.join(tmpDir, "telemetry-no-gate.jsonl"),
+						now: () => new Date("2026-05-02T02:00:00.000Z"),
+					});
+					await appendApprovedProposal(store, patchProposalInput());
+					await store.applyApproved(authority, {
+						applier: async () => undefined,
+						runLogger: sink,
+					});
+				}
+
+				const sandboxDecisions = collected.filter(
+					(entry) => entry.phase === "proposal.sandbox_decision",
+				);
+				const kinds = sandboxDecisions
+					.map((entry) => String(entry.payload?.kind))
+					.sort();
+				expect(kinds).toEqual(
+					["deny", "docker", "native", "no_gate", "probe_error"].sort(),
+				);
+
+				// docker payload carries proposalKind but no warning/reason.
+				const dockerPayload = sandboxDecisions.find(
+					(entry) => entry.payload?.kind === "docker",
+				)?.payload;
+				expect(dockerPayload?.proposalKind).toBe("scaffold_patch");
+
+				// native payload carries the warning string.
+				const nativePayload = sandboxDecisions.find(
+					(entry) => entry.payload?.kind === "native",
+				)?.payload;
+				expect(typeof nativePayload?.warning).toBe("string");
+
+				// deny carries the policy reason; probe_error carries the
+				// probe failure message; no_gate carries the requirement.
+				const denyPayload = sandboxDecisions.find(
+					(entry) => entry.payload?.kind === "deny",
+				)?.payload;
+				expect(String(denyPayload?.reason)).toMatch(/ci-maintenance/u);
+
+				const probePayload = sandboxDecisions.find(
+					(entry) => entry.payload?.kind === "probe_error",
+				)?.payload;
+				expect(String(probePayload?.reason)).toMatch(/sandbox probe failed/iu);
+
+				const noGatePayload = sandboxDecisions.find(
+					(entry) => entry.payload?.kind === "no_gate",
+				)?.payload;
+				expect(String(noGatePayload?.reason)).toMatch(/sandboxPolicyGate/u);
 			});
 		});
 	});

@@ -353,9 +353,17 @@ Because `IdleEvolutionRunner` is constructed before `startRepl` (per the launch 
 
 For `scaffold_patch` proposals the caller of `JsonlProposalStore.applyApproved(...)` MUST pass `sandboxPolicyGate: ProposalSandboxPolicyGate` (see `packages/agent-core/src/self-evolution/sandbox-policy-gate.ts`). After `WriteAuthority` returns `allow`, `applyApproved` consults this gate and decides between `docker` / `native+warning` / `deny` per the high-risk-write sandbox-isolation rule in [07 §2.6.4](../07-safety-guardrails/README.md#264-writeauthority-gate权限模式的运行时执行器). On `docker`, the applier receives a `{ sandbox: { kind: "docker", provider: "docker" } }` context and runs the patch inside a `DockerSandboxRouter` container. On `native` (Docker unavailable), the gate logs a `logger.warn` audit entry and lets the applier run on the host. On `deny`, `applyApproved` skips the applier and records `reasonCode: "sandbox_denied"`.
 
-非 `scaffold_patch`（artifact-only review proposal）短路返回 `native`（warning 为空），保持既有 review-only 流程的零行为变化；caller 不传入 gate 时，`applyApproved` 完全保留既有 native applier 行为，便于单元测试与本地脚本调用。
+非 `scaffold_patch`（artifact-only review proposal）短路返回 `native`（warning 为空），保持既有 review-only 流程的零行为变化；caller 不传入 gate 时，artifact-only 提案保留既有 native applier 行为，便于单元测试与本地脚本调用。
 
-Non-`scaffold_patch` (artifact-only review) proposals short-circuit to `native` with an empty warning so the existing review-only flow is unchanged; when no gate is supplied, `applyApproved` preserves the original native-applier behavior so unit tests and local scripts can keep their current call sites.
+Non-`scaffold_patch` (artifact-only review) proposals short-circuit to `native` with an empty warning so the existing review-only flow is unchanged; for those proposals, omitting the gate keeps the original native-applier behavior so unit tests and local scripts can keep their current call sites.
+
+**Round-2 修复 / Round-2 hardening (QUI-97, 2026-05-09)**：scaffold_patch 类提案 **必须** 传 `sandboxPolicyGate`，否则 `applyApproved` 返回 `skipped` + `reasonCode: "sandbox_gate_missing"`，不允许"无 gate 就 native apply"绕过沙箱（详见 [07 §2.6.5](../07-safety-guardrails/README.md#26-writeauthority-写授权统一闸门)）。REPL 的 `/proposal-apply` 在调用 `applyApproved` 时，如果 embedder 未注入自定义 gate，会自动使用默认 `DockerProposalSandboxPolicyGate`。
+
+Round-2 hardening (QUI-97, 2026-05-09): `scaffold_patch` proposals **must** pass `sandboxPolicyGate`; omitting it makes `applyApproved` return `skipped` + `reasonCode: "sandbox_gate_missing"` instead of silently bypassing sandbox enforcement (see [07 §2.6.5](../07-safety-guardrails/README.md#26-writeauthority-写授权统一闸门)). The REPL's `/proposal-apply` falls back to a default `DockerProposalSandboxPolicyGate` when the embedder did not provide one.
+
+**生产部署 trade-off / Production deployment trade-off**：`DockerProposalSandboxPolicyGate` 接受 `requireDocker?: boolean` 选项。`true`（生产推荐）→ Docker 不可达时 `deny`，强制 scaffold patch apply 必须在容器内执行；`false`（默认）→ `native + warning` fallback，便于本地开发与单元测试。每次 gate 决策（含 `no_gate` / `probe_error`）发出 `proposal.sandbox_decision` agent-run 事件，便于审计。
+
+Production trade-off: `DockerProposalSandboxPolicyGate` accepts a `requireDocker?: boolean` option. `true` (recommended for production) → `deny` whenever Docker is unreachable, hard-failing scaffold-patch apply if the container runtime is missing; `false` (default) → `native + warning` fallback, friendlier for local dev / tests. Every gate decision (including `no_gate` and `probe_error`) emits a `proposal.sandbox_decision` agent-run event for audit.
 
 ### 2.4.1 提案审核 REPL 命令 / Proposal Review REPL Commands
 

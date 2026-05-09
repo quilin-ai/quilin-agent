@@ -72,7 +72,22 @@ export type AgentRunLogPhase =
 	| "proposal.rejected"
 	| "proposal.applied"
 	| "proposal.apply_skipped"
-	| "proposal.apply_failed";
+	| "proposal.apply_failed"
+	// Self-evolution sandbox policy gate decision (added 2026-05-09,
+	// QUI-97 round-2 cross-review). Emitted from inside
+	// `JsonlProposalStore.applyApprovedRecord` after the gate is consulted.
+	// Five paths must be observable so reviewers can audit which scaffold
+	// patches ran isolated, which fell back to native, and which were denied.
+	// 自进化 sandbox policy gate 的决策事件（2026-05-09 QUI-97 round-2 加入）：
+	// 五个路径都要发出事件，方便审计哪些 scaffold patch 在容器内执行、
+	// 哪些 native fallback、哪些被拒绝、哪些没传 gate / 探测失败。
+	// payload: {
+	//   proposalId: string,
+	//   kind: "docker" | "native" | "deny" | "no_gate" | "probe_error",
+	//   proposalKind: GeneratedPatchProposalKind | "artifact_only",
+	//   reason?: string, warning?: string, requireDocker?: boolean,
+	// }
+	| "proposal.sandbox_decision";
 
 export interface AgentRunLogRecordOptions {
 	readonly turnId?: string;

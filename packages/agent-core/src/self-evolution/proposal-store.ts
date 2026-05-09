@@ -1,5 +1,9 @@
 import { appendFile, readFile } from "node:fs/promises";
 import { logger } from "../logger.js";
+import {
+	type AgentRunLogSink,
+	recordAgentRunEvent,
+} from "../observability/agent-run-log.js";
 import type {
 	WriteAuthority,
 	WriteOrigin,
@@ -134,7 +138,15 @@ export type ProposalApplySkippedReason =
 	| "user_rejected"
 	| "deny_all"
 	| "missing_confirm"
-	| "sandbox_denied";
+	| "sandbox_denied"
+	// Round-2 cross-review (QUI-97): scaffold_patch proposals require an
+	// explicit `sandboxPolicyGate`. When the caller omits it, the apply path
+	// must DENY by default rather than silently bypass sandbox enforcement
+	// (07 §2.6.4 + 07 §2.6.5: "WriteAuthority allowed therefore native apply"
+	// is forbidden for scaffold patches). Non-scaffold proposals are not
+	// affected — the gate stays optional for them.
+	// 调用方未传 gate 时，scaffold_patch 类提案默认 deny，避免静默绕过沙箱。
+	| "sandbox_gate_missing";
 
 export type ProposalApplyFailedReason =
 	| "unsupported_patch_type"
@@ -177,15 +189,31 @@ export interface ProposalApplyOptions {
 	readonly reviewedAt?: string;
 	readonly applier?: ProposalPatchApplier;
 	/**
-	 * Optional sandbox policy gate consulted before the applier runs on a
-	 * `scaffold_patch` proposal. When omitted, existing behavior is preserved
-	 * (applier runs natively with no sandbox context). When provided, the
-	 * gate decides docker / native+warning / deny per 07 §2.6.4.
+	 * Sandbox policy gate consulted before the applier runs on a
+	 * `scaffold_patch` proposal. **Required for scaffold_patch proposals**
+	 * (round-2 cross-review fix QUI-97): when the caller omits the gate,
+	 * scaffold_patch applies are denied with `sandbox_gate_missing` rather
+	 * than silently bypassing sandbox enforcement. Non-scaffold proposals
+	 * (artifact-only review) preserve the existing optional behavior.
 	 *
-	 * 可选的沙箱策略闸门：仅在 `scaffold_patch` 类提案上生效。未提供时保持
-	 * 既有行为；提供时按 07 §2.6.4 决定 docker / native+warning / deny。
+	 * 沙箱策略闸门：scaffold_patch 类提案 **必填**（round-2 修复 QUI-97），
+	 * 调用方不传时该类提案直接 deny + `sandbox_gate_missing`，避免静默绕过；
+	 * artifact-only 类提案保持可选。
 	 */
 	readonly sandboxPolicyGate?: ProposalSandboxPolicyGate;
+	/**
+	 * Optional run-log sink used to emit `proposal.sandbox_decision`
+	 * telemetry from inside `applyApproved`. Five paths are observable:
+	 * `docker`, `native`, `deny`, `probe_error`, and `no_gate`. When not
+	 * provided, the gate decision is still applied but no telemetry event
+	 * is recorded (callers can layer their own observability on top of the
+	 * `ProposalApplyResult` outcomes).
+	 *
+	 * 可选 run-log sink：在 `applyApproved` 内发出 `proposal.sandbox_decision`
+	 * 事件，覆盖 docker / native / deny / probe_error / no_gate 五条路径；
+	 * 未提供时不发事件，调用方可自行叠加观测。
+	 */
+	readonly runLogger?: AgentRunLogSink;
 }
 
 interface NormalizedCreatedAtQueryRange {
@@ -1045,6 +1073,7 @@ export class JsonlProposalStore {
 					reviewedAt: options.reviewedAt,
 					applier,
 					sandboxPolicyGate: options.sandboxPolicyGate,
+					runLogger: options.runLogger,
 				});
 				if (outcome.kind === "applied") {
 					applied.push(outcome.record);
@@ -1073,6 +1102,7 @@ export class JsonlProposalStore {
 		readonly reviewedAt?: string;
 		readonly applier: ProposalPatchApplier;
 		readonly sandboxPolicyGate?: ProposalSandboxPolicyGate;
+		readonly runLogger?: AgentRunLogSink;
 	}): Promise<
 		| { readonly kind: "applied"; readonly record: StoredProposalRecord }
 		| { readonly kind: "skipped"; readonly outcome: ProposalApplyOutcome }
@@ -1086,8 +1116,22 @@ export class JsonlProposalStore {
 			reviewedAt,
 			applier,
 			sandboxPolicyGate,
+			runLogger,
 		} = input;
+		const proposalKind =
+			record.generatedPatchProposal?.proposalKind ?? "artifact_only";
 		const writeRequest = buildApplyWriteRequest(record, origin);
+
+		// Gate ordering: WriteAuthority FIRST, SandboxPolicyGate SECOND.
+		// Rationale (round-2 cross-review): user intent / permission must be
+		// resolved before we spend a probe roundtrip on Docker; if the user
+		// rejects the apply, we never need to consult the sandbox gate. This
+		// matches the documented design choice in docs/07 §2.6.5 (sandbox is
+		// a *second* enforcement layer that runs only after WriteAuthority
+		// has returned `allow`).
+		// 闸门顺序：WriteAuthority 在前，SandboxPolicyGate 在后。这是有意保留
+		// 的设计（用户拒绝就无需探测 Docker），与 docs/07 §2.6.5 的"第二道
+		// 强制点"语义一致。
 		const decision = await authority.authorize(writeRequest);
 		if (decision.kind !== "allow") {
 			const reason =
@@ -1109,10 +1153,43 @@ export class JsonlProposalStore {
 			};
 		}
 
+		// HIGH-1 fix (round-2 cross-review): for `scaffold_patch` proposals
+		// the caller MUST pass a `sandboxPolicyGate`. Silently bypassing
+		// sandbox enforcement when the gate is missing violates 07 §2.6.4 +
+		// 07 §2.6.5. Non-scaffold proposals keep the legacy optional path.
+		// scaffold_patch 类提案必须传 gate；不传时直接 deny，避免静默绕过沙箱。
+		if (
+			proposalKind === "scaffold_patch" &&
+			sandboxPolicyGate === undefined
+		) {
+			const reason =
+				"sandboxPolicyGate is required for scaffold_patch proposals (07 §2.6.5)";
+			logger.warn(
+				{
+					proposalId: record.proposalId,
+					proposalKind,
+				},
+				"Refusing to apply scaffold patch without sandbox policy gate",
+			);
+			await recordAgentRunEvent(runLogger, "proposal.sandbox_decision", {
+				proposalId: record.proposalId,
+				kind: "no_gate",
+				proposalKind,
+				reason,
+			});
+			return {
+				kind: "skipped",
+				outcome: {
+					proposalId: record.proposalId,
+					status: "skipped",
+					reasonCode: "sandbox_gate_missing",
+					reason,
+				},
+			};
+		}
+
 		let sandboxDecision: ProposalSandboxDecision | undefined;
 		if (sandboxPolicyGate !== undefined) {
-			const proposalKind =
-				record.generatedPatchProposal?.proposalKind ?? "artifact_only";
 			sandboxDecision = await sandboxPolicyGate.decide({
 				tool: writeRequest.tool,
 				riskLevel: writeRequest.riskLevel,
@@ -1129,6 +1206,20 @@ export class JsonlProposalStore {
 					},
 					"Sandbox policy gate denied scaffold patch apply",
 				);
+				// Emit BOTH `proposal.sandbox_decision` (with `kind: "deny"`,
+				// `proposalKind`) and the existing apply_skipped event later
+				// in repl.ts. We surface the gate's own `kind: "probe_error"`
+				// when the gate's reason flags a probe failure so audits can
+				// distinguish probe failures from CI policy denials.
+				const isProbeFailure = sandboxDecision.reason
+					.toLowerCase()
+					.includes("sandbox probe failed");
+				await recordAgentRunEvent(runLogger, "proposal.sandbox_decision", {
+					proposalId: record.proposalId,
+					kind: isProbeFailure ? "probe_error" : "deny",
+					proposalKind,
+					reason: sandboxDecision.reason,
+				});
 				return {
 					kind: "skipped",
 					outcome: {
@@ -1139,17 +1230,28 @@ export class JsonlProposalStore {
 					},
 				};
 			}
-			if (
-				sandboxDecision.kind === "native" &&
-				sandboxDecision.warning.length > 0
-			) {
-				logger.warn(
-					{
-						proposalId: record.proposalId,
-						proposalKind,
-					},
-					sandboxDecision.warning,
-				);
+			if (sandboxDecision.kind === "native") {
+				if (sandboxDecision.warning.length > 0) {
+					logger.warn(
+						{
+							proposalId: record.proposalId,
+							proposalKind,
+						},
+						sandboxDecision.warning,
+					);
+				}
+				await recordAgentRunEvent(runLogger, "proposal.sandbox_decision", {
+					proposalId: record.proposalId,
+					kind: "native",
+					proposalKind,
+					warning: sandboxDecision.warning,
+				});
+			} else if (sandboxDecision.kind === "docker") {
+				await recordAgentRunEvent(runLogger, "proposal.sandbox_decision", {
+					proposalId: record.proposalId,
+					kind: "docker",
+					proposalKind,
+				});
 			}
 		}
 

@@ -587,6 +587,25 @@ After `WriteAuthority` returns `allow` for `self_evolution_patch_apply`, the app
 
 Non-`scaffold_patch` proposals (artifact-only) short-circuit to `native` with an empty warning and never probe Docker, so the existing review-only proposal path is unaffected.
 
+**Round-2 hardening (QUI-97 / 2026-05-09)**: `applyApproved` 增加四道纪律：
+
+Round-2 hardening (QUI-97 / 2026-05-09): `applyApproved` adds four extra disciplines:
+
+1. **Gate 顺序固定 / Gate ordering is fixed**：WriteAuthority 在前，SandboxPolicyGate 在后。理由：用户拒绝 apply 就无需探测 Docker，避免无谓 IO；同时与"sandbox 是 §2.6.4 后的第二道强制点"语义一致。
+2. **scaffold_patch 必须有 gate / Gate is required for scaffold_patch**：调用方未传 `sandboxPolicyGate` 时，scaffold_patch 类提案直接 `skipped` + `reasonCode: "sandbox_gate_missing"`，不允许"无 gate 就 native apply"。Artifact-only 提案保持可选。
+3. **`requireDocker` 选项 / `requireDocker` option**：`DockerProposalSandboxPolicyGate({ requireDocker: true })` 让 Docker 不可达直接 `deny` 而不是 `native+warning`。生产部署若把容器隔离视为硬约束应启用；默认 `false` 兼容既有调用方。
+4. **探测错误兜底 / Probe error fallback**：`isDockerAvailable()` 抛错时，gate 返回 `deny` + 清洗后的错误信息（剔除 C0/DEL，长度 ≤ 200 字符），避免崩溃 apply。`denyOverride` 返回的 reason 也走相同清洗。
+
+The four disciplines:
+1. WriteAuthority runs before SandboxPolicyGate so a user-rejected apply never spends a Docker probe roundtrip.
+2. `scaffold_patch` proposals require an explicit `sandboxPolicyGate`; omitting it yields `skipped` + `reasonCode: "sandbox_gate_missing"` rather than a silent native bypass.
+3. Production callers can opt into hard-fail behavior with `requireDocker: true`; the default keeps the legacy `native + warning` fallback.
+4. A throwing `isDockerAvailable()` probe is caught and converted to `deny`; both the probe error message and any `denyOverride` reason are sanitized (control characters stripped, capped at 200 chars).
+
+每次 gate 决策（`docker` / `native` / `deny` / `probe_error` / `no_gate`）通过 `recordAgentRunEvent` 发出 `proposal.sandbox_decision` 遥测事件，确保 CRITICAL scaffold-patch apply 路径在 agent-run JSONL 中可审计。
+
+Each gate decision (`docker` / `native` / `deny` / `probe_error` / `no_gate`) emits a `proposal.sandbox_decision` event via `recordAgentRunEvent`, keeping CRITICAL scaffold-patch apply paths fully observable in the agent-run JSONL.
+
 **与 Layer 2（步骤验证）的关系**：
 
 - Layer 2 的"是否触发权限边界？"一问由 WriteAuthority 的 decision 作为客观输入（而非 LLM 自评），避免 step verifier 自己猜测权限状态
