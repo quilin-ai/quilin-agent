@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import secrets
 from contextlib import asynccontextmanager
 from typing import Any
@@ -10,6 +11,15 @@ from mcp.server.fastmcp import Context, FastMCP
 
 from .event_log import TraceContext, parse_traceparent
 from .logging import configure_once, logger
+from .observer import (
+    L3aObserver,
+    ObservationTurnInput,
+    ObserverConfig,
+    _candidate_to_dict,
+    observe_safely,
+)
+from .profile_store import ProfileStore
+from .profile_updater import ProfileUpdater
 from .retrieval_profile import RetrievalProfileStore
 from .retriever import MemoryRetriever
 from .scratchpad import ScratchpadStore
@@ -21,6 +31,10 @@ MAX_TOOL_METADATA_DEPTH = 4
 MAX_TOOL_METADATA_ITEMS = 32
 MAX_TOOL_METADATA_STRING_LENGTH = 512
 MAX_TOOL_METADATA_BYTES = 4 * 1024
+MAX_OBSERVE_TEXT_LENGTH = 32 * 1024  # cap per-text field at 32KB
+DEFAULT_OBSERVER_FREQUENCY = 10
+DEFAULT_OBSERVER_BASE_URL = "https://api.deepseek.com/v1/chat/completions"
+DEFAULT_OBSERVER_MODEL = "deepseek-v4-flash"
 ALLOWED_TOOL_METADATA_KEYS = frozenset(
     {
         "block_version",
@@ -352,6 +366,120 @@ async def _scratchpad_read_with_store(
     return json.dumps({"value": value, **_trace_payload(trace_context)})
 
 
+def _build_observer_config_from_env() -> ObserverConfig:
+    """Build ObserverConfig from environment variables.
+
+    Defaults match observer.py's ObserverConfig:
+        model = QUILIN_OBSERVER_MODEL or deepseek-v4-flash
+        api_key = QUILIN_OBSERVER_API_KEY (preferred) or DEEPSEEK_API_KEY
+        frequency = QUILIN_OBSERVER_FREQUENCY (>=1) or 10
+        base_url = QUILIN_OBSERVER_BASE_URL or DeepSeek chat completions URL
+
+    API keys must come from env only — never from MCP arguments.
+    """
+    model = os.environ.get("QUILIN_OBSERVER_MODEL", DEFAULT_OBSERVER_MODEL)
+    # QUILIN_OBSERVER_API_KEY takes precedence; fall back to DEEPSEEK_API_KEY
+    # to align with the existing ObserverConfig default factory.
+    api_key = os.environ.get("QUILIN_OBSERVER_API_KEY") or os.environ.get("DEEPSEEK_API_KEY") or ""
+    base_url = os.environ.get("QUILIN_OBSERVER_BASE_URL", DEFAULT_OBSERVER_BASE_URL)
+    raw_frequency = os.environ.get("QUILIN_OBSERVER_FREQUENCY")
+    frequency = DEFAULT_OBSERVER_FREQUENCY
+    if raw_frequency is not None and raw_frequency.strip():
+        try:
+            parsed = int(raw_frequency)
+            if parsed >= 1:
+                frequency = parsed
+        except ValueError:
+            # Invalid env value — fall back to default rather than crash.
+            logger.warning(
+                "memory_observe ignoring invalid QUILIN_OBSERVER_FREQUENCY",
+                value=raw_frequency,
+            )
+
+    return ObserverConfig(
+        model=model,
+        api_key=api_key,
+        frequency=frequency,
+        base_url=base_url,
+    )
+
+
+def _validate_observe_text(text: str, field: str) -> str:
+    """Cap per-text field length at MAX_OBSERVE_TEXT_LENGTH bytes."""
+    if not isinstance(text, str):
+        raise ValueError(f"memory_observe {field} must be a string")
+    if len(text) > MAX_OBSERVE_TEXT_LENGTH:
+        raise ValueError(
+            f"memory_observe {field} must be at most {MAX_OBSERVE_TEXT_LENGTH} characters"
+        )
+    return text
+
+
+def _build_observer_session_key(
+    user_id: str | None,
+    session_id: str | None,
+) -> str:
+    """Compose the cache key for the per-session observer instance.
+
+    None values normalize to literal "_" so we still produce a stable key.
+    """
+    safe_user = (user_id or "").strip() or "_"
+    safe_session = (session_id or "").strip() or "_"
+    return f"{safe_user}|{safe_session}"
+
+
+async def _memory_observe_with_observer(
+    observer: L3aObserver,
+    *,
+    user_text: str,
+    assistant_text: str,
+    user_id: str | None,
+    session_id: str | None,
+    metadata: dict[str, object] | None = None,
+    trace_context: TraceContext | None = None,
+) -> str:
+    """Run the observer over a single (user, assistant) turn pair.
+
+    Both texts are concatenated into one ObservationTurn with role=user
+    (a single turn captures the full exchange). On candidate yield this
+    returns wire-format JSON `{"candidates": [...]}`.
+    Errors are sanitized via MemoryOperationError.
+    """
+    try:
+        safe_user_text = _validate_observe_text(user_text, "user_text")
+        safe_assistant_text = _validate_observe_text(assistant_text, "assistant_text")
+    except ValueError as exc:
+        _raise_memory_operation_error("memory_observe", exc)
+
+    combined_content_parts: list[str] = []
+    if safe_user_text.strip():
+        combined_content_parts.append(f"[user]: {safe_user_text.strip()}")
+    if safe_assistant_text.strip():
+        combined_content_parts.append(f"[assistant]: {safe_assistant_text.strip()}")
+    combined_content = "\n".join(combined_content_parts) or "(empty turn)"
+
+    turn_input: ObservationTurnInput = {
+        "content": combined_content,
+        "role": "user",
+        **({"user_id": user_id} if user_id and user_id.strip() else {}),
+        **({"session_id": session_id} if session_id and session_id.strip() else {}),
+        **({"metadata": metadata} if metadata else {}),
+    }
+
+    try:
+        candidates = await observe_safely(observer, turn_input)
+    except Exception as exc:
+        _raise_memory_operation_error("memory_observe", exc)
+
+    payload: dict[str, object] = {
+        "candidates": [_candidate_to_dict(candidate) for candidate in candidates],
+    }
+    if trace_context is not None:
+        payload["traceparent"] = trace_context.traceparent
+
+    return json.dumps(payload)
+
+
 async def _scratchpad_clear_with_store(
     scratchpad_store: ScratchpadStore,
     *,
@@ -440,9 +568,27 @@ async def memory_store(
 def create_server(
     store: QuilinMemStore | None = None,
     scratchpad_store: ScratchpadStore | None = None,
+    *,
+    observer_factory: object | None = None,
+    profile_updater_factory: object | None = None,
 ) -> FastMCP:
+    """Build the quilin-mem MCP server.
+
+    Optional injection points:
+        observer_factory: zero-arg callable returning ``L3aObserver``;
+            defaults to constructing one from env-derived ``ObserverConfig``.
+            Used by tests to inject deterministic LLM stubs without env vars.
+        profile_updater_factory: zero-arg callable returning ``ProfileUpdater``
+            or ``None``. Defaults to lazy ``ProfileStore`` per server.
+
+    L3a observer instances are cached per ``(user_id, session_id)`` so a
+    long-running session accumulates buffer state across ``memory_observe``
+    calls.
+    """
     server_store: QuilinMemStore | None = store
     server_scratchpad_store: ScratchpadStore | None = scratchpad_store
+    observer_sessions: dict[str, L3aObserver] = {}
+    server_profile_updater: ProfileUpdater | None = None
     server = FastMCP("quilin-mem", lifespan=_build_store_lifespan(store))
 
     async def resolve_store(
@@ -464,6 +610,87 @@ def create_server(
             server_scratchpad_store = ScratchpadStore()
 
         return server_scratchpad_store
+
+    def resolve_profile_updater() -> ProfileUpdater | None:
+        """Lazily construct a ProfileUpdater for L3a profile sync.
+
+        Returns None if the factory yields None or raises (best-effort).
+        Without a profile updater, observer.observe() still runs but high-
+        confidence findings are not mirrored to ~/.quilin/user.md.
+        """
+        nonlocal server_profile_updater
+        if server_profile_updater is not None:
+            return server_profile_updater
+
+        if profile_updater_factory is not None:
+            try:
+                candidate = profile_updater_factory()  # type: ignore[misc]
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "memory_observe profile_updater_factory failed",
+                    error=str(exc),
+                )
+                return None
+
+            if candidate is None:
+                return None
+
+            if not isinstance(candidate, ProfileUpdater):
+                logger.warning(
+                    "memory_observe profile_updater_factory returned wrong type",
+                    type=type(candidate).__name__,
+                )
+                return None
+
+            server_profile_updater = candidate
+            return server_profile_updater
+
+        try:
+            store_instance = ProfileStore()
+            server_profile_updater = ProfileUpdater(store_instance)
+            return server_profile_updater
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "memory_observe profile_updater bootstrap failed",
+                error=str(exc),
+            )
+            return None
+
+    def resolve_observer(
+        user_id: str | None,
+        session_id: str | None,
+    ) -> L3aObserver:
+        """Get-or-create the per-session L3aObserver instance.
+
+        We key on (user_id, session_id) so observer turn buffers grow
+        across multiple memory_observe calls for the same session.
+        """
+        key = _build_observer_session_key(user_id, session_id)
+        cached = observer_sessions.get(key)
+        if cached is not None:
+            return cached
+
+        if observer_factory is not None:
+            try:
+                created = observer_factory()  # type: ignore[misc]
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "memory_observe observer_factory failed; using env defaults",
+                    error=str(exc),
+                )
+                created = None
+
+            if isinstance(created, L3aObserver):
+                observer_sessions[key] = created
+                return created
+
+        config = _build_observer_config_from_env()
+        # Wire profile updater only if api_key configured (matches observer
+        # behavior: no api_key → no LLM trigger → no profile mirror).
+        profile_updater = resolve_profile_updater() if config.api_key else None
+        observer = L3aObserver(config, profile_updater=profile_updater)
+        observer_sessions[key] = observer
+        return observer
 
     @server.tool(name="memory_recall")
     async def memory_recall_tool(
@@ -549,6 +776,42 @@ def create_server(
             task_id=task_id,
             session_id=session_id,
             key=key,
+            trace_context=_child_trace_context(parent_trace),
+        )
+
+    @server.tool(name="memory_observe")
+    async def memory_observe_tool(
+        user_text: str,
+        assistant_text: str,
+        user_id: str | None = None,
+        session_id: str | None = None,
+        metadata: dict[str, object] | None = None,
+        ctx: Context[object, Any, object] | None = None,
+    ) -> str:
+        """Observe a single agent turn and return profile-worthy candidates.
+
+        L3a observer instances are cached per (user_id, session_id), so
+        consecutive calls for the same session accumulate buffer state.
+
+        Args:
+            user_text: The user message text for this turn.
+            assistant_text: The assistant response text for this turn.
+            user_id: Optional user identifier (used to scope observer).
+            session_id: Optional session identifier (used to scope observer).
+            metadata: Optional turn metadata propagated to ObservationTurn.
+
+        Returns:
+            JSON string ``{"candidates": [...]}`` (deterministic + optional L3a).
+        """
+        parent_trace = _trace_context_from_context(ctx)
+        observer = resolve_observer(user_id, session_id)
+        return await _memory_observe_with_observer(
+            observer,
+            user_text=user_text,
+            assistant_text=assistant_text,
+            user_id=user_id,
+            session_id=session_id,
+            metadata=metadata,
             trace_context=_child_trace_context(parent_trace),
         )
 

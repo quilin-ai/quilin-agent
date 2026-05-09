@@ -2789,4 +2789,95 @@ describe("runAgentLoop", () => {
 		);
 		expect(transcript).toEqual([{ role: "user", content: "hello" }]);
 	});
+
+	describe("L3a observer bridge integration", () => {
+		it("calls observerBridge.observeTurn once per completed turn", async () => {
+			vi.mocked(getLoggerRuntimeMode).mockReturnValue("service");
+
+			const chat = vi.fn().mockResolvedValue({
+				content: "assistant reply",
+				usage: { inputTokens: 5, outputTokens: 10 },
+				finishReason: "stop",
+			});
+			const observeTurn = vi.fn().mockResolvedValue(undefined);
+
+			const result = await runAgentLoop(
+				{
+					llm: { chat },
+					inferenceConfig: {
+						temperature: 0.5,
+						maxTokens: 512,
+						thinkingMode: "disabled",
+					},
+					observerBridge: { observeTurn },
+					observerUserId: "alice",
+					observerSessionId: "session-A",
+				},
+				[{ role: "user", content: "remember I prefer Chinese" }],
+			);
+
+			expect(result).toBe("assistant reply");
+			expect(observeTurn).toHaveBeenCalledTimes(1);
+			expect(observeTurn).toHaveBeenCalledWith({
+				userText: "remember I prefer Chinese",
+				assistantText: "assistant reply",
+				userId: "alice",
+				sessionId: "session-A",
+			});
+		});
+
+		it("ignores observerBridge.observeTurn errors (best-effort)", async () => {
+			vi.mocked(getLoggerRuntimeMode).mockReturnValue("service");
+
+			const chat = vi.fn().mockResolvedValue({
+				content: "ok",
+				usage: { inputTokens: 1, outputTokens: 1 },
+				finishReason: "stop",
+			});
+			const observeTurn = vi
+				.fn()
+				.mockRejectedValue(new Error("simulated observer crash"));
+
+			await expect(
+				runAgentLoop(
+					{
+						llm: { chat },
+						inferenceConfig: {
+							temperature: 0,
+							maxTokens: 16,
+							thinkingMode: "disabled",
+						},
+						observerBridge: { observeTurn },
+					},
+					[{ role: "user", content: "hi" }],
+				),
+			).resolves.toBe("ok");
+
+			expect(observeTurn).toHaveBeenCalledTimes(1);
+		});
+
+		it("skips observer hook when no observerBridge is configured", async () => {
+			vi.mocked(getLoggerRuntimeMode).mockReturnValue("service");
+
+			const chat = vi.fn().mockResolvedValue({
+				content: "ok",
+				usage: { inputTokens: 1, outputTokens: 1 },
+				finishReason: "stop",
+			});
+
+			await runAgentLoop(
+				{
+					llm: { chat },
+					inferenceConfig: {
+						temperature: 0,
+						maxTokens: 16,
+						thinkingMode: "disabled",
+					},
+				},
+				[{ role: "user", content: "hi" }],
+			);
+			// Sanity check: no observer wired, no failure
+			expect(chat).toHaveBeenCalledTimes(1);
+		});
+	});
 });

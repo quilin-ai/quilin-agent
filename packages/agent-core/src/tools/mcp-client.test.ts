@@ -513,6 +513,7 @@ describe.sequential("MCPClientManager", () => {
 			);
 
 			expect(toolNames).toEqual([
+				"memory_observe",
 				"memory_recall",
 				"memory_store",
 				"scratchpad_clear",

@@ -116,6 +116,7 @@ export {
 	idleEvolutionConfigSchema,
 	llmConfigSchema,
 	memoryConfigSchema,
+	memoryObserverConfigSchema,
 	observabilityConfigSchema,
 	safetyConfigSchema,
 	sessionConfigSchema,

@@ -2,6 +2,7 @@ import type { ScanResult } from "./context/injection-scanner.js";
 import type { OutboundPromptRequest } from "./context/prompt-session-assembler.js";
 import type { ContextManager, TokenBudget } from "./context/types.js";
 import type { InferenceConfig, LLMClient } from "./llm/types.js";
+import type { ObserverBridge } from "./memory/observer-bridge.js";
 import type { AgentLoopObservability } from "./observability/loop.js";
 import type { ActionVerificationResult } from "./safety/action-verifier.js";
 import type { AgentState, Checkpoint, Message } from "./state/types.js";
@@ -88,4 +89,19 @@ export interface AgentLoopConfig {
 	readonly observability?: AgentLoopObservability;
 	readonly toolRouterOptions?: ToolRouterOptions;
 	readonly inferenceConfig: InferenceConfig;
+	/**
+	 * Optional bridge to the L3a observer (memory_observe MCP tool).
+	 * When provided, runAgentLoop calls observeTurn() after each completed
+	 * agent turn. The bridge is best-effort — failures never abort the
+	 * loop. Default agent runs leave this undefined and skip observation.
+	 *
+	 * 可选：L3a 观察桥（memory_observe MCP 工具）。配置后 runAgentLoop 在
+	 * 每次 agent 回合结束后调用 observeTurn()。桥层尽力而为，失败也不会
+	 * 中断 loop。默认运行不配置该项即跳过观察。
+	 */
+	readonly observerBridge?: ObserverBridge;
+	/** Optional user identifier passed through to the observer. */
+	readonly observerUserId?: string;
+	/** Optional session identifier passed through to the observer. */
+	readonly observerSessionId?: string;
 }

@@ -2,7 +2,15 @@
 
 > **实现状态（2026-04-30 校准）**
 > - ✅ **已实现**：`providers/memory/src/quilin_mem/` — quilin-mem MCP server、working / episodic / semantic / skill 四层、SQLite + FTS5/BM25、KG 子图检索、vector retriever 接口、hybrid retriever + reranker、event log + trace context、ProfileStore / ProfileUpdater、scratchpad、idle_budget + consolidator dry-run、soul schema validator。
-> - ✅ **L3a observer 已激活**：flash 模型（deepseek-v4-flash）驱动，自动观察用户行为→发现偏好模式→写回 user.md；频率可配置（默认每 10 轮）。
+> - ✅ **L3a observer 已激活 / L3a observer is wired into the runtime**：
+>   - Class implementation lives at `providers/memory/src/quilin_mem/observer.py:1404` (`L3aObserver`); deterministic L1/L2 extraction runs every turn, the flash-tier LLM (`deepseek-v4-flash`) is triggered every `frequency` turns (default 10).
+>   - L3a 类实现在 `providers/memory/src/quilin_mem/observer.py:1404`（`L3aObserver`）；L1/L2 启发式抽取每轮都跑，flash 档 LLM（`deepseek-v4-flash`）每 `frequency` 轮触发一次（默认 10）。
+>   - Runtime wiring is exposed via the new `memory_observe` MCP tool registered in `providers/memory/src/quilin_mem/server.py` (per-`(user_id, session_id)` observer cache, env-driven `ObserverConfig`); the agent-core loop calls it through `packages/agent-core/src/memory/observer-bridge.ts` and `packages/agent-core/src/loop.ts` after each completed turn when `memoryObserver.enabled` is true.
+>   - 运行时接线由新增的 `memory_observe` MCP 工具暴露（按 `(user_id, session_id)` 缓存 observer 实例，`ObserverConfig` 从环境变量取）；agent-core loop 通过 `packages/agent-core/src/memory/observer-bridge.ts` 与 `packages/agent-core/src/loop.ts` 在每轮结束后调用，前提是 `memoryObserver.enabled` 打开。
+>   - High-confidence findings (>= 0.7) sync to `~/.quilin/user.md` via `ProfileUpdater.sync_user_md` (`providers/memory/src/quilin_mem/profile_updater.py:159`).
+>   - 高置信度发现（≥ 0.7）通过 `ProfileUpdater.sync_user_md`（`providers/memory/src/quilin_mem/profile_updater.py:159`）镜像到 `~/.quilin/user.md`。
+>   - **Default is OFF / 默认关闭**：`memoryObserver.enabled = false`. Opt-in via `[memory.observer] enabled = true` in user.toml. The observer needs `DEEPSEEK_API_KEY` (or `QUILIN_OBSERVER_API_KEY`) — without it the L3a path silently no-ops and only deterministic candidates are returned.
+>   - 默认关闭：`memoryObserver.enabled = false`，需在 user.toml 通过 `[memory.observer] enabled = true` 显式开启。observer 依赖 `DEEPSEEK_API_KEY`（或 `QUILIN_OBSERVER_API_KEY`）；缺少 key 时 L3a 路径静默 no-op，只返回确定性候选。
 > - Linear 后续项：[QUI-16](https://linear.app/quilin-agent/issue/QUI-16/03-memory-observer-validation-archival-and-evaluation-pipeline)（observer 验证）、[QUI-95](https://linear.app/quilin-agent/issue/QUI-95/m3-实现长期记忆写入-召回-归档自动闭环)（长期记忆自动闭环）；Iter F memory depth 见 [QUI-11](https://linear.app/quilin-agent/issue/QUI-11/iter-f-deepen-memoryl3a-observer-and-longmemeval-path)。
 
 > quilin-mem 4 层分级记忆系统详细规格

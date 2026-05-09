@@ -31,6 +31,25 @@ import { saveCheckpointState } from "./state/checkpoint-writer.js";
 import type { Message } from "./state/types.js";
 import { ToolRouter } from "./tools/router.js";
 
+/**
+ * Walk the working transcript backwards to find the most recent user-role
+ * message. Returns "" when the loop has only system + assistant messages
+ * (e.g., bootstrap turn). Used by the L3a observer bridge to feed the
+ * (user, assistant) pair into ``memory_observe``.
+ *
+ * 倒序找最近一条 user 消息。bootstrap 回合可能只有 system + assistant
+ * 时返回空串。给 L3a observer 桥喂 (user, assistant) 对。
+ */
+function findLastUserText(messages: readonly Message[]): string {
+	for (let i = messages.length - 1; i >= 0; i -= 1) {
+		const message = messages[i];
+		if (message?.role === "user") {
+			return message.content;
+		}
+	}
+	return "";
+}
+
 export async function runAgentLoop(
 	config: AgentLoopConfig,
 	messages: readonly Message[],
@@ -354,6 +373,33 @@ export async function runAgentLoop(
 					},
 					runLogContext,
 				);
+				// Best-effort L3a observer hook. The bridge swallows its own
+				// errors; we still wrap in try/catch as a defense-in-depth so
+				// any unexpected throw never breaks the agent loop.
+				// L3a 观察 hook 尽力而为：bridge 自己已吞错，这里再包一层
+				// try/catch 作为纵深防御，确保意外抛出永远不会破坏 loop。
+				if (config.observerBridge != null) {
+					const lastUserText = findLastUserText(workingMessages);
+					try {
+						await config.observerBridge.observeTurn({
+							userText: lastUserText,
+							assistantText: response.content,
+							...(config.observerUserId == null
+								? {}
+								: { userId: config.observerUserId }),
+							...(config.observerSessionId == null
+								? {}
+								: { sessionId: config.observerSessionId }),
+						});
+					} catch (error: unknown) {
+						const message =
+							error instanceof Error ? error.message : String(error);
+						logger.warn(
+							{ error: message },
+							"observerBridge.observeTurn threw — ignored",
+						);
+					}
+				}
 				return response.content;
 			}
 			if (response.toolCalls == null || response.toolCalls.length === 0) {

@@ -87,6 +87,21 @@ export const llmConfigSchema = z
 	})
 	.strict();
 
+export const memoryObserverConfigSchema = z
+	.object({
+		// Default OFF — observer hits an external LLM every N turns. Users
+		// must explicitly opt in. API key is sourced from env (DEEPSEEK_API_KEY
+		// or QUILIN_OBSERVER_API_KEY) — never from this config.
+		// 默认关闭 — 观察器每 N 回合调外部 LLM，必须显式 opt in。API key
+		// 只从环境变量取（DEEPSEEK_API_KEY / QUILIN_OBSERVER_API_KEY），
+		// 不从此 config 取。
+		enabled: z.boolean().default(false),
+		model: z.string().min(1).default("deepseek-v4-flash"),
+		frequency: z.number().int().min(1).default(10),
+	})
+	.strict()
+	.default({ enabled: false, model: "deepseek-v4-flash", frequency: 10 });
+
 export const memoryConfigSchema = z
 	.object({
 		scratchpad: z
@@ -96,9 +111,13 @@ export const memoryConfigSchema = z
 			})
 			.strict()
 			.default({ ttl_sec: 3600, capacity_per_task: 1024 }),
+		observer: memoryObserverConfigSchema,
 	})
 	.strict()
-	.default({ scratchpad: { ttl_sec: 3600, capacity_per_task: 1024 } });
+	.default({
+		scratchpad: { ttl_sec: 3600, capacity_per_task: 1024 },
+		observer: { enabled: false, model: "deepseek-v4-flash", frequency: 10 },
+	});
 
 export const observabilityConfigSchema = z
 	.object({
