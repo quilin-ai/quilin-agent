@@ -15,7 +15,16 @@ import {
 } from "./loader.js";
 
 export type CapabilitiesReloadOperation = "bootstrap" | "reload";
-export type CapabilitiesReloadTrigger = "manual" | "watch";
+// QUI-148: extend trigger taxonomy to cover webhook (HTTP POST /reload) and
+// signal (SIGHUP) reload entry points alongside the existing manual / watch
+// triggers.
+// QUI-148：扩展触发器分类，新增 webhook（HTTP POST /reload）与 signal
+// （SIGHUP）入口，与既有的 manual / watch 触发器并列。
+export type CapabilitiesReloadTrigger =
+	| "manual"
+	| "watch"
+	| "webhook"
+	| "signal";
 export type CapabilitiesReloadDomain = "config" | "mcp" | "skills";
 export type CapabilitiesReloadApplyState =
 	| "not_requested"

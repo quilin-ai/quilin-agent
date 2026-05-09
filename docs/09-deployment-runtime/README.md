@@ -5,8 +5,10 @@
 > - ✅ **已实现**：`justfile` 跨语言编排、REPL 入口、config schema/loader/user config cascade、`quilin config show/set` CLI、CI 三语言矩阵、Rust stub CI、Vitest runner 固化、DockerSandbox benchmark MVP + Linux smoke gate。
 > - ✅ **Implemented**: `packages/agent-core/src/tools/docker-sandbox-router.ts` now provides a production-facing DockerSandboxRouter adapter; it reuses the `SandboxRouter` contract, uses an injectable Docker CLI runner, defaults to a Docker isolation boundary, maps mount / resource / output policies, and reports command failure, network denial, output truncation, and deferred snapshot/resume through structured failures.
 > - ✅ **已实现**：`packages/agent-core/src/tools/docker-sandbox-router.ts` 已提供 production-facing DockerSandboxRouter adapter；它复用 `SandboxRouter` 合同，使用可注入 Docker CLI runner，默认 Docker isolation boundary，映射 mount / resource / output policy，并用 structured failure 表达 command failure、network denial、output truncation、snapshot/resume deferred。
-> - 🚧 **Partial / deferred**: Durable DockerSandbox snapshot/resume, LocalSandbox / CloudSandbox family, daemon sandbox lifecycle, config hot reload, and suspend/resume are not frozen yet; LocalSandbox remains a dev-only unsafe opt-in, not a production fallback.
-> - 🚧 **部分实现 / 延期**：DockerSandbox durable snapshot/resume、LocalSandbox / CloudSandbox family、daemon sandbox lifecycle、config 热更新与 suspend/resume 尚未冻结；LocalSandbox 仍只能作为 dev-only unsafe opt-in，不是生产 fallback。
+> - ✅ **Implemented (QUI-148, 2026-05-10)**: Capabilities config hot reload covers all four trigger surfaces — manual (`/reload` REPL command), watch (`fs.watch` debounce), webhook (`POST /reload` HTTP, 127.0.0.1-only, HMAC-SHA256), and signal (`SIGHUP`). Webhook server lives at [`packages/agent-core/src/config/reload-webhook-server.ts:245`](../../packages/agent-core/src/config/reload-webhook-server.ts#L245); SIGHUP factory at [`packages/agent-core/src/config/sighup-handler.ts:91`](../../packages/agent-core/src/config/sighup-handler.ts#L91); LocalSandbox prod gate at [`packages/agent-core/src/config/local-sandbox-prod-gate.ts:79`](../../packages/agent-core/src/config/local-sandbox-prod-gate.ts#L79).
+> - ✅ **已实现（QUI-148，2026-05-10）**：capabilities 热更新覆盖四种触发器 — manual（`/reload` REPL 命令）、watch（`fs.watch` debounce）、webhook（`POST /reload` HTTP，仅环回地址，HMAC-SHA256）、signal（`SIGHUP`）。webhook server 见 [`packages/agent-core/src/config/reload-webhook-server.ts:245`](../../packages/agent-core/src/config/reload-webhook-server.ts#L245)；SIGHUP 工厂见 [`packages/agent-core/src/config/sighup-handler.ts:91`](../../packages/agent-core/src/config/sighup-handler.ts#L91)；LocalSandbox 生产模式拒绝闸门见 [`packages/agent-core/src/config/local-sandbox-prod-gate.ts:79`](../../packages/agent-core/src/config/local-sandbox-prod-gate.ts#L79)。
+> - 🚧 **Partial / deferred**: Durable DockerSandbox snapshot/resume, CloudSandbox family, daemon sandbox lifecycle, and suspend/resume are not frozen yet; LocalSandbox remains a dev-only unsafe opt-in, not a production fallback (now enforced at boot — see § LocalSandbox prod hard rule).
+> - 🚧 **部分实现 / 延期**：DockerSandbox durable snapshot/resume、CloudSandbox family、daemon sandbox lifecycle、suspend/resume 尚未冻结；LocalSandbox 仍只能作为 dev-only unsafe opt-in，不是生产 fallback（现在在启动时硬性拦截，详见 § LocalSandbox 生产硬规则）。
 > - Linear follow-up: [QUI-21](https://linear.app/quilin-agent/issue/QUI-21/09-runtime-packaging-hot-update-devcontainercd-and-sandbox-lifecycle)（打包/热更新）、[QUI-105](https://linear.app/quilin-agent/issue/QUI-105/生产级-tui-与-web-控制台会话skillmcp配置与-provider-管理)（TUI & Web 控制台）、[QUI-106](https://linear.app/quilin-agent/issue/QUI-106/首次使用配置引导模型providermcpskills记忆与安全设置)（首次配置引导，API 骨架已完成）、[QUI-84](https://linear.app/quilin-agent/issue/QUI-84/m2-实现-tui-resume-会话列表与恢复)（TUI session 恢复）、[QUI-86](https://linear.app/quilin-agent/issue/QUI-86/m3-实现-config-热更新-webhook-与-quilin-config-reload)（config 热更新 webhook）。
 > - Linear 后续项：[QUI-21](https://linear.app/quilin-agent/issue/QUI-21/09-runtime-packaging-hot-update-devcontainercd-and-sandbox-lifecycle)（打包/热更新）、[QUI-105](https://linear.app/quilin-agent/issue/QUI-105/生产级-tui-与-web-控制台会话skillmcp配置与-provider-管理)（TUI & Web 控制台）、[QUI-106](https://linear.app/quilin-agent/issue/QUI-106/首次使用配置引导模型providermcpskills记忆与安全设置)（首次配置引导，API 骨架已完成）、[QUI-84](https://linear.app/quilin-agent/issue/QUI-84/m2-实现-tui-resume-会话列表与恢复)（TUI session 恢复）、[QUI-86](https://linear.app/quilin-agent/issue/QUI-86/m3-实现-config-热更新-webhook-与-quilin-config-reload)（config 热更新 webhook）。
 
@@ -1513,3 +1515,109 @@ async def test_session_persistence_across_restarts():
 
     assert "7" in result.output
 ```
+
+---
+
+## § Hot reload triggers / 热更新触发器
+
+The capabilities hot reload subsystem (`CapabilitiesHotReloadController`) accepts four trigger surfaces. All of them route through the same `controller.reload(trigger)` entry point — the runtime side-effects (config diff, MCP reconnect classification, skills catalog reload, status snapshots) are identical across triggers.
+
+capabilities 热更新子系统（`CapabilitiesHotReloadController`）接受四种触发器，全部走同一个 `controller.reload(trigger)` 入口；不同触发器走出来的运行时副作用（config diff、MCP reconnect 分类、skills 目录刷新、状态快照）完全一致。
+
+| Trigger | Where | When to use | Notes |
+|---------|-------|-------------|-------|
+| `manual` | REPL `/reload` command | Operator-driven reload from inside the REPL | Same code path as bootstrap (operation = `reload`) |
+| `watch` | `fs.watch` debounce | Automatic reload on `~/.quilin/capabilities.{yaml,json}` change | Default ON, debounced 200 ms |
+| `webhook` | `POST /reload` HTTP | External orchestrators (CI / control plane) trigger reload over HTTP | Default OFF, opt-in via `runtime.hot_reload.webhook.enabled = true` |
+| `signal` | `SIGHUP` | Process supervisors (systemd, runit) reload via signal | Default ON (skipped under `NODE_ENV=test` / `VITEST`) |
+
+| 触发器 | 位置 | 使用场景 | 备注 |
+|--------|------|----------|------|
+| `manual` | REPL `/reload` 命令 | 运维在 REPL 内主动触发 | 与 bootstrap 同一代码路径（operation = `reload`） |
+| `watch` | `fs.watch` 防抖 | `~/.quilin/capabilities.{yaml,json}` 变更自动 reload | 默认开启，200 ms 防抖 |
+| `webhook` | `POST /reload` HTTP | 外部编排器（CI / 控制面）通过 HTTP 触发 | 默认关闭，需 `runtime.hot_reload.webhook.enabled = true` |
+| `signal` | `SIGHUP` | systemd / runit 等进程监管者用信号触发 | 默认开启（`NODE_ENV=test` 或 `VITEST` 自动跳过） |
+
+### Webhook usage / Webhook 使用方式
+
+The webhook server enforces three hard constraints at startup:
+
+1. **Loopback-only host.** Only `127.0.0.1`, `::1`, `localhost`, and `127.0.0.0/8` are accepted. `0.0.0.0`, `::`, and any public IP cause `ReloadWebhookConfigurationError` at startup.
+2. **HMAC secret required.** `QUILIN_RELOAD_WEBHOOK_SECRET` env var MUST be set; missing / empty value refuses to start (no insecure fallback path).
+3. **HMAC-SHA256 signature on every request.** Clients send `X-Reload-Signature: <hex(hmac-sha256(secret, body))>`. Missing header → `401 missing_signature`. Wrong signature → `401 invalid_signature`. Non-POST methods → `405`. Unknown paths → `404`.
+
+webhook server 在启动时强制三条硬约束：
+
+1. **仅环回地址**：只接受 `127.0.0.1`、`::1`、`localhost`、`127.0.0.0/8`，公网 IP 与 `0.0.0.0`、`::` 在启动时直接抛 `ReloadWebhookConfigurationError`。
+2. **必须配置 HMAC secret**：`QUILIN_RELOAD_WEBHOOK_SECRET` 环境变量必须设置，缺失或为空时拒绝启动，没有任何不安全 fallback。
+3. **每次请求都校验 HMAC-SHA256**：客户端发送 `X-Reload-Signature: <hex(hmac-sha256(secret, body))>`。缺失头 → `401 missing_signature`；签名错误 → `401 invalid_signature`；非 POST → `405`；未知路径 → `404`。
+
+Example client (curl) / 客户端示例（curl）:
+
+```bash
+SECRET=$QUILIN_RELOAD_WEBHOOK_SECRET
+BODY='{"reason":"deploy-12345"}'
+SIG=$(printf "%s" "$BODY" | openssl dgst -sha256 -hmac "$SECRET" -hex | awk '{print $2}')
+curl -sS -X POST "http://127.0.0.1:9090/reload" \
+  -H "content-type: application/json" \
+  -H "X-Reload-Signature: $SIG" \
+  --data "$BODY"
+```
+
+Successful response is the reload result JSON (status / generation / change / configPath). Failures return 4xx (signature problems) or 5xx (controller error).
+
+成功响应是 reload 结果 JSON（status / generation / change / configPath）。失败按 4xx（签名问题）或 5xx（controller 错误）返回。
+
+### SIGHUP usage / SIGHUP 使用方式
+
+```bash
+# Find the agent-core PID and send SIGHUP. Reload runs asynchronously;
+# the structured log line `SIGHUP reload handler registered` confirms
+# the listener is wired.
+kill -HUP $(pgrep -f "quilin")
+```
+
+The handler is registered through `installSighupHandler(controller, options)`. Tests inject a `processRef: FakeProcess` and call `forceRegister: true` to bypass the test-env skip. Reload failures never crash the parent — they are routed through `options.onError`.
+
+handler 由 `installSighupHandler(controller, options)` 注册。测试可注入 `processRef: FakeProcess` 并使用 `forceRegister: true` 跳过测试环境检测。reload 失败不会让父进程崩溃，错误经 `options.onError` 转发。
+
+---
+
+## § LocalSandbox 生产硬规则 / LocalSandbox prod hard rule
+
+LocalSandbox is a **dev-only unsafe opt-in**. To prevent operators from accidentally shipping it to production, the boot path now refuses to start when both:
+
+1. The runtime is in production mode — either `NODE_ENV=production` or `QUILIN_PROD=1`.
+2. The user config selects `local-dev` as the default sandbox provider — `runtime.sandbox.default = "local-dev"` in `~/.quilin/config.toml`.
+
+LocalSandbox 是 **dev-only 的不安全 opt-in**。为防止运维误把它带进生产环境，启动路径会在以下两个条件同时成立时拒绝启动：
+
+1. 运行时处于生产模式 — `NODE_ENV=production` 或 `QUILIN_PROD=1` 任一成立。
+2. 用户配置把 `local-dev` 设为默认 sandbox 后端 — `~/.quilin/config.toml` 中 `runtime.sandbox.default = "local-dev"`。
+
+When triggered, `assertLocalSandboxNotInProd` throws `LocalSandboxProdRefusalError` with the message:
+
+触发时 `assertLocalSandboxNotInProd` 抛出 `LocalSandboxProdRefusalError`，错误消息为：
+
+```
+LocalSandbox is dev-only and refused in production mode.
+Configure DockerSandbox or remove sandbox.default override.
+See docs/09-deployment-runtime/README.md § sandbox.
+(NODE_ENV=production)
+```
+
+Remediation / 修复方式:
+
+- Set `runtime.sandbox.default = "docker"` in `~/.quilin/config.toml`, or
+- Remove the `[runtime.sandbox]` section entirely (default is `docker`), or
+- Unset `NODE_ENV=production` / `QUILIN_PROD=1` if the host is genuinely a dev environment.
+
+修复方法：
+
+- 在 `~/.quilin/config.toml` 中设置 `runtime.sandbox.default = "docker"`；
+- 或删除 `[runtime.sandbox]` 整段（默认就是 `docker`）；
+- 或取消 `NODE_ENV=production` / `QUILIN_PROD=1`（确认主机其实是 dev 环境）。
+
+Dev mode behavior is unchanged: `runtime.sandbox.default = "local-dev"` keeps working when neither prod env var is set, so existing dev-shell flows that opt into LocalSandbox are unaffected.
+
+dev 模式行为保持不变：未设置任何生产 env 时 `runtime.sandbox.default = "local-dev"` 照常工作，现有 dev-shell 显式 opt-in LocalSandbox 的流程不受影响。

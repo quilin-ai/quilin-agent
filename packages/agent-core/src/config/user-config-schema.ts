@@ -196,6 +196,70 @@ export const safetyConfigSchema = z
 	.default({ trust_mode: "auto" });
 
 /**
+ * Hot reload webhook trigger configuration (QUI-148).
+ *
+ * Default OFF. When enabled, opens a localhost-bound HTTP server with a
+ * single `POST /reload` endpoint that triggers the capabilities hot
+ * reload. HMAC-SHA256 signature verification is mandatory: the
+ * `QUILIN_RELOAD_WEBHOOK_SECRET` env var MUST be set or the webhook
+ * refuses to start. The host MUST be a loopback address — public IPs
+ * are rejected at startup.
+ *
+ * 热更新 webhook 配置（QUI-148）。默认关闭；启用后开放 `POST /reload` HTTP
+ * 端点用于触发 capabilities 热更新。HMAC-SHA256 签名校验强制开启，
+ * `QUILIN_RELOAD_WEBHOOK_SECRET` 环境变量必须设置，否则拒绝启动。host
+ * 必须为环回地址，启动时拒绝任何公网 IP。
+ */
+export const reloadWebhookConfigSchema = z
+	.object({
+		enabled: z.boolean().default(false),
+		port: z.number().int().min(0).max(65_535).default(0),
+		host: z.string().min(1).default("127.0.0.1"),
+	})
+	.strict()
+	.default({ enabled: false, port: 0, host: "127.0.0.1" });
+
+export const hotReloadConfigSchema = z
+	.object({
+		webhook: reloadWebhookConfigSchema,
+	})
+	.strict()
+	.default({ webhook: { enabled: false, port: 0, host: "127.0.0.1" } });
+
+/**
+ * Runtime configuration namespace (QUI-148).
+ *
+ * Holds runtime-level toggles distinct from per-domain (LLM / memory /
+ * tools) settings. Currently exposes:
+ * - `hot_reload.webhook` — opt-in HTTP webhook trigger.
+ * - `sandbox.default` — default sandbox provider; `local-dev` is dev-only
+ *   and refused in production mode (NODE_ENV=production / QUILIN_PROD=1).
+ *
+ * 运行时配置命名空间（QUI-148）。承载运行时层面的开关，与按领域划分的配置
+ * （LLM / 记忆 / 工具）互不干扰。当前暴露：
+ * - `hot_reload.webhook`：opt-in 的 HTTP webhook 触发器。
+ * - `sandbox.default`：默认 sandbox 后端；`local-dev` 仅限开发环境，生产
+ *   模式（NODE_ENV=production / QUILIN_PROD=1）下启动即报错。
+ */
+export const runtimeSandboxConfigSchema = z
+	.object({
+		default: z.enum(["docker", "local-dev"]).default("docker"),
+	})
+	.strict()
+	.default({ default: "docker" });
+
+export const runtimeConfigSchema = z
+	.object({
+		hot_reload: hotReloadConfigSchema,
+		sandbox: runtimeSandboxConfigSchema,
+	})
+	.strict()
+	.default({
+		hot_reload: { webhook: { enabled: false, port: 0, host: "127.0.0.1" } },
+		sandbox: { default: "docker" },
+	});
+
+/**
  * Self-evolution configuration. Currently only governs which offline
  * optimizer the idle runner instantiates; future fields will live here
  * (e.g. proposal review TTL, dry-run toggles).
@@ -340,6 +404,7 @@ export const userConfigSchema = z
 		safety: safetyConfigSchema,
 		context: contextConfigSchema,
 		self_evolution: selfEvolutionConfigSchema,
+		runtime: runtimeConfigSchema,
 	})
 	.strict();
 

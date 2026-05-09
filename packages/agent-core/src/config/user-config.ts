@@ -263,6 +263,11 @@ function buildSchemaTree(): SchemaTreeNode {
 		"context.relevance.threshold": "number",
 		"context.relevance.rerankEnabled": "boolean",
 		"context.relevance.strategy": "string",
+		// QUI-148: runtime hot reload + sandbox default knobs.
+		"runtime.hot_reload.webhook.enabled": "boolean",
+		"runtime.hot_reload.webhook.port": "number",
+		"runtime.hot_reload.webhook.host": "string",
+		"runtime.sandbox.default": "string",
 	};
 
 	const root: {

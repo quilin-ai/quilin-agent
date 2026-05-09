@@ -12,6 +12,10 @@ import {
 	type CapabilitiesHotReloadEvent,
 	createCapabilitiesHotReloadController,
 } from "./config/hot-reload.js";
+import {
+	assertLocalSandboxNotInProd,
+	LocalSandboxProdRefusalError,
+} from "./config/local-sandbox-prod-gate.js";
 // MCPRegistry spawns quilin-mem / quilin-web servers automatically
 // from the default capabilities config (loader.ts) via
 // StdioClientTransport. The previous mcp-launcher.ts module was
@@ -19,12 +23,19 @@ import {
 // it was redundant and double-spawning every server.
 import { ensureMemoryBackend } from "./config/memory-setup.js";
 import {
+	loadReloadWebhookSecret,
+	ReloadWebhookConfigurationError,
+	type ReloadWebhookServerHandle,
+	startReloadWebhookServer,
+} from "./config/reload-webhook-server.js";
+import {
 	bootstrapUserRuntime,
 	buildRuntimeInferenceConfig,
 	buildRuntimeTierRoutingConfig,
 	buildRuntimeToolFilter,
 	resolveRuntimeWriteAuthorityMode,
 } from "./config/runtime.js";
+import { installSighupHandler } from "./config/sighup-handler.js";
 import type { UserConfigLoadResult } from "./config/user-config.js";
 import { startControlPlaneServer } from "./control-plane/handler.js";
 import {
@@ -69,6 +80,23 @@ import { getSubagentRegistrySnapshot } from "./tools/builtin/index.js";
 export * from "./config/first-run.js";
 export * from "./config/hot-reload.js";
 export {
+	assertLocalSandboxNotInProd,
+	isProductionRuntimeMode,
+	type LocalSandboxProdGateOptions,
+	LocalSandboxProdRefusalError,
+} from "./config/local-sandbox-prod-gate.js";
+export {
+	assertLoopbackHost,
+	computeReloadWebhookSignature,
+	loadReloadWebhookSecret,
+	RELOAD_WEBHOOK_SECRET_ENV,
+	RELOAD_WEBHOOK_SIGNATURE_HEADER,
+	ReloadWebhookConfigurationError,
+	type ReloadWebhookServerHandle,
+	type ReloadWebhookServerOptions,
+	startReloadWebhookServer,
+} from "./config/reload-webhook-server.js";
+export {
 	type BootstrapOptions,
 	bootstrapUserRuntime,
 	buildRuntimeInferenceConfig,
@@ -105,6 +133,13 @@ export {
 	type UserRuntimeStateSnapshotField,
 } from "./config/runtime.js";
 export {
+	installSighupHandler,
+	isTestEnvironment,
+	type ProcessLike,
+	type SighupHandlerHandle,
+	type SighupHandlerOptions,
+} from "./config/sighup-handler.js";
+export {
 	type ConfigSource,
 	loadUserConfig,
 	UserConfigError,
@@ -113,11 +148,15 @@ export {
 } from "./config/user-config.js";
 export {
 	FORBIDDEN_FIELD_FRAGMENTS,
+	hotReloadConfigSchema,
 	idleEvolutionConfigSchema,
 	llmConfigSchema,
 	memoryConfigSchema,
 	memoryObserverConfigSchema,
 	observabilityConfigSchema,
+	reloadWebhookConfigSchema,
+	runtimeConfigSchema,
+	runtimeSandboxConfigSchema,
 	safetyConfigSchema,
 	sessionConfigSchema,
 	toolsConfigSchema,
@@ -710,6 +749,25 @@ export async function main(options: MainOptions = {}): Promise<void> {
 
 	const userRuntime = await bootstrapUserRuntime();
 
+	// QUI-148: refuse to boot when production mode is configured with the
+	// `local-dev` sandbox default. LocalSandbox is dev-only; failing fast
+	// here keeps a misconfigured deployment from silently shipping an
+	// unsafe sandbox.
+	// QUI-148：生产模式下若把 sandbox.default 设为 `local-dev` 必须立即
+	// 拒绝启动，避免误把 dev-only sandbox 带进生产环境。
+	try {
+		assertLocalSandboxNotInProd(userRuntime.result.config);
+	} catch (err) {
+		if (err instanceof LocalSandboxProdRefusalError) {
+			logger.fatal(
+				{ error: { name: err.name, message: err.message, code: err.code } },
+				"LocalSandbox refused in production mode",
+			);
+			process.exit(1);
+		}
+		throw err;
+	}
+
 	// Ensure ~/.quilin/memory.db exists with schema before any memory use.
 	// Guard against test-mode runs so index.test.ts call-index assertions stay stable.
 	if (process.env.NODE_ENV !== "test") {
@@ -840,6 +898,72 @@ export async function main(options: MainOptions = {}): Promise<void> {
 			logEvent: logCapabilitiesHotReloadEvent,
 		});
 		await capabilitiesHotReload.bootstrap();
+
+		// QUI-148: SIGHUP handler — kicks `controller.reload("signal")` on
+		// SIGHUP. Test environments skip registration so vitest's signal
+		// handling is not polluted (see config/sighup-handler.ts).
+		// QUI-148：注册 SIGHUP handler，收到 SIGHUP 时触发
+		// `controller.reload("signal")`。测试环境跳过注册，避免污染 vitest 的
+		// 信号处理逻辑（参见 config/sighup-handler.ts）。
+		const sighupHandle = installSighupHandler(capabilitiesHotReload, {
+			env: process.env,
+			onRegister: () => {
+				logger.info({ trigger: "signal" }, "SIGHUP reload handler registered");
+			},
+			onError: (error) => {
+				const message = error instanceof Error ? error.message : String(error);
+				logger.error({ trigger: "signal", message }, "SIGHUP reload failed");
+			},
+		});
+
+		// QUI-148: optional reload webhook (POST /reload). Default OFF; opt-in
+		// via `runtime.hot_reload.webhook.enabled = true`. Refuses to start
+		// without `QUILIN_RELOAD_WEBHOOK_SECRET` and without a loopback host.
+		// QUI-148：可选 reload webhook（POST /reload）。默认关闭，需要在 user
+		// config `runtime.hot_reload.webhook.enabled = true` 显式打开；缺少
+		// `QUILIN_RELOAD_WEBHOOK_SECRET` 或非环回 host 时拒绝启动。
+		const webhookConfig = userRuntime.result.config.runtime.hot_reload.webhook;
+		let webhookHandle: ReloadWebhookServerHandle | null = null;
+		if (webhookConfig.enabled) {
+			try {
+				// Validate the secret early so we surface a clear error before
+				// touching the network layer.
+				loadReloadWebhookSecret(process.env);
+				webhookHandle = await startReloadWebhookServer({
+					controller: capabilitiesHotReload,
+					host: webhookConfig.host,
+					port: webhookConfig.port,
+					env: process.env,
+					onListen: ({ host, port }) => {
+						logger.info(
+							{ host, port, trigger: "webhook" },
+							"Reload webhook listening",
+						);
+					},
+					onError: (error, context) => {
+						const message =
+							error instanceof Error ? error.message : String(error);
+						logger.error(
+							{ context, message, trigger: "webhook" },
+							"Reload webhook handler failed",
+						);
+					},
+				});
+			} catch (err) {
+				if (err instanceof ReloadWebhookConfigurationError) {
+					logger.error(
+						{ error: { name: err.name, message: err.message, code: err.code } },
+						"Reload webhook configuration error — webhook disabled",
+					);
+				} else {
+					logger.error(
+						{ error: providerErrorLogFields(err) },
+						"Reload webhook failed to start",
+					);
+				}
+			}
+		}
+
 		const sessionId = await resolveReplSessionId();
 		let shouldExit = false;
 
@@ -1089,6 +1213,17 @@ export async function main(options: MainOptions = {}): Promise<void> {
 			});
 			shouldExit = true;
 		} finally {
+			sighupHandle.dispose();
+			if (webhookHandle != null) {
+				try {
+					await webhookHandle.close();
+				} catch (err) {
+					logger.warn(
+						{ error: providerErrorLogFields(err) },
+						"Reload webhook close failed",
+					);
+				}
+			}
 			capabilitiesHotReload.dispose();
 		}
 
