@@ -18,7 +18,6 @@
  * package tsconfig（rootDir = `src/`）可以一起 type-check 单元 + 集成测试。
  */
 
-import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
@@ -41,6 +40,35 @@ interface CliOptions {
 const DEFAULT_TRAJ = "docs/10-self-evolution/benchmark/trajectories.jsonl";
 const DEFAULT_REPORT = "docs/10-self-evolution/dspy-validation-report.md";
 
+const USAGE = `Usage: bun run scripts/bench-self-evolution.ts [options]
+
+Stage D — DSPy benchmark validation script (QUI-147). Runs the 3-arm
+benchmark (PromptRewrite baseline + DSPy MIPROv2 mock + DSPy GEPA mock)
+on the labeled trajectories corpus and writes a markdown report.
+
+Stage D（QUI-147）DSPy 验证脚本，跑 3-arm benchmark（PromptRewrite
+baseline + DSPy MIPROv2 mock + DSPy GEPA mock），输出 markdown 报告。
+
+Options:
+  --trajectories <path>   JSONL trajectories file (default: ${DEFAULT_TRAJ})
+                          带标注的轨迹 JSONL 文件。
+  --report <path>         Markdown report output path (default: ${DEFAULT_REPORT})
+                          markdown 报告输出路径。
+  --seeds <int>           Positive integer — number of seeds per arm (default: 3)
+                          每个 arm 跑的 seed 数，必须是正整数。
+  --dry-run               Load trajectories then exit without running the bench
+                          只加载轨迹然后退出，不跑 bench。
+  -h, --help              Print this usage message and exit
+                          打印此帮助信息并退出。
+
+Manual reproduction / 手动复现：
+  bun run scripts/bench-self-evolution.ts --help
+  bun run scripts/bench-self-evolution.ts --dry-run
+  bun run scripts/bench-self-evolution.ts --seeds 3
+`;
+
+class CliArgError extends Error {}
+
 function parseArgs(argv: readonly string[]): CliOptions {
 	let trajectoriesPath = DEFAULT_TRAJ;
 	let reportPath = DEFAULT_REPORT;
@@ -48,29 +76,51 @@ function parseArgs(argv: readonly string[]): CliOptions {
 	let dryRun = false;
 	for (let i = 0; i < argv.length; i += 1) {
 		const arg = argv[i];
-		if (arg === "--trajectories" && argv[i + 1] != null) {
-			trajectoriesPath = argv[i + 1] ?? DEFAULT_TRAJ;
+		if (arg === "--trajectories") {
+			const next = argv[i + 1];
+			if (next == null) {
+				throw new CliArgError("--trajectories requires a path argument");
+			}
+			trajectoriesPath = next;
 			i += 1;
-		} else if (arg === "--report" && argv[i + 1] != null) {
-			reportPath = argv[i + 1] ?? DEFAULT_REPORT;
+		} else if (arg === "--report") {
+			const next = argv[i + 1];
+			if (next == null) {
+				throw new CliArgError("--report requires a path argument");
+			}
+			reportPath = next;
 			i += 1;
-		} else if (arg === "--seeds" && argv[i + 1] != null) {
-			const parsed = Number.parseInt(argv[i + 1] ?? "3", 10);
-			seeds = Number.isNaN(parsed) ? 3 : parsed;
+		} else if (arg === "--seeds") {
+			const next = argv[i + 1];
+			if (next == null) {
+				throw new CliArgError("--seeds requires an integer argument");
+			}
+			const parsed = Number.parseInt(next, 10);
+			if (
+				!Number.isFinite(parsed) ||
+				!Number.isInteger(parsed) ||
+				parsed <= 0 ||
+				String(parsed) !== next.trim()
+			) {
+				throw new CliArgError(
+					`--seeds must be a positive integer, got "${next}"`,
+				);
+			}
+			seeds = parsed;
 			i += 1;
 		} else if (arg === "--dry-run") {
 			dryRun = true;
+		} else {
+			throw new CliArgError(
+				`unknown flag: ${String(arg)} — run with --help to see valid options`,
+			);
 		}
 	}
 	return { trajectoriesPath, reportPath, seeds, dryRun };
 }
 
-function getCommitHash(): string {
-	try {
-		return execSync("git rev-parse HEAD", { encoding: "utf-8" }).trim();
-	} catch {
-		return "unknown";
-	}
+function isHelpFlag(argv: readonly string[]): boolean {
+	return argv.includes("--help") || argv.includes("-h");
 }
 
 async function getDatasetHash(path: string): Promise<string> {
@@ -79,7 +129,22 @@ async function getDatasetHash(path: string): Promise<string> {
 }
 
 async function main(): Promise<void> {
-	const options = parseArgs(process.argv.slice(2));
+	const argv = process.argv.slice(2);
+	if (isHelpFlag(argv)) {
+		process.stdout.write(USAGE);
+		return;
+	}
+	let options: CliOptions;
+	try {
+		options = parseArgs(argv);
+	} catch (err) {
+		if (err instanceof CliArgError) {
+			process.stderr.write(`bench-self-evolution: ${err.message}\n`);
+			process.stderr.write(USAGE);
+			process.exit(2);
+		}
+		throw err;
+	}
 	const trajectoriesAbsPath = resolve(options.trajectoriesPath);
 	const reportAbsPath = resolve(options.reportPath);
 	console.log(`bench-self-evolution: loading ${trajectoriesAbsPath}`);
@@ -108,7 +173,6 @@ async function main(): Promise<void> {
 		options.seeds,
 	);
 
-	const commitHash = getCommitHash();
 	const datasetHash = await getDatasetHash(trajectoriesAbsPath);
 	const report = renderReport({
 		baseline,
@@ -116,7 +180,6 @@ async function main(): Promise<void> {
 		gepa,
 		trajectoryCount: harness.entries.length,
 		seeds: options.seeds,
-		commitHash,
 		datasetHash,
 		trajectoriesPath: options.trajectoriesPath,
 	});

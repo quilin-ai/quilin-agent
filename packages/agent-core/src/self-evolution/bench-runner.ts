@@ -43,7 +43,18 @@ export interface ReportInput {
 	readonly gepa: ArmResult;
 	readonly trajectoryCount: number;
 	readonly seeds: number;
-	readonly commitHash: string;
+	/**
+	 * Optional commit hash. Round-2 fix: this is no longer rendered in the
+	 * Reproducibility section because the commit-hash-at-render-time will
+	 * lag the commit-that-actually-lands-the-fix; the dataset SHA-256 +
+	 * trajectories file path are sufficient reproducibility keys. Kept on
+	 * the interface for callers that want to log it elsewhere.
+	 *
+	 * round-2 修复：commit hash 不再渲染到 Reproducibility 段，因为渲染时
+	 * 抓到的 hash 永远落后于真正落库的 commit。dataset SHA-256 + 轨迹
+	 * 文件路径已是充分的复现 key。接口上保留字段，便于调用方在别处记录。
+	 */
+	readonly commitHash?: string;
 	readonly datasetHash: string;
 	readonly trajectoriesPath: string;
 }
@@ -105,7 +116,40 @@ export function createMockDspyClient(
 				? (args.trajectories as readonly { trajectoryRef?: string }[])
 				: [];
 			const proposals: OptimizationProposalDraft[] = [];
-			const seenCategories = new Set<FailureCategory>();
+			// NOTE (round-2 fix): no per-category dedupe — we want every entry
+			// to participate so the seed multiplier exercises the full sample.
+			// The (seed * 991 + i * 71) mod 1000 hash uses two primes coprime
+			// to 1000 to give meaningful variance across seeds; the previous
+			// (seed * 17 + i * 31) mod 100 hash combined with category dedupe
+			// only fed ~5 trajectories per call AND repeated thresholds across
+			// seeds, so 3 mipro seeds produced identical numbers.
+			//
+			// 注意（round-2 修复）：去掉了按类别去重 —— 我们希望每条 entry 都参与，
+			// 让 seed 乘子能够覆盖到完整样本。`(seed * 991 + i * 71) mod 1000`
+			// 使用两个与 1000 互质的质数，跨 seed 给出可观察的方差；之前的
+			// `(seed * 17 + i * 31) mod 100` 加上类别去重，每次只喂 ~5 条
+			// trajectory，且阈值上映射重复值，最终 3 个 mipro seed 输出完全相同。
+			// Build a list of "wrong-category" template strings so the
+			// `!fullCoverage` branch picks guidance that does NOT cover the
+			// entry's ground-truth keywords. Without this, the same-category
+			// fallback template was nearly word-for-word the ground truth
+			// (e.g., tool_error fallback === tool_error ground truth), so
+			// per-seed pass/fail rates collapsed even when the seed multiplier
+			// produced different proposal mixes.
+			//
+			// 构造"跨类别"的 fallback 模板池，让 `!fullCoverage` 分支挑到的
+			// guidance 不覆盖 entry 的 ground-truth 关键字。修复前同类别
+			// fallback 与 ground truth 几乎一字不差（tool_error fallback ===
+			// tool_error ground truth），即便 seed 乘子产出不同 proposal 混合，
+			// 单 seed 的 pass/fail 仍然完全一致。
+			const wrongCategoryFor = (cat: FailureCategory): readonly string[] => {
+				const others: readonly string[] = (
+					Object.keys(FIX_DIRECTION_TEMPLATES) as FailureCategory[]
+				)
+					.filter((c) => c !== cat && c !== "unknown")
+					.flatMap((c) => FIX_DIRECTION_TEMPLATES[c] ?? []);
+				return others;
+			};
 			for (let i = 0; i < trajectoriesArg.length; i += 1) {
 				const ref = trajectoriesArg[i]?.trajectoryRef ?? "";
 				const id = ref.replace(/^trajectory:/, "");
@@ -113,15 +157,18 @@ export function createMockDspyClient(
 				if (entry == null) {
 					continue;
 				}
-				if (seenCategories.has(entry.category)) {
-					continue;
+				const seedHash = (i * 71 + seed * 991) % 1000;
+				const fullCoverage = seedHash < fullCoverageRate * 1000;
+				let guidance: string;
+				if (fullCoverage) {
+					guidance = entry.ground_truth_fix_direction;
+				} else {
+					const others = wrongCategoryFor(entry.category);
+					guidance =
+						others.length === 0
+							? ((FIX_DIRECTION_TEMPLATES[entry.category] ?? [])[0] ?? "")
+							: (others[seedHash % others.length] ?? "");
 				}
-				seenCategories.add(entry.category);
-				const seedHash = (i * 31 + seed * 17) % 100;
-				const fullCoverage = seedHash < fullCoverageRate * 100;
-				const guidance = fullCoverage
-					? entry.ground_truth_fix_direction
-					: ((FIX_DIRECTION_TEMPLATES[entry.category] ?? [])[0] ?? "");
 				const summary = `${name}/${choice} guidance for ${entry.category}: ${guidance}`;
 				proposals.push({
 					title: `${choice.toUpperCase()} candidate for ${entry.category}`,
@@ -170,7 +217,22 @@ export async function runBaselineArm(
 	seed: number,
 ): Promise<BenchmarkResult> {
 	const optimizer = new PromptRewriteOptimizer({
-		now: () => new Date(`2026-05-10T0${seed}:00:00.000Z`),
+		now: () =>
+			new Date(
+				// Round-2 fix: use padStart so the hours field is two digits, and
+				// wrap with modulo 24 so seeds >= 24 don't produce invalid dates
+				// like `2026-05-10T24:00:00.000Z`. This `now` is a deterministic
+				// per-seed timestamp injection — exact wall-clock value doesn't
+				// matter, only that distinct seeds produce distinct timestamps
+				// (mod 24 collisions for seeds >= 24 are acceptable for a bench).
+				//
+				// round-2 修复：用 padStart 让 hour 域是两位，并用模 24 包装，
+				// 避免 seed >= 24 时拼出非法时间戳。这里的 `now` 是确定性的
+				// per-seed 时间戳注入，具体 wall-clock 值不重要，只要不同
+				// seed 给出不同时间戳即可（seed >= 24 时模 24 冲突在 bench
+				// 场景可接受）。
+				`2026-05-10T${String(seed % 24).padStart(2, "0")}:00:00.000Z`,
+			),
 	});
 	const trajectories = entries.map((e) => entryToTrajectoryRecord(e));
 	const analyses = trajectories.map(analyzeTrajectoryFailures);
@@ -190,7 +252,22 @@ export async function runDspyArm(
 	const optimizer = new DspyOfflineOptimizer({
 		client,
 		optimizerChoice: choice,
-		now: () => new Date(`2026-05-10T0${seed}:00:00.000Z`),
+		now: () =>
+			new Date(
+				// Round-2 fix: use padStart so the hours field is two digits, and
+				// wrap with modulo 24 so seeds >= 24 don't produce invalid dates
+				// like `2026-05-10T24:00:00.000Z`. This `now` is a deterministic
+				// per-seed timestamp injection — exact wall-clock value doesn't
+				// matter, only that distinct seeds produce distinct timestamps
+				// (mod 24 collisions for seeds >= 24 are acceptable for a bench).
+				//
+				// round-2 修复：用 padStart 让 hour 域是两位，并用模 24 包装，
+				// 避免 seed >= 24 时拼出非法时间戳。这里的 `now` 是确定性的
+				// per-seed 时间戳注入，具体 wall-clock 值不重要，只要不同
+				// seed 给出不同时间戳即可（seed >= 24 时模 24 冲突在 bench
+				// 场景可接受）。
+				`2026-05-10T${String(seed % 24).padStart(2, "0")}:00:00.000Z`,
+			),
 	});
 	const trajectories = entries.map((e) => entryToTrajectoryRecord(e));
 	const analyses = trajectories.map(analyzeTrajectoryFailures);
@@ -226,6 +303,49 @@ function emptyAggregate(): BenchmarkResult {
 	};
 }
 
+/**
+ * Pool BenchmarkResult counts across every seed so the Wilson CI runs on
+ * the full sample size (`n_per_seed * seeds`). Pre-fix the harness only
+ * looked at `perSeedResults[0]` which dropped 2 of 3 seeds and silently
+ * collapsed the CI to single-seed precision.
+ *
+ * 把每个 seed 的 BenchmarkResult 计数池化，让 Wilson CI 跑在完整样本量
+ * （`每 seed 样本数 * seeds`）上。修复前只读 `perSeedResults[0]`，丢掉
+ * 了 3 个 seed 中的 2 个，CI 隐式塌缩到单 seed 精度。
+ */
+function poolAggregate(
+	perSeedResults: readonly BenchmarkResult[],
+): BenchmarkResult {
+	const pooled = emptyAggregate();
+	let pooledPassed = 0;
+	let pooledFailed = 0;
+	const pooledRaw: BenchmarkResult["raw"][number][] = [];
+	const perCategory = pooled.perCategory as Record<
+		FailureCategory,
+		{ pass: number; fail: number }
+	>;
+	for (const r of perSeedResults) {
+		pooledPassed += r.passed;
+		pooledFailed += r.failed;
+		for (const cat of Object.keys(perCategory) as FailureCategory[]) {
+			const bucket = r.perCategory[cat];
+			perCategory[cat] = {
+				pass: perCategory[cat].pass + bucket.pass,
+				fail: perCategory[cat].fail + bucket.fail,
+			};
+		}
+		for (const item of r.raw) {
+			pooledRaw.push(item);
+		}
+	}
+	return {
+		passed: pooledPassed,
+		failed: pooledFailed,
+		perCategory,
+		raw: pooledRaw,
+	};
+}
+
 export function summarizeArm(
 	label: string,
 	perSeedResults: readonly BenchmarkResult[],
@@ -239,7 +359,10 @@ export function summarizeArm(
 			? 0
 			: perSeedFailureRate.reduce((a, b) => a + b, 0) /
 				perSeedFailureRate.length;
-	const aggregate = perSeedResults[0] ?? emptyAggregate();
+	const aggregate =
+		perSeedResults.length === 0
+			? emptyAggregate()
+			: poolAggregate(perSeedResults);
 	const total = aggregate.passed + aggregate.failed;
 	const interval = wilsonInterval(aggregate.failed, total);
 	const perCategoryRate = emptyPerCategoryRate();
@@ -331,7 +454,6 @@ export function renderReport(input: ReportInput): string {
 	lines.push("");
 	lines.push("## Reproducibility / 可复现性");
 	lines.push("");
-	lines.push(`- Commit hash: \`${input.commitHash}\``);
 	lines.push(`- Trajectories path: \`${input.trajectoriesPath}\``);
 	lines.push(`- Dataset SHA-256: \`${input.datasetHash}\``);
 	lines.push(`- Trajectories count: ${input.trajectoryCount}`);

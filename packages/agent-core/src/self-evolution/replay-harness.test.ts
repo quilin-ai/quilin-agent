@@ -3,10 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+	createMockDspyClient,
 	renderReport,
 	runArmWithSeeds,
 	runBaselineArm,
 	runDspyArm,
+	summarizeArm,
 } from "./bench-runner.js";
 import {
 	type BenchmarkTrajectoryEntry,
@@ -171,6 +173,53 @@ describe("replay-harness — replayTrajectories", () => {
 		await expect(
 			replayTrajectories(harness, { mode: "ghost" as never }),
 		).rejects.toThrow(/unknown replay mode/u);
+	});
+
+	it("scores each entry against ONLY proposals targeting it via sourceRefs (round-2 fix)", async () => {
+		// Round-2 fix: when a proposal's artifacts.sourceRefs includes
+		// `trajectory:<entry.id>`, the entry is scored against that
+		// proposal alone (not the union of all proposals). This isolates
+		// per-proposal coverage so seed variance in the mock client
+		// surfaces in per-seed pass/fail rates.
+		const e1 = entry({ id: "t-target-1", category: "tool_error" });
+		const e2 = entry({
+			id: "t-target-2",
+			category: "schema_violation",
+			ground_truth_fix_direction: "restate schema and refuse free-form output",
+		});
+		const harness = harnessFromEntries([e1, e2]);
+		const targetedProposal: OptimizationProposalDraft = {
+			title: "for e1 only",
+			summary:
+				"add preflight check before shell command invocation handles tool errors",
+			artifacts: [
+				{
+					artifactId: "a1",
+					kind: "markdown",
+					title: "shell guidance",
+					content:
+						"add preflight check before shell command invocation handles tool errors",
+					contentHash: "0".repeat(64),
+					sourceRefs: ["trajectory:t-target-1"],
+				},
+			],
+			evidenceHashes: [],
+			riskPreview: {
+				level: "low",
+				reasons: [],
+				touchesRuntime: false,
+				requiresHumanReview: true,
+			},
+		};
+		// e2 has no targeted proposal → falls back to union (which here is
+		// just the e1-targeted proposal — does NOT cover schema keywords).
+		const result = await replayTrajectories(harness, {
+			proposals: [targetedProposal],
+		});
+		expect(result.raw[0]?.id).toBe("t-target-1");
+		expect(result.raw[0]?.passed).toBe(true);
+		expect(result.raw[1]?.id).toBe("t-target-2");
+		expect(result.raw[1]?.passed).toBe(false);
 	});
 
 	it("throws when harness is not an object", async () => {
@@ -420,6 +469,30 @@ describe("replay-harness — wilsonInterval", () => {
 		expect(() => wilsonInterval(Number.NaN, 10)).toThrow();
 		expect(() => wilsonInterval(1, Number.POSITIVE_INFINITY)).toThrow();
 	});
+
+	it("matches exact Wilson formula values for n=50, success=13", () => {
+		// Round-2 fix: lock the exact numerical values so refactors of the
+		// Wilson formula don't drift silently. Reference values computed
+		// from the Wilson score interval formula
+		// (https://en.wikipedia.org/wiki/Binomial_proportion_confidence_interval#Wilson_score_interval)
+		// for k=13, n=50, z=1.96 → [0.1587, 0.3955].
+		const interval = wilsonInterval(13, 50);
+		expect(interval.lower).toBeCloseTo(0.159, 2);
+		expect(interval.upper).toBeCloseTo(0.396, 2);
+	});
+
+	it("matches exact Wilson formula values for n=150, success=39 (pooled 3-seed)", () => {
+		// Round-2 fix: 3-seed pooling yields n=150 (50 entries × 3 seeds);
+		// CI should be tighter than the n=50 single-seed case at the same
+		// proportion (39/150 = 0.26 ≈ 13/50 = 0.26). Reference [0.1964, 0.3356].
+		const single = wilsonInterval(13, 50);
+		const pooled = wilsonInterval(39, 150);
+		expect(pooled.upper - pooled.lower).toBeLessThan(
+			single.upper - single.lower,
+		);
+		expect(pooled.lower).toBeCloseTo(0.196, 2);
+		expect(pooled.upper).toBeCloseTo(0.336, 2);
+	});
 });
 
 describe("bench-self-evolution — integration", () => {
@@ -529,7 +602,8 @@ describe("bench-self-evolution — integration", () => {
 		expect(baseline.perSeedFailureRate).toHaveLength(2);
 		expect(mipro.perSeedFailureRate).toHaveLength(2);
 		expect(gepa.perSeedFailureRate).toHaveLength(2);
-		expect(baseline.aggregate.passed + baseline.aggregate.failed).toBe(5);
+		// Round-2 fix: aggregate now pools across all seeds (5 × 2 = 10).
+		expect(baseline.aggregate.passed + baseline.aggregate.failed).toBe(10);
 
 		const report = renderReport({
 			baseline,
@@ -537,7 +611,6 @@ describe("bench-self-evolution — integration", () => {
 			gepa,
 			trajectoryCount: miniCorpus.length,
 			seeds: 2,
-			commitHash: "test-commit",
 			datasetHash: "test-dataset-hash",
 			trajectoriesPath: "test/path.jsonl",
 		});
@@ -550,6 +623,9 @@ describe("bench-self-evolution — integration", () => {
 		expect(report).toContain("PromptRewrite (baseline)");
 		expect(report).toContain("DSPy + MIPROv2 (mocked)");
 		expect(report).toContain("DSPy + GEPA (mocked)");
+		// Round-2 fix: report no longer renders commit hash to avoid the
+		// "report hash points to pre-fix commit" reproducibility gap.
+		expect(report).not.toContain("Commit hash");
 	});
 
 	it("persists the rendered report to a tmp file with required sections", async () => {
@@ -574,7 +650,6 @@ describe("bench-self-evolution — integration", () => {
 			gepa,
 			trajectoryCount: miniCorpus.length,
 			seeds: 1,
-			commitHash: "abc",
 			datasetHash: "def",
 			trajectoriesPath: "tmp.jsonl",
 		});
@@ -587,6 +662,159 @@ describe("bench-self-evolution — integration", () => {
 		expect(persisted).toContain("Lift summary");
 		expect(persisted).toContain("MOCK 数据声明");
 	});
+
+	it("DSPy mipro arm produces non-identical per-seed failure rates on a 50-entry corpus (round-2 fix)", async () => {
+		// Round-2 fix: lock the property that 3 mipro seeds DO NOT produce
+		// identical failure rates anymore. Pre-fix the seed multiplier
+		// collapsed to identical thresholds + same-category fallbacks
+		// nearly equal to ground truth, so all seeds reported the exact
+		// same number.
+		const corpus: BenchmarkTrajectoryEntry[] = Array.from(
+			{ length: 50 },
+			(_, idx) => {
+				const cats = [
+					"tool_error",
+					"schema_violation",
+					"budget_exhaustion",
+					"missing_evidence",
+				] as const;
+				const cat = cats[idx % 4] as BenchmarkTrajectoryEntry["category"];
+				const gt = {
+					tool_error: "add preflight check before shell command invocation",
+					schema_violation: "restate schema and refuse free-form output",
+					budget_exhaustion:
+						"summarize prior context before exceeding budget cap",
+					missing_evidence:
+						"require explicit citations and refuse uncited assertions",
+				} as const;
+				return {
+					id: `e-${idx}`,
+					category: cat,
+					task: `task ${idx}`,
+					trajectory: [{ index: 0, kind: "observation", label: "step" }],
+					failure_signal: `signal ${idx}`,
+					ground_truth_fix_direction: gt[cat as keyof typeof gt],
+				};
+			},
+		);
+		const arm = await runArmWithSeeds(
+			"mipro test",
+			(seed) => runDspyArm(corpus, "mipro", seed),
+			3,
+		);
+		expect(arm.perSeedFailureRate).toHaveLength(3);
+		const unique = new Set(arm.perSeedFailureRate.map((r) => r.toFixed(4)));
+		// At least 2 distinct values across 3 seeds — round-2 acceptance.
+		expect(unique.size).toBeGreaterThanOrEqual(2);
+	});
+
+	it("pools BenchmarkResult counts across all seeds before computing Wilson CI (round-2 fix)", () => {
+		// Round-2 fix: summarizeArm previously used only perSeedResults[0]
+		// to derive the aggregate; with seeds=3 this collapsed n from
+		// 5*3=15 to just 5, widening the Wilson CI artificially. Lock the
+		// pooling behavior here.
+		const seedResult = (passed: number, failed: number) => ({
+			passed,
+			failed,
+			perCategory: {
+				tool_error: { pass: passed, fail: failed },
+				schema_violation: { pass: 0, fail: 0 },
+				budget_exhaustion: { pass: 0, fail: 0 },
+				missing_evidence: { pass: 0, fail: 0 },
+				unknown: { pass: 0, fail: 0 },
+			},
+			raw: [],
+		});
+		const arm = summarizeArm("test", [
+			seedResult(40, 10),
+			seedResult(40, 10),
+			seedResult(40, 10),
+		]);
+		expect(arm.aggregate.passed).toBe(120);
+		expect(arm.aggregate.failed).toBe(30);
+		expect(arm.aggregate.perCategory.tool_error).toEqual({
+			pass: 120,
+			fail: 30,
+		});
+		// CI on n=150 should be tighter than on n=50 at the same proportion.
+		const single = summarizeArm("single", [seedResult(40, 10)]);
+		expect(arm.wilsonUpper - arm.wilsonLower).toBeLessThan(
+			single.wilsonUpper - single.wilsonLower,
+		);
+	});
+
+	it("createMockDspyClient produces seed-dependent variance with per-entry sourceRefs (round-2 fix)", async () => {
+		// Round-2 fix: the prior (seed * 17 + i * 31) mod 100 hash combined
+		// with category dedupe made 3 mipro seeds produce identical output.
+		// New (seed * 991 + i * 71) mod 1000 with no category dedupe and
+		// cross-category fallback templates must give meaningfully different
+		// proposals across seeds AND per-entry scoring must surface that
+		// variance into per-seed failure rates.
+		const corpus: BenchmarkTrajectoryEntry[] = Array.from(
+			{ length: 50 },
+			(_, idx) => ({
+				id: `e-${idx}`,
+				category: (
+					[
+						"tool_error",
+						"schema_violation",
+						"budget_exhaustion",
+						"missing_evidence",
+					] as const
+				)[idx % 4] as BenchmarkTrajectoryEntry["category"],
+				task: `task ${idx}`,
+				trajectory: [{ index: 0, kind: "observation", label: "step" }],
+				failure_signal: `signal ${idx}`,
+				ground_truth_fix_direction: (
+					{
+						tool_error: "add preflight check before shell command invocation",
+						schema_violation: "restate schema and refuse free-form output",
+						budget_exhaustion:
+							"summarize prior context before exceeding budget cap",
+						missing_evidence:
+							"require explicit citations and refuse uncited assertions",
+					} as const
+				)[
+					(
+						[
+							"tool_error",
+							"schema_violation",
+							"budget_exhaustion",
+							"missing_evidence",
+						] as const
+					)[idx % 4]
+				],
+			}),
+		);
+		const trajectoriesArg = corpus.map((e) => ({
+			trajectoryRef: `trajectory:${e.id}`,
+		}));
+		const callOnce = async (seed: number) => {
+			const client = createMockDspyClient("mipro", corpus, seed);
+			const raw = await client.callTool("mipro_optimize", {
+				trajectories: trajectoriesArg,
+			});
+			return JSON.parse(raw) as {
+				readonly proposals: readonly {
+					readonly artifacts: readonly { readonly content: string }[];
+				}[];
+			};
+		};
+		const out0 = await callOnce(0);
+		const out1 = await callOnce(1);
+		const out2 = await callOnce(2);
+		// All 50 entries should produce a proposal — no per-category dedupe.
+		expect(out0.proposals.length).toBe(50);
+		expect(out1.proposals.length).toBe(50);
+		expect(out2.proposals.length).toBe(50);
+		// Cross-seed JSON should not be identical (the bug round-1 had).
+		expect(JSON.stringify(out0.proposals)).not.toBe(
+			JSON.stringify(out1.proposals),
+		);
+		expect(JSON.stringify(out1.proposals)).not.toBe(
+			JSON.stringify(out2.proposals),
+		);
+	});
 });
 
 describe("replay-harness — relativeLift", () => {
@@ -594,8 +822,16 @@ describe("replay-harness — relativeLift", () => {
 		expect(relativeLift(0.5, 0.25)).toBeCloseTo(0.5, 4);
 	});
 
-	it("returns 0 when baseline did not fail", () => {
-		expect(relativeLift(0, 0.1)).toBe(0);
+	it("returns 0 when baseline did not fail and candidate also did not fail", () => {
+		expect(relativeLift(0, 0)).toBe(0);
+	});
+
+	it("returns -Infinity when baseline is perfect but candidate regresses", () => {
+		// Round-2 fix: previously returned 0 here, silently masking
+		// regressions from a perfect baseline. -Infinity makes the
+		// regression visible to Math.max(...)-style decision logic.
+		expect(relativeLift(0, 0.1)).toBe(Number.NEGATIVE_INFINITY);
+		expect(relativeLift(0, 0.5)).toBe(Number.NEGATIVE_INFINITY);
 	});
 
 	it("returns negative lift when candidate is worse than baseline", () => {

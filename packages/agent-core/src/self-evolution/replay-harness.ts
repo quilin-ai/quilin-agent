@@ -88,9 +88,22 @@ export interface ReplayOptions {
 	 * scoring is identical to replay mode — the difference is the prompt
 	 * text fed in.
 	 *
+	 * Semantics: in live mode, the prompt fed to `score()` is the
+	 * concatenation `<gathered baseline prompt>\n<liveStub output>`. This
+	 * means proposals/guidanceText AND the live stub both contribute to
+	 * the keyword overlap. Callers should generally pass either
+	 * `proposals` / `guidanceText` OR `liveStub` — not both — unless they
+	 * intentionally want to score the union (e.g., ablation experiments).
+	 *
 	 * `live` 模式下调用方必须提供 stub LLM 响应函数。给定 prompt 返回
 	 * 合成的 agent 答案。harness 评分逻辑与 replay 模式一致，区别只在
 	 * 输入 prompt。
+	 *
+	 * 语义说明：live 模式下喂给 `score()` 的 prompt 是
+	 * `<聚合后的 baseline prompt>\n<liveStub 输出>` 的拼接。也就是说
+	 * proposals/guidanceText 和 liveStub 都会参与关键字重叠匹配。调用方
+	 * 一般应只传 `proposals` / `guidanceText` 或 `liveStub` 其一，除非
+	 * 显式希望对它们的并集打分（如 ablation 实验）。
 	 */
 	readonly liveStub?: (prompt: string) => string;
 	readonly seed?: number;
@@ -327,14 +340,45 @@ export function entryToTrajectoryRecord(
 }
 
 function tokenize(value: string): readonly string[] {
+	// Round-2 fix: lower threshold from 4 → 3 so short but signal-bearing
+	// keywords like "add", "non", "tool", "json", "for" survive. Pre-fix the
+	// 4-char floor dropped the most common ground-truth fix-direction tokens
+	// like "add" and "for" entirely, which under-counted matches.
+	//
+	// round-2 修复：阈值从 4 降到 3，让 "add" / "non" / "tool" / "json" /
+	// "for" 这类短但有信号的词保留下来。修复前 4 字符门槛把最常见的
+	// ground-truth 修复方向词（"add" / "for" 等）整体过滤掉，导致命中数
+	// 被低估。
 	return value
 		.toLowerCase()
 		.split(/[^a-z0-9]+/u)
-		.filter((token) => token.length >= 4);
+		.filter((token) => token.length >= 3);
 }
 
 function uniqueTokens(values: readonly string[]): readonly string[] {
 	return [...new Set(values)];
+}
+
+function proposalText(proposal: OptimizationProposalDraft): string {
+	const buckets: string[] = [proposal.title, proposal.summary];
+	for (const artifact of proposal.artifacts) {
+		buckets.push(artifact.title);
+		buckets.push(artifact.content);
+	}
+	return buckets.join("\n");
+}
+
+function proposalTargetsEntry(
+	proposal: OptimizationProposalDraft,
+	entry: BenchmarkTrajectoryEntry,
+): boolean {
+	const trajectoryRef = `trajectory:${entry.id}`;
+	for (const artifact of proposal.artifacts) {
+		if (artifact.sourceRefs?.includes(trajectoryRef)) {
+			return true;
+		}
+	}
+	return false;
 }
 
 function gatherProposalText(
@@ -346,12 +390,48 @@ function gatherProposalText(
 		buckets.push(guidanceText);
 	}
 	for (const proposal of proposals ?? []) {
-		buckets.push(proposal.title);
-		buckets.push(proposal.summary);
-		for (const artifact of proposal.artifacts) {
-			buckets.push(artifact.title);
-			buckets.push(artifact.content);
-		}
+		buckets.push(proposalText(proposal));
+	}
+	return buckets.join("\n");
+}
+
+/**
+ * Build the prompt used to score a single entry. Round-2 fix: when one or
+ * more proposals explicitly target this entry (`sourceRefs` includes
+ * `trajectory:<entry.id>`), score against ONLY those targeting proposals
+ * plus any explicit `guidanceText`. This makes per-entry pass/fail
+ * sensitive to per-proposal coverage and exposes seed variance — the
+ * pre-fix union-of-all-proposals approach concentrated so much vocabulary
+ * into the prompt that every entry passed regardless of seed. When no
+ * proposal targets this entry we fall back to the union (preserves the
+ * existing baseline / `guidanceText`-only behavior).
+ *
+ * round-2 修复：当存在 `sourceRefs` 显式指向当前 entry 的 proposal 时，
+ * 只对这些"针对性 proposal" + 显式 `guidanceText` 打分。这样每条 entry
+ * 的 pass/fail 取决于具体那一条 proposal 的覆盖度，能暴露 seed 间方差；
+ * 修复前把所有 50 条 proposal 拼到一起，词汇池过于丰富，每条 entry
+ * 一定通过，掩盖了 seed 方差。如果没有 proposal 显式指向当前 entry，
+ * fall back 到 union 行为（保留 baseline / 仅 guidanceText 的旧路径）。
+ */
+function gatherEntryPrompt(
+	entry: BenchmarkTrajectoryEntry,
+	proposals: readonly OptimizationProposalDraft[] | undefined,
+	guidanceText: string | undefined,
+	unionPrompt: string,
+): string {
+	if (proposals == null || proposals.length === 0) {
+		return unionPrompt;
+	}
+	const targeting = proposals.filter((p) => proposalTargetsEntry(p, entry));
+	if (targeting.length === 0) {
+		return unionPrompt;
+	}
+	const buckets: string[] = [];
+	if (typeof guidanceText === "string" && guidanceText.length > 0) {
+		buckets.push(guidanceText);
+	}
+	for (const p of targeting) {
+		buckets.push(proposalText(p));
 	}
 	return buckets.join("\n");
 }
@@ -452,12 +532,18 @@ export async function replayTrajectories(
 			"replayTrajectories(live mode) requires a liveStub function",
 		);
 	}
-	const baselinePrompt = gatherProposalText(
+	const unionPrompt = gatherProposalText(
 		options.proposals,
 		options.guidanceText,
 	);
 	const results: TrajectoryResult[] = [];
 	for (const entry of harness.entries) {
+		const baselinePrompt = gatherEntryPrompt(
+			entry,
+			options.proposals,
+			options.guidanceText,
+			unionPrompt,
+		);
 		const prompt =
 			mode === "live" && options.liveStub != null
 				? `${baselinePrompt}\n${options.liveStub(
@@ -503,11 +589,21 @@ export function wilsonInterval(
 
 /**
  * Compute the relative failure-rate lift from baseline → candidate. Positive
- * values mean the candidate failed less often (i.e., better). Returns 0 when
- * the baseline did not fail (no headroom).
+ * values mean the candidate failed less often (i.e., better). When the
+ * baseline failure rate is zero (perfect baseline) we return:
+ *   - `0` if the candidate also failed zero times (no movement);
+ *   - `Number.NEGATIVE_INFINITY` if the candidate introduced any failure
+ *     (regression from a perfect baseline cannot be expressed as a finite
+ *     relative lift; surfacing `-Infinity` keeps `Math.max(...)`-style
+ *     decision logic correct without silently masking the regression).
  *
  * 相对失败率 lift（baseline → candidate）。正值代表 candidate 失败率更低（更好）。
- * 当 baseline 失败率为 0 时返回 0（无可改进空间）。
+ * 当 baseline 失败率为 0（baseline 已完美）时返回：
+ *   - 若 candidate 也是 0（没动）→ 返回 0；
+ *   - 若 candidate > 0（从完美 baseline 引入了新失败）→ 返回
+ *     `Number.NEGATIVE_INFINITY`，因为完美 baseline 上的回归无法用有限
+ *     相对 lift 表示；返回 `-Infinity` 既不会被 `Math.max(...)` 等决策
+ *     逻辑当成"持平"忽略，又能显式标记回归。
  */
 export function relativeLift(
 	baselineFailureRate: number,
@@ -520,6 +616,9 @@ export function relativeLift(
 		throw new TypeError("candidateFailureRate must be finite");
 	}
 	if (baselineFailureRate <= 0) {
+		if (candidateFailureRate > 0) {
+			return Number.NEGATIVE_INFINITY;
+		}
 		return 0;
 	}
 	return (baselineFailureRate - candidateFailureRate) / baselineFailureRate;

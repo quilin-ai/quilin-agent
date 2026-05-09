@@ -6,7 +6,6 @@
 
 ## Reproducibility / 可复现性
 
-- Commit hash: `0b55ff9926924dacd204c5061fd62655d95f7f47`
 - Trajectories path: `docs/10-self-evolution/benchmark/trajectories.jsonl`
 - Dataset SHA-256: `39387d3c71cd9eb6c3937bade50a08938591b5368ef8db7da6c61ecfea6cc82b`
 - Trajectories count: 50
@@ -16,34 +15,34 @@
 
 | Arm | Mean failure rate | 95% CI (Wilson) | Per-seed failure rates |
 |---|---|---|---|
-| PromptRewrite (baseline) | 26.0% | [15.9%, 39.6%] | 26.0%, 26.0%, 26.0% |
-| DSPy + MIPROv2 (mocked) | 22.0% | [12.8%, 35.2%] | 22.0%, 22.0%, 22.0% |
-| DSPy + GEPA (mocked) | 22.0% | [12.8%, 35.2%] | 22.0%, 22.0%, 22.0% |
+| PromptRewrite (baseline) | 24.0% | [17.9%, 31.4%] | 24.0%, 24.0%, 24.0% |
+| DSPy + MIPROv2 (mocked) | 19.3% | [13.8%, 26.4%] | 18.0%, 20.0%, 20.0% |
+| DSPy + GEPA (mocked) | 27.3% | [20.8%, 35.0%] | 28.0%, 28.0%, 26.0% |
 
 ## ASCII bar chart — failure rate (lower is better) / ASCII 条形图 —— 失败率（越低越好）
 
 ```
-PromptRewrite (baseline)     | ██████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 26.0%
-DSPy + MIPROv2 (mocked)      | █████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 22.0%
-DSPy + GEPA (mocked)         | █████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 22.0%
+PromptRewrite (baseline)     | ██████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 24.0%
+DSPy + MIPROv2 (mocked)      | ████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 19.3%
+DSPy + GEPA (mocked)         | ███████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 27.3%
 ```
 
 ## Lift summary / Lift 总结
 
-- Lift (MIPROv2 vs baseline): 15.4% relative failure-rate reduction
-- Lift (GEPA vs baseline): 15.4% relative failure-rate reduction
-- Best arm lift: 15.4%
+- Lift (MIPROv2 vs baseline): 19.4% relative failure-rate reduction
+- Lift (GEPA vs baseline): -13.9% relative failure-rate reduction
+- Best arm lift: 19.4%
 
-Lift（MIPROv2 vs baseline）：15.4% 相对失败率降幅；Lift（GEPA vs baseline）：15.4% 相对失败率降幅。最优 arm lift = 15.4%。
+Lift（MIPROv2 vs baseline）：19.4% 相对失败率降幅；Lift（GEPA vs baseline）：-13.9% 相对失败率降幅。最优 arm lift = 19.4%。
 
 ## Per-FailureCategory breakdown / 按失败类型拆分
 
 | Category | baseline | MIPROv2 | GEPA |
 |---|---|---|---|
-| tool_error | 80.0% | 26.7% | 26.7% |
-| schema_violation | 7.1% | 42.9% | 42.9% |
-| budget_exhaustion | 0.0% | 0.0% | 0.0% |
-| missing_evidence | 0.0% | 11.1% | 11.1% |
+| tool_error | 73.3% | 11.1% | 22.2% |
+| schema_violation | 7.1% | 21.4% | 21.4% |
+| budget_exhaustion | 0.0% | 27.3% | 39.4% |
+| missing_evidence | 0.0% | 22.2% | 33.3% |
 | unknown | 0.0% | 0.0% | 0.0% |
 
 ## Decision recommendation / 决策建议
