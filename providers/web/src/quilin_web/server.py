@@ -135,8 +135,7 @@ class _Crawl4AIAdapter:
     """Default crawler that delegates to crawl4ai.AsyncWebCrawler."""
 
     def __init__(self, async_web_crawler_cls: Any) -> None:
-        # pragma: no cover -- constructed only via _default_crawler_factory.
-        self._cls = async_web_crawler_cls  # pragma: no cover
+        self._cls = async_web_crawler_cls  # pragma: no cover -- constructed only via _default_crawler_factory
 
     async def fetch(
         self,
@@ -271,8 +270,7 @@ async def _web_crawl(
     while queue and len(pages) < max_pages:
         current_url, level = queue.pop(0)
         if current_url in seen:
-            # pragma: no cover -- defensive guard; queue is deduped on insert.
-            continue  # pragma: no cover
+            continue  # pragma: no cover -- defensive guard; queue is deduped on insert
         seen.add(current_url)
         try:
             result = await crawler.fetch(
@@ -306,8 +304,7 @@ async def _web_crawl(
                 if not _same_host(url, normalized):
                     continue
                 if normalized in seen:
-                    # pragma: no cover -- defensive against repeated link discovery.
-                    continue  # pragma: no cover
+                    continue  # pragma: no cover -- defensive against repeated link discovery
                 queue.append((normalized, level + 1))
 
     return json.dumps(

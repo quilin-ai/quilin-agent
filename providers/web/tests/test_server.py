@@ -490,18 +490,22 @@ def _extract_text(raw: object) -> str:
 async def test_crawl4ai_adapter_passes_verbose_false_via_browser_and_run_configs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured: dict[str, dict[str, object] | None] = {
+    captured: dict[str, object] = {
         "browser_args": None,
         "run_args": None,
+        "browser_instance": None,
+        "run_instance": None,
     }
 
     class CapturedBrowserConfig:
         def __init__(self, **kwargs: object) -> None:
             captured["browser_args"] = kwargs
+            captured["browser_instance"] = self
 
     class CapturedRunConfig:
         def __init__(self, **kwargs: object) -> None:
             captured["run_args"] = kwargs
+            captured["run_instance"] = self
 
     fake_crawl4ai = ModuleType("crawl4ai")
     fake_crawl4ai.BrowserConfig = CapturedBrowserConfig  # type: ignore[attr-defined]
@@ -539,7 +543,7 @@ async def test_crawl4ai_adapter_passes_verbose_false_via_browser_and_run_configs
 
     # 2. CrawlerRunConfig MUST receive verbose=False (per-call override).
     run_args = captured["run_args"]
-    assert run_args is not None
+    assert isinstance(run_args, dict)
     assert run_args["verbose"] is False, (
         f"CrawlerRunConfig must receive verbose=False; got {run_args}"
     )
@@ -549,7 +553,10 @@ async def test_crawl4ai_adapter_passes_verbose_false_via_browser_and_run_configs
     # 3. AsyncWebCrawler called with config=browser_cfg (NOT verbose=...).
     cls_mock.assert_called_once()
     _, cls_kwargs = cls_mock.call_args
-    assert isinstance(cls_kwargs["config"], CapturedBrowserConfig)
+    assert cls_kwargs["config"] is captured["browser_instance"], (
+        "AsyncWebCrawler must receive the SAME BrowserConfig instance constructed by the server, "
+        "not a freshly-built second instance"
+    )
     # Critical: verbose must NOT be passed directly to AsyncWebCrawler — it's
     # silently dropped in **kwargs. This locks the contract.
     assert "verbose" not in cls_kwargs
@@ -558,7 +565,10 @@ async def test_crawl4ai_adapter_passes_verbose_false_via_browser_and_run_configs
     arun_mock.assert_called_once()
     arun_kwargs = arun_mock.call_args.kwargs
     assert arun_kwargs["url"] == "https://example.com/page"
-    assert isinstance(arun_kwargs["config"], CapturedRunConfig)
+    assert arun_kwargs["config"] is captured["run_instance"], (
+        "arun must receive the SAME CrawlerRunConfig instance constructed by the server, "
+        "not a freshly-built second instance"
+    )
 
     # 5. CrawlResult preserves URL / status / markdown / title / links.
     assert result.url == "https://example.com/page"
