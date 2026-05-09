@@ -176,6 +176,36 @@ export const safetyConfigSchema = z
 	.strict()
 	.default({ trust_mode: "auto" });
 
+/**
+ * Self-evolution configuration. Currently only governs which offline
+ * optimizer the idle runner instantiates; future fields will live here
+ * (e.g. proposal review TTL, dry-run toggles).
+ *
+ * 自我演进配置：当前仅控制 idle runner 选用的离线优化器。未来 self-evolution
+ * 相关参数（提案审核 TTL、dry-run 开关等）也归到这里。
+ *
+ * Optimizer choices:
+ * - `prompt_rewrite` (default): heuristic, dependency-free TS optimizer.
+ * - `noop`: opt-out for evaluation runs that explicitly want no proposals.
+ * - `dspy`: DSPy/GEPA-backed optimizer that talks to
+ *   `providers/optimizer` over MCP. Stage A returns a deterministic stub;
+ *   Stage C will swap in real DSPy compilation.
+ *
+ * Optimizer 选项：
+ * - `prompt_rewrite`（默认）：零依赖的启发式 TS 优化器。
+ * - `noop`：评估场景下显式禁用提案的 opt-out。
+ * - `dspy`：经 MCP 调用 `providers/optimizer` 的 DSPy/GEPA 优化器；
+ *   Stage A 返回确定性占位，Stage C 接入真实 DSPy 编译。
+ */
+export const selfEvolutionConfigSchema = z
+	.object({
+		optimizer: z
+			.enum(["noop", "prompt_rewrite", "dspy"])
+			.default("prompt_rewrite"),
+	})
+	.strict()
+	.default({ optimizer: "prompt_rewrite" });
+
 // Default token budget mirrors DEFAULT_CONTEXT_BUDGET in
 // ../context/manager.ts. Keep them in sync — Phase 0 only enforces
 // budget.total; per-section caps are reserved for Phase 1+.
@@ -247,6 +277,7 @@ export const userConfigSchema = z
 		idle_evolution: idleEvolutionConfigSchema,
 		safety: safetyConfigSchema,
 		context: contextConfigSchema,
+		self_evolution: selfEvolutionConfigSchema,
 	})
 	.strict();
 

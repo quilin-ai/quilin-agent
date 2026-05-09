@@ -60,6 +60,7 @@ import {
 	DEFAULT_IDLE_DAILY_TOKEN_QUOTA,
 	IdleEvolutionRunner,
 } from "./self-evolution/idle-runner.js";
+import { createOfflineOptimizer } from "./self-evolution/optimizer-factory.js";
 import { JsonlProposalStore } from "./self-evolution/proposal-store.js";
 import { JsonlTrajectoryStore } from "./self-evolution/trajectory-store.js";
 import { SQLiteCheckpoint } from "./state/checkpoint.js";
@@ -997,13 +998,26 @@ export async function main(options: MainOptions = {}): Promise<void> {
 			dataRoot: selfEvolutionDataRoot,
 			filePath: "proposals.jsonl",
 		});
+		// Optimizer choice is opt-in via user.toml [self_evolution] optimizer.
+		// Default `prompt_rewrite` keeps existing behavior; `dspy` is gated
+		// behind an explicit MCP client factory which is not yet wired into
+		// the core REPL bootstrap (Stage A+B). When a user opts into `dspy`
+		// without that wiring, the factory falls back to PromptRewrite and
+		// logs a warning.
+		//
+		// 离线优化器选择通过 user.toml `[self_evolution] optimizer` 显式 opt-in。
+		// 默认 `prompt_rewrite` 保持现有行为；`dspy` 需要显式注入 MCP 客户端
+		// 工厂——目前 Stage A+B 阶段尚未在 REPL bootstrap 中接线。用户选择
+		// `dspy` 但没接线时，工厂会退化到 PromptRewrite 并记录警告。
+		const optimizerChoice = userRuntime.result.config.self_evolution.optimizer;
 		const idleRunner = new IdleEvolutionRunner({
 			idleBudget: { dailyTokenQuota: DEFAULT_IDLE_DAILY_TOKEN_QUOTA },
 			trajectoryStore,
 			failureAnalyzer: analyzeTrajectoryFailures,
 			proposalStore,
+			optimizer: createOfflineOptimizer({ choice: optimizerChoice }),
 		});
-		logger.info("Self-evolution engine online");
+		logger.info({ optimizerChoice }, "Self-evolution engine online");
 
 		if (isFirstRun && firstRunPlan != null) {
 			process.stderr.write(formatFirstRunWelcome(firstRunPlan));
