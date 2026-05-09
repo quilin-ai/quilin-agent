@@ -9,12 +9,11 @@ from __future__ import annotations
 
 import json
 import sys
-from collections.abc import Callable
 from dataclasses import replace
 from types import ModuleType
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
+import pytest  # type: ignore[import-not-found]
 
 from quilin_web.server import (
     DEFAULT_TIMEOUT_MS,
@@ -23,6 +22,7 @@ from quilin_web.server import (
     MAX_PAGES,
     MAX_QUERY_LENGTH,
     Crawler,
+    CrawlerFactory,
     CrawlResult,
     WebOperationError,
     _Crawl4AIAdapter,
@@ -71,7 +71,7 @@ class FakeCrawler:
         return CrawlResult(url=url, status=200, markdown="", title=None, links=())
 
 
-def make_factory(crawler: Crawler) -> Callable[[], object]:
+def make_factory(crawler: Crawler) -> CrawlerFactory:
     async def _factory() -> Crawler:
         return crawler
 
