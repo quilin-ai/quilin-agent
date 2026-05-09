@@ -77,3 +77,55 @@ export class NullObserverBridge implements ObserverBridge {
 		// intentionally empty
 	}
 }
+
+/**
+ * Inputs for {@link createObserverBridgeIfEnabled} — kept dependency-free so
+ * the wiring decision can be unit-tested without spinning up a real REPL.
+ *
+ * 让构造决策可以脱离 REPL 单测，输入故意保持纯数据。
+ */
+export interface ObserverBridgeWiringInput {
+	/** Result of `userConfig.memory?.observer?.enabled`. */
+	readonly enabled: boolean;
+	/** `process.env.QUILIN_OBSERVER_API_KEY` (or undefined). */
+	readonly observerApiKey?: string;
+	/** `process.env.DEEPSEEK_API_KEY` (or undefined). */
+	readonly deepseekApiKey?: string;
+	/** Memory MCP transport, or `undefined` if not yet connected. */
+	readonly transport?: ObserverBridgeMCPTransport;
+}
+
+/**
+ * Construct an `MCPObserverBridge` only when both gates pass:
+ *  1) user explicitly enabled `memory.observer.enabled = true`
+ *  2) at least one observer API key is present in the environment
+ *
+ * Returns `undefined` when either gate is closed (loop.ts treats that as
+ * a no-op). Returns `undefined` when no transport is available (i.e.
+ * memory MCP server has not finished connecting yet — the caller should
+ * try again on the next turn).
+ *
+ * 仅当两道闸门同时打开时构造观察桥：
+ *  1) 用户显式开启 `memory.observer.enabled = true`
+ *  2) 环境变量含至少一个 observer API key
+ *
+ * 任一闸门未通过返回 `undefined`（loop.ts 视为 no-op）。transport 还没
+ * 接通时也返回 `undefined`，调用方可下一回合重试。
+ */
+export function createObserverBridgeIfEnabled(
+	input: ObserverBridgeWiringInput,
+): ObserverBridge | undefined {
+	if (!input.enabled) {
+		return undefined;
+	}
+	const hasApiKey =
+		(input.observerApiKey != null && input.observerApiKey.length > 0) ||
+		(input.deepseekApiKey != null && input.deepseekApiKey.length > 0);
+	if (!hasApiKey) {
+		return undefined;
+	}
+	if (input.transport == null) {
+		return undefined;
+	}
+	return new MCPObserverBridge(input.transport);
+}

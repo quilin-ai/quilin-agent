@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+	createObserverBridgeIfEnabled,
 	MCPObserverBridge,
 	NullObserverBridge,
 	type ObserverBridgeMCPTransport,
@@ -200,5 +201,82 @@ describe("NullObserverBridge", () => {
 				sessionId: "session-A",
 			}),
 		).resolves.toBeUndefined();
+	});
+});
+
+describe("createObserverBridgeIfEnabled", () => {
+	const { transport } = createTransport(JSON.stringify({ candidates: [] }));
+
+	it("returns undefined when enabled=false even with api keys + transport", () => {
+		expect(
+			createObserverBridgeIfEnabled({
+				enabled: false,
+				observerApiKey: "k1",
+				deepseekApiKey: "k2",
+				transport,
+			}),
+		).toBeUndefined();
+	});
+
+	it("returns undefined when enabled=true but no api key is present", () => {
+		expect(
+			createObserverBridgeIfEnabled({
+				enabled: true,
+				transport,
+			}),
+		).toBeUndefined();
+		expect(
+			createObserverBridgeIfEnabled({
+				enabled: true,
+				observerApiKey: "",
+				deepseekApiKey: "",
+				transport,
+			}),
+		).toBeUndefined();
+	});
+
+	it("returns undefined when enabled+api key but transport not yet ready", () => {
+		expect(
+			createObserverBridgeIfEnabled({
+				enabled: true,
+				observerApiKey: "k1",
+			}),
+		).toBeUndefined();
+	});
+
+	it("returns an MCPObserverBridge when all gates pass with QUILIN_OBSERVER_API_KEY", () => {
+		const bridge = createObserverBridgeIfEnabled({
+			enabled: true,
+			observerApiKey: "k1",
+			transport,
+		});
+		expect(bridge).toBeInstanceOf(MCPObserverBridge);
+	});
+
+	it("returns an MCPObserverBridge when DEEPSEEK_API_KEY alone is present", () => {
+		const bridge = createObserverBridgeIfEnabled({
+			enabled: true,
+			deepseekApiKey: "k2",
+			transport,
+		});
+		expect(bridge).toBeInstanceOf(MCPObserverBridge);
+	});
+
+	it("constructed bridge can call memory_observe through the transport", async () => {
+		const { calls, transport: t } = createTransport(
+			JSON.stringify({ candidates: [] }),
+		);
+		const bridge = createObserverBridgeIfEnabled({
+			enabled: true,
+			observerApiKey: "k1",
+			transport: t,
+		});
+		expect(bridge).toBeInstanceOf(MCPObserverBridge);
+		await bridge?.observeTurn({
+			userText: "hi",
+			assistantText: "ok",
+		});
+		expect(calls).toHaveLength(1);
+		expect(calls[0]?.name).toBe("memory_observe");
 	});
 });

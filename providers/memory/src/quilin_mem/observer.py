@@ -92,6 +92,7 @@ class ObserverConfig:
         if self.frequency < 1:
             raise ValueError("ObserverConfig.frequency must be >= 1")
 
+
 VALID_OBSERVATION_ROLES: tuple[ObservationRole, ...] = (
     "user",
     "assistant",
@@ -1433,6 +1434,17 @@ class L3aObserver:
         normalized = normalize_observation_turn(turn)
         self._turn_count += 1
         self._turn_buffer.append(normalized)
+        # Cap the turn buffer at 2x frequency: the LLM trigger uses the
+        # most-recent ``frequency`` turns, so 2x gives us a small safety
+        # margin while preventing unbounded growth across long-lived
+        # sessions. Without this cap the buffer (and resulting prompt
+        # bloat) grows linearly with turn count.
+        #
+        # 截断 turn_buffer 至 2x frequency：LLM 触发只用最近 frequency 条，
+        # 2x 给小缓冲；否则在长 session 中 buffer 会无界增长，把 prompt 撑爆。
+        max_buffer_size = 2 * self._config.frequency
+        if len(self._turn_buffer) > max_buffer_size:
+            self._turn_buffer = self._turn_buffer[-self._config.frequency :]
 
         candidates: list[ObservationCandidate] = list(
             extract_observation_candidates(normalized)

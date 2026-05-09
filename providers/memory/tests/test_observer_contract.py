@@ -2018,3 +2018,32 @@ async def test_l3a_observer_without_profile_updater_still_returns_candidates() -
         c for c in candidates if c.metadata.get("source") == "l3a_observer"
     ]
     assert len(llm_candidates) >= 2
+
+
+async def test_l3a_observer_turn_buffer_is_capped_at_2x_frequency() -> None:
+    """The internal turn buffer must not grow unboundedly: it is trimmed
+    to at most ``2 * frequency`` entries after each observe() call. This
+    prevents prompt bloat in long-lived sessions where the same
+    L3aObserver instance is reused across hundreds of turns.
+
+    内部 turn_buffer 不能无界增长：每次 observe() 后裁剪到至多 2x
+    frequency 条；防止长 session 把 LLM prompt 撑爆。
+    """
+    frequency = 5
+    observer = L3aObserver(
+        ObserverConfig(api_key="", frequency=frequency),  # api_key="" → no LLM
+        profile_updater=None,
+    )
+
+    # Run many more turns than 2*frequency.
+    total_turns = 50
+    for i in range(total_turns):
+        await observer.observe({"content": f"turn {i}", "role": "user"})
+
+    # Buffer must never exceed 2*frequency.
+    assert len(observer._turn_buffer) <= 2 * frequency
+    # The trim keeps the most recent ``frequency`` entries when triggered,
+    # so after 50 turns we expect either ``frequency`` or
+    # ``frequency + 1 .. 2*frequency`` depending on append/trim ordering.
+    # Hard guarantee is just the upper bound.
+    assert len(observer._turn_buffer) >= 1

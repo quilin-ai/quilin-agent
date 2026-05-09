@@ -49,6 +49,7 @@ const mockCreateInterface = vi.fn((): MockReadlineInterface => {
 const mockRunAgentLoop = vi.fn();
 const mockLoggerError = vi.fn();
 const mockLoggerWarn = vi.fn();
+const mockLoggerInfo = vi.fn();
 const mockStreamingClient = vi.fn();
 const mockProviderControlPlaneClient = vi.fn();
 const mockCheckpointLoad = vi.fn();
@@ -381,6 +382,21 @@ class MockMCPRegistry {
 	getToolDescriptors = mockRegistryGetToolDescriptors;
 	disconnectAll = mockRegistryDisconnectAll;
 	onChange = mockRegistryOnChange;
+	// Observer bridge wiring asks the registry for a callTool transport
+	// targeting the quilin-mem server. Default mock returns undefined so
+	// resolveObserverBridge() returns undefined too — no observer in tests.
+	getServerCallToolTransport = vi.fn(
+		(
+			_serverId: string,
+		):
+			| {
+					callTool(
+						name: string,
+						args: Record<string, unknown>,
+					): Promise<string>;
+			  }
+			| undefined => undefined,
+	);
 
 	constructor(...args: unknown[]) {
 		mockRegistryConstructor(...args);
@@ -399,6 +415,7 @@ vi.mock("./logger.js", () => ({
 	logger: {
 		error: mockLoggerError,
 		warn: mockLoggerWarn,
+		info: mockLoggerInfo,
 	},
 }));
 

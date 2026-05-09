@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import secrets
+from collections import OrderedDict
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -35,6 +36,13 @@ MAX_OBSERVE_TEXT_LENGTH = 32 * 1024  # cap per-text field at 32KB
 DEFAULT_OBSERVER_FREQUENCY = 10
 DEFAULT_OBSERVER_BASE_URL = "https://api.deepseek.com/v1/chat/completions"
 DEFAULT_OBSERVER_MODEL = "deepseek-v4-flash"
+# Cap on the per-server (user_id, session_id) → L3aObserver cache so that a
+# misbehaving caller (e.g. random session ids) cannot make the server leak
+# memory unboundedly. Eviction is LRU via OrderedDict.move_to_end + popitem.
+#
+# 缓存 (user_id, session_id) → L3aObserver 的上限，防止调用方滥用（例如
+# 每次都传随机 session id）导致内存无界增长。基于 OrderedDict 的 LRU。
+MAX_OBSERVER_SESSIONS = 256
 ALLOWED_TOOL_METADATA_KEYS = frozenset(
     {
         "block_version",
@@ -587,7 +595,7 @@ def create_server(
     """
     server_store: QuilinMemStore | None = store
     server_scratchpad_store: ScratchpadStore | None = scratchpad_store
-    observer_sessions: dict[str, L3aObserver] = {}
+    observer_sessions: OrderedDict[str, L3aObserver] = OrderedDict()
     server_profile_updater: ProfileUpdater | None = None
     server = FastMCP("quilin-mem", lifespan=_build_store_lifespan(store))
 
@@ -656,6 +664,24 @@ def create_server(
             )
             return None
 
+    def _store_observer(key: str, observer: L3aObserver) -> None:
+        """Insert or refresh an observer entry with LRU eviction.
+
+        Adding a new entry past ``MAX_OBSERVER_SESSIONS`` evicts the oldest
+        (least recently used) entry. Existing entries are moved to the end
+        (most recently used) to refresh their LRU position.
+
+        新增条目超过 ``MAX_OBSERVER_SESSIONS`` 时驱逐最久未用的条目；
+        已存在的条目移到末尾以刷新 LRU 位置。
+        """
+        if key in observer_sessions:
+            observer_sessions.move_to_end(key)
+            observer_sessions[key] = observer
+            return
+        observer_sessions[key] = observer
+        while len(observer_sessions) > MAX_OBSERVER_SESSIONS:
+            observer_sessions.popitem(last=False)
+
     def resolve_observer(
         user_id: str | None,
         session_id: str | None,
@@ -664,10 +690,13 @@ def create_server(
 
         We key on (user_id, session_id) so observer turn buffers grow
         across multiple memory_observe calls for the same session.
+        Cache is bounded at ``MAX_OBSERVER_SESSIONS`` with LRU eviction.
         """
         key = _build_observer_session_key(user_id, session_id)
         cached = observer_sessions.get(key)
         if cached is not None:
+            # Refresh LRU position so frequently-used sessions survive.
+            observer_sessions.move_to_end(key)
             return cached
 
         if observer_factory is not None:
@@ -681,7 +710,7 @@ def create_server(
                 created = None
 
             if isinstance(created, L3aObserver):
-                observer_sessions[key] = created
+                _store_observer(key, created)
                 return created
 
         config = _build_observer_config_from_env()
@@ -689,7 +718,7 @@ def create_server(
         # behavior: no api_key → no LLM trigger → no profile mirror).
         profile_updater = resolve_profile_updater() if config.api_key else None
         observer = L3aObserver(config, profile_updater=profile_updater)
-        observer_sessions[key] = observer
+        _store_observer(key, observer)
         return observer
 
     @server.tool(name="memory_recall")

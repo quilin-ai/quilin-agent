@@ -78,6 +78,22 @@ const CLIENT_INFO = {
 	version: "0.0.1",
 };
 
+/**
+ * Internal MCP tool names that must never be exposed to the LLM. These are
+ * tools the runtime calls directly (e.g. `memory_observe` is invoked by the
+ * post-turn observer bridge — the LLM should not see or call it). The list
+ * is filtered out of the tool array returned by `MCPClientManager.connect`,
+ * which means it never reaches the registry / system-prompt / tool-router.
+ *
+ * 仅运行时直接调用的内部 MCP 工具，禁止暴露给 LLM。例如
+ * `memory_observe` 由观察桥在每回合后主动调用，模型不应看到或触发它。
+ * 此列表会从 `MCPClientManager.connect` 返回的工具数组中过滤掉，从而
+ * 不会进入注册表 / system prompt / tool router。
+ */
+export const INTERNAL_MCP_TOOL_NAMES: ReadonlySet<string> = new Set([
+	"memory_observe",
+]);
+
 export class MCPTimeoutError extends Error {
 	readonly label: string;
 	readonly timeoutMs: number;
@@ -346,28 +362,37 @@ export class MCPClientManager {
 				this.connectionState = "connected";
 				this.disconnectReason = "MCP client is not connected";
 
-				return tools.map((tool) => {
-					const name = sanitizeMCPToolName(tool.name);
-					return {
-						name,
-						description: sanitizeMCPToolDescription(tool.description ?? "", {
-							toolName: name,
-						}),
-						parameters: jsonSchemaToZod(tool.inputSchema),
-						execute: async (args: unknown) => {
-							const result = await this.callToolWithMetadata(
-								name,
-								args as Record<string, unknown>,
-							);
+				return tools
+					.filter((tool) => {
+						// Filter out internal-only tools (e.g. memory_observe) so
+						// the LLM never sees them in the tool list. The runtime
+						// can still invoke these via `callTool` directly — the
+						// filter only affects what is advertised to the model.
+						const sanitized = sanitizeMCPToolName(tool.name);
+						return !INTERNAL_MCP_TOOL_NAMES.has(sanitized);
+					})
+					.map((tool) => {
+						const name = sanitizeMCPToolName(tool.name);
+						return {
+							name,
+							description: sanitizeMCPToolDescription(tool.description ?? "", {
+								toolName: name,
+							}),
+							parameters: jsonSchemaToZod(tool.inputSchema),
+							execute: async (args: unknown) => {
+								const result = await this.callToolWithMetadata(
+									name,
+									args as Record<string, unknown>,
+								);
 
-							return {
-								toolCallId: "mcp-call",
-								content: result.content,
-								isError: result.isError,
-							};
-						},
-					};
-				});
+								return {
+									toolCallId: "mcp-call",
+									content: result.content,
+									isError: result.isError,
+								};
+							},
+						};
+					});
 			} catch (error) {
 				try { await transport.close(); } catch { /* already closed */ }
 				this.client = undefined;

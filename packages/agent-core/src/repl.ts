@@ -41,6 +41,10 @@ import { logger } from "./logger.js";
 import { runAgentLoop } from "./loop.js";
 import { AgentLoopError } from "./loop-types.js";
 import {
+	createObserverBridgeIfEnabled,
+	type ObserverBridge,
+} from "./memory/observer-bridge.js";
+import {
 	type ChildRunStatusRecord,
 	InProcessSupervisorRuntime,
 	type SupervisorProgressEvent,
@@ -2349,6 +2353,69 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 		}
 	}
 	const resolvedSessionId = sessionId ?? crypto.randomUUID();
+	// L3a observer bridge — resolved lazily because the underlying
+	// MCP transport for `quilin-mem` is not connected until syncRuntimeSurface
+	// runs the registry. The bridge is constructed at most once per session,
+	// gated on `userConfig.memory.observer.enabled === true` AND the presence
+	// of an observer API key in the environment (QUILIN_OBSERVER_API_KEY or
+	// DEEPSEEK_API_KEY). When either gate is closed, no bridge is built and
+	// runAgentLoop's observerBridge stays undefined (loop.ts handles
+	// `observerBridge == null` as a no-op).
+	//
+	// L3a 观察桥懒加载：底层 quilin-mem MCP transport 要等 syncRuntimeSurface
+	// 跑完 registry 才连上。每 session 最多构造一次，必须同时满足
+	// `userConfig.memory.observer.enabled === true` 且环境变量含
+	// QUILIN_OBSERVER_API_KEY 或 DEEPSEEK_API_KEY；否则不构造桥，
+	// runAgentLoop 的 observerBridge 保持 undefined（loop.ts 已处理为 no-op）。
+	const QUILIN_MEM_SERVER_ID = "quilin-mem";
+	let cachedObserverBridge: ObserverBridge | undefined;
+	let observerStartupLogged = false;
+	const resolveObserverBridge = (): ObserverBridge | undefined => {
+		if (cachedObserverBridge != null) {
+			return cachedObserverBridge;
+		}
+		const userConfig = getUserConfig?.() ?? null;
+		const enabled = userConfig?.memory?.observer?.enabled === true;
+		const observerApiKey = process.env.QUILIN_OBSERVER_API_KEY;
+		const deepseekApiKey = process.env.DEEPSEEK_API_KEY;
+		const hasApiKey =
+			(observerApiKey != null && observerApiKey.length > 0) ||
+			(deepseekApiKey != null && deepseekApiKey.length > 0);
+		const transport = registry.getServerCallToolTransport(QUILIN_MEM_SERVER_ID);
+		// Build using the pure helper so the gating logic is unit-testable
+		// without spinning up a REPL.
+		const bridge = createObserverBridgeIfEnabled({
+			enabled,
+			...(observerApiKey == null ? {} : { observerApiKey }),
+			...(deepseekApiKey == null ? {} : { deepseekApiKey }),
+			...(transport == null ? {} : { transport }),
+		});
+		if (bridge == null) {
+			if (!observerStartupLogged && (!enabled || !hasApiKey)) {
+				// Log once when permanently inactive (config-gated). Don't
+				// log when transport is just not yet ready — that's a
+				// transient state that resolves on the next turn.
+				observerStartupLogged = true;
+				logger.info(
+					{
+						observerEnabled: enabled,
+						observerApiKeyPresent: hasApiKey,
+					},
+					"L3a observer bridge inactive (gated by config + env)",
+				);
+			}
+			return undefined;
+		}
+		cachedObserverBridge = bridge;
+		if (!observerStartupLogged) {
+			observerStartupLogged = true;
+			logger.info(
+				{ sessionId: resolvedSessionId },
+				"L3a observer bridge enabled (memory_observe wired)",
+			);
+		}
+		return cachedObserverBridge;
+	};
 	const checkpoint = new SQLiteCheckpoint({ sessionId: resolvedSessionId });
 	const runLogger =
 		agentRunLogger ?? createDefaultAgentRunLogger(resolvedSessionId);
@@ -3400,6 +3467,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 				let latestAssistantMessage: Message | undefined;
 				let latestLoopMessages: readonly Message[] | undefined;
 				const userContextBudget = resolveContextBudget();
+				const observerBridge = resolveObserverBridge();
 				const response = await runAgentLoop(
 					{
 						llm: activeLlm,
@@ -3418,6 +3486,12 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 							sandboxApproval: confirmSandboxApproval,
 						},
 						inferenceConfig,
+						...(observerBridge == null
+							? {}
+							: {
+									observerBridge,
+									observerSessionId: resolvedSessionId,
+								}),
 						observability: {
 							...options.observability,
 							runLogger: runLogger ?? options.observability?.runLogger,

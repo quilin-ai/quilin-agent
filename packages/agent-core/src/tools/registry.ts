@@ -15,6 +15,15 @@ interface MCPClientConnection {
 	readonly isConnected: boolean;
 	connect(config: MCPServerConfig): Promise<Tool[]>;
 	disconnect(): Promise<void>;
+	/**
+	 * Optional direct callTool path used by internal runtime hooks
+	 * (e.g. the L3a observer bridge). Concrete `MCPClientManager`
+	 * always implements this; mocks may omit it.
+	 *
+	 * 仅供内部 runtime hook（例如 L3a 观察桥）使用的直连 callTool 通道。
+	 * 具体实现 `MCPClientManager` 总是提供；测试 mock 可以省略。
+	 */
+	callTool?(name: string, args: Record<string, unknown>): Promise<string>;
 }
 
 export interface MCPServerEntry {
@@ -291,6 +300,30 @@ export class MCPRegistry {
 
 	isServerConnected(serverId: string): boolean {
 		return this.connections.get(serverId)?.isConnected === true;
+	}
+
+	/**
+	 * Return a callTool-only transport for the given server, or `undefined`
+	 * if the server is not registered or its underlying connection lacks a
+	 * `callTool` method (mock connections in tests may omit it). Used by
+	 * the L3a observer bridge to invoke `memory_observe` directly without
+	 * routing through the LLM-visible tool surface.
+	 *
+	 * 返回指定 server 的 callTool 通道；server 未注册或底层连接未实现
+	 * callTool 时返回 undefined（测试 mock 可省略）。L3a 观察桥用它
+	 * 直接调用 `memory_observe`，绕开 LLM 可见的工具列表。
+	 */
+	getServerCallToolTransport(
+		serverId: string,
+	):
+		| { callTool(name: string, args: Record<string, unknown>): Promise<string> }
+		| undefined {
+		const connection = this.connections.get(serverId);
+		if (connection == null || typeof connection.callTool !== "function") {
+			return undefined;
+		}
+		const callTool = connection.callTool.bind(connection);
+		return { callTool };
 	}
 
 	async disconnectAll(): Promise<void> {

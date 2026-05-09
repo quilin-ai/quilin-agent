@@ -275,13 +275,18 @@ async def test_memory_observe_invalid_env_frequency_falls_back(
     assert config.frequency == server_module.DEFAULT_OBSERVER_FREQUENCY
 
 
-async def test_memory_observe_observer_factory_failure_falls_back_to_env() -> None:
+async def test_memory_observe_observer_factory_failure_falls_back_to_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """When observer_factory raises, the server falls back to building an
-    observer from env-derived ObserverConfig (no api_key here → safe)."""
-    import os
+    observer from env-derived ObserverConfig (no api_key here → safe).
 
-    os.environ.pop("QUILIN_OBSERVER_API_KEY", None)
-    os.environ.pop("DEEPSEEK_API_KEY", None)
+    Uses ``monkeypatch.delenv`` so the test never pollutes the pytest
+    session environment (raw ``os.environ.pop`` would persist across tests
+    and break parallel runs).
+    """
+    monkeypatch.delenv("QUILIN_OBSERVER_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
 
     def broken_factory() -> L3aObserver:
         raise RuntimeError("factory blew up")
@@ -426,3 +431,157 @@ async def test_memory_observe_caches_observer_per_session(
     )
 
     assert len(constructed) == 2
+
+
+async def test_memory_observe_evicts_oldest_observer_when_cache_is_full(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The (user_id, session_id) → L3aObserver cache is bounded at
+    ``MAX_OBSERVER_SESSIONS``. Once the cap is reached, inserting a new
+    distinct session evicts the oldest (least recently used) entry.
+
+    To verify eviction, we:
+      1) construct a server with a small cap (4) via monkeypatch,
+      2) call memory_observe with 5 distinct session ids (key0..key4),
+      3) confirm 5 observers were constructed and the cache size is 4
+         (key0 evicted),
+      4) re-request key0 — it must construct a *new* observer (factory
+         called a 6th time), proving key0 was evicted.
+
+    缓存有上限：超过容量时驱逐最久未用条目；重新请求最老 key 时
+    工厂会再次被调用（证明它已被驱逐）。
+    """
+    from quilin_mem import server as server_module
+
+    monkeypatch.setattr(server_module, "MAX_OBSERVER_SESSIONS", 4)
+
+    constructed: list[L3aObserver] = []
+
+    def factory() -> L3aObserver:
+        observer = L3aObserver(
+            ObserverConfig(api_key="", frequency=10),
+            _llm_caller=_llm_json_caller,
+        )
+        constructed.append(observer)
+        return observer
+
+    server = create_server(observer_factory=factory)
+
+    # Five distinct (user_id, session_id) keys — exceeds the cap of 4.
+    for i in range(5):
+        await _call_tool_request(
+            server,
+            "memory_observe",
+            {
+                "user_text": f"hi {i}",
+                "assistant_text": "ack",
+                "user_id": f"user-{i}",
+                "session_id": f"session-{i}",
+            },
+        )
+
+    # Five fresh observers were constructed (one per distinct key).
+    assert len(constructed) == 5
+
+    # Re-request key 0 — it must have been evicted (it was the oldest),
+    # so the factory is invoked again, giving us a 6th instance.
+    await _call_tool_request(
+        server,
+        "memory_observe",
+        {
+            "user_text": "hi 0 again",
+            "assistant_text": "ack",
+            "user_id": "user-0",
+            "session_id": "session-0",
+        },
+    )
+    assert len(constructed) == 6
+
+    # In contrast, the most recently used key (4) should still be cached:
+    # re-requesting it should NOT increment the constructed count.
+    await _call_tool_request(
+        server,
+        "memory_observe",
+        {
+            "user_text": "hi 4 again",
+            "assistant_text": "ack",
+            "user_id": "user-4",
+            "session_id": "session-4",
+        },
+    )
+    assert len(constructed) == 6
+
+
+async def test_memory_observe_cache_stays_bounded_with_many_sessions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Stress test: 257 distinct (user_id, session_id) keys against a cap
+    of 256 must not grow unboundedly. We can't peek inside the closure-
+    private OrderedDict, so we verify indirectly: the *first* key is
+    evicted (factory called again on re-request), and the *last* key is
+    still cached (factory not called again on re-request).
+
+    若缓存无界增长，最早的 key 仍命中、不会重新构造；要求最早的 key
+    在第 257 次插入时被驱逐。
+    """
+    from quilin_mem import server as server_module
+
+    monkeypatch.setattr(server_module, "MAX_OBSERVER_SESSIONS", 256)
+
+    constructed: list[L3aObserver] = []
+
+    def factory() -> L3aObserver:
+        observer = L3aObserver(
+            ObserverConfig(api_key="", frequency=10),
+            _llm_caller=_llm_json_caller,
+        )
+        constructed.append(observer)
+        return observer
+
+    server = create_server(observer_factory=factory)
+
+    # 257 unique sessions — exceeds the cap by 1.
+    total = 257
+    for i in range(total):
+        await _call_tool_request(
+            server,
+            "memory_observe",
+            {
+                "user_text": f"hi {i}",
+                "assistant_text": "ack",
+                "user_id": f"user-{i}",
+                "session_id": f"session-{i}",
+            },
+        )
+
+    # 257 distinct keys → 257 observers constructed so far.
+    assert len(constructed) == total
+
+    # Re-request the oldest key (i=0). It must have been evicted (the
+    # 257th insert pushed the cache past 256, evicting key 0).
+    await _call_tool_request(
+        server,
+        "memory_observe",
+        {
+            "user_text": "hi 0 again",
+            "assistant_text": "ack",
+            "user_id": "user-0",
+            "session_id": "session-0",
+        },
+    )
+    assert len(constructed) == total + 1
+
+    # Re-request the most-recently-inserted key (i=256). It must still
+    # be cached → factory not invoked again.
+    await _call_tool_request(
+        server,
+        "memory_observe",
+        {
+            "user_text": "hi 256 again",
+            "assistant_text": "ack",
+            "user_id": f"user-{total - 1}",
+            "session_id": f"session-{total - 1}",
+        },
+    )
+    # Constructed count stays at total + 1 — no new observer.
+    assert len(constructed) == total + 1

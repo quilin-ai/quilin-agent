@@ -6,6 +6,7 @@ import { createTaskHash, LinearPlanExecutor } from "../planning/executor.js";
 import type { LinearPlan } from "../planning/types.js";
 import {
 	createMCPSpawnEnv,
+	INTERNAL_MCP_TOOL_NAMES,
 	MCPClientManager,
 	MCPTimeoutError,
 	validateMCPServerConfig,
@@ -173,12 +174,9 @@ describe.sequential("MCPClientManager", () => {
 		await vi.advanceTimersByTimeAsync(30_001);
 		const result = await resultPromise;
 		expect(result.isError).toBe(true);
-		expect(result.content).toEqual(
-			expect.stringContaining("timed out"),
-		);
+		expect(result.content).toEqual(expect.stringContaining("timed out"));
 		vi.useRealTimers();
 	});
-
 
 	it("forwards ambient traceparent and request_id through MCP request metadata", async () => {
 		const manager = new MCPClientManager();
@@ -512,14 +510,18 @@ describe.sequential("MCPClientManager", () => {
 				(tool) => tool.name === "scratchpad_clear",
 			);
 
+			// memory_observe is filtered out (internal tool — invoked by the
+			// observer bridge directly, never advertised to the LLM).
 			expect(toolNames).toEqual([
-				"memory_observe",
 				"memory_recall",
 				"memory_store",
 				"scratchpad_clear",
 				"scratchpad_read",
 				"scratchpad_write",
 			]);
+			expect(tools.find((tool) => tool.name === "memory_observe")).toBe(
+				undefined,
+			);
 			expect(
 				memoryRecall?.parameters.safeParse({ query: "hello" }).success,
 			).toBe(true);
@@ -627,6 +629,40 @@ describe.sequential("MCPClientManager", () => {
 		expect(JSON.parse(result)).toEqual({
 			error: expect.stringContaining("disconnected"),
 		});
+	});
+
+	it("exports memory_observe in INTERNAL_MCP_TOOL_NAMES blocklist", () => {
+		// memory_observe is the canonical internal-only tool the LLM must
+		// never see. Adding/removing entries here changes runtime behavior
+		// for every MCP server connection — guard against accidental drift.
+		expect(INTERNAL_MCP_TOOL_NAMES.has("memory_observe")).toBe(true);
+	});
+
+	it("filters internal tools from listTools output but keeps callTool path open", async () => {
+		const manager = new MCPClientManager();
+
+		try {
+			const tools = await manager.connect(createMemoryServerConfig());
+			// memory_observe must be absent from the LLM-visible list — it's
+			// invoked only by the observer bridge via callTool().
+			expect(tools.find((tool) => tool.name === "memory_observe")).toBe(
+				undefined,
+			);
+			expect(tools.map((tool) => tool.name)).not.toContain("memory_observe");
+
+			// But the bridge can still call it directly through the transport.
+			const result = await manager.callTool("memory_observe", {
+				user_text: "hello",
+				assistant_text: "hi",
+			});
+			// Server returns a JSON envelope (skipped or dispatched) — the
+			// important guarantee is that the call did not error out as
+			// "tool not found".
+			const parsed = JSON.parse(result) as Record<string, unknown>;
+			expect(parsed).not.toHaveProperty("error");
+		} finally {
+			await manager.disconnect();
+		}
 	});
 
 	it("does not leak quilin-mem state across fresh test connections", async () => {
