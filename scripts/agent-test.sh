@@ -159,6 +159,20 @@ cmd_start() {
 	local logfile
 	logfile="$(log_path_for "$session")"
 
+	# Install the SIGINT/SIGTERM trap *before* `tmux new-session` so the
+	# race window between the kernel marking the session alive and our
+	# shell registering a cleanup handler shrinks to a single variable
+	# assignment (sub-microsecond — bounded by bash's signal-check
+	# granularity between simple commands). The trap body uses lazy
+	# expansion: $session, $logfile, $session_started are read at fire
+	# time. Until session_started=1 the trap is a pure exit-130 no-op;
+	# after session_started=1 it kills the session and rm's the logfile.
+	# require_session_name + validate_log_dir guarantee these variables
+	# are shell-metachar safe, so lazy expansion cannot inject.
+	local session_started=0
+	# shellcheck disable=SC2016
+	trap '(( session_started )) && { rm -f "$logfile"; tmux kill-session -t "=$session" 2>/dev/null || true; }; exit 130' INT TERM
+
 	# C-3: do NOT pre-check via session_exists then call new-session —
 	# that's TOCTOU. Instead let `tmux new-session -d` itself report
 	# the duplicate-session error and translate it to our actionable
@@ -166,6 +180,8 @@ cmd_start() {
 	# when the name is taken; we capture stderr and re-raise.
 	local new_session_err
 	if ! new_session_err="$(tmux new-session -d -s "$session" -x "$PANE_W" -y "$PANE_H" "$command" 2>&1)"; then
+		# new-session failed — no session created, trap cleanup unneeded.
+		trap - INT TERM
 		# Distinguish duplicate-session from other failures (e.g. malformed
 		# command spec) by matching tmux's well-known error string.
 		if [[ "$new_session_err" == *"duplicate session"* ]]; then
@@ -173,17 +189,20 @@ cmd_start() {
 		fi
 		die "start: tmux new-session failed: $new_session_err"
 	fi
+	# Session is alive in the tmux server; arm the trap's cleanup body.
+	session_started=1
 
 	# Now safe to truncate (start succeeded). Pipe-pane will append from
 	# this point; any prior content is intentionally discarded so each
 	# `start` produces a fresh log.
 	: >"$logfile"
 
-	# G-4: poll session_exists instead of fixed `sleep 0.3`. Faster on
-	# the typical case (the inner shell is ready in 5–50ms, not 300ms)
-	# and more robust on heavily loaded CI where 300ms may be too short.
-	# Bounded by a 2s ceiling — beyond that, the inner shell almost
-	# certainly died on startup (e.g. malformed command, missing binary).
+	# G-4: poll session_exists instead of fixed `sleep 0.3`. tmux
+	# `new-session -d` is synchronous w.r.t. has-session, so the typical
+	# fast path is 0ms (first poll succeeds immediately, no sleep).
+	# The 50ms × 40 = 2s ceiling is the worst-case budget for the rare
+	# slow-CI / cold-tmux-server scenario; well above that the inner
+	# shell almost certainly died on startup.
 	local poll_attempts=0
 	local max_attempts=40   # 40 × 50ms = 2s ceiling
 	while ((poll_attempts < max_attempts)); do
@@ -197,8 +216,13 @@ cmd_start() {
 	# H-1: post-startup verification. If the session is gone after the
 	# poll window, the command exited before we could attach pipe-pane.
 	# Emit a structured, actionable error rather than letting the user
-	# discover this via "no such session" on the next subcommand.
+	# discover this via "no such session" on the next subcommand. Also
+	# rm the truncated logfile so a tight loop of failed `start`s does
+	# not leak zero-byte files into LOG_DIR; disarm the trap because the
+	# session is already dead.
 	if ! session_exists "$session"; then
+		rm -f "$logfile"
+		trap - INT TERM
 		die "start: command exited before pipe-pane could attach — session '$session' is dead.
        Likely causes: the <command> string failed at parse / exec, or finished
        too fast (e.g. 'true' / 'echo hi'). Use a long-running command (a REPL
@@ -208,11 +232,23 @@ cmd_start() {
        your command — that is NOT what you want here."
 	fi
 
-	# `-o` is tmux's TOGGLE flag — it closes a pre-existing pipe before
-	# opening a new one (idempotency). The `cat >>` does the actual append.
-	# If `-o` is removed, a second pipe-pane call would silently no-op
-	# (tmux refuses to overwrite an active pipe).
-	tmux pipe-pane -t "$session" -o "cat >>'$logfile'"
+	# Wrap pipe-pane in an explicit failure branch. The INT/TERM trap
+	# does NOT cover non-zero exits under `set -e` — if pipe-pane fails
+	# (e.g. tmux server-side fault), the script aborts before the
+	# trap-clear and would leak BOTH session and zero-byte logfile.
+	# Mirror the H-1 die path: rm, kill, clear trap, die. `-o` is tmux's
+	# TOGGLE flag (idempotent re-attach); `cat >>` does the actual append.
+	if ! tmux pipe-pane -t "$session" -o "cat >>'$logfile'"; then
+		rm -f "$logfile"
+		tmux kill-session -t "=$session" 2>/dev/null || true
+		trap - INT TERM
+		die "start: tmux pipe-pane attach failed for session '$session' — tmux server may be unhealthy"
+	fi
+
+	# Pipe-pane attached; the SIGINT trap is no longer needed because
+	# subsequent failures (in the caller, not in cmd_start) are the
+	# caller's responsibility to clean up via `cmd_cleanup`.
+	trap - INT TERM
 
 	echo "agent-test: started session '$session'  log=$logfile  pane=${PANE_W}x${PANE_H}"
 }
@@ -369,8 +405,12 @@ cmd_selftest() {
 	# create a trap injection vulnerability.
 	local safe_s
 	printf -v safe_s '%q' "$s"
+	# EXIT trap also covers the H-1 probe session created below — if a
+	# signal lands between probe success-detection and explicit cleanup,
+	# the EXIT handler still cleans up. agent_test_h1_$$ matches the
+	# literal name used at the H-1 negative probe (same shell PID).
 	# shellcheck disable=SC2064
-	trap "cmd_cleanup $safe_s 2>/dev/null || true" EXIT
+	trap "cmd_cleanup $safe_s 2>/dev/null || true; cmd_cleanup agent_test_h1_$$ 2>/dev/null || true" EXIT
 
 	# Use an interactive bash with no rc files so prompt is deterministic.
 	cmd_start "$s" 'env PS1="\$ " bash --norc --noprofile -i 2>&1'
@@ -452,6 +492,40 @@ cmd_selftest() {
 	# Multi-arg send rejection (catches Round-1 Bug 3 different angle)
 	if "${BASH_SOURCE[0]}" send "$s" hello world 2>/dev/null; then
 		echo "agent-test: SELFTEST FAIL — multi-arg send accepted" >&2
+		return 1
+	fi
+
+	# H-1 negative coverage: `start` with a command that exits immediately
+	# ('true') must die with the "command exited before pipe-pane could
+	# attach" diagnostic. Locks the H-1 contract so a future refactor that
+	# drops the session_exists post-poll check trips selftest immediately.
+	# Uses a fresh session name to avoid interference; the H-1 die path
+	# also rm's the log file, so no leak after this probe.
+	local h1_probe="agent_test_h1_$$"
+	local h1_err
+	local h1_rc=0
+	# `set -e` aborts on a non-zero command substitution INSIDE an
+	# assignment, so the rc capture has to use `|| ...` to keep us alive
+	# on the expected die-path.
+	h1_err="$("${BASH_SOURCE[0]}" start "$h1_probe" true 2>&1)" || h1_rc=$?
+	if (( h1_rc == 0 )); then
+		echo "agent-test: SELFTEST FAIL — H-1 fast-exit command accepted" >&2
+		# Defensive cleanup in case start somehow succeeded.
+		cmd_cleanup "$h1_probe" 2>/dev/null || true
+		return 1
+	fi
+	# Lock the H-1 diagnostic path specifically. Without this, dropping
+	# the session_exists post-poll check still produces non-zero exit +
+	# clean logfile via the pipe-pane failure fallback (which also rms
+	# the logfile), making the contract ambiguous (X REAL #1).
+	if [[ "$h1_err" != *"command exited before pipe-pane could attach"* ]]; then
+		echo "agent-test: SELFTEST FAIL — H-1 probe did not produce the H-1 diagnostic." >&2
+		echo "  exit=$h1_rc  stderr=$h1_err" >&2
+		return 1
+	fi
+	if [[ -f "$(log_path_for "$h1_probe")" ]]; then
+		echo "agent-test: SELFTEST FAIL — H-1 die path leaked logfile" >&2
+		rm -f "$(log_path_for "$h1_probe")"
 		return 1
 	fi
 
