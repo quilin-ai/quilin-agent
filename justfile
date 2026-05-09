@@ -121,13 +121,16 @@ dev-web:
 test-py:
     cd providers/memory && QUILIN_ENV=test uv run pytest
     cd providers/web && QUILIN_ENV=test uv run pytest
+    cd providers/optimizer && QUILIN_ENV=test uv run pytest
 
 lint-py:
     cd providers/memory && uv run ruff check src/ tests/
     cd providers/web && uv run ruff check src/ tests/
+    cd providers/optimizer && uv run ruff check src/ tests/
 fmt-py:
     cd providers/memory && uv run ruff format src/ tests/
     cd providers/web && uv run ruff format src/ tests/
+    cd providers/optimizer && uv run ruff format src/ tests/
 
 # ============ Rust (crates/) ============
 
