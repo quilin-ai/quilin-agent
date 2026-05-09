@@ -29,6 +29,7 @@ import {
 	type ServerResponse,
 } from "node:http";
 import { isIPv4, isIPv6 } from "node:net";
+import { basename } from "node:path";
 import type {
 	CapabilitiesHotReloadController,
 	CapabilitiesReloadResult,
@@ -37,6 +38,47 @@ import type {
 export const RELOAD_WEBHOOK_SECRET_ENV =
 	"QUILIN_RELOAD_WEBHOOK_SECRET" as const;
 export const RELOAD_WEBHOOK_SIGNATURE_HEADER = "x-reload-signature" as const;
+
+/**
+ * Maximum size of the request body the webhook is willing to buffer
+ * before responding with 413. Reload payloads are tiny (callers
+ * typically POST `{}` or a few hundred bytes of metadata), so 64 KiB
+ * is generous while still preventing DoS via unbounded body buffering
+ * (HMAC verification cannot start until the body is fully read, so
+ * an attacker on loopback could otherwise OOM the process).
+ *
+ * webhook 在响应 413 之前愿意缓冲的请求体上限。reload payload 极小
+ * （调用方一般 POST `{}` 或几百字节元数据），64 KiB 足够宽裕；同时
+ * 防止通过无限缓冲请求体发起 DoS（HMAC 校验必须等 body 完整读完才
+ * 能开始，环回攻击者否则可耗尽内存）。
+ */
+export const MAX_RELOAD_REQUEST_BODY_BYTES = 64 * 1024;
+
+/**
+ * Socket idle timeout for the webhook HTTP server. 5 seconds is far
+ * more than enough for a loopback HMAC reload, while still ensuring a
+ * slow-stream attacker cannot pin a socket open indefinitely.
+ *
+ * webhook HTTP server 的 socket 空闲超时。5 秒对于环回 HMAC reload
+ * 远远足够，同时确保慢速流式攻击者无法长期占用连接。
+ */
+export const RELOAD_WEBHOOK_SOCKET_TIMEOUT_MS = 5_000;
+
+/**
+ * Sentinel error class thrown by `readRequestBody` when the request
+ * body exceeds `MAX_RELOAD_REQUEST_BODY_BYTES`. Used so the handler
+ * can map to a 413 response.
+ *
+ * `readRequestBody` 在请求体超过 `MAX_RELOAD_REQUEST_BODY_BYTES` 时
+ * 抛出的哨兵异常类，用于让 handler 映射为 413 响应。
+ */
+class RequestBodyTooLargeError extends Error {
+	readonly code = "REQUEST_BODY_TOO_LARGE" as const;
+	constructor(message: string) {
+		super(message);
+		this.name = "RequestBodyTooLargeError";
+	}
+}
 
 /**
  * Hosts considered safe to bind. Anything else (in particular `0.0.0.0`,
@@ -172,6 +214,15 @@ function timingSafeEqualHex(expected: string, actual: string): boolean {
 		return false;
 	}
 	try {
+		// `Buffer.from(str, "hex")` truncates at the first invalid nibble,
+		// so a fully non-hex input decodes to an empty Buffer. The length
+		// guard below catches both that case and any partial truncation
+		// (decoded length < expected) before reaching `timingSafeEqual`,
+		// which itself requires equal-length operands.
+		// `Buffer.from(str, "hex")` 会在第一个非 hex nibble 处截断，
+		// 因此完全非 hex 的输入会解出空 Buffer。下面的长度守卫同时拦
+		// 截这种情况和任何部分截断（解出的字节数 < expected），保证
+		// 进入 `timingSafeEqual` 的两个 buffer 长度一致。
 		const expectedBuf = Buffer.from(expected, "hex");
 		const actualBuf = Buffer.from(actual, "hex");
 		if (expectedBuf.length === 0 || expectedBuf.length !== actualBuf.length) {
@@ -183,18 +234,118 @@ function timingSafeEqualHex(expected: string, actual: string): boolean {
 	}
 }
 
-function readRequestBody(req: IncomingMessage): Promise<Buffer> {
+/**
+ * Parses an HTTP `Content-Length` header value defensively. Returns a
+ * non-negative integer when the header is a clean integer string, or
+ * `null` when the header is missing / malformed (including duplicates,
+ * decimals, negatives, NaN). Does not trust `Number(...)` because it
+ * silently coerces empty strings, hex prefixes, etc.
+ *
+ * 防御式解析 `Content-Length` 头。仅当头部是干净的整数字符串时返回
+ * 非负整数；缺失或非法（重复、含小数、负数、NaN）时返回 `null`。
+ * 不使用 `Number(...)`，避免空串、hex 前缀等场景被静默转换。
+ */
+function parseContentLengthHeader(
+	headerValue: string | string[] | undefined,
+): number | null {
+	if (headerValue == null) {
+		return null;
+	}
+	if (Array.isArray(headerValue)) {
+		// Multiple Content-Length headers are a smuggling smell — refuse.
+		// 多个 Content-Length 头是走私风险 — 拒绝。
+		return null;
+	}
+	const trimmed = headerValue.trim();
+	if (trimmed.length === 0 || !/^\d+$/.test(trimmed)) {
+		return null;
+	}
+	const parsed = Number.parseInt(trimmed, 10);
+	if (!Number.isFinite(parsed) || parsed < 0) {
+		return null;
+	}
+	return parsed;
+}
+
+/**
+ * Reads the full request body into a `Buffer`, enforcing
+ * `MAX_RELOAD_REQUEST_BODY_BYTES` against both the declared
+ * `Content-Length` header (pre-check) and the actually-streamed bytes
+ * (mid-stream guard). On overflow rejects with `RequestBodyTooLargeError`
+ * so the handler can respond with 413; the underlying socket is
+ * destroyed by the caller to free the resource.
+ *
+ * 把请求体完整读入 `Buffer`，同时通过 `Content-Length` 头预检查与
+ * 流式累积守卫两层防护强制 `MAX_RELOAD_REQUEST_BODY_BYTES` 上限。
+ * 超限时以 `RequestBodyTooLargeError` 拒绝，由 handler 映射为 413；
+ * caller 负责销毁底层 socket 释放资源。
+ */
+function readRequestBody(
+	req: IncomingMessage,
+	maxBytes: number = MAX_RELOAD_REQUEST_BODY_BYTES,
+): Promise<Buffer> {
 	return new Promise((resolve, reject) => {
+		const declaredLength = parseContentLengthHeader(
+			req.headers["content-length"],
+		);
+		if (declaredLength != null && declaredLength > maxBytes) {
+			reject(
+				new RequestBodyTooLargeError(
+					`Content-Length ${declaredLength} exceeds cap ${maxBytes}`,
+				),
+			);
+			return;
+		}
+
 		const chunks: Buffer[] = [];
-		req.on("data", (chunk: Buffer | string) => {
-			chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-		});
-		req.on("end", () => {
+		let received = 0;
+		let aborted = false;
+
+		const onData = (chunk: Buffer | string) => {
+			if (aborted) {
+				return;
+			}
+			const buf = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+			received += buf.length;
+			if (received > maxBytes) {
+				aborted = true;
+				cleanup();
+				reject(
+					new RequestBodyTooLargeError(
+						`Streamed body exceeded cap ${maxBytes} bytes`,
+					),
+				);
+				return;
+			}
+			chunks.push(buf);
+		};
+
+		const onEnd = () => {
+			if (aborted) {
+				return;
+			}
+			cleanup();
 			resolve(Buffer.concat(chunks));
-		});
-		req.on("error", (err) => {
+		};
+
+		const onError = (err: Error) => {
+			if (aborted) {
+				return;
+			}
+			aborted = true;
+			cleanup();
 			reject(err);
-		});
+		};
+
+		const cleanup = () => {
+			req.removeListener("data", onData);
+			req.removeListener("end", onEnd);
+			req.removeListener("error", onError);
+		};
+
+		req.on("data", onData);
+		req.on("end", onEnd);
+		req.on("error", onError);
 	});
 }
 
@@ -215,13 +366,22 @@ function reloadResultToJson(
 	result: CapabilitiesReloadResult,
 ): Record<string, unknown> {
 	if (result.status === "success") {
+		// Redact the absolute path to its basename — exposing the full path
+		// over a (loopback-only but locally multi-tenant) HTTP response is
+		// unnecessary info-leak surface. Callers only need to know which
+		// file was reloaded, not where on disk it lives.
+		// 把绝对路径裁剪为 basename — 通过 HTTP 响应（仅环回但本地可能
+		// 多用户）暴露完整路径是不必要的信息泄漏面。调用方只需要知道
+		// reload 的是哪个文件，不需要它在磁盘上的位置。
+		const configPath = result.snapshot.configPath;
 		return {
 			status: "success",
 			generation: result.snapshot.generation,
 			operation: result.snapshot.operation,
 			trigger: result.snapshot.trigger,
 			completedAtEpochMs: result.snapshot.completedAtEpochMs,
-			configPath: result.snapshot.configPath,
+			configPath:
+				typeof configPath === "string" ? basename(configPath) : configPath,
 			change: result.snapshot.change,
 		};
 	}
@@ -259,6 +419,15 @@ export async function startReloadWebhookServer(
 			onError: options.onError,
 		});
 	});
+	// Socket-level idle timeout: a slow-streaming attacker on loopback
+	// could otherwise hold a request open indefinitely without the
+	// `data`/`end` events firing. After the timeout elapses Node
+	// destroys the socket, which surfaces as a request-level error
+	// caught by readRequestBody / handleRequest.
+	// socket 级空闲超时：慢速流式攻击者在环回上可能长期占用连接而不
+	// 触发 `data`/`end` 事件。超时后 Node 销毁 socket，会以请求级
+	// error 形式被 readRequestBody / handleRequest 捕获。
+	server.setTimeout(RELOAD_WEBHOOK_SOCKET_TIMEOUT_MS);
 
 	await new Promise<void>((resolve, reject) => {
 		const onListening = () => {
@@ -334,9 +503,13 @@ async function handleRequest(
 		}
 
 		const signatureHeader = req.headers[RELOAD_WEBHOOK_SIGNATURE_HEADER];
-		const signature = Array.isArray(signatureHeader)
+		const rawSignature = Array.isArray(signatureHeader)
 			? signatureHeader[0]
 			: signatureHeader;
+		// Be forgiving of accidental whitespace / CRLF picked up while
+		// shell-piping the header value; HMAC compare still timing-safe.
+		// 容忍 shell 管道复制时混入的空白 / CRLF；HMAC 比较仍是定时安全。
+		const signature = rawSignature?.trim();
 		if (signature == null || signature.length === 0) {
 			writeJson(res, 401, {
 				status: "error",
@@ -346,7 +519,25 @@ async function handleRequest(
 			return;
 		}
 
-		const body = await readRequestBody(req);
+		let body: Buffer;
+		try {
+			body = await readRequestBody(req);
+		} catch (readErr) {
+			if (readErr instanceof RequestBodyTooLargeError) {
+				writeJson(res, 413, {
+					status: "error",
+					error: "payload_too_large",
+					message: `Request body exceeds ${MAX_RELOAD_REQUEST_BODY_BYTES} byte cap.`,
+				});
+				// Tear the socket down so a slow / hostile sender cannot
+				// keep streaming after we have already responded.
+				// 拆掉 socket，避免响应后慢速 / 恶意发送方继续灌入数据。
+				req.destroy();
+				return;
+			}
+			throw readErr;
+		}
+
 		const expected = computeReloadWebhookSignature(context.secret, body);
 		if (!timingSafeEqualHex(expected, signature.toLowerCase())) {
 			writeJson(res, 401, {

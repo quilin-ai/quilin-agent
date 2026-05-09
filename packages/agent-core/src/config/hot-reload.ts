@@ -348,6 +348,50 @@ export class CapabilitiesHotReloadController {
 		return cloneMcpReconnect(this.mcpReconnect);
 	}
 
+	/**
+	 * Reloads capabilities config from disk and atomically swaps the
+	 * runtime when the reload commits. Triggers may overlap (webhook,
+	 * SIGHUP, manual, watcher all call this method) — serialization is
+	 * intentionally **not** a Promise mutex but a per-call generation
+	 * token:
+	 *
+	 *   1. Each call increments `this.generation` to claim a token.
+	 *   2. After loading + building runtime, the call checks whether
+	 *      its token still matches `this.generation`. If a newer
+	 *      reload has bumped the counter mid-flight, the older call
+	 *      yields and returns the **current** lastSuccess snapshot
+	 *      (representing the newer in-flight result once it commits).
+	 *   3. Only the call whose token is still current performs the
+	 *      atomic state swap and emits the success event.
+	 *
+	 * Two concurrent reloads (e.g. webhook + SIGHUP arriving within
+	 * milliseconds) therefore converge on the latest config — the
+	 * older trigger's HTTP / signal response may briefly observe a
+	 * stale `lastSuccess` while the newer reload finishes IO, but
+	 * **no data is lost** and the system always settles on the most
+	 * recent on-disk config. Callers that need read-your-write
+	 * semantics across triggers should poll `getStatus().generation`.
+	 *
+	 * 从磁盘重载 capabilities 配置，并在 commit 时原子替换 runtime。
+	 * 多触发器（webhook / SIGHUP / manual / watcher）可能重叠调用本
+	 * 方法 — 序列化策略**不是** Promise 互斥锁，而是按调用发放的
+	 * generation token：
+	 *
+	 *   1. 每次调用先把 `this.generation` 自增，认领一个 token。
+	 *   2. 读盘 + 构建 runtime 后，对比自己的 token 是否仍等于
+	 *      `this.generation`；如果中途有更新 reload 抢先递增，则
+	 *      较旧调用退让并返回**当前** lastSuccess 快照（待较新
+	 *      reload 写入后即代表最新结果）。
+	 *   3. 只有 token 仍为最新的调用才会执行原子状态替换并发出
+	 *      success 事件。
+	 *
+	 * 因此两个并发 reload（例如毫秒级到达的 webhook + SIGHUP）会
+	 * 收敛到最新配置 — 较旧触发器的 HTTP / 信号返回可能短暂看到
+	 * 陈旧的 `lastSuccess`（在更新 reload 完成 IO 之前），但**不
+	 * 会丢失任何数据**，系统最终始终落在最新的磁盘配置上。需要
+	 * 跨触发器 read-your-write 语义的调用方应轮询
+	 * `getStatus().generation`。
+	 */
 	async reload(
 		trigger: CapabilitiesReloadTrigger = "manual",
 	): Promise<CapabilitiesReloadResult> {
