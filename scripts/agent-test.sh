@@ -156,29 +156,57 @@ cmd_start() {
 	require_session_name "$session"
 	[[ -n "$command" ]] || die "start: command required"
 
-	if session_exists "$session"; then
-		die "session '$session' already exists — cleanup first or pick another name"
-	fi
-
 	local logfile
 	logfile="$(log_path_for "$session")"
 
-	# Start the session FIRST. If tmux fails (e.g. the command spec is
-	# malformed), `set -e` aborts before we touch the existing logfile —
-	# preserving any prior log for post-mortem.
-	tmux new-session -d -s "$session" -x "$PANE_W" -y "$PANE_H" "$command"
+	# C-3: do NOT pre-check via session_exists then call new-session —
+	# that's TOCTOU. Instead let `tmux new-session -d` itself report
+	# the duplicate-session error and translate it to our actionable
+	# format. tmux returns non-zero with "duplicate session" stderr
+	# when the name is taken; we capture stderr and re-raise.
+	local new_session_err
+	if ! new_session_err="$(tmux new-session -d -s "$session" -x "$PANE_W" -y "$PANE_H" "$command" 2>&1)"; then
+		# Distinguish duplicate-session from other failures (e.g. malformed
+		# command spec) by matching tmux's well-known error string.
+		if [[ "$new_session_err" == *"duplicate session"* ]]; then
+			die "session '$session' already exists — cleanup first or pick another name"
+		fi
+		die "start: tmux new-session failed: $new_session_err"
+	fi
 
 	# Now safe to truncate (start succeeded). Pipe-pane will append from
 	# this point; any prior content is intentionally discarded so each
 	# `start` produces a fresh log.
 	: >"$logfile"
 
-	# Brief wait so the inner shell is ready before pipe-pane attaches.
-	# Without this, pipe-pane may miss the first ~50ms of stdout.  This is
-	# best-effort: very fast commands that exit before pipe-pane attaches
-	# will still leave an empty log; capture-pane scrollback compensates
-	# for the in-memory case.
-	sleep 0.3
+	# G-4: poll session_exists instead of fixed `sleep 0.3`. Faster on
+	# the typical case (the inner shell is ready in 5–50ms, not 300ms)
+	# and more robust on heavily loaded CI where 300ms may be too short.
+	# Bounded by a 2s ceiling — beyond that, the inner shell almost
+	# certainly died on startup (e.g. malformed command, missing binary).
+	local poll_attempts=0
+	local max_attempts=40   # 40 × 50ms = 2s ceiling
+	while ((poll_attempts < max_attempts)); do
+		if session_exists "$session"; then
+			break
+		fi
+		sleep 0.05
+		poll_attempts=$((poll_attempts + 1))
+	done
+
+	# H-1: post-startup verification. If the session is gone after the
+	# poll window, the command exited before we could attach pipe-pane.
+	# Emit a structured, actionable error rather than letting the user
+	# discover this via "no such session" on the next subcommand.
+	if ! session_exists "$session"; then
+		die "start: command exited before pipe-pane could attach — session '$session' is dead.
+       Likely causes: the <command> string failed at parse / exec, or finished
+       too fast (e.g. 'true' / 'echo hi'). Use a long-running command (a REPL
+       like 'bash -i' or 'just dev-yolo'), or wrap a short command to keep
+       the pane alive after it exits: '<your-cmd>; sleep 3600'.
+       NOTE: 'sleep N && <your-cmd>' would block for N seconds BEFORE running
+       your command — that is NOT what you want here."
+	fi
 
 	# `-o` is tmux's TOGGLE flag — it closes a pre-existing pipe before
 	# opening a new one (idempotency). The `cat >>` does the actual append.
