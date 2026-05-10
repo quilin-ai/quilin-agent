@@ -52,6 +52,15 @@
 #                                   Bump for high-volume agents (e.g. LLM
 #                                   streaming >500 lines / poll interval) to
 #                                   avoid missing matches scrolled past.
+#   AGENT_TEST_MAX_ATTEMPTS         `start`'s post-new-session poll budget
+#                                   (default 40 × 50ms = 2s). The selftest
+#                                   H-1 probe sets this to 4 (200ms) for
+#                                   speed; users running `start` against a
+#                                   long-running command never hit the
+#                                   ceiling (first poll succeeds in 0ms).
+#                                   Must be a positive integer; validated
+#                                   before tmux invocation, so an invalid
+#                                   value cannot leak a session.
 #
 # Example E2E flow (web_crawl repro):
 #   ./scripts/agent-test.sh start qx 'just dev-yolo 2>&1'
@@ -156,6 +165,16 @@ cmd_start() {
 	require_session_name "$session"
 	[[ -n "$command" ]] || die "start: command required"
 
+	# Validate AGENT_TEST_MAX_ATTEMPTS BEFORE any session-creating side
+	# effect (the INT/TERM trap below does NOT cover generic die exits, so
+	# a post-new-session validation failure would leak both session and
+	# zero-byte logfile). Empty-string is treated as "use default" — same
+	# convention as LOG_DIR / SCROLLBACK_LINES env handling.
+	local max_attempts="${AGENT_TEST_MAX_ATTEMPTS:-40}"
+	if [[ ! "$max_attempts" =~ ^[1-9][0-9]*$ ]]; then
+		die "AGENT_TEST_MAX_ATTEMPTS must be a positive integer (got: $max_attempts)"
+	fi
+
 	local logfile
 	logfile="$(log_path_for "$session")"
 
@@ -197,14 +216,24 @@ cmd_start() {
 	# `start` produces a fresh log.
 	: >"$logfile"
 
-	# G-4: poll session_exists instead of fixed `sleep 0.3`. tmux
-	# `new-session -d` is synchronous w.r.t. has-session, so the typical
-	# fast path is 0ms (first poll succeeds immediately, no sleep).
-	# The 50ms × 40 = 2s ceiling is the worst-case budget for the rare
-	# slow-CI / cold-tmux-server scenario; well above that the inner
-	# shell almost certainly died on startup.
+	# Poll session_exists instead of using a fixed `sleep 0.3`. tmux
+	# `new-session -d` is synchronous w.r.t. has-session for healthy
+	# long-running commands — the first poll succeeds immediately, 0ms.
+	#
+	# The 50ms × 40 = 2s ceiling covers two distinct cases:
+	#   (a) slow-CI / cold-tmux-server warm-up where the long-running
+	#       inner shell genuinely needs a moment.
+	#   (b) Fast-exit commands like `start <s> 'true'` — the session
+	#       already died by the time we poll. We exhaust the full 2s
+	#       budget *by design* (we are confirming death, not waiting
+	#       for life), then the H-1 die path emits a structured
+	#       diagnostic. Selftest exercises this path and accepts the
+	#       2s cost; users running `start <s> '<long-cmd>'` never see
+	#       it.
+	#
+	# Override the ceiling by exporting AGENT_TEST_MAX_ATTEMPTS — the
+	# selftest H-1 probe sets this to 4 (200ms) to keep selftest fast.
 	local poll_attempts=0
-	local max_attempts=40   # 40 × 50ms = 2s ceiling
 	while ((poll_attempts < max_attempts)); do
 		if session_exists "$session"; then
 			break
@@ -489,9 +518,36 @@ cmd_selftest() {
 		return 1
 	fi
 
-	# Multi-arg send rejection (catches Round-1 Bug 3 different angle)
+	# Multi-arg send rejection
 	if "${BASH_SOURCE[0]}" send "$s" hello world 2>/dev/null; then
 		echo "agent-test: SELFTEST FAIL — multi-arg send accepted" >&2
+		return 1
+	fi
+
+	# Invalid AGENT_TEST_MAX_ATTEMPTS must die BEFORE creating a session,
+	# so no tmux session leaks. Probe several invalid forms.
+	local mxa_probe
+	for mxa_probe in 0 04 -1 abc '4; touch /tmp/AGENT_TEST_MXA_PWNED'; do
+		local mxa_session="agent_test_mxa_$$"
+		if AGENT_TEST_MAX_ATTEMPTS="$mxa_probe" "${BASH_SOURCE[0]}" start "$mxa_session" 'sleep 60' 2>/dev/null; then
+			echo "agent-test: SELFTEST FAIL — invalid AGENT_TEST_MAX_ATTEMPTS accepted: $mxa_probe" >&2
+			cmd_cleanup "$mxa_session" 2>/dev/null || true
+			return 1
+		fi
+		if tmux has-session -t "=$mxa_session" 2>/dev/null; then
+			echo "agent-test: SELFTEST FAIL — invalid AGENT_TEST_MAX_ATTEMPTS leaked session: $mxa_probe" >&2
+			tmux kill-session -t "=$mxa_session" 2>/dev/null || true
+			return 1
+		fi
+		if [[ -f "$(log_path_for "$mxa_session")" ]]; then
+			echo "agent-test: SELFTEST FAIL — invalid AGENT_TEST_MAX_ATTEMPTS leaked logfile: $mxa_probe" >&2
+			rm -f "$(log_path_for "$mxa_session")"
+			return 1
+		fi
+	done
+	if [[ -e /tmp/AGENT_TEST_MXA_PWNED ]]; then
+		rm -f /tmp/AGENT_TEST_MXA_PWNED
+		echo "agent-test: SELFTEST FAIL — AGENT_TEST_MAX_ATTEMPTS injection wrote a file" >&2
 		return 1
 	fi
 
@@ -507,17 +563,21 @@ cmd_selftest() {
 	# `set -e` aborts on a non-zero command substitution INSIDE an
 	# assignment, so the rc capture has to use `|| ...` to keep us alive
 	# on the expected die-path.
-	h1_err="$("${BASH_SOURCE[0]}" start "$h1_probe" true 2>&1)" || h1_rc=$?
+	# Cap the H-1 probe poll budget at 4 × 50ms = 200ms instead of the
+	# default 2s — fast-exit commands always exhaust the budget, so we
+	# trim it for selftest reliability and CI throughput.
+	h1_err="$(AGENT_TEST_MAX_ATTEMPTS=4 "${BASH_SOURCE[0]}" start "$h1_probe" true 2>&1)" || h1_rc=$?
 	if (( h1_rc == 0 )); then
 		echo "agent-test: SELFTEST FAIL — H-1 fast-exit command accepted" >&2
 		# Defensive cleanup in case start somehow succeeded.
 		cmd_cleanup "$h1_probe" 2>/dev/null || true
 		return 1
 	fi
-	# Lock the H-1 diagnostic path specifically. Without this, dropping
-	# the session_exists post-poll check still produces non-zero exit +
-	# clean logfile via the pipe-pane failure fallback (which also rms
-	# the logfile), making the contract ambiguous (X REAL #1).
+	# Lock the H-1 diagnostic path specifically. Without this assertion,
+	# dropping the session_exists post-poll check still produces non-zero
+	# exit + clean logfile via the pipe-pane failure fallback (which also
+	# rms the logfile), making the contract ambiguous — the test would
+	# pass spuriously on broken code.
 	if [[ "$h1_err" != *"command exited before pipe-pane could attach"* ]]; then
 		echo "agent-test: SELFTEST FAIL — H-1 probe did not produce the H-1 diagnostic." >&2
 		echo "  exit=$h1_rc  stderr=$h1_err" >&2
