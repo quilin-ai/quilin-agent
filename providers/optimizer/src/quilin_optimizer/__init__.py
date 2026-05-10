@@ -12,6 +12,8 @@ extra 缺失时返回结构化"DSPy unavailable"告警，不会让 server 崩溃
 
 from .server import (
     DEFAULT_OPTIMIZER_CHOICE,
+    JUDGE_MODE_DUMMY,
+    JUDGE_MODE_LLM,
     MIN_TRAJECTORIES,
     OPTIMIZER_ID,
     SCHEMA_VERSION,
@@ -25,6 +27,8 @@ from .server import (
 
 __all__ = [
     "DEFAULT_OPTIMIZER_CHOICE",
+    "JUDGE_MODE_DUMMY",
+    "JUDGE_MODE_LLM",
     "MIN_TRAJECTORIES",
     "OPTIMIZER_ID",
     "SCHEMA_VERSION",

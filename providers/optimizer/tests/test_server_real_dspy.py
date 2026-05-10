@@ -25,6 +25,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from quilin_optimizer.server import (
+    JUDGE_MODE_DUMMY,
+    JUDGE_MODE_LLM,
     MIN_TRAJECTORIES,
     OptimizerConfig,
     optimize,
@@ -105,13 +107,36 @@ def _make_fake_dspy(
 
     fake.LM = _LM
 
+    # Mirror dspy.utils.DummyLM for the ``judge_mode = "dummy"`` path.
+    # Real DummyLM cycles through a list of canned responses; the
+    # construction signature `DummyLM(answers: list[str])` is what the
+    # server calls — we only need to verify it is constructed and bound
+    # to ``settings.lm`` when dummy mode is active.
+    class _DummyLM:
+        def __init__(self, answers: list[str]) -> None:
+            self.answers = list(answers)
+
+    utils_mod = types.ModuleType("dspy.utils")
+    utils_mod.DummyLM = _DummyLM
+    fake.utils = utils_mod
+
     settings = MagicMock()
     fake.settings = settings
 
     class _CompilerBase:
-        def __init__(self, *, metric: Any, auto: str = "light") -> None:
+        # GEPA in DSPy 3.x requires an explicit `reflection_lm` kwarg in
+        # addition to metric / auto. We accept (and ignore) it here so
+        # the fake matches the real signature without per-compiler shims.
+        def __init__(
+            self,
+            *,
+            metric: Any,
+            auto: str = "light",
+            reflection_lm: Any = None,
+        ) -> None:
             self.metric = metric
             self.auto = auto
+            self.reflection_lm = reflection_lm
 
         def compile(self, program: Any, trainset: list[Any]) -> Any:
             if compile_raises is not None:
@@ -709,3 +734,157 @@ async def test_optimize_tool_round_trip_via_mcp_handler(
     payload = json.loads(text)
     assert payload["optimizer_choice"] == "gepa"
     assert payload["proposals"][0]["metadata"]["optimizer_choice"] == "gepa"
+
+
+# ---------------------------------------------------------------------------
+# Dummy-LM judge mode (zero-cost real-DSPy code path benchmarking)
+# ---------------------------------------------------------------------------
+
+
+class TestDummyJudgeMode:
+    """Tests for ``QUILIN_OPTIMIZER_JUDGE_MODE=dummy`` — DummyLM judge."""
+
+    def test_optimizer_config_judge_mode_defaults_to_llm(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # No env override → default mode is "llm".
+        monkeypatch.delenv("QUILIN_OPTIMIZER_JUDGE_MODE", raising=False)
+        config = OptimizerConfig.from_env({})
+        assert config.judge_mode == JUDGE_MODE_LLM
+
+    def test_optimizer_config_reads_dummy_mode_from_env(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("QUILIN_OPTIMIZER_JUDGE_API_KEY", raising=False)
+        config = OptimizerConfig.from_env({"QUILIN_OPTIMIZER_JUDGE_MODE": "dummy"})
+        assert config.judge_mode == JUDGE_MODE_DUMMY
+
+    def test_optimizer_config_unknown_mode_falls_back_to_llm(self) -> None:
+        # Defensive: a typo / future-mode env value silently maps to "llm"
+        # rather than crashing the server. Combined with is_ready() this
+        # means a misconfigured mode + missing key still reports the
+        # standard "judge_api_key_missing" reason.
+        config = OptimizerConfig.from_env({"QUILIN_OPTIMIZER_JUDGE_MODE": "made-up-mode"})
+        assert config.judge_mode == JUDGE_MODE_LLM
+
+    def test_optimizer_config_is_ready_true_for_dummy_without_api_key(self) -> None:
+        config = OptimizerConfig(
+            judge_model=None,
+            judge_api_key=None,
+            judge_base_url=None,
+            judge_mode=JUDGE_MODE_DUMMY,
+        )
+        assert config.is_ready() is True
+
+    def test_optimizer_config_is_ready_false_for_llm_without_api_key(self) -> None:
+        config = OptimizerConfig(
+            judge_model=None,
+            judge_api_key=None,
+            judge_base_url=None,
+            judge_mode=JUDGE_MODE_LLM,
+        )
+        assert config.is_ready() is False
+
+    @pytest.mark.asyncio
+    async def test_optimize_dummy_mode_runs_real_dspy_compile_path(
+        self,
+        fake_dspy: types.ModuleType,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Dummy mode requires NO API key — the whole point is zero-cost
+        # real-DSPy benchmarking. Setting only the mode env should let
+        # the optimizer reach the compile path.
+        monkeypatch.delenv("QUILIN_OPTIMIZER_JUDGE_API_KEY", raising=False)
+        monkeypatch.setenv("QUILIN_OPTIMIZER_JUDGE_MODE", "dummy")
+
+        result = await optimize(
+            optimizer_choice="mipro",
+            trajectories=_trajectories(),
+            failure_categories=["tool_error"],
+            dry_run=False,
+        )
+        # Extract textual payload (mirrors other tests' helper logic).
+        if isinstance(result, str):
+            text = result
+        else:
+            items = list(getattr(result, "content", []))
+            text = "\n".join(
+                getattr(item, "text", "") for item in items if getattr(item, "type", None) == "text"
+            )
+        payload = json.loads(text)
+
+        # Compile path must reach a real proposal — no insufficient_signal
+        # bailout. This proves dummy mode actually exercises the DSPy
+        # compile loop instead of short-circuiting at the readiness gate.
+        assert payload["proposals"], (
+            "dummy mode should produce real proposals, not bail at readiness gate; "
+            f"no_proposal_reasons={payload.get('no_proposal_reasons')}"
+        )
+        assert payload["proposals"][0]["title"].startswith("DSPy MIPRO")
+
+    @pytest.mark.asyncio
+    async def test_optimize_dummy_mode_binds_dummy_lm_to_dspy_settings(
+        self,
+        fake_dspy: types.ModuleType,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # The settings.configure(lm=...) call should receive a DummyLM
+        # instance (not a real dspy.LM) when judge_mode=dummy. This test
+        # verifies the wire that prevents real LLM calls in dummy mode.
+        monkeypatch.delenv("QUILIN_OPTIMIZER_JUDGE_API_KEY", raising=False)
+        monkeypatch.setenv("QUILIN_OPTIMIZER_JUDGE_MODE", "dummy")
+
+        await optimize(
+            optimizer_choice="mipro",
+            trajectories=_trajectories(),
+            failure_categories=["tool_error"],
+            dry_run=False,
+        )
+
+        configure_calls = fake_dspy.settings.configure.call_args_list
+        assert configure_calls, "settings.configure must have been called"
+        bound_lm = configure_calls[-1].kwargs.get("lm")
+        # The bound LM is a DummyLM instance — it has the canned answers
+        # list we hand it in `_DUMMY_LM_RESPONSES`. Real `dspy.LM` would
+        # have a `.model` string; DummyLM has `.answers` list.
+        assert hasattr(bound_lm, "answers"), (
+            f"dummy mode should bind a DummyLM (with .answers), got {type(bound_lm).__name__}"
+        )
+        assert isinstance(bound_lm.answers, list) and len(bound_lm.answers) >= 3
+
+    @pytest.mark.asyncio
+    async def test_optimize_dummy_mode_no_api_key_no_warning(
+        self,
+        fake_dspy: types.ModuleType,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # Negative regression: in llm mode without a key, the server
+        # logs "judge_api_key_missing" and returns insufficient_signal.
+        # In dummy mode it must NOT emit that warning.
+        monkeypatch.delenv("QUILIN_OPTIMIZER_JUDGE_API_KEY", raising=False)
+        monkeypatch.setenv("QUILIN_OPTIMIZER_JUDGE_MODE", "dummy")
+
+        await optimize(
+            optimizer_choice="mipro",
+            trajectories=_trajectories(),
+            failure_categories=["tool_error"],
+            dry_run=False,
+        )
+
+        api_key_warnings = [
+            record for record in caplog.records if "judge_api_key_missing" in record.getMessage()
+        ]
+        assert not api_key_warnings, (
+            f"dummy mode must not emit judge_api_key_missing warning; got {api_key_warnings}"
+        )
+
+    # Note on the missing log-content test: a previous draft asserted on
+    # the `dspy_compile_starting` info log via capfd, but structlog's
+    # ``PrintLoggerFactory(file=sys.stderr)`` caches a stderr handle
+    # reference at configure-time, so subsequent writes go to the
+    # original FD even after pytest swaps sys.stderr for capture. The
+    # log line IS emitted (visible in pytest's "Captured stderr call"
+    # section) but cannot be reliably read back via fixtures. The
+    # behavioral assertions on `settings.configure(lm=DummyLM)` already
+    # cover the wire that matters.

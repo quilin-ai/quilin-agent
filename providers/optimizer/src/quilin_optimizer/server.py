@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import itertools
 import json
 import os
 from dataclasses import dataclass
@@ -79,6 +80,11 @@ class OptimizerOperationError(RuntimeError):
     """Sanitized tool error exposed over MCP."""
 
 
+JUDGE_MODE_LLM = "llm"
+JUDGE_MODE_DUMMY = "dummy"
+_ALLOWED_JUDGE_MODES = frozenset({JUDGE_MODE_LLM, JUDGE_MODE_DUMMY})
+
+
 @dataclass(frozen=True)
 class OptimizerConfig:
     """User-provided judge LLM configuration sourced from env vars.
@@ -88,32 +94,57 @@ class OptimizerConfig:
 
     所有字段在工具调用时读取（非模块导入时），方便测试与 CI 逐次覆盖。
     ``api_key`` 永不写入日志。
+
+    ``judge_mode`` (env: ``QUILIN_OPTIMIZER_JUDGE_MODE``) selects between:
+    - ``"llm"`` (default): real LLM judge via ``dspy.LM`` + ``litellm``
+      → requires ``QUILIN_OPTIMIZER_JUDGE_API_KEY`` to be set
+    - ``"dummy"``: deterministic ``dspy.utils.DummyLM`` judge → zero LLM
+      cost; lets the DSPy compile loop actually run for benchmarking the
+      real DSPy code path without burning real API budget. No API key
+      required in this mode.
+
+    ``judge_mode``（env：``QUILIN_OPTIMIZER_JUDGE_MODE``）切换：
+    - ``"llm"``（默认）：真实 LLM judge，走 ``dspy.LM`` + ``litellm``
+      → 必须设置 ``QUILIN_OPTIMIZER_JUDGE_API_KEY``
+    - ``"dummy"``：确定性 ``dspy.utils.DummyLM`` judge → 零 LLM 成本，
+      让 DSPy compile loop 真跑起来，方便在不烧真实 API 配额的前提下
+      benchmark 真实 DSPy 代码路径。该模式下 API key 非必需。
     """
 
     judge_model: str | None
     judge_api_key: str | None
     judge_base_url: str | None
+    judge_mode: str = JUDGE_MODE_LLM
 
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> OptimizerConfig:
         source = env if env is not None else os.environ
+        raw_mode = (source.get("QUILIN_OPTIMIZER_JUDGE_MODE") or "").strip().lower()
+        mode = raw_mode if raw_mode in _ALLOWED_JUDGE_MODES else JUDGE_MODE_LLM
         return cls(
             judge_model=source.get("QUILIN_OPTIMIZER_JUDGE_MODEL") or None,
             judge_api_key=source.get("QUILIN_OPTIMIZER_JUDGE_API_KEY") or None,
             judge_base_url=source.get("QUILIN_OPTIMIZER_JUDGE_BASE_URL") or None,
+            judge_mode=mode,
         )
 
     def is_ready(self) -> bool:
-        """True iff a judge API key is configured.
+        """True iff the optimizer can construct a judge LM.
 
-        Both ``judge_model`` and ``judge_base_url`` are optional — DSPy /
-        litellm pick reasonable defaults when omitted. Only the API key
-        is required.
+        - ``llm`` mode: requires ``judge_api_key``
+        - ``dummy`` mode: always ready (no API key needed; DummyLM is local)
 
-        当且仅当 judge API key 已配置时返回 True。
-        ``judge_model`` 与 ``judge_base_url`` 可省略，由 DSPy / litellm 兜底。
-        仅 API key 必填。
+        Both ``judge_model`` and ``judge_base_url`` are optional in llm
+        mode — DSPy / litellm pick reasonable defaults when omitted.
+
+        - ``llm`` 模式：必须有 ``judge_api_key``
+        - ``dummy`` 模式：永远 ready（不需 API key，DummyLM 在本地）
+
+        ``judge_model`` 与 ``judge_base_url`` 在 llm 模式下可省略，
+        由 DSPy / litellm 兜底。
         """
+        if self.judge_mode == JUDGE_MODE_DUMMY:
+            return True
         return bool(self.judge_api_key)
 
 
@@ -283,8 +314,13 @@ def _build_judge_metric(config: OptimizerConfig) -> Any:
     # contract even though we don't read it.
     _ = config  # silence "unused" without breaking the closure binding
 
-    def metric(example: Any, prediction: Any, trace: Any = None) -> float:
-        _unused = trace  # noqa: F841 — kwarg part of DSPy metric contract
+    def metric(example: Any, prediction: Any, *args: Any, **kwargs: Any) -> float:
+        # DSPy's metric contract varies by compiler:
+        # - MIPROv2 calls metric(example, prediction, trace=None)
+        # - GEPA calls metric(gold, pred, trace, pred_name, pred_trace)
+        # Accept both via *args / **kwargs so the same metric is reusable
+        # across compilers without per-compiler wrapping.
+        _unused = (args, kwargs)  # noqa: F841 — extra kwargs intentionally ignored
         # Default DSPy behavior: when ``expected`` is provided and we
         # have a candidate, do a simple lexical overlap fallback. The
         # judge LM is invoked by the compiler internally if a richer
@@ -352,24 +388,138 @@ def _select_compiler(dspy_module: Any, choice: str, metric: Any) -> Any:
         compiler_cls = getattr(dspy_module, "GEPA", None)
         if compiler_cls is None:
             raise OptimizerOperationError("installed dspy build does not expose GEPA")
-        return compiler_cls(metric=metric, auto="light")
+        # GEPA REQUIRES an explicit reflection_lm kwarg in DSPy 3.x —
+        # it uses a separate "reflection" LM to propose new instructions
+        # based on observed program behavior. We pass the same LM that's
+        # bound to dspy.settings (the user's judge LM in llm mode, or
+        # DummyLM in dummy mode). Looking up via dspy.settings means
+        # this works for both modes without extra plumbing.
+        reflection_lm = getattr(dspy_module.settings, "lm", None)
+        if reflection_lm is None:
+            raise OptimizerOperationError("GEPA needs dspy.settings.lm configured before compile")
+        return compiler_cls(metric=metric, auto="light", reflection_lm=reflection_lm)
     # _validate_optimizer_choice already excluded other values, but keep
     # this branch for defense-in-depth.
     raise OptimizerOperationError(f"unsupported optimizer_choice: {choice}")
 
 
+# Each dict represents one structured LM response to a DSPy Predict
+# call. DummyLM cycles through this list. We over-include common output
+# field names (observations / instruction / proposed_instruction /
+# score / response / answer / better_instruction) so MIPROv2's
+# internal data-aware proposer + instruction generator + grounded
+# proposer Predicts all find a value for whatever output field they
+# request. Any field DSPy doesn't ask for is silently ignored.
+#
+# DSPy 3.x's MIPROv2 uses a handful of internal signatures (DataObserver,
+# DatasetDescriptor, GenerateInstructionGivenAttempts, etc.); rather
+# than enumerate them and risk drift on minor DSPy updates, we provide
+# a generic shape with all the field names actually seen across the
+# 2.5–3.x line.
+_DUMMY_LM_RESPONSES: tuple[dict[str, str], ...] = (
+    {
+        "observations": "tool_error: commands fail without preflight checks.",
+        "dataset_description": "Shell command failures after planning.",
+        "proposed_instruction": "Add a preflight check before shell commands.",
+        "instruction": "Add a preflight check before shell commands.",
+        "better_instruction": "Add a preflight check; verify command exists in PATH.",
+        "score": "0.7",
+        "response": "0.7",
+        "answer": "Add a preflight check before shell commands.",
+        "summary": "preflight-check pattern",
+        "rationale": "Preflight validation reduces tool_error frequency.",
+    },
+    {
+        "observations": "schema_violation: output lacks explicit field validation.",
+        "dataset_description": "Malformed JSON / dict outputs.",
+        "proposed_instruction": "Validate output shape against the expected schema.",
+        "instruction": "Validate output shape against the expected schema.",
+        "better_instruction": "Validate output shape; reject mismatches.",
+        "score": "0.5",
+        "response": "0.5",
+        "answer": "Validate output shape against the expected schema.",
+        "summary": "schema-validation pattern",
+        "rationale": "Explicit validation prevents shape drift.",
+    },
+    {
+        "observations": "budget_exhaustion: agent retries indefinitely.",
+        "dataset_description": "Trajectories that consume excessive token budget.",
+        "proposed_instruction": "Cap retry count and exit cleanly at budget threshold.",
+        "instruction": "Cap retry count and exit cleanly at budget threshold.",
+        "better_instruction": "Cap retries; monitor remaining budget; exit at threshold.",
+        "score": "0.6",
+        "response": "0.6",
+        "answer": "Cap retry count and exit cleanly at budget threshold.",
+        "summary": "retry-cap pattern",
+        "rationale": "Bounded retries protect budget.",
+    },
+    {
+        "observations": "missing_evidence: sources cited without verification.",
+        "dataset_description": "Trajectories that cite unverified content.",
+        "proposed_instruction": "Cite a verified source URL before any external fact.",
+        "instruction": "Cite a verified source URL before any external fact.",
+        "better_instruction": "Cite verified source URL; mark unverified claims.",
+        "score": "0.8",
+        "response": "0.8",
+        "answer": "Cite a verified source URL before any external fact.",
+        "summary": "evidence-citation pattern",
+        "rationale": "Verified citations prevent hallucination.",
+    },
+    {
+        "observations": "planning_drift: subtasks diverge from the original goal.",
+        "dataset_description": "Trajectories where planning drifts off-task.",
+        "proposed_instruction": "Re-anchor on the original task before each subtask.",
+        "instruction": "Re-anchor on the original task before each subtask.",
+        "better_instruction": "Re-anchor before each subtask; abort drift early.",
+        "score": "0.4",
+        "response": "0.4",
+        "answer": "Re-anchor on the original task before each subtask.",
+        "summary": "re-anchor pattern",
+        "rationale": "Periodic anchoring keeps execution on-task.",
+    },
+)
+
+
 def _configure_dspy_lm(dspy_module: Any, config: OptimizerConfig) -> None:
-    """Wire the user-configured judge LLM into ``dspy.settings``.
+    """Wire the configured judge into ``dspy.settings``.
+
+    Two modes:
+
+    - ``judge_mode = "llm"`` (default): real ``dspy.LM`` driven by
+      LiteLLM. Requires ``judge_api_key``.
+    - ``judge_mode = "dummy"``: deterministic ``dspy.utils.DummyLM`` —
+      zero LLM cost. Lets the DSPy compile loop run end-to-end for
+      benchmarking the real DSPy code path without spending API budget.
 
     Defensive: any LM-construction error is wrapped in
     ``OptimizerOperationError`` so the caller surfaces a structured
-    warning instead of a raw LiteLLM stack trace.
+    warning instead of a raw stack trace.
 
-    把用户配置的 judge LLM 绑定到 ``dspy.settings``。
+    两种模式：
+
+    - ``judge_mode = "llm"``（默认）：真实 ``dspy.LM`` + LiteLLM。
+      必须有 ``judge_api_key``。
+    - ``judge_mode = "dummy"``：确定性 ``dspy.utils.DummyLM`` —— 零
+      LLM 成本，让 DSPy compile loop 真跑起来，便于在不烧 API 配额的
+      前提下 benchmark 真实 DSPy 代码路径。
+
     防御性处理：LM 构造异常会包装成 ``OptimizerOperationError``，
-    避免 LiteLLM 的原始堆栈泄露给调用方。
+    避免原始堆栈泄露给调用方。
     """
     try:
+        if config.judge_mode == JUDGE_MODE_DUMMY:
+            # DummyLM is the canonical zero-cost stand-in for a real LM
+            # when exercising DSPy's compile loop. We pre-flatten 200
+            # cycles of the response pool because MIPROv2 / GEPA make
+            # many internal Predict calls during compile (data-aware
+            # proposer, instruction generator, demo bootstrapping, etc.)
+            # and DummyLM's underlying iterator does NOT cycle by itself.
+            # 200 × 5 = 1000 responses comfortably covers a single
+            # compile run on a 5-50 trajectory training set.
+            cycled = list(itertools.islice(itertools.cycle(_DUMMY_LM_RESPONSES), 1000))
+            dummy = dspy_module.utils.DummyLM(cycled)
+            dspy_module.settings.configure(lm=dummy)
+            return
         lm_kwargs: dict[str, object] = {}
         if config.judge_api_key:
             lm_kwargs["api_key"] = config.judge_api_key
@@ -381,8 +531,9 @@ def _configure_dspy_lm(dspy_module: Any, config: OptimizerConfig) -> None:
     except Exception as exc:
         # Sanitize: never echo the API key. The exc.__str__ may include
         # config details, so we hard-replace with a generic message.
+        model = config.judge_model or "default"
         raise OptimizerOperationError(
-            f"failed to configure DSPy judge LM (model={config.judge_model or 'default'})"
+            f"failed to configure DSPy judge LM (mode={config.judge_mode}, model={model})"
         ) from exc
 
 
@@ -778,6 +929,20 @@ async def _optimize(
                 )
             ],
         )
+
+    # Info-log the active judge mode so operators can confirm whether a
+    # zero-cost dummy judge or a real LLM is in use. Never echoes the
+    # API key — only the boolean key-present + the mode + (optional)
+    # model name. Crucial for benchmarking trust ("am I burning real
+    # API budget right now?").
+    logger.info(
+        "dspy_compile_starting",
+        optimizer_choice=optimizer_choice,
+        judge_mode=config.judge_mode,
+        judge_model=config.judge_model or "(default)",
+        judge_api_key_present=bool(config.judge_api_key),
+        trajectory_count=len(trajectories),
+    )
 
     # Real DSPy compile path. Any failure is wrapped as a structured
     # "insufficient_signal" reason so the TS adapter can surface it

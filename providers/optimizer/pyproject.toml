@@ -20,6 +20,12 @@ dependencies = [
 [project.optional-dependencies]
 dspy = [
     "dspy-ai>=2.5",
+    # MIPROv2 internally calls `optuna` for Bayesian instruction search;
+    # DSPy lists it as an optional extra (`dspy[optuna]`) but our
+    # graceful-degrade path can't surface "missing optuna" as nicely as
+    # "missing dspy-ai", so we pull it eagerly when the user opts into
+    # the dspy extra. Adds ~5 MB.
+    "optuna>=3.0",
 ]
 dev = [
     "pytest>=9.0.3",
