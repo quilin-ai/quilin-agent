@@ -1524,10 +1524,8 @@ describe("startRepl", () => {
 
 	it("shows slash command help while / is typed without submitting input", async () => {
 		const restoreStdinTty = setProcessTty(process.stdin, true);
-		// Slash-help install + render now target stdout (matches readline's
-		// output stream after QUI-141 Symptom B). Both stderr (legacy) and
-		// stdout TTY flags are flipped so the install path is hit.
-		const restoreStderrTty = setProcessTty(process.stderr, true);
+		// Slash-help install + render target stdout (the readline output
+		// stream); the install guard checks stdin + stdout TTY only.
 		const restoreStdoutTty = setProcessTty(process.stdout, true);
 		const readlineLineAccess = vi.fn(() => {
 			throw new Error("slash command help must not read readline.line");
@@ -1587,14 +1585,12 @@ describe("startRepl", () => {
 			await replPromise;
 		} finally {
 			restoreStdoutTty();
-			restoreStderrTty();
 			restoreStdinTty();
 		}
 	});
 
 	it("filters slash command help by the typed prefix", async () => {
 		const restoreStdinTty = setProcessTty(process.stdin, true);
-		const restoreStderrTty = setProcessTty(process.stderr, true);
 		const restoreStdoutTty = setProcessTty(process.stdout, true);
 		const readlineLineAccess = vi.fn(() => {
 			throw new Error("slash command help must not read readline.line");
@@ -1652,7 +1648,6 @@ describe("startRepl", () => {
 			await replPromise;
 		} finally {
 			restoreStdoutTty();
-			restoreStderrTty();
 			restoreStdinTty();
 		}
 	});

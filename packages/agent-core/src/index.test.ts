@@ -669,6 +669,7 @@ describe("main", () => {
 
 	it("falls back to terminal detection when QUILIN_RUNTIME_MODE is invalid", async () => {
 		const restoreStdin = stubIsTTY(process.stdin, true);
+		const restoreStdout = stubIsTTY(process.stdout, true);
 		const restoreStderr = stubIsTTY(process.stderr, true);
 		const model = createMockLanguageModel();
 		const provider = createMockProvider(() => model);
@@ -692,6 +693,7 @@ describe("main", () => {
 			await main();
 		} finally {
 			restoreStdin();
+			restoreStdout();
 			restoreStderr();
 		}
 
@@ -703,7 +705,8 @@ describe("main", () => {
 
 	it("falls back to service mode when stdio is not fully interactive", async () => {
 		const restoreStdin = stubIsTTY(process.stdin, true);
-		const restoreStderr = stubIsTTY(process.stderr, false);
+		const restoreStdout = stubIsTTY(process.stdout, false);
+		const restoreStderr = stubIsTTY(process.stderr, true);
 		const model = createMockLanguageModel();
 		const provider = createMockProvider(() => model);
 		const serviceRunner = vi.fn().mockResolvedValue(undefined);
@@ -726,6 +729,7 @@ describe("main", () => {
 			await main({ serviceRunner });
 		} finally {
 			restoreStdin();
+			restoreStdout();
 			restoreStderr();
 		}
 

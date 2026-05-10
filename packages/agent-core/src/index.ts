@@ -556,7 +556,12 @@ function resolveRuntimeMode(runtimeMode?: RuntimeMode): RuntimeMode {
 		return modeFromEnv;
 	}
 
-	return process.stdin.isTTY && process.stderr.isTTY ? "repl" : "service";
+	// Both `stdin.isTTY` and `stdout.isTTY` true means we have an
+	// interactive terminal on the user-facing render surface (post-
+	// channel-split, repl renders to stdout). If stdout is piped to a
+	// file (e.g. `bun ... > log`) treat it as service mode even if
+	// stderr is still a TTY — the user cannot see the prompt.
+	return process.stdin.isTTY && process.stdout.isTTY ? "repl" : "service";
 }
 
 function parseReplCliOptions(
