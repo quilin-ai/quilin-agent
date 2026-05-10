@@ -66,6 +66,11 @@ import {
 } from "./observability/dashboard-runtime-providers.js";
 import { JsonFileSpanExporter } from "./observability/exporters/json-file.js";
 import { startRepl } from "./repl.js";
+import {
+	buildDspyClientFactoryFromRegistryRef,
+	DSPY_OPTIMIZER_MCP_SERVER_ID,
+	type MCPRegistryRef,
+} from "./self-evolution/dspy-client-factory.js";
 import { analyzeTrajectoryFailures } from "./self-evolution/failure-analyzer.js";
 import {
 	DEFAULT_IDLE_DAILY_TOKEN_QUOTA,
@@ -1129,16 +1134,24 @@ export async function main(options: MainOptions = {}): Promise<void> {
 			filePath: "proposals.jsonl",
 		});
 		// Optimizer choice is opt-in via user.toml [self_evolution] optimizer.
-		// Default `prompt_rewrite` keeps existing behavior; `dspy` is gated
-		// behind an explicit MCP client factory which is not yet wired into
-		// the core REPL bootstrap (Stage C). When a user opts into `dspy`
-		// without that wiring, the factory falls back to PromptRewrite and
-		// logs a warning.
+		// Default `prompt_rewrite` keeps existing behavior; `dspy` resolves
+		// the MCP client lazily through `mcpRegistryRef`, populated by
+		// `onRuntimeReady` once `startRepl` constructs `MCPRegistry` and
+		// `syncRuntimeSurface` registers `quilin-optimizer`. When a user
+		// opts into `dspy` but the optimizer entry is absent from the loaded
+		// capabilities config (no provider dir, no judge API key),
+		// `buildDspyClientFactoryFromRegistryRef` returns `undefined` and
+		// `createOfflineOptimizer` falls back to PromptRewrite with a warn
+		// log — preserving self-evolution rather than crashing.
 		//
 		// 离线优化器选择通过 user.toml `[self_evolution] optimizer` 显式 opt-in。
-		// 默认 `prompt_rewrite` 保持现有行为；`dspy` 需要显式注入 MCP 客户端
-		// 工厂——Stage C 尚未在 REPL bootstrap 中接线。用户选择 `dspy` 但
-		// 没接线时，工厂会退化到 PromptRewrite 并记录警告。
+		// 默认 `prompt_rewrite` 保持现有行为；`dspy` 通过 `mcpRegistryRef`
+		// 懒查询 MCP client，registry 在 `onRuntimeReady` 触发后由 `startRepl`
+		// 填充，`syncRuntimeSurface` 完成 `quilin-optimizer` 注册。用户选择
+		// `dspy` 但 capabilities config 没有 optimizer entry（缺 provider
+		// 目录或 judge API key）时，`buildDspyClientFactoryFromRegistryRef`
+		// 返回 `undefined`，`createOfflineOptimizer` 退化到 PromptRewrite
+		// 并记录 warn——保留 self-evolution 而不是直接崩。
 		//
 		// `optimizer_choice` (mipro / gepa) 是 dspy 通路的二级选项，
 		// 转发给 Python `optimize` 工具决定使用哪个 DSPy 编译器。
@@ -1148,6 +1161,16 @@ export async function main(options: MainOptions = {}): Promise<void> {
 		const optimizerChoice = userRuntime.result.config.self_evolution.optimizer;
 		const dspyOptimizerChoice =
 			userRuntime.result.config.self_evolution.optimizer_choice;
+		const mcpRegistryRef: MCPRegistryRef = {};
+		const dspyClientFactory = buildDspyClientFactoryFromRegistryRef({
+			registryRef: mcpRegistryRef,
+			hasOptimizerEntry: () =>
+				capabilitiesHotReload
+					.getRuntime()
+					.mcpServers.some(
+						(entry) => entry.id === DSPY_OPTIMIZER_MCP_SERVER_ID,
+					),
+		});
 		const idleRunner = new IdleEvolutionRunner({
 			idleBudget: { dailyTokenQuota: DEFAULT_IDLE_DAILY_TOKEN_QUOTA },
 			trajectoryStore,
@@ -1156,10 +1179,15 @@ export async function main(options: MainOptions = {}): Promise<void> {
 			optimizer: createOfflineOptimizer({
 				choice: optimizerChoice,
 				dspyOptimizerChoice,
+				...(dspyClientFactory == null ? {} : { dspyClientFactory }),
 			}),
 		});
 		logger.info(
-			{ optimizerChoice, dspyOptimizerChoice },
+			{
+				optimizerChoice,
+				dspyOptimizerChoice,
+				dspyClientFactoryWired: dspyClientFactory != null,
+			},
 			"Self-evolution engine online",
 		);
 
@@ -1210,6 +1238,16 @@ export async function main(options: MainOptions = {}): Promise<void> {
 					dashboardRuntimeRefs.supervisorRuntime = runtime.supervisorRuntime;
 					dashboardRuntimeRefs.memoryBackendFactory = () =>
 						new LocalMemoryBackend();
+					// Late-bind the same MCPRegistry into the DSPy client factory
+					// ref. The `dspyClientFactory` closure captured at idle-runner
+					// construction time reads `mcpRegistryRef.registry` on each
+					// `callTool`, so flipping it here is enough — no need to
+					// rebuild the optimizer or the runner.
+					// 把同一份 MCPRegistry 后绑定到 DSPy client factory ref。
+					// 构造 idle runner 时捕获的 `dspyClientFactory` 闭包每次
+					// `callTool` 都读 `mcpRegistryRef.registry`，所以这里
+					// 翻一下值即可，不用重建 optimizer 或 runner。
+					mcpRegistryRef.registry = runtime.registry;
 				},
 				toolFilter: runtimeToolFilter,
 				onProviderRunRecord: createProviderRunRecordLogger("repl_turn"),

@@ -1,3 +1,5 @@
+export * from "./bench-runner.js";
+export * from "./dspy-client-factory.js";
 export * from "./dspy-offline-optimizer.js";
 export * from "./failure-analyzer.js";
 export * from "./idle-runner.js";
@@ -6,7 +8,6 @@ export * from "./optimizer-factory.js";
 export * from "./patch-proposal.js";
 export * from "./prompt-rewrite-optimizer.js";
 export * from "./proposal-store.js";
-export * from "./bench-runner.js";
 export * from "./replay-harness.js";
 export * from "./sandbox-policy-gate.js";
 export * from "./trajectory-store.js";

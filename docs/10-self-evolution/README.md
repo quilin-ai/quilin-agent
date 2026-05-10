@@ -402,7 +402,12 @@ Production trade-off: `DockerProposalSandboxPolicyGate` accepts a `requireDocker
 - `packages/agent-core/src/config/loader.ts` — `quilin-optimizer` MCP server entry added to default capabilities config, gated on (a) `providers/optimizer/` exists AND (b) `QUILIN_OPTIMIZER_JUDGE_API_KEY` env var present; absence of either skips the spawn.
 - TS test count: 1962 passing (+ 1 skipped) — was 1958 baseline; +4 new tests in `dspy-offline-optimizer.test.ts` (2 — `optimizer_choice` default + override) and `optimizer-factory.test.ts` (2 — `dspyOptimizerChoice` flow-through).
 
-**Deferred to follow-up**: a real `dspyClientFactory` wiring inside `index.ts` that connects to the spawned `quilin-optimizer` MCP server through the existing `MCPClientManager`. Until that lands, `createOfflineOptimizer({ choice: "dspy" })` falls back to `PromptRewriteOptimizer` with a warn-level log even when the optimizer server is spawned. Tracked as a Stage C+ follow-up.
+**Stage C+ wiring landed (2026-05-10)** — the deferred `dspyClientFactory` inside `index.ts` is now wired to the spawned `quilin-optimizer` MCP server, so `createOfflineOptimizer({ choice: "dspy" })` actually returns `DspyOfflineOptimizer` when (a) the loaded capabilities config contains a `quilin-optimizer` entry AND (b) the registry's transport is connected. When the entry is absent the factory returns `undefined` and `createOfflineOptimizer` still falls back to `PromptRewriteOptimizer` with a warn log — a misconfigured user does not lose self-evolution. Reference points:
+
+- `packages/agent-core/src/self-evolution/dspy-client-factory.ts` — `buildDspyClientFactoryFromRegistryRef` returns a lazy factory whose `callTool` resolves the transport from a late-bound `MCPRegistryRef` on every invocation; `DspyOptimizerNotConnectedError` covers the "registry bound but transport missing" case.
+- `packages/agent-core/src/index.ts` (REPL bootstrap, around the `createOfflineOptimizer({...})` call site) — `mcpRegistryRef` is constructed before `IdleEvolutionRunner`, the factory captures it, and `onRuntimeReady` flips `mcpRegistryRef.registry` to the live `MCPRegistry` once `startRepl` builds it. The `Self-evolution engine online` log line carries `dspyClientFactoryWired: bool` so operators can confirm the wire from a single log record without leaking secrets.
+- `packages/agent-core/src/self-evolution/dspy-client-factory.test.ts` — 11 tests cover positive wiring, negative fallback, lazy late-binding, default vs custom server id, and an end-to-end smoke that flows a stubbed DSPy proposal through `IdleEvolutionRunner.tryRun()` into `proposalStore.append()` (catches the "factory wired but never invoked" regression class).
+- TS test count: 2071 passing (+ 1 skipped) — was 2060 baseline; +11 new tests in `dspy-client-factory.test.ts`.
 
 **实现实证（Stage C，2026-05-10）** —— 真实 DSPy 集成已在本 worktree 落地（master cherry-pick 待 review）。下游消费者参考点：
 
@@ -415,7 +420,12 @@ Production trade-off: `DockerProposalSandboxPolicyGate` accepts a `requireDocker
 - `packages/agent-core/src/config/loader.ts` —— 默认 capabilities config 新增 `quilin-optimizer` MCP server，门控为：（a）`providers/optimizer/` 目录存在 **并且**（b）`QUILIN_OPTIMIZER_JUDGE_API_KEY` 环境变量已配置；任一不满足则不 spawn。
 - TS 测试数：1962 通过（+1 跳过）—— baseline 1958；新增 4 条测试，分布在 `dspy-offline-optimizer.test.ts`（2 条：`optimizer_choice` 默认 + 覆盖）和 `optimizer-factory.test.ts`（2 条：`dspyOptimizerChoice` 流转）。
 
-**待后续完成**：在 `index.ts` 通过现有 `MCPClientManager` 连接到已 spawn 的 `quilin-optimizer` MCP server 的真实 `dspyClientFactory` 接线。在该 follow-up 落地前，`createOfflineOptimizer({ choice: "dspy" })` 即使 optimizer server 已 spawn 也会退化到 `PromptRewriteOptimizer` 并 warn-level 打日志。作为 Stage C+ follow-up 跟踪。
+**Stage C+ wiring 已落地（2026-05-10）** —— 之前推后的 `index.ts` 内 `dspyClientFactory` 接线已完成，连到 spawn 的 `quilin-optimizer` MCP server，所以 `createOfflineOptimizer({ choice: "dspy" })` 在（a）加载的 capabilities config 含 `quilin-optimizer` entry **并且**（b）registry transport 已连接时会真的返回 `DspyOfflineOptimizer`。entry 缺失时 factory 返回 `undefined`，`createOfflineOptimizer` 仍退化到 `PromptRewriteOptimizer` 并打 warn —— 误配置的用户不会丢掉 self-evolution。参考点：
+
+- `packages/agent-core/src/self-evolution/dspy-client-factory.ts` —— `buildDspyClientFactoryFromRegistryRef` 返回懒 factory，每次 `callTool` 才从后绑定的 `MCPRegistryRef` 解析 transport；`DspyOptimizerNotConnectedError` 覆盖 "registry 已绑但 transport 缺失" 的边界。
+- `packages/agent-core/src/index.ts`（REPL bootstrap，`createOfflineOptimizer({...})` 调用点附近）—— `mcpRegistryRef` 在 `IdleEvolutionRunner` 之前构造，factory 捕获它，`onRuntimeReady` 在 `startRepl` 构造 `MCPRegistry` 后把 `mcpRegistryRef.registry` 翻成活值。`Self-evolution engine online` 日志附带 `dspyClientFactoryWired: bool`，让运维一行日志确认接线状态而不泄漏密钥。
+- `packages/agent-core/src/self-evolution/dspy-client-factory.test.ts` —— 11 条测试覆盖正向接线、负向回退、懒后绑、默认与自定义 server id，以及一条把占位 DSPy 提案通过 `IdleEvolutionRunner.tryRun()` 流到 `proposalStore.append()` 的端到端冒烟（可拦下 "接好但从未触发" 的回归类）。
+- TS 测试数：2071 通过（+1 跳过）—— baseline 2060；新增 11 条测试，全部位于 `dspy-client-factory.test.ts`。
 
 **Stage D — Benchmark validation ([Linear QUI-147](https://linear.app/quilin-agent/issue/QUI-147), blocked by QUI-146)**: Build trajectory-replay harness and run a 3-way A/B against `PromptRewriteOptimizer` baseline / DSPy + MIPROv2 / DSPy + GEPA. Decision branches: lift ≥ 30% → make DSPy default; lift 10–30% → DSPy stays opt-in; lift < 10% → trigger Stage E follow-up to evaluate Trace optimizer / OPRO / PromptBreeder alternatives. Detailed acceptance criteria tracked on the issue.
 
@@ -436,11 +446,11 @@ Production trade-off: `DockerProposalSandboxPolicyGate` accepts a `requireDocker
 **Next steps for Stage D follow-up / Stage D follow-up 的下一步**:
 
 1. Curate ≥ 200 real production failure trajectories (current dataset is synthetic, 50 entries). Real prod traces are needed to make lift numbers meaningful.
-2. Run the bench against a real `quilin-optimizer` MCP server connected to a real judge LLM (requires `QUILIN_OPTIMIZER_JUDGE_API_KEY` configured and `dspy-ai` installed). The Stage C+ wiring of `dspyClientFactory` in `index.ts` is the prerequisite.
+2. Run the bench against a real `quilin-optimizer` MCP server connected to a real judge LLM (requires `QUILIN_OPTIMIZER_JUDGE_API_KEY` configured and `dspy-ai` installed). The Stage C+ wiring of `dspyClientFactory` in `index.ts` (prerequisite) landed 2026-05-10 — see "Stage C+ wiring landed" sub-block above.
 3. Re-evaluate the lift bucket against the §2.4.0.1 decision rule with real numbers and decide whether to flip DSPy default, keep opt-in, or trigger Stage E.
 
 1. 策划 ≥ 200 条真实生产失败轨迹（当前语料是合成的 50 条）。真实 prod trace 才能让 lift 数字有意义。
-2. 在真实 `quilin-optimizer` MCP server（连真实 judge LLM）上跑 bench（需要配置 `QUILIN_OPTIMIZER_JUDGE_API_KEY` 并安装 `dspy-ai`）。前置条件是 Stage C+ 把 `dspyClientFactory` 接到 `index.ts`。
+2. 在真实 `quilin-optimizer` MCP server（连真实 judge LLM）上跑 bench（需要配置 `QUILIN_OPTIMIZER_JUDGE_API_KEY` 并安装 `dspy-ai`）。前置条件是 Stage C+ 把 `dspyClientFactory` 接到 `index.ts` —— 已于 2026-05-10 落地，详见上方 "Stage C+ wiring 已落地" 子块。
 3. 用真实数字根据 §2.4.0.1 决策规则重新评估 lift bucket，决定是否把 DSPy 转默认 / 保持 opt-in / 触发 Stage E。
 
 ### 2.4.1 提案审核 REPL 命令 / Proposal Review REPL Commands
