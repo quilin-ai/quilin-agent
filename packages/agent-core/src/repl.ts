@@ -1718,8 +1718,8 @@ interface ReplStreamRenderState {
 	// delta (the LLM's natural-language reply). Used by the turn-end
 	// hook to ensure a trailing newline is emitted so that subsequent
 	// logger output / readline prompt does not collide with the reply's
-	// last character (QUI-141 Symptom A). Reply content is on stdout
-	// (QUI-141 Symptom B); operational icons / banner stay on stderr.
+	// last character. Reply content is on stdout; operational icons /
+	// banner stay on stderr.
 	lastTextEndedWithNewline: boolean;
 	hasEmittedText: boolean;
 }
@@ -1733,7 +1733,7 @@ interface ReplStreamRenderState {
  * one. This prevents the next stream writer (logger on stderr,
  * tool-call icon on stderr, readline prompt on stdout) from
  * concatenating onto the reply's final character. See QUI-141
- * Symptom A. Reply text + trailing `\n` go to stdout (Symptom B).
+ * Reply text + trailing `\n` go to stdout (separate from operational stderr).
  *
  * Resets the flags after firing so the NEXT round's text deltas (or
  * lack thereof, in a tool-only round) decide independently whether
@@ -1804,7 +1804,7 @@ function renderStreamEvent(
 			// Reply content goes to stdout so a downstream pipe consumer
 			// (e.g. `just dev 2>/tmp/log`) can capture the natural-language
 			// reply separate from the operational stderr surface.
-			// (QUI-141 Symptom B.)
+			// (channel split: reply on stdout, operational on stderr.)
 			stdout.write(event.delta);
 			// Only update the trailing-newline flag for non-empty deltas:
 			// some providers emit a final empty `text` delta to flush state,
@@ -2018,7 +2018,7 @@ function moveToBlockTop(
 	helpRows: number,
 ): void {
 	// Cursor manipulation must target the same stream as the prompt
-	// rendering (stdout, after QUI-141 Symptom B). Otherwise the
+	// rendering (stdout, after the reply/operational channel split). Otherwise the
 	// cursor moves on stderr while the visible prompt is on stdout
 	// and the help block / prompt rendering desyncs.
 	moveCursor(stdout, -cursorPos.cols, -(cursorPos.rows + helpRows));
@@ -2196,7 +2196,7 @@ function renderSlashCommandHelpBlock(
 	};
 	// Prompt + slash-help block share the readline output stream
 	// (stdout) so the cursor stays in sync with the visible prompt.
-	// (QUI-141 Symptom B.)
+	// (the slash-help block must render on the same stream as readline.)
 	stdout.write(fullBlockText);
 	restoreCursorPosition(measureDisplayPosition(fullBlockText), targetCursorPos);
 	state.renderedLine = line;
@@ -2242,7 +2242,7 @@ function installSlashCommandHelp(options: {
 	};
 
 	// Slash-command help renders on stdout (matches readline's output
-	// stream after QUI-141 Symptom B). Cursor manipulation requires
+	// stream after the channel split). Cursor manipulation requires
 	// stdout to be a TTY; otherwise skip the live-help overlay.
 	if (stdin.isTTY !== true || stdout.isTTY !== true) {
 		return noopController;
@@ -2580,7 +2580,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 		// readline's prompt rendering and user-input echo go to stdout so
 		// the user keeps seeing the prompt even when stderr is redirected
 		// (e.g. `just dev 2>/tmp/log`). Operational surface (banner, tool
-		// icons, errors) remains on stderr. (QUI-141 Symptom B.)
+		// icons, errors) remains on stderr.
 		rl = readline.createInterface({ input: stdin, output: stdout });
 		rl.on?.("line", handleLiveInputLine);
 		slashCommandHelpController = installSlashCommandHelp({
@@ -3460,7 +3460,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 			});
 			// Visual gap between user input echo and the LLM reply belongs
 			// on the reply stream (stdout) — same channel as `case "text"`
-			// and the readline prompt. (QUI-141 Symptom B.)
+			// and the readline prompt (both on stdout after the channel split).
 			stdout.write("\n");
 
 			try {
@@ -3506,7 +3506,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 								// At this point the LLM stream has ended; ensure
 								// the reply ends on a newline before any logger
 								// output (e.g. provider run record) writes to
-								// stderr in between. QUI-141 Symptom A.
+								// stderr in between.
 								finalizeStreamRender(streamRenderState);
 							},
 							onMessagesUpdated: (loopMessages) => {
@@ -3579,7 +3579,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 				// blank lines between the reply and the next prompt — keep
 				// just one for visual breathing room. Goes to stdout because
 				// it is part of the reply visual that precedes the next
-				// (stdout-rendered) readline prompt. (QUI-141 Symptom B.)
+				// (stdout-rendered) readline prompt.
 				stdout.write("\n");
 			} catch (err) {
 				logger.error(
