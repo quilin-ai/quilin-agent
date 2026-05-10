@@ -171,7 +171,7 @@ quilin-agent/
 - **协作语言使用中文**：Agent 之间通过 AgentBridge 的所有对话使用中文，方便用户同步查看协作内容
 - **Linear 先于执行**：主 agent / subagent 做任何非琐碎实现、调研、review、探索前，必须在 Linear 中有 issue、project 或 comment；空闲 subagent 优先从 Linear 队列领取或复用已有 issue comment，只有需要独立验收 / 阻塞关系时才新建 issue
 - **调研必须落档**：调研输出不能只留在聊天或 Linear comment；需要写入相关组件 docs，保持中英双语、按段落对照
-- **长任务必须 subagent**：预期超过 5 分钟的任务用 subagent，主线程保持响应（详见 agent-bridge.md §3.3）
+- **subagent 用于并行**：预期超过 5 分钟且能与其他工作并行的任务用 subagent，让主线程继续推进其他工作。**单任务不派 subagent**：如果只有一个任务在飞、主线程会一直闲等，直接主线程做更快（不绕 worktree → cherry-pick 仪式，少一道 worktree-cwd 误写主仓库的风险）。详见 agent-bridge.md §3.3
 - **谁写代码谁 commit**（详见 agent-bridge.md §8.1）
 - 每个任务结束双方主动提醒用户开新 session（详见 agent-bridge.md §9）
 - 在核心实现落地前，默认先改文档 / 计划 / 脚本，不凭空扩展未批准的运行时代码结构
