@@ -109,16 +109,36 @@ def tokenize(text: str) -> set[str]:
 
 
 def overlap_score(candidate: str, expected: str) -> float:
-    """Recall-style lexical overlap: |E ∩ C| / |E|."""
+    """Recall-style lexical overlap: |E ∩ C| / |E|.
+
+    Returns ``-1.0`` when there is no oracle (empty expected). The
+    bench harness treats this sentinel as "exclude from denominator"
+    rather than "auto-pass" — see ``passes()`` and ``run_seed_arm``.
+    Inside DSPy's compile loop the same "no oracle" case would return
+    1.0 (unsupervised optimization), but for benchmarking the right
+    behavior is to drop the trajectory entirely.
+
+    返回 ``-1.0`` 表示无 oracle（``expected`` 为空）。bench 把这条
+    哨兵值当作"从分母里剔除"，不是"自动通过"。
+    """
     expected_tokens = tokenize(expected)
     if not expected_tokens:
-        return 1.0  # No oracle → always pass.
+        return -1.0
     candidate_tokens = tokenize(candidate)
     return len(expected_tokens & candidate_tokens) / len(expected_tokens)
 
 
-def passes(candidate: str, expected: str, threshold: float = 0.5) -> bool:
-    return overlap_score(candidate, expected) >= threshold
+def passes(candidate: str, expected: str, threshold: float = 0.5) -> bool | None:
+    """Return True/False on a real oracle, ``None`` when oracle is empty.
+
+    ``None`` signals "skip this trajectory from the bench denominator";
+    callers that ignore the sentinel will treat the no-oracle case as
+    failure (safer default than auto-pass).
+    """
+    score = overlap_score(candidate, expected)
+    if score < 0:
+        return None
+    return score >= threshold
 
 
 def wilson_interval(successes: int, total: int, z: float = 1.96) -> tuple[float, float]:
@@ -201,17 +221,30 @@ async def dspy_arm_proposal(
     proposals = decoded.get("proposals", [])
     if not proposals:
         return ""
-    # Each proposal has multiple artifacts; the markdown one carries the
-    # full optimized prompt + few-shot examples in human-readable form.
+    # Each proposal has multiple artifacts; the one with kind="markdown"
+    # carries the human-readable optimized prompt + few-shot examples.
+    # The kind="json" artifact serializes the same content plus internal
+    # metadata (optimizer_choice, trajectory refs, failure_categories);
+    # mixing JSON serialization into the candidate string adds spurious
+    # token overlap with ground-truth-fix-direction (e.g. the substring
+    # "tool_error" appearing in `"failure_categories": ["tool_error"]`),
+    # so we ONLY use the markdown artifact for scoring.
+    #
+    # Reviewer A QUI-147 round-3 caught this — earlier code looked up
+    # `artifactType` (a field that doesn't exist on the server side, so
+    # the lookup always fell through to a concatenation fallback that
+    # mixed markdown + JSON). The server uses the field name `kind`.
     artifacts = proposals[0].get("artifacts", [])
     md_artifact = next(
-        (a for a in artifacts if a.get("artifactType") == "prompt-rewrite-summary"),
+        (a for a in artifacts if a.get("kind") == "markdown"),
         None,
     )
     if md_artifact and isinstance(md_artifact.get("content"), str):
         return md_artifact["content"]
-    # Fallback: combine all artifact contents.
-    return "\n".join(str(a.get("content", "")) for a in artifacts)
+    # Defensive fallback when the server omits the markdown artifact —
+    # should not happen in practice for dspy proposals. Prefer empty
+    # candidate over JSON-contaminated text.
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -259,20 +292,30 @@ async def run_seed_arm(
         # Baseline arm — per-category heuristic, no LM call.
         for traj in trajectories:
             candidate = baseline_arm_proposal(traj.category)
-            ok = passes(candidate, traj.ground_truth_fix_direction)
-            _record(result, traj.category, ok)
+            outcome = passes(candidate, traj.ground_truth_fix_direction)
+            _record(result, traj.category, outcome)
         return result
 
     proposal_text = await dspy_arm_proposal(optimize_fn, trajectories, optimizer_choice)
     for traj in trajectories:
-        ok = passes(proposal_text, traj.ground_truth_fix_direction)
-        _record(result, traj.category, ok)
+        outcome = passes(proposal_text, traj.ground_truth_fix_direction)
+        _record(result, traj.category, outcome)
     return result
 
 
-def _record(result: ArmResult, category: str, ok: bool) -> None:
+def _record(result: ArmResult, category: str, outcome: bool | None) -> None:
+    """Record one trajectory outcome.
+
+    ``outcome=None`` means "no oracle, skip from denominator" — the
+    trajectory contributes neither pass nor fail. This prevents empty
+    ``ground_truth_fix_direction`` entries from silently inflating
+    pass-rate (which would happen if `overlap_score` returned 1.0 for
+    no-oracle case).
+    """
     bucket = result.per_category.setdefault(category, {"pass": 0, "fail": 0})
-    if ok:
+    if outcome is None:
+        return  # excluded from this arm's denominator
+    if outcome:
         result.pass_count += 1
         bucket["pass"] += 1
     else:
@@ -354,6 +397,7 @@ def render_report(
     trajectory_count: int,
     seeds: int,
     dataset_sha: str,
+    judge_mode: str,
 ) -> str:
     baseline = next(a for a in aggregates if "baseline" in a.arm.lower())
     arms_lookup = {a.arm: a for a in aggregates}
@@ -402,12 +446,28 @@ def render_report(
             cells.append(fmt_pct(rate))
         cat_rows.append(f"| {cat} | " + " | ".join(cells) + " |")
 
-    decision_recommend = (
-        "DSPy default (lift ≥ 30% threshold met)" if best_lift >= 0.30
-        else "DSPy stays opt-in; default remains PromptRewrite. DSPy 仍保持 opt-in，默认仍是 PromptRewrite."
-        if best_lift >= 0.10
-        else "Trigger Stage E follow-up (Trace optimizer / OPRO / PromptBreeder evaluation). 触发 Stage E follow-up 评估替代算法."
-    )
+    # Reviewer B QUI-147 round-3 caught: dummy-mode runs MUST NOT
+    # trigger the §2.4.0.1 decision ladder, because DummyLM provides
+    # content-free judge signal — the lift bucket is meaningless.
+    # Override the recommendation in dummy mode regardless of bucket.
+    if judge_mode == "dummy":
+        bucket = "suppressed (DummyLM mode)"
+        decision_recommend = (
+            "Decision suppressed — this run uses dspy.utils.DummyLM, which provides "
+            "deterministic but content-free judge signal. The §2.4.0.1 lift ladder "
+            "(≥ 30% / 10–30% / < 10%) only applies when the judge is a real LLM. "
+            "Real-LLM bench is the actual gate; this run only verifies the DSPy "
+            "framework wiring. 决策暂缓 —— 本次跑用 DummyLM，judge 信号没有语义内容，"
+            "§2.4.0.1 的 lift 阈值仅在真实 LLM judge 下有效。本次跑只验证 DSPy "
+            "框架接线，正式决策需要真实 LLM bench。"
+        )
+    else:
+        decision_recommend = (
+            "DSPy default (lift ≥ 30% threshold met)" if best_lift >= 0.30
+            else "DSPy stays opt-in; default remains PromptRewrite. DSPy 仍保持 opt-in，默认仍是 PromptRewrite."
+            if best_lift >= 0.10
+            else "Trigger Stage E follow-up (Trace optimizer / OPRO / PromptBreeder evaluation). 触发 Stage E follow-up 评估替代算法."
+        )
 
     return f"""# Stage D — DSPy Validation Report (QUI-147)
 
@@ -556,6 +616,7 @@ async def main() -> int:
         trajectory_count=len(trajectories),
         seeds=args.seeds,
         dataset_sha=dataset_sha,
+        judge_mode=os.environ.get("QUILIN_OPTIMIZER_JUDGE_MODE", "dummy"),
     )
 
     if args.dry_run:

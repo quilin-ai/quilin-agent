@@ -51,8 +51,8 @@ Lift（MIPROv2 vs baseline）：-22.0% 相对失败率降幅；Lift（GEPA vs ba
 
 ## Decision recommendation / 决策建议
 
-- Bucket: **lift < 10%**
-- Recommendation: Trigger Stage E follow-up (Trace optimizer / OPRO / PromptBreeder evaluation). 触发 Stage E follow-up 评估替代算法.
+- Bucket: **suppressed (DummyLM mode)**
+- Recommendation: Decision suppressed — this run uses dspy.utils.DummyLM, which provides deterministic but content-free judge signal. The §2.4.0.1 lift ladder (≥ 30% / 10–30% / < 10%) only applies when the judge is a real LLM. Real-LLM bench is the actual gate; this run only verifies the DSPy framework wiring. 决策暂缓 —— 本次跑用 DummyLM，judge 信号没有语义内容，§2.4.0.1 的 lift 阈值仅在真实 LLM judge 下有效。本次跑只验证 DSPy 框架接线，正式决策需要真实 LLM bench。
 
 Decision branches per docs/10-self-evolution/README.md §2.4.0.1: lift ≥ 30% → DSPy default; 10–30% → DSPy opt-in; < 10% → trigger Stage E.
 

@@ -850,7 +850,14 @@ class TestDummyJudgeMode:
         assert hasattr(bound_lm, "answers"), (
             f"dummy mode should bind a DummyLM (with .answers), got {type(bound_lm).__name__}"
         )
-        assert isinstance(bound_lm.answers, list) and len(bound_lm.answers) >= 3
+        # The server cycles 5 templates × 200 = 1000 responses to cover
+        # MIPROv2's data-aware proposer + instruction generator + GEPA
+        # rollouts (which empirically use up to ~580 LM calls per
+        # 50-trajectory compile). Locking the exact size catches a
+        # regression where the cycle constant is tuned down silently.
+        assert isinstance(bound_lm.answers, list) and len(bound_lm.answers) == 1000, (
+            f"dummy mode must cycle to exactly 1000 responses; got {len(bound_lm.answers)}"
+        )
 
     @pytest.mark.asyncio
     async def test_optimize_dummy_mode_no_api_key_no_warning(
@@ -877,6 +884,47 @@ class TestDummyJudgeMode:
         ]
         assert not api_key_warnings, (
             f"dummy mode must not emit judge_api_key_missing warning; got {api_key_warnings}"
+        )
+
+    def test_judge_metric_accepts_both_mipro_and_gepa_signatures(self) -> None:
+        # MIPROv2 calls metric(example, prediction, trace=None) — 3 args.
+        # GEPA calls metric(gold, pred, trace, pred_name, pred_trace) —
+        # 5 args. The metric implementation must accept BOTH signatures
+        # via *args/**kwargs without raising TypeError.
+        # Reviewer A (round-3) RECOMMEND: locks the contract that
+        # historically broke once when MIPROv2 was upgraded to GEPA.
+        from quilin_optimizer.server import OptimizerConfig, _build_judge_metric
+
+        config = OptimizerConfig(
+            judge_model=None,
+            judge_api_key=None,
+            judge_base_url=None,
+            judge_mode=JUDGE_MODE_DUMMY,
+        )
+        metric = _build_judge_metric(config)
+
+        class _Example:
+            def __init__(self, response: str) -> None:
+                self.response = response
+
+        example = _Example("expected response text with shared keywords")
+        prediction = _Example("expected response text")
+
+        # MIPROv2 shape: (example, prediction, trace=None)
+        score_mipro = metric(example, prediction)
+        assert isinstance(score_mipro, float) and 0.0 <= score_mipro <= 1.0, (
+            f"MIPROv2 3-arg call must return a float in [0,1]; got {score_mipro!r}"
+        )
+
+        # GEPA shape: (gold, pred, trace, pred_name, pred_trace)
+        score_gepa = metric(example, prediction, None, "pred_main", object())
+        assert isinstance(score_gepa, float) and 0.0 <= score_gepa <= 1.0, (
+            f"GEPA 5-arg call must return a float in [0,1]; got {score_gepa!r}"
+        )
+
+        # Same inputs → same score regardless of compiler-shape extras.
+        assert score_mipro == score_gepa, (
+            "metric must be deterministic across MIPROv2 and GEPA signatures"
         )
 
     # Note on the missing log-content test: a previous draft asserted on
