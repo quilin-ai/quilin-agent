@@ -267,41 +267,32 @@ export const runtimeConfigSchema = z
  * 自我演进配置：当前仅控制 idle runner 选用的离线优化器。未来 self-evolution
  * 相关参数（提案审核 TTL、dry-run 开关等）也归到这里。
  *
- * Optimizer choices:
- * - `prompt_rewrite` (default): heuristic, dependency-free TS optimizer.
- * - `noop`: opt-out for evaluation runs that explicitly want no proposals.
- * - `dspy`: DSPy/GEPA-backed optimizer that talks to
- *   `providers/optimizer` over MCP. Stage C runs real DSPy with lazy
- *   import + graceful degrade when the `dspy-ai` extra is missing.
+ * Optimizer choices (singular path post 2026-05-12 refactor):
+ * - `dspy` (default): DSPy/GEPA optimizer over MCP. GEPA is the only
+ *   compiler (ICLR 2026 Oral; rationale in
+ *   docs/10-self-evolution/README.md §2.4).
+ * - `noop`: opt-out for evaluation runs that explicitly want no
+ *   proposals. Also the silent fallback when `dspy` is chosen but
+ *   the MCP client cannot be wired.
  *
- * Optimizer 选项：
- * - `prompt_rewrite`（默认）：零依赖的启发式 TS 优化器。
- * - `noop`：评估场景下显式禁用提案的 opt-out。
- * - `dspy`：经 MCP 调用 `providers/optimizer` 的 DSPy/GEPA 优化器；
- *   Stage C 跑真实 DSPy，缺失 `dspy-ai` extra 时 lazy import + 优雅降级。
+ * 优化器选项（2026-05-12 重构后只有一条路径）：
+ * - `dspy`（默认）：经 MCP 调用 `providers/optimizer` 的 DSPy/GEPA 优化器。
+ *   GEPA 是唯一编译器（ICLR 2026 Oral 接收；决策依据见
+ *   docs/10-self-evolution/README.md §2.4）。
+ * - `noop`：评估场景下显式禁用提案的 opt-out；也是 `dspy` 选了但 MCP
+ *   client 未接通时的静默回退。
  *
- * `optimizer_choice` selects which DSPy compiler to run when
- * `optimizer === "dspy"`. Both compilers ship in the same Python MCP
- * server; the field is ignored for `prompt_rewrite` / `noop`.
- *
- * `optimizer_choice` 选择 `optimizer === "dspy"` 时使用的 DSPy 编译器。
- * 两种编译器都在同一个 Python MCP server 中提供；
- * `prompt_rewrite` / `noop` 模式下该字段被忽略。
- *
- * - `mipro` (default): MIPROv2 — Bayesian search over instruction +
- *   few-shot subsets, the DSPy 2.x flagship algorithm.
- * - `gepa`: Genetic-Pareto — emits a Pareto frontier so
- *   accuracy / cost trade-offs can be inspected.
+ * Removed 2026-05-12: `optimizer = "prompt_rewrite"` (TS heuristic)
+ * and `optimizer_choice = "mipro"` (the prior DSPy compiler). Existing
+ * configs that still set these will fail Zod validation — update to
+ * `optimizer = "dspy"` (or "noop") to migrate.
  */
 export const selfEvolutionConfigSchema = z
 	.object({
-		optimizer: z
-			.enum(["noop", "prompt_rewrite", "dspy"])
-			.default("prompt_rewrite"),
-		optimizer_choice: z.enum(["mipro", "gepa"]).default("mipro"),
+		optimizer: z.enum(["noop", "dspy"]).default("dspy"),
 	})
 	.strict()
-	.default({ optimizer: "prompt_rewrite", optimizer_choice: "mipro" });
+	.default({ optimizer: "dspy" });
 
 // Default token budget mirrors DEFAULT_CONTEXT_BUDGET in
 // ../context/manager.ts. Keep them in sync — Phase 0 only enforces

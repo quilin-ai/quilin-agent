@@ -1,16 +1,25 @@
 """Quilin offline optimizer MCP server — Stage C real DSPy integration.
 
-Exposes a single tool, ``optimize``, that runs a real DSPy compiler
-(``MIPROv2`` or ``GEPA``) over input trajectories and returns
-``OptimizationProposalDraft`` candidates matching the TS-side
-``DspyOfflineOptimizer`` contract. The MCP tool signature, return shape,
-and JSON keys are the contract that downstream TS code expects — keep
-them stable.
+Exposes a single tool, ``optimize``, that runs the **DSPy GEPA** compiler
+(Genetic-Pareto reflective prompt evolution; ICLR 2026 Oral) over input
+trajectories and returns ``OptimizationProposalDraft`` candidates matching
+the TS-side ``DspyOfflineOptimizer`` contract. The MCP tool signature,
+return shape, and JSON keys are the contract that downstream TS code
+expects — keep them stable.
 
-暴露唯一的 MCP 工具 ``optimize``：基于真实 DSPy 编译器（``MIPROv2``
-或 ``GEPA``）对输入轨迹进行优化，返回与 TS 端 ``DspyOfflineOptimizer``
-契约一致的 ``OptimizationProposalDraft`` 候选。MCP 工具签名、返回结构
-和 JSON 字段是下游 TS 代码依赖的对外契约，必须保持稳定。
+GEPA is the singular optimizer. MIPROv2 (the prior alternative compiler)
+and the TS PromptRewrite heuristic were removed 2026-05-12 after industry
+evidence + scenario fit analysis settled on GEPA as the production path.
+See docs/10-self-evolution/README.md §2.4 for the decision rationale.
+
+暴露唯一的 MCP 工具 ``optimize``：基于真实 DSPy **GEPA**（Genetic-Pareto
+反射式 prompt 进化；ICLR 2026 Oral）对输入轨迹进行优化，返回与 TS 端
+``DspyOfflineOptimizer`` 契约一致的 ``OptimizationProposalDraft`` 候选。
+MCP 工具签名、返回结构和 JSON 字段是下游 TS 代码依赖的对外契约，必须保持稳定。
+
+GEPA 是唯一的 optimizer。MIPROv2（原备选编译器）与 TS 端 PromptRewrite
+启发式于 2026-05-12 移除，依据是业界证据 + 场景契合度分析。决策依据见
+docs/10-self-evolution/README.md §2.4。
 
 Graceful degradation paths (return empty proposals + structured warning,
 NEVER crash the server):
@@ -61,19 +70,19 @@ MAX_TRAJECTORIES = 256
 MAX_FAILURE_CATEGORIES = 32
 MAX_STRING_LENGTH = 1024
 
-# DSPy compilers need a minimum training-set size to produce meaningful
-# few-shot output. MIPROv2 / GEPA both perform poorly on tiny sets; we
-# emit a structured "insufficient_signal" reason below this threshold
-# instead of running a no-op compile.
+# DSPy GEPA needs a minimum training-set size to produce meaningful
+# reflective-evolution output; performs poorly on tiny sets. Below this
+# threshold we emit a structured "insufficient_signal" reason instead
+# of running a no-op compile.
 #
-# DSPy 编译器需要最小训练集才能产出有意义的 few-shot 输出。
-# MIPROv2 / GEPA 在样本过少时表现差，低于阈值直接返回结构化
-# "insufficient_signal" 而不是空跑编译器。
+# DSPy GEPA 需要最小训练集才能产出有意义的反射进化结果；样本过少时
+# 表现差。低于阈值直接返回结构化 "insufficient_signal" 而不是空跑编译器。
 MIN_TRAJECTORIES = 5
 
-# Supported DSPy compiler choices, surfaced as ``optimizer_choice`` arg.
-SUPPORTED_OPTIMIZER_CHOICES: frozenset[str] = frozenset({"mipro", "gepa"})
-DEFAULT_OPTIMIZER_CHOICE = "mipro"
+# Singular optimizer — GEPA only. Kept as named constants so report
+# strings + structured-log keys reference one source of truth.
+OPTIMIZER_NAME = "gepa"
+OPTIMIZER_DISPLAY = "GEPA"
 
 
 class OptimizerOperationError(RuntimeError):
@@ -207,18 +216,6 @@ def _validate_failure_category(value: object, index: int) -> str:
     return _validate_string_field(value, f"failure_categories[{index}]")
 
 
-def _validate_optimizer_choice(value: object) -> str:
-    if value is None:
-        return DEFAULT_OPTIMIZER_CHOICE
-    if not isinstance(value, str):
-        raise OptimizerOperationError("optimizer_choice must be a string")
-    if value not in SUPPORTED_OPTIMIZER_CHOICES:
-        raise OptimizerOperationError(
-            f"optimizer_choice must be one of {sorted(SUPPORTED_OPTIMIZER_CHOICES)}"
-        )
-    return value
-
-
 def _stable_artifact_hash(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
@@ -256,9 +253,15 @@ def _import_dspy() -> Any | None:
     try:
         return importlib.import_module("dspy")
     except ImportError:
+        # Post 2026-05-12 GEPA-only refactor: dspy-ai is a HARD dep —
+        # reaching this branch means the venv is broken. The hint
+        # points the operator at the canonical install.
         logger.warning(
-            "dspy_extra_not_installed",
-            hint="install with `uv sync --extra dspy` or `pip install 'quilin-optimizer[dspy]'`",
+            "dspy_not_installed",
+            hint=(
+                "install with `uv sync` inside providers/optimizer "
+                "(dspy-ai is a hard dep — broken venv if this fires)"
+            ),
         )
         return None
 
@@ -369,38 +372,29 @@ def _build_dspy_program(dspy_module: Any) -> Any:
     return dspy_module.Predict(TaskResponse)
 
 
-def _select_compiler(dspy_module: Any, choice: str, metric: Any) -> Any:
-    """Instantiate the chosen DSPy compiler.
+def _select_compiler(dspy_module: Any, metric: Any) -> Any:
+    """Instantiate the DSPy GEPA compiler.
 
-    Raises ``OptimizerOperationError`` when the chosen compiler is not
-    available in the installed dspy version (e.g. older builds without
-    ``dspy.GEPA``).
+    Raises ``OptimizerOperationError`` when the installed dspy build does
+    not expose ``dspy.GEPA``, or when ``dspy.settings.lm`` has not been
+    configured (GEPA needs a reflection LM).
 
-    实例化所选 DSPy 编译器。如果当前 dspy 版本不支持该编译器
-    （例如旧版没有 ``dspy.GEPA``），抛 ``OptimizerOperationError``。
+    实例化 DSPy GEPA 编译器。当前 dspy 版本无 ``GEPA``，或 ``dspy.settings.lm``
+    尚未配置（GEPA 需要 reflection LM），抛 ``OptimizerOperationError``。
     """
-    if choice == "mipro":
-        compiler_cls = getattr(dspy_module, "MIPROv2", None)
-        if compiler_cls is None:
-            raise OptimizerOperationError("installed dspy build does not expose MIPROv2")
-        return compiler_cls(metric=metric, auto="light")
-    if choice == "gepa":
-        compiler_cls = getattr(dspy_module, "GEPA", None)
-        if compiler_cls is None:
-            raise OptimizerOperationError("installed dspy build does not expose GEPA")
-        # GEPA REQUIRES an explicit reflection_lm kwarg in DSPy 3.x —
-        # it uses a separate "reflection" LM to propose new instructions
-        # based on observed program behavior. We pass the same LM that's
-        # bound to dspy.settings (the user's judge LM in llm mode, or
-        # DummyLM in dummy mode). Looking up via dspy.settings means
-        # this works for both modes without extra plumbing.
-        reflection_lm = getattr(dspy_module.settings, "lm", None)
-        if reflection_lm is None:
-            raise OptimizerOperationError("GEPA needs dspy.settings.lm configured before compile")
-        return compiler_cls(metric=metric, auto="light", reflection_lm=reflection_lm)
-    # _validate_optimizer_choice already excluded other values, but keep
-    # this branch for defense-in-depth.
-    raise OptimizerOperationError(f"unsupported optimizer_choice: {choice}")
+    compiler_cls = getattr(dspy_module, "GEPA", None)
+    if compiler_cls is None:
+        raise OptimizerOperationError("installed dspy build does not expose GEPA")
+    # GEPA REQUIRES an explicit reflection_lm kwarg in DSPy 3.x — it
+    # uses a separate "reflection" LM to propose new instructions based
+    # on observed program behavior. We pass the same LM bound to
+    # dspy.settings (the user's judge LM in llm mode, or DummyLM in
+    # dummy mode). Looking up via dspy.settings means this works for
+    # both modes without extra plumbing.
+    reflection_lm = getattr(dspy_module.settings, "lm", None)
+    if reflection_lm is None:
+        raise OptimizerOperationError("GEPA needs dspy.settings.lm configured before compile")
+    return compiler_cls(metric=metric, auto="light", reflection_lm=reflection_lm)
 
 
 # Each dict represents one structured LM response to a DSPy Predict
@@ -643,7 +637,6 @@ def _extract_few_shot_examples(compiled_program: Any) -> list[dict[str, str]]:
 
 def _build_proposal_artifacts(
     *,
-    optimizer_choice: str,
     optimized_prompt: str,
     few_shot_examples: list[dict[str, str]],
     trajectory_refs: list[str],
@@ -657,9 +650,9 @@ def _build_proposal_artifacts(
     输出两个 artifact：markdown 摘要（供人工审阅）+ 结构化 JSON（供下游工具）。
     """
     markdown_lines = [
-        f"# DSPy {optimizer_choice.upper()} optimization proposal",
+        f"# DSPy {OPTIMIZER_DISPLAY} optimization proposal",
         "",
-        f"Optimizer: `{optimizer_choice}` (DSPy {optimizer_choice.upper()})",
+        f"Optimizer: `{OPTIMIZER_NAME}` (DSPy {OPTIMIZER_DISPLAY})",
         "",
         "## Optimized prompt",
         "",
@@ -695,7 +688,7 @@ def _build_proposal_artifacts(
         "stage": STAGE,
         "schema_version": SCHEMA_VERSION,
         "optimizer_id": OPTIMIZER_ID,
-        "optimizer_choice": optimizer_choice,
+        "optimizer_choice": OPTIMIZER_NAME,
         "optimized_prompt": optimized_prompt,
         "few_shot_examples": few_shot_examples,
         "trajectories_considered": trajectory_refs,
@@ -707,10 +700,10 @@ def _build_proposal_artifacts(
         {
             "artifactId": _stable_id(
                 "artifact",
-                ["markdown", f"DSPy {optimizer_choice}", _stable_artifact_hash(markdown)],
+                ["markdown", f"DSPy {OPTIMIZER_NAME}", _stable_artifact_hash(markdown)],
             ),
             "kind": "markdown",
-            "title": f"DSPy {optimizer_choice.upper()} optimization summary",
+            "title": f"DSPy {OPTIMIZER_DISPLAY} optimization summary",
             "content": markdown,
             "contentHash": _stable_artifact_hash(markdown),
             "sourceRefs": trajectory_refs,
@@ -718,10 +711,10 @@ def _build_proposal_artifacts(
         {
             "artifactId": _stable_id(
                 "artifact",
-                ["json", f"DSPy {optimizer_choice} payload", _stable_artifact_hash(json_content)],
+                ["json", f"DSPy {OPTIMIZER_NAME} payload", _stable_artifact_hash(json_content)],
             ),
             "kind": "json",
-            "title": f"DSPy {optimizer_choice.upper()} optimization payload",
+            "title": f"DSPy {OPTIMIZER_DISPLAY} optimization payload",
             "content": json_content,
             "contentHash": _stable_artifact_hash(json_content),
             "sourceRefs": trajectory_refs,
@@ -732,11 +725,10 @@ def _build_proposal_artifacts(
 def _run_dspy_compile(
     *,
     dspy_module: Any,
-    optimizer_choice: str,
     config: OptimizerConfig,
     trajectories: list[dict[str, object]],
 ) -> tuple[str, list[dict[str, str]]]:
-    """Compile a DSPy program over the trajectories.
+    """Compile a DSPy GEPA program over the trajectories.
 
     Returns ``(optimized_prompt, few_shot_examples)``. Raises
     ``OptimizerOperationError`` for sanitized failures (LM construction,
@@ -750,16 +742,14 @@ def _run_dspy_compile(
     per-call activation instead of ``dspy.settings.configure``, dodging
     DSPy 3.x's "configure can only be called from the same async task"
     RuntimeError that fires under pytest-asyncio's per-test event
-    loops. ``MIPROv2.__init__`` itself reads ``dspy.settings.lm`` at
-    construction time — ``_select_compiler`` MUST therefore run
-    **inside** the context block, not before.
+    loops. GEPA reads ``dspy.settings.lm`` at construction time, so
+    ``_select_compiler`` MUST run **inside** the context block.
 
-    LM 作用域：本函数用 ``with dspy.context(lm=lm)`` 做 per-call
-    激活，**不再用** ``dspy.settings.configure``，避开 DSPy 3.x 在
-    pytest-asyncio 多 event loop 下抛 RuntimeError 的"configure 只能
-    在同一 async task 调用"约束。注意 ``MIPROv2.__init__`` 构造期会读
-    ``dspy.settings.lm``，所以 ``_select_compiler`` 必须**放在
-    context 块内**，不能在外面先 new。
+    LM 作用域：本函数用 ``with dspy.context(lm=lm)`` 做 per-call 激活，
+    **不再用** ``dspy.settings.configure``，避开 DSPy 3.x 在 pytest-asyncio
+    多 event loop 下抛 RuntimeError 的"configure 只能在同一 async task 调用"
+    约束。注意 GEPA 构造期会读 ``dspy.settings.lm``，所以 ``_select_compiler``
+    必须**放在 context 块内**，不能在外面先 new。
     """
     lm = _build_judge_lm(dspy_module, config)
 
@@ -771,10 +761,7 @@ def _run_dspy_compile(
         with dspy_module.context(lm=lm):
             # Compiler instantiation reads dspy.settings.lm — keep it
             # inside the context block to avoid the "no default LM" gate.
-            compiler = _select_compiler(dspy_module, optimizer_choice, metric)
-            # Different DSPy compilers expose slightly different compile()
-            # kwargs; we pass the trainset under both common names so the
-            # call works against MIPROv2 and GEPA without branching.
+            compiler = _select_compiler(dspy_module, metric)
             compiled = compiler.compile(
                 program,
                 trainset=examples,
@@ -782,10 +769,10 @@ def _run_dspy_compile(
     except OptimizerOperationError:
         raise
     except Exception as exc:
-        raise OptimizerOperationError(f"DSPy {optimizer_choice} compile failed") from exc
+        raise OptimizerOperationError(f"DSPy {OPTIMIZER_DISPLAY} compile failed") from exc
 
     if compiled is None:
-        raise OptimizerOperationError(f"DSPy {optimizer_choice} returned no compiled program")
+        raise OptimizerOperationError(f"DSPy {OPTIMIZER_DISPLAY} returned no compiled program")
 
     optimized_prompt = _extract_optimized_prompt(compiled)
     few_shot_examples = _extract_few_shot_examples(compiled)
@@ -794,7 +781,6 @@ def _run_dspy_compile(
 
 def _build_real_proposal(
     *,
-    optimizer_choice: str,
     optimized_prompt: str,
     few_shot_examples: list[dict[str, str]],
     trajectories: list[dict[str, object]],
@@ -804,7 +790,6 @@ def _build_real_proposal(
     """Assemble the final ``OptimizationProposalDraft``."""
     trajectory_refs = sorted({str(item["trajectoryRef"]) for item in trajectories})
     artifacts = _build_proposal_artifacts(
-        optimizer_choice=optimizer_choice,
         optimized_prompt=optimized_prompt,
         few_shot_examples=few_shot_examples,
         trajectory_refs=trajectory_refs,
@@ -813,9 +798,9 @@ def _build_real_proposal(
     evidence_hashes = [artifact["contentHash"] for artifact in artifacts]
 
     return {
-        "title": f"DSPy {optimizer_choice.upper()} optimization proposal",
+        "title": f"DSPy {OPTIMIZER_DISPLAY} optimization proposal",
         "summary": (
-            f"DSPy {optimizer_choice.upper()} compiled program over "
+            f"DSPy {OPTIMIZER_DISPLAY} compiled program over "
             f"{len(trajectories)} trajectories. Review-only — never auto-apply."
         ),
         "artifacts": artifacts,
@@ -823,7 +808,7 @@ def _build_real_proposal(
         "riskPreview": {
             "level": "medium",
             "reasons": [
-                f"DSPy {optimizer_choice.upper()} candidate is artifact-only — never auto-applied.",
+                f"DSPy {OPTIMIZER_DISPLAY} candidate is artifact-only — never auto-applied.",
                 f"Trajectories aggregated into the proposal: {len(trajectory_refs)}.",
                 f"Few-shot examples extracted: {len(few_shot_examples)}.",
             ],
@@ -832,7 +817,7 @@ def _build_real_proposal(
         },
         "metadata": {
             "optimizer_id": OPTIMIZER_ID,
-            "optimizer_choice": optimizer_choice,
+            "optimizer_choice": OPTIMIZER_NAME,
             "stage": STAGE,
             "trajectory_refs": trajectory_refs,
             "failure_categories": list(failure_categories),
@@ -895,7 +880,6 @@ async def _optimize(
     failure_categories_raw: list[object] | None,
     *,
     dry_run: bool,
-    optimizer_choice_raw: object | None,
     config: OptimizerConfig,
 ) -> dict[str, object]:
     trajectories_input: list[object] = list(trajectories_raw or [])
@@ -915,28 +899,28 @@ async def _optimize(
         _validate_failure_category(entry, index)
         for index, entry in enumerate(failure_categories_input)
     ]
-    optimizer_choice = _validate_optimizer_choice(optimizer_choice_raw)
 
     no_proposal_reasons = _build_no_proposal_reasons_input_guard(trajectories, failure_categories)
     if no_proposal_reasons:
         return _empty_result(
-            optimizer_choice=optimizer_choice,
             dry_run=dry_run,
             no_proposal_reasons=no_proposal_reasons,
         )
 
-    # Graceful degradation gate 1: dspy-ai extra not installed.
+    # Graceful degradation gate 1: dspy-ai unavailable. Now that
+    # `dspy-ai` is a hard dependency this should never happen for a
+    # properly-installed quilin-optimizer, but the gate stays as
+    # defense-in-depth (e.g. broken venv).
     dspy_module = _import_dspy()
     if dspy_module is None:
         return _empty_result(
-            optimizer_choice=optimizer_choice,
             dry_run=dry_run,
             no_proposal_reasons=[
                 _no_proposal_reason(
                     code="insufficient_signal",
                     message=(
-                        "DSPy extra (`dspy-ai>=2.5`) not installed — install with "
-                        "`uv sync --extra dspy` to enable real optimization."
+                        "DSPy (`dspy-ai>=2.5`) failed to import — reinstall "
+                        "quilin-optimizer or check the venv."
                     ),
                     evidence_refs=[str(item["trajectoryRef"]) for item in trajectories],
                 )
@@ -947,11 +931,10 @@ async def _optimize(
     if not config.is_ready():
         logger.warning(
             "judge_api_key_missing",
-            optimizer_choice=optimizer_choice,
+            optimizer_choice=OPTIMIZER_NAME,
             judge_model=config.judge_model or "(default)",
         )
         return _empty_result(
-            optimizer_choice=optimizer_choice,
             dry_run=dry_run,
             no_proposal_reasons=[
                 _no_proposal_reason(
@@ -968,13 +951,12 @@ async def _optimize(
     # Graceful degradation gate 3: training set too small.
     if len(trajectories) < MIN_TRAJECTORIES:
         return _empty_result(
-            optimizer_choice=optimizer_choice,
             dry_run=dry_run,
             no_proposal_reasons=[
                 _no_proposal_reason(
                     code="insufficient_signal",
                     message=(
-                        f"DSPy {optimizer_choice} needs at least {MIN_TRAJECTORIES} "
+                        f"DSPy {OPTIMIZER_DISPLAY} needs at least {MIN_TRAJECTORIES} "
                         f"trajectories to produce useful output; got {len(trajectories)}."
                     ),
                     evidence_refs=[str(item["trajectoryRef"]) for item in trajectories],
@@ -989,7 +971,7 @@ async def _optimize(
     # API budget right now?").
     logger.info(
         "dspy_compile_starting",
-        optimizer_choice=optimizer_choice,
+        optimizer_choice=OPTIMIZER_NAME,
         judge_mode=config.judge_mode,
         judge_model=config.judge_model or "(default)",
         judge_api_key_present=bool(config.judge_api_key),
@@ -1002,7 +984,6 @@ async def _optimize(
     try:
         optimized_prompt, few_shot_examples = _run_dspy_compile(
             dspy_module=dspy_module,
-            optimizer_choice=optimizer_choice,
             config=config,
             trajectories=trajectories,
         )
@@ -1011,11 +992,10 @@ async def _optimize(
         # underlying exc chain (may contain provider details).
         logger.warning(
             "dspy_compile_failed",
-            optimizer_choice=optimizer_choice,
+            optimizer_choice=OPTIMIZER_NAME,
             reason=str(exc),
         )
         return _empty_result(
-            optimizer_choice=optimizer_choice,
             dry_run=dry_run,
             no_proposal_reasons=[
                 _no_proposal_reason(
@@ -1027,7 +1007,6 @@ async def _optimize(
         )
 
     proposal = _build_real_proposal(
-        optimizer_choice=optimizer_choice,
         optimized_prompt=optimized_prompt,
         few_shot_examples=few_shot_examples,
         trajectories=trajectories,
@@ -1044,13 +1023,12 @@ async def _optimize(
         "no_proposal_reasons": [],
         "stage": STAGE,
         "dry_run": dry_run,
-        "optimizer_choice": optimizer_choice,
+        "optimizer_choice": OPTIMIZER_NAME,
     }
 
 
 def _empty_result(
     *,
-    optimizer_choice: str,
     dry_run: bool,
     no_proposal_reasons: list[dict[str, object]],
 ) -> dict[str, object]:
@@ -1063,7 +1041,7 @@ def _empty_result(
         "no_proposal_reasons": no_proposal_reasons,
         "stage": STAGE,
         "dry_run": dry_run,
-        "optimizer_choice": optimizer_choice,
+        "optimizer_choice": OPTIMIZER_NAME,
     }
 
 
@@ -1071,10 +1049,9 @@ async def optimize(
     trajectories: list[object] | None = None,
     failure_categories: list[object] | None = None,
     dry_run: bool = False,
-    optimizer_choice: object | None = None,
     config: OptimizerConfig | None = None,
 ) -> str:
-    """Stage C real DSPy entrypoint.
+    """Stage C real DSPy GEPA entrypoint.
 
     Returns a JSON string matching the TS-side ``OfflineOptimizerResult``
     shape. On any handled error path (extra missing, key missing, small
@@ -1093,7 +1070,6 @@ async def optimize(
             trajectories,
             failure_categories,
             dry_run=dry_run,
-            optimizer_choice_raw=optimizer_choice,
             config=effective_config,
         )
     except OptimizerOperationError:
@@ -1122,9 +1098,8 @@ def create_server() -> FastMCP:
         trajectories: list[object] | None = None,
         failure_categories: list[object] | None = None,
         dry_run: bool = False,
-        optimizer_choice: str | None = None,
     ) -> str:
-        """Stage C real DSPy entrypoint.
+        """Stage C real DSPy GEPA entrypoint.
 
         Args:
             trajectories: Recent stored trajectories (each a dict with at
@@ -1137,14 +1112,11 @@ def create_server() -> FastMCP:
             dry_run: Forwarded to metadata. Output is identical regardless
                 of value; the flag is recorded so downstream auditors can
                 verify caller intent.
-            optimizer_choice: Either ``"mipro"`` (default) or ``"gepa"``.
-                Selects the DSPy compiler.
         """
         return await optimize(
             trajectories=trajectories,
             failure_categories=failure_categories,
             dry_run=dry_run,
-            optimizer_choice=optimizer_choice,
         )
 
     return server

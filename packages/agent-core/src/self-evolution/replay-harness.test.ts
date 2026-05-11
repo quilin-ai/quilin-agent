@@ -583,31 +583,24 @@ describe("bench-self-evolution — integration", () => {
 		},
 	];
 
-	it("runs the 3-arm bench loop on a 5-trajectory mini-corpus and writes a report", async () => {
+	it("runs the 2-arm bench loop on a 5-trajectory mini-corpus and writes a report", async () => {
 		const baseline = await runArmWithSeeds(
-			"PromptRewrite (baseline)",
+			"PromptRewrite (bench-only baseline)",
 			(seed) => runBaselineArm(miniCorpus, seed),
-			2,
-		);
-		const mipro = await runArmWithSeeds(
-			"DSPy + MIPROv2 (mocked)",
-			(seed) => runDspyArm(miniCorpus, "mipro", seed),
 			2,
 		);
 		const gepa = await runArmWithSeeds(
 			"DSPy + GEPA (mocked)",
-			(seed) => runDspyArm(miniCorpus, "gepa", seed),
+			(seed) => runDspyArm(miniCorpus, seed),
 			2,
 		);
 		expect(baseline.perSeedFailureRate).toHaveLength(2);
-		expect(mipro.perSeedFailureRate).toHaveLength(2);
 		expect(gepa.perSeedFailureRate).toHaveLength(2);
 		// Round-2 fix: aggregate now pools across all seeds (5 × 2 = 10).
 		expect(baseline.aggregate.passed + baseline.aggregate.failed).toBe(10);
 
 		const report = renderReport({
 			baseline,
-			mipro,
 			gepa,
 			trajectoryCount: miniCorpus.length,
 			seeds: 2,
@@ -615,13 +608,12 @@ describe("bench-self-evolution — integration", () => {
 			trajectoriesPath: "test/path.jsonl",
 		});
 
-		expect(report).toContain("Stage D — DSPy Validation Report");
+		expect(report).toContain("Stage D — DSPy GEPA Validation Report");
 		expect(report).toContain("MOCKED BENCHMARK DISCLOSURE");
 		expect(report).toContain("Aggregate failure-rate table");
 		expect(report).toContain("Per-FailureCategory breakdown");
 		expect(report).toContain("Decision recommendation");
-		expect(report).toContain("PromptRewrite (baseline)");
-		expect(report).toContain("DSPy + MIPROv2 (mocked)");
+		expect(report).toContain("PromptRewrite (bench-only baseline)");
 		expect(report).toContain("DSPy + GEPA (mocked)");
 		// Round-2 fix: report no longer renders commit hash to avoid the
 		// "report hash points to pre-fix commit" reproducibility gap.
@@ -630,23 +622,17 @@ describe("bench-self-evolution — integration", () => {
 
 	it("persists the rendered report to a tmp file with required sections", async () => {
 		const baseline = await runArmWithSeeds(
-			"PromptRewrite (baseline)",
+			"PromptRewrite (bench-only baseline)",
 			(seed) => runBaselineArm(miniCorpus, seed),
-			1,
-		);
-		const mipro = await runArmWithSeeds(
-			"DSPy + MIPROv2 (mocked)",
-			(seed) => runDspyArm(miniCorpus, "mipro", seed),
 			1,
 		);
 		const gepa = await runArmWithSeeds(
 			"DSPy + GEPA (mocked)",
-			(seed) => runDspyArm(miniCorpus, "gepa", seed),
+			(seed) => runDspyArm(miniCorpus, seed),
 			1,
 		);
 		const report = renderReport({
 			baseline,
-			mipro,
 			gepa,
 			trajectoryCount: miniCorpus.length,
 			seeds: 1,
@@ -663,12 +649,11 @@ describe("bench-self-evolution — integration", () => {
 		expect(persisted).toContain("MOCK 数据声明");
 	});
 
-	it("DSPy mipro arm produces non-identical per-seed failure rates on a 50-entry corpus (round-2 fix)", async () => {
-		// Round-2 fix: lock the property that 3 mipro seeds DO NOT produce
-		// identical failure rates anymore. Pre-fix the seed multiplier
-		// collapsed to identical thresholds + same-category fallbacks
-		// nearly equal to ground truth, so all seeds reported the exact
-		// same number.
+	it("DSPy GEPA arm produces non-identical per-seed failure rates on a 50-entry corpus (round-2 fix)", async () => {
+		// Round-2 fix: lock the property that 3 seeds DO NOT produce
+		// identical failure rates. Pre-fix the seed multiplier collapsed
+		// to identical thresholds + same-category fallbacks nearly equal
+		// to ground truth, so all seeds reported the same number.
 		const corpus: BenchmarkTrajectoryEntry[] = Array.from(
 			{ length: 50 },
 			(_, idx) => {
@@ -698,8 +683,8 @@ describe("bench-self-evolution — integration", () => {
 			},
 		);
 		const arm = await runArmWithSeeds(
-			"mipro test",
-			(seed) => runDspyArm(corpus, "mipro", seed),
+			"gepa test",
+			(seed) => runDspyArm(corpus, seed),
 			3,
 		);
 		expect(arm.perSeedFailureRate).toHaveLength(3);
@@ -745,8 +730,8 @@ describe("bench-self-evolution — integration", () => {
 
 	it("createMockDspyClient produces seed-dependent variance with per-entry sourceRefs (round-2 fix)", async () => {
 		// Round-2 fix: the prior (seed * 17 + i * 31) mod 100 hash combined
-		// with category dedupe made 3 mipro seeds produce identical output.
-		// New (seed * 991 + i * 71) mod 1000 with no category dedupe and
+		// with category dedupe made 3 seeds produce identical output. New
+		// (seed * 991 + i * 71) mod 1000 with no category dedupe and
 		// cross-category fallback templates must give meaningfully different
 		// proposals across seeds AND per-entry scoring must surface that
 		// variance into per-seed failure rates.
@@ -790,8 +775,8 @@ describe("bench-self-evolution — integration", () => {
 			trajectoryRef: `trajectory:${e.id}`,
 		}));
 		const callOnce = async (seed: number) => {
-			const client = createMockDspyClient("mipro", corpus, seed);
-			const raw = await client.callTool("mipro_optimize", {
+			const client = createMockDspyClient(corpus, seed);
+			const raw = await client.callTool("optimize", {
 				trajectories: trajectoriesArg,
 			});
 			return JSON.parse(raw) as {

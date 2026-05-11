@@ -317,20 +317,18 @@ function buildSelfEvolutionStep(
 	env: Record<string, string | undefined>,
 ): FirstRunOnboardingStep {
 	// Self-evolution offers three optimizer modes:
-	//   - prompt_rewrite (default) : zero-dep heuristic TS optimizer
-	//   - dspy                     : real DSPy MIPROv2 / GEPA via MCP
+	//   - dspy (default)           : real DSPy GEPA via MCP
 	//   - noop                     : eval-mode opt-out
 	//
-	// At first-run we surface the choice + check whether the user's
-	// selection is actually wired (DSPy needs the quilin-optimizer
-	// MCP server + a judge LM source: either an API key in env or
-	// dummy mode). Misconfigured = step escalates to "required".
+	// At first-run we surface the choice + check whether DSPy is fully
+	// wired (needs the quilin-optimizer MCP server + a judge LM source:
+	// either an API key in env or dummy mode). Misconfigured =
+	// step escalates to "required".
 	//
 	// 首次运行时显式展示 optimizer 选择，并校验依赖：DSPy 模式需要
 	// `quilin-optimizer` MCP server 已注册 + judge LM 可用（env API key
 	// 或 dummy 模式）。配置不一致时升级为 required。
 	const optimizer = config.self_evolution.optimizer;
-	const optimizerChoice = config.self_evolution.optimizer_choice;
 
 	if (optimizer === "noop") {
 		return {
@@ -339,21 +337,7 @@ function buildSelfEvolutionStep(
 			title: "Self-evolution",
 			summary: "Optimizer: noop (proposals suppressed — eval mode).",
 			actions: [
-				'To enable suggestion generation: set `self_evolution.optimizer = "prompt_rewrite"` (default heuristic) or `"dspy"` (real DSPy + judge LM).',
-			],
-		};
-	}
-
-	if (optimizer === "prompt_rewrite") {
-		return {
-			id: "self_evolution",
-			status: "complete",
-			title: "Self-evolution",
-			summary:
-				"Optimizer: prompt_rewrite (zero-dep heuristic TS — default, runs fully offline).",
-			actions: [
-				"Generated proposals route through WriteAuthority + sandbox-policy gates; nothing auto-applies.",
-				'To upgrade to real DSPy (MIPROv2 / GEPA): set `self_evolution.optimizer = "dspy"` + `optimizer_choice = "mipro"|"gepa"`, install `dspy-ai` extra (`uv sync --extra dspy`), and set QUILIN_OPTIMIZER_JUDGE_API_KEY (or QUILIN_OPTIMIZER_JUDGE_MODE=dummy for zero-cost real-code-path testing).',
+				'To enable suggestion generation: set `self_evolution.optimizer = "dspy"` (real DSPy GEPA + judge LM).',
 			],
 		};
 	}
@@ -378,7 +362,7 @@ function buildSelfEvolutionStep(
 	const issues: string[] = [];
 	if (!hasOptimizerServer) {
 		issues.push(
-			"`quilin-optimizer` MCP server is NOT registered in capabilities — DSPy choice will silently fall back to prompt_rewrite. Add the server entry to capabilities config.",
+			"`quilin-optimizer` MCP server is NOT registered in capabilities — DSPy choice will silently fall back to noop (zero proposals). Add the server entry to capabilities config.",
 		);
 	}
 	if (!judgeReady) {
@@ -396,10 +380,10 @@ function buildSelfEvolutionStep(
 			id: "self_evolution",
 			status: "complete",
 			title: "Self-evolution",
-			summary: `Optimizer: dspy (${optimizerChoice}) — judge ${judgeNote}.`,
+			summary: `Optimizer: dspy (GEPA) — judge ${judgeNote}.`,
 			actions: [
-				`DSPy compile loop active for ${optimizerChoice.toUpperCase()}; proposals still route through WriteAuthority + sandbox-policy gates.`,
-				"Switch optimizer_choice between `mipro` and `gepa` to compare; bench script `scripts/bench-real-dspy.py` runs 3-way A/B locally.",
+				"DSPy GEPA compile loop active; proposals route through WriteAuthority + sandbox-policy gates (never auto-applied).",
+				"Bench script `scripts/bench-real-dspy.py` runs a real-LLM A/B locally if you want to validate end-to-end.",
 			],
 		};
 	}
@@ -408,10 +392,10 @@ function buildSelfEvolutionStep(
 		id: "self_evolution",
 		status: "required",
 		title: "Self-evolution",
-		summary: `Optimizer: dspy (${optimizerChoice}) — configuration is INCOMPLETE.`,
+		summary: "Optimizer: dspy (GEPA) — configuration is INCOMPLETE.",
 		actions: [
 			...issues,
-			'Or set `self_evolution.optimizer = "prompt_rewrite"` to fall back to the zero-dep default.',
+			'Or set `self_evolution.optimizer = "noop"` to silence proposals while you finish setup.',
 		],
 	};
 }

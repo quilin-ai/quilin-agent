@@ -372,7 +372,7 @@ describe("DspyOfflineOptimizer", () => {
 		expect(result.createdAt).toBe("2030-01-01T00:00:00.000Z");
 	});
 
-	it("forwards optimizer_choice='mipro' by default", async () => {
+	it("does NOT forward an optimizer_choice arg (GEPA is implicit post 2026-05-12)", async () => {
 		const client = new FakeMCPClient(stubServerPayload({ proposals: [] }));
 		const optimizer = new DspyOfflineOptimizer({
 			client,
@@ -381,21 +381,9 @@ describe("DspyOfflineOptimizer", () => {
 
 		await optimizer.optimize({ trajectories: [trajectory()] });
 
+		// The optimizer_choice arg was removed when MIPROv2 was deleted —
+		// the Python MCP server now always runs GEPA.
 		const call = client.calls[0];
-		expect(call?.args.optimizer_choice).toBe("mipro");
-	});
-
-	it("forwards optimizer_choice='gepa' when configured", async () => {
-		const client = new FakeMCPClient(stubServerPayload({ proposals: [] }));
-		const optimizer = new DspyOfflineOptimizer({
-			client,
-			now: FIXED_NOW,
-			optimizerChoice: "gepa",
-		});
-
-		await optimizer.optimize({ trajectories: [trajectory()] });
-
-		const call = client.calls[0];
-		expect(call?.args.optimizer_choice).toBe("gepa");
+		expect(call?.args).not.toHaveProperty("optimizer_choice");
 	});
 });

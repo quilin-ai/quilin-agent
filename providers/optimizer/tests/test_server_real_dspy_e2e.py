@@ -1,23 +1,22 @@
 """End-to-end tests against the **real** dspy-ai library (QUI-147 follow-up).
 
 The companion file ``test_server_real_dspy.py`` injects a fake ``dspy``
-module via ``sys.modules`` to avoid pulling the heavy extra in CI. That
-gives us fast, deterministic unit coverage but misses real-DSPy version
-drift: if a future ``dspy-ai`` release renames a sub-signature field or
-changes the DummyLM signature, the fake-module tests stay green while
-the real path silently breaks.
+module via ``sys.modules`` for fast unit coverage but misses real-DSPy
+version drift: if a future ``dspy-ai`` release renames a sub-signature
+field or changes the DummyLM signature, the fake-module tests stay
+green while the real path silently breaks.
 
 This file covers that gap by importing the REAL ``dspy-ai`` package
-and exercising the actual MIPROv2 / GEPA compile loops with
-``dspy.utils.DummyLM`` as judge (zero LLM cost). The entire module
-skips when the ``dspy`` extra is not installed, so CI without the
-extra still passes.
+and exercising the actual **GEPA** compile loop with ``dspy.utils.DummyLM``
+as judge (zero LLM cost). Since GEPA is now a hard dependency of
+quilin-optimizer, the importorskip guard exists only as defense for
+broken local venvs.
 
 本文件补齐 ``test_server_real_dspy.py``（用 fake ``dspy`` 模块）漏掉的
 真实版本漂移覆盖：当 ``dspy-ai`` 升级改了内部子签名字段名或 DummyLM
 签名时，fake-module 测试仍绿，但真实路径会悄悄坏。这里导入真实
-``dspy-ai``，跑真 MIPROv2 / GEPA + ``dspy.utils.DummyLM`` judge（零
-LLM 成本）。``dspy`` extra 未装时整文件 skip，CI 仍可通过。
+``dspy-ai``，跑真 **GEPA** + ``dspy.utils.DummyLM`` judge（零 LLM 成本）。
+``dspy-ai`` 现在是 quilin-optimizer 的硬依赖，importorskip 仅作 venv 损坏的兜底。
 """
 
 from __future__ import annotations
@@ -32,11 +31,7 @@ import pytest
 # already cover the unit-level behavior.
 dspy = pytest.importorskip(
     "dspy",
-    reason="dspy-ai extra not installed; install with `uv sync --extra dspy`",
-)
-pytest.importorskip(
-    "optuna",
-    reason="optuna missing; required by MIPROv2's Bayesian search backend",
+    reason="dspy-ai not installed (should never happen — it is a hard dependency)",
 )
 
 from quilin_optimizer.server import (  # noqa: E402 — import after skip guard
@@ -89,7 +84,7 @@ def _extract_payload(result: Any) -> dict[str, Any]:
 
 
 def test_dummy_lm_responses_cover_dspy_3x_subsignature_fields() -> None:
-    """MIPROv2's internal Predicts request specific output field names
+    """DSPy 3.x's internal Predicts request specific output field names
     (``observations``, ``proposed_instruction``, etc.). If a future
     DSPy version adds a new internal sub-signature and our response
     dicts lack the new key, DummyLM raises ``KeyError`` mid-compile
@@ -120,8 +115,9 @@ def test_dummy_lm_responses_cover_dspy_3x_subsignature_fields() -> None:
 
 
 def test_dummy_lm_responses_have_distinct_proposed_instructions() -> None:
-    """MIPROv2's instruction search needs >1 candidate to be non-degenerate.
-    Locks that the response pool has at least 3 distinct
+    """GEPA's reflection LM proposes new instruction candidates; the
+    pool must have >1 distinct value or the optimizer's search is
+    degenerate. Locks that the response pool has at least 3 distinct
     ``proposed_instruction`` values so the optimizer sees variance.
     """
     distinct = {slot["proposed_instruction"] for slot in _DUMMY_LM_RESPONSES}
@@ -157,11 +153,11 @@ def test_configure_dspy_lm_dummy_binds_real_dummy_lm() -> None:
     )
 
 
-def test_configure_dspy_lm_dummy_pool_sized_for_mipro_and_gepa() -> None:
+def test_configure_dspy_lm_dummy_pool_sized_for_gepa() -> None:
     """The DummyLM instance must carry enough cycled responses to
-    satisfy MIPROv2's instruction search + GEPA's rollout budget.
-    Empirically GEPA hits ~580 rollouts on a 50-trajectory compile;
-    we pad to 1000 for safety. This test locks the cycle constant.
+    satisfy GEPA's rollout budget. Empirically GEPA hits ~580 rollouts
+    on a 50-trajectory compile; we pad to 1000 for safety. This test
+    locks the cycle constant.
     """
     import dspy as _dspy
 
@@ -186,82 +182,47 @@ def test_configure_dspy_lm_dummy_pool_sized_for_mipro_and_gepa() -> None:
 
 
 # ---------------------------------------------------------------------------
-# optimize() end-to-end with real DSPy + DummyLM
+# optimize() end-to-end with real DSPy GEPA + DummyLM
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_optimize_mipro_real_dspy_dummy_lm_emits_proposal(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """End-to-end smoke: real MIPROv2 compile loop runs under DummyLM
-    and produces at least one ``OptimizationProposalDraft``-shaped
-    entry. Asserts the compile didn't bail at any of the four
-    graceful-degradation gates.
-
-    This test catches the class of regression where a DSPy minor bump
-    changes the compile API (e.g., the optuna integration) and the
-    fake-module tests stay green but real DSPy errors out.
-    """
-    monkeypatch.delenv("QUILIN_OPTIMIZER_JUDGE_API_KEY", raising=False)
-    monkeypatch.setenv("QUILIN_OPTIMIZER_JUDGE_MODE", "dummy")
-
-    result = await optimize(
-        optimizer_choice="mipro",
-        trajectories=_trajectories(MIN_TRAJECTORIES),
-        failure_categories=["tool_error"],
-        dry_run=False,
-    )
-    payload = _extract_payload(result)
-    # The compile path either produces proposals or bails at a gate.
-    # In dummy mode with 5 trajectories and dspy installed, all four
-    # gates should pass — so we expect at least one proposal.
-    assert payload["proposals"], (
-        f"real-DSPy MIPROv2 + DummyLM must produce a proposal; "
-        f"no_proposal_reasons={payload.get('no_proposal_reasons')}"
-    )
-    proposal = payload["proposals"][0]
-    assert proposal["title"].startswith("DSPy MIPRO"), proposal["title"]
-    # Both kind="markdown" and kind="json" artifacts are emitted per
-    # _build_proposal_artifacts; this asserts the contract surface
-    # downstream consumers depend on.
-    kinds = sorted(a["kind"] for a in proposal["artifacts"])
-    assert kinds == ["json", "markdown"], kinds
 
 
 @pytest.mark.asyncio
 async def test_optimize_gepa_real_dspy_dummy_lm_emits_proposal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """End-to-end smoke for GEPA — same as the MIPROv2 e2e test but
-    exercises the ``reflection_lm=dspy.settings.lm`` wiring. GEPA in
-    DSPy 3.x raises if ``reflection_lm`` is not explicitly provided,
-    so this test guards that branch.
+    """End-to-end smoke: real GEPA compile loop runs under DummyLM
+    and produces at least one ``OptimizationProposalDraft``-shaped
+    entry. Asserts the compile didn't bail at any of the gates +
+    exercises the ``reflection_lm=dspy.settings.lm`` wiring (GEPA in
+    DSPy 3.x raises if ``reflection_lm`` is not explicitly provided).
 
-    Historical note: this test was previously dropped because DSPy 3.x's
-    ``dspy.settings.configure`` was guarded against multi-task re-entry,
-    and pytest-asyncio runs each test in a fresh event loop —
-    sequential MIPROv2-then-GEPA e2e tests raised RuntimeError. The
-    compile path now uses ``with dspy.context(lm=lm):`` per-call
-    scoping (see ``_run_dspy_compile`` in server.py), which dodges
-    that constraint. Re-added as part of the QUI-147 follow-up that
-    closed the latent bug.
+    The compile path uses ``with dspy.context(lm=lm):`` per-call scoping
+    (see ``_run_dspy_compile`` in server.py) which dodges DSPy 3.x's
+    "configure can only be called from the same async task" constraint
+    that fires under pytest-asyncio's per-test event loops.
     """
     monkeypatch.delenv("QUILIN_OPTIMIZER_JUDGE_API_KEY", raising=False)
     monkeypatch.setenv("QUILIN_OPTIMIZER_JUDGE_MODE", "dummy")
 
     result = await optimize(
-        optimizer_choice="gepa",
         trajectories=_trajectories(MIN_TRAJECTORIES),
         failure_categories=["schema_violation"],
         dry_run=False,
     )
     payload = _extract_payload(result)
+    # In dummy mode with MIN_TRAJECTORIES and dspy installed, all
+    # graceful-degradation gates should pass — expect ≥1 proposal.
     assert payload["proposals"], (
         f"real-DSPy GEPA + DummyLM must produce a proposal; "
         f"no_proposal_reasons={payload.get('no_proposal_reasons')}"
     )
-    assert payload["proposals"][0]["title"].startswith("DSPy GEPA")
+    proposal = payload["proposals"][0]
+    assert proposal["title"].startswith("DSPy GEPA"), proposal["title"]
+    # Both kind="markdown" and kind="json" artifacts are emitted per
+    # _build_proposal_artifacts; this asserts the contract surface
+    # downstream consumers depend on.
+    kinds = sorted(a["kind"] for a in proposal["artifacts"])
+    assert kinds == ["json", "markdown"], kinds
 
 
 @pytest.mark.asyncio
@@ -278,7 +239,6 @@ async def test_optimize_small_trainset_still_gates_in_dummy_mode(
 
     too_few = _trajectories(MIN_TRAJECTORIES - 1)
     result = await optimize(
-        optimizer_choice="mipro",
         trajectories=too_few,
         failure_categories=["tool_error"],
         dry_run=False,

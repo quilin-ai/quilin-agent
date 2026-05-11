@@ -251,10 +251,14 @@ English: GEPA/DSPy-style prompt/skill optimization（GEPA/DSPy 风格提示词/�
 中文：GEPA/DSPy-style prompt/skill optimization（GEPA/DSPy 风格提示词/技能优化，即用轨迹、评分反馈和搜索算法生成候选提示词或技能文本）必须产生产物，而不是执行写入。候选提示词、技能草稿和脚手架 diff 会序列化为 `OptimizationCandidate` 记录，然后先评测，再展示提案。
 
 ```ts
+// MIPROv2 / BootstrapFewShot kinds were on this list during pre-2026-05-12
+// planning when both DSPy compilers were going to ship. Post the GEPA-only
+// decision (see docs/10-self-evolution/README.md §2.4) only GEPA remains;
+// `dspy_bootstrap_few_shot` is kept as a *possible* future kind but not
+// currently implemented.
 export type OptimizerKind =
   | "static_metaprompt"
   | "dspy_bootstrap_few_shot"
-  | "dspy_mipro_v2"
   | "gepa_textual_gradient"
   | "manual_candidate";
 

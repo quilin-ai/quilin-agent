@@ -367,6 +367,10 @@ Production trade-off: `DockerProposalSandboxPolicyGate` accepts a `requireDocker
 
 ### 2.4.0.1 Phase 1+ 决策：DSPy 路径 / Phase 1+ Decision: DSPy Path
 
+> ⚠️ **SUPERSEDED by the GEPA-only outcome at the end of this section (2026-05-12)** — Everything in this subsection up to "Stage D Outcome — DSPy + GEPA AS THE SINGULAR OPTIMIZER (2026-05-12)" reflects pre-decision planning text from Stages A/B/C/D. Concretely the following claims in the older text are NO LONGER TRUE: (1) DSPy is opt-in via `[project.optional-dependencies] dspy` extra — it is now a HARD dep; (2) both `MIPROv2` and `GEPA` ship — only GEPA ships; (3) `optimizer_choice = "mipro" | "gepa"` config field — removed; (4) `optuna` is a hard transitive — dropped; (5) 3-way A/B bench — now 2-arm; (6) fallback to `PromptRewriteOptimizer` when DSPy unwired — now falls back to `LocalNoopOfflineOptimizer`; (7) test counts cited inline — outdated. The historical narrative is preserved for context only; treat the "Stage D Outcome" block as the canonical current state.
+>
+> ⚠️ **本节内容已被本节末尾的 GEPA-only 决策（2026-05-12）取代** —— 从此处到 "Stage D Outcome — DSPy + GEPA AS THE SINGULAR OPTIMIZER (2026-05-12)" 之间的所有文本反映的是 Stages A/B/C/D 的决策前规划。**已失效的具体声明**：(1) DSPy 通过 `[project.optional-dependencies] dspy` extra 可选 —— 现在是硬依赖；(2) 同时 ship MIPROv2 与 GEPA —— 现只 ship GEPA；(3) `optimizer_choice = "mipro" | "gepa"` 配置字段 —— 已删除；(4) `optuna` 硬传递依赖 —— 已移除；(5) 3-way A/B bench —— 现 2-arm；(6) DSPy 未接线时回退 `PromptRewriteOptimizer` —— 现回退 `LocalNoopOfflineOptimizer`；(7) 文中引用的测试条数 —— 已过期。历史叙事仅作上下文保留，**当前真相以本节末尾的 "Stage D Outcome" 段为准**。
+
 **Status (2026-05-09)**: Stage A (`providers/optimizer/` Python MCP server skeleton) and Stage B/B+ (`DspyOfflineOptimizer` + IoC factory + `self_evolution.optimizer` config) are sealed at master commits `7dc076c` and `70eba77` (QUI-118 closed Done). The DSPy path is **placeholder-only** — `providers/optimizer/src/quilin_optimizer/server.py` returns deterministic stub proposals; no `dspy-ai` dependency is imported.
 
 **状态（2026-05-09）**：Stage A（`providers/optimizer/` Python MCP server 骨架）和 Stage B/B+（`DspyOfflineOptimizer` + IoC factory + `self_evolution.optimizer` 配置）已封存于 master 提交 `7dc076c` 和 `70eba77`（QUI-118 已 Done）。DSPy 通路目前仅是 **占位实现** —— `providers/optimizer/src/quilin_optimizer/server.py` 返回确定性 stub 提案，没有引入 `dspy-ai` 依赖。
@@ -439,33 +443,33 @@ Production trade-off: `DockerProposalSandboxPolicyGate` accepts a `requireDocker
 
 **为什么把 C 和 D 拆成独立 Linear issue**：Stage D 被 Stage C 阻塞（不存在的代码无法被 benchmark），但它有独立的验收证据（benchmark 数据集 + 验证报告），且数据策划那一段可以与 Stage C 工程实现并行。拆分让 Stage C 落地 cherry-pick 不必等到 benchmark 数据策划完成。
 
-**Stage D Validation Outcome — REAL LLM JUDGE (2026-05-12, supersedes the DummyLM round-3 numbers below)** — On 2026-05-12 the bench was run with a **real LLM judge** (`deepseek/deepseek-chat`) via `scripts/bench-real-dspy.py --mode llm --confirm-real-llm-cost --seeds 3`. 3-seed pooled (n=150) results:
+**Stage D Outcome — DSPy + GEPA AS THE SINGULAR OPTIMIZER (2026-05-12)** — After running the bench with two different real judges (`deepseek/deepseek-chat` and `openai/gpt-4o-mini` via OpenRouter), the lift signal **flipped sign** depending on the judge — MIPROv2 went from +14.6% (DeepSeek) to −19.5% (gpt-4o-mini) on the same code + dataset. The bench's keyword-overlap scorer rewards keyword-dense proposals (DeepSeek's style) and penalizes abstract proposals (gpt-4o-mini's style), measuring **proposal style alignment with the keyword pool**, not optimization quality. The bench cannot decide which DSPy compiler is "better".
 
-| Arm | Pooled failure rate | 95% CI (Wilson) | Lift vs baseline |
-|---|---|---|---|
-| `PromptRewrite` (baseline heuristic) | 82.0% | [75.1%, 87.3%] | — |
-| **DSPy + MIPROv2** | **70.0%** | [62.2%, 76.8%] | **−12pp / 14.6% relative** 🟢 |
-| DSPy + GEPA | 86.0% | [79.5%, 90.7%] | +4pp / −4.9% regression 🔴 |
+**Decision: adopt GEPA as the singular optimizer**, based on three independent sources of evidence that bypass the broken bench:
 
-**Decision bucket = `10% ≤ lift < 30%`** → DSPy stays opt-in (default remains `PromptRewrite`). **Stage E NOT triggered** (lift 14.6% clears the 10% threshold).
+1. **Academic**: [GEPA paper (ICLR 2026 Oral)](https://arxiv.org/abs/2507.19457) reports GEPA outperforms MIPROv2 by ~13% across 6 tasks with **35× fewer rollouts** than the equivalent RL baseline.
+2. **Framework**: DSPy's official docs promote GEPA as the SOTA optimizer; the "start with MIPROv2 → upgrade to GEPA when you have textual feedback" workflow matches Quilin's failure-category-tagged trajectories exactly.
+3. **Scenario fit**: Quilin's failure trajectories carry **textual category labels** (`tool_error`, `schema_violation`, `budget_exhaustion`, `missing_evidence`, `unknown`) — exactly the "textual feedback" signal GEPA's reflection LM consumes. MIPROv2's Bayesian instruction search does not benefit from this signal, but GEPA does.
 
-Per-category breakdown reveals MIPROv2's entire lift comes from `tool_error` (46.7% → 0%). Of the other 4 categories, `budget_exhaustion` / `missing_evidence` / `unknown` saturate at 100% across all arms (synthetic dataset cannot differentiate them); `schema_violation` sits at 92.9% baseline → 100% MIPROv2 (slight regression) → 92.9% GEPA (flat). GEPA *regresses* on `tool_error` (46.7% → 60%) because its reflection LM proposes over-specific instructions (e.g., long `docker run` boilerplate) that over-fit to particular tasks.
+**Removed 2026-05-12**: TS `PromptRewriteOptimizer` (heuristic, deleted as a user-config choice — kept only as bench-internal baseline), Python `MIPROv2` compile path, `optimizer_choice` config field. The MCP `optimize` tool no longer takes an `optimizer_choice` arg; GEPA is implicit.
 
-Caveats: (1) DeepSeek runs at low temperature → all 3 seeds returned identical numbers (zero variance); Wilson CI reflects sample size, not randomness. (2) DeepSeek's JSON adapter failed ~10 times during the run — `openai/gpt-4o-mini` cross-validation tracked as [QUI-152](https://linear.app/quilin-agent/issue/QUI-152) E-11. Full report: [`docs/10-self-evolution/dspy-validation-report-real-llm.md`](./dspy-validation-report-real-llm.md). Linear: [QUI-147](https://linear.app/quilin-agent/issue/QUI-147).
+**Bench scope after refactor**: the real-LLM bench (`scripts/bench-real-dspy.py`) now runs a **2-arm comparison** — PromptRewrite (bench-only baseline) vs DSPy GEPA. The bench is for measuring the **size** of GEPA's contribution, not for picking which optimizer to use; that picking decision is now closed.
 
-**Stage D 验证产出 —— 真实 LLM 评委（2026-05-12，取代下方 DummyLM round-3 数据）** —— 2026-05-12 用真实 LLM 评委（`deepseek/deepseek-chat`）跑 `scripts/bench-real-dspy.py --mode llm --confirm-real-llm-cost --seeds 3`。3-seed 池化（n=150）结果：
+Full Linear: [QUI-147](https://linear.app/quilin-agent/issue/QUI-147). Historical bench reports (DeepSeek run, gpt-4o-mini run, DummyLM run) preserved as evidence of bench unreliability: [`dspy-validation-report-real-llm.md`](./dspy-validation-report-real-llm.md), [`dspy-validation-report-real-llm-gpt4o-mini.md`](./dspy-validation-report-real-llm-gpt4o-mini.md), [`dspy-validation-report.md`](./dspy-validation-report.md).
 
-| Arm | 池化失败率 | 95% CI (Wilson) | vs baseline |
-|---|---|---|---|
-| `PromptRewrite`（启发式 baseline）| 82.0% | [75.1%, 87.3%] | — |
-| **DSPy + MIPROv2** | **70.0%** | [62.2%, 76.8%] | **−12pp / 14.6% 相对降幅** 🟢 |
-| DSPy + GEPA | 86.0% | [79.5%, 90.7%] | +4pp / −4.9% 相对回归 🔴 |
+**Stage D 产出 —— DSPy + GEPA 是唯一优化器（2026-05-12）** —— 用两个真实评委（`deepseek/deepseek-chat` 与 `openai/gpt-4o-mini`，后者经 OpenRouter）跑同一份代码 + 数据集，**lift 信号变号**：MIPROv2 从 +14.6%（DeepSeek 评委）变成 −19.5%（gpt-4o-mini 评委）。bench 的关键字重叠评分奖励关键字密集型 proposal（DeepSeek 风格），惩罚抽象 proposal（gpt-4o-mini 风格），实际测量的是**proposal 风格与关键字池的匹配度**，不是优化器质量。bench 无法判定哪个 DSPy 编译器更好。
 
-**Decision bucket = `10% ≤ lift < 30%`** → DSPy 保持 opt-in（默认仍是 `PromptRewrite`）。**Stage E 未触发**（lift 14.6% 越过 10% 阈值）。
+**决策：GEPA 作为唯一 optimizer**，基于三条独立、绕开损坏 bench 的证据：
 
-按失败类型拆分：MIPROv2 的全部 lift 来自 `tool_error` 类别（46.7% → 0%）。其他 4 类中，`budget_exhaustion`/`missing_evidence`/`unknown` 在所有 arm 上都是 100%（合成数据集分辨不出）；`schema_violation` 基线 92.9% → MIPROv2 100%（小幅回归）→ GEPA 92.9%（持平）。GEPA 在 `tool_error` 上**回归**（46.7% → 60%）：reflection LM 提议的指令过度具体化（如长篇 `docker run` 样板），对特定任务过拟合。
+1. **学术**：[GEPA 论文（ICLR 2026 Oral 接收）](https://arxiv.org/abs/2507.19457)报告 GEPA 在 6 项任务上平均超 MIPROv2 ~13%，rollouts 比同等 RL baseline 少 **35×**。
+2. **框架**：DSPy 官方文档主推 GEPA 为 SOTA；"先 MIPROv2 → 有 textual feedback 时升级 GEPA" 的工作流跟 Quilin 的"按失败类别打标的轨迹"完美对齐。
+3. **场景契合**：Quilin 的失败轨迹自带**文本类别标签**（`tool_error`/`schema_violation`/`budget_exhaustion`/`missing_evidence`/`unknown`）—— 这恰是 GEPA reflection LM 消化的 textual feedback 信号。MIPROv2 的贝叶斯指令搜索吃不到这个信号，但 GEPA 能。
 
-限制说明：(1) DeepSeek 低温确定性 → 3 个 seed 完全相同（方差为零）；Wilson CI 反映样本量界限不反映随机性。(2) DeepSeek JSON adapter 报错 ~10 次 —— `openai/gpt-4o-mini` 交叉验证记在 [QUI-152](https://linear.app/quilin-agent/issue/QUI-152) E-11。完整报告：[`docs/10-self-evolution/dspy-validation-report-real-llm.md`](./dspy-validation-report-real-llm.md)。Linear：[QUI-147](https://linear.app/quilin-agent/issue/QUI-147)。
+**2026-05-12 移除**：TS `PromptRewriteOptimizer`（启发式，从用户配置选项中删除 —— 仅作为 bench 内部 baseline 保留）、Python `MIPROv2` 编译路径、`optimizer_choice` 配置字段。MCP `optimize` 工具不再接受 `optimizer_choice` 参数，GEPA 是隐式默认。
+
+**重构后的 bench 范围**：真实 LLM bench（`scripts/bench-real-dspy.py`）现在跑 **2-arm 对比** —— PromptRewrite（bench 内部 baseline）vs DSPy GEPA。bench 用于**测量 GEPA 的贡献量级**，不再用于"选哪个 optimizer"的决策（这个决策已闭）。
+
+Linear：[QUI-147](https://linear.app/quilin-agent/issue/QUI-147)。历史 bench 报告（DeepSeek 跑 / gpt-4o-mini 跑 / DummyLM 跑）作为 bench 不可靠的证据保留：[`dspy-validation-report-real-llm.md`](./dspy-validation-report-real-llm.md)、[`dspy-validation-report-real-llm-gpt4o-mini.md`](./dspy-validation-report-real-llm-gpt4o-mini.md)、[`dspy-validation-report.md`](./dspy-validation-report.md)。
 
 ---
 

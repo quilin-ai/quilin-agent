@@ -82,41 +82,17 @@ const ALLOWED_ARTIFACT_KINDS = new Set<CandidateArtifactKind>([
 	"patch",
 ]);
 
-/**
- * DSPy compiler choice forwarded to the Python MCP server.
- *
- * - `mipro` (default): MIPROv2 — Bayesian search over instruction + few-shot
- *   subsets, DSPy 2.x flagship.
- * - `gepa`: Genetic-Pareto — Pareto frontier for accuracy / cost trade-off.
- *
- * 转发给 Python MCP server 的 DSPy 编译器选择。
- * - `mipro`（默认）：MIPROv2，DSPy 2.x 旗舰 Bayesian 搜索算法。
- * - `gepa`：Genetic-Pareto，输出 accuracy / cost 权衡的 Pareto 前沿。
- */
-export type DspyOptimizerChoice = "mipro" | "gepa";
-
-export const DEFAULT_DSPY_OPTIMIZER_CHOICE: DspyOptimizerChoice = "mipro";
-
 export interface DspyOfflineOptimizerOptions {
 	readonly client: DspyOptimizerMCPClient;
 	readonly now?: () => Date;
 	/**
-	 * Tool name to invoke. Defaults to `optimize` (the Python placeholder
-	 * server's only tool). Exposed for forward-compat: Stage C may add a
-	 * second tool e.g. `optimize_v2` without breaking current callers.
+	 * Tool name to invoke. Defaults to `optimize` — the only tool the
+	 * Python optimizer server exposes after the GEPA-only refactor.
 	 *
-	 * 调用的工具名。默认 `optimize`（占位服务唯一工具）。预留给 Stage C
-	 * 可能新增 `optimize_v2` 时不破坏当前调用方。
+	 * 调用的工具名。默认 `optimize` —— GEPA-only 重构后 optimizer server
+	 * 只暴露这一个工具。
 	 */
 	readonly toolName?: string;
-	/**
-	 * DSPy compiler choice. Defaults to `mipro` (MIPROv2). Forwarded as
-	 * the `optimizer_choice` arg to the Python `optimize` tool.
-	 *
-	 * DSPy 编译器选择。默认 `mipro` (MIPROv2)。
-	 * 通过 `optimizer_choice` 参数转发给 Python `optimize` 工具。
-	 */
-	readonly optimizerChoice?: DspyOptimizerChoice;
 }
 
 interface DspyToolPayload {
@@ -408,7 +384,6 @@ export class DspyOfflineOptimizer implements OfflineOptimizer {
 	private readonly client: DspyOptimizerMCPClient;
 	private readonly now: () => Date;
 	private readonly toolName: string;
-	private readonly optimizerChoice: DspyOptimizerChoice;
 
 	constructor(options: DspyOfflineOptimizerOptions) {
 		if (options.client == null) {
@@ -417,8 +392,6 @@ export class DspyOfflineOptimizer implements OfflineOptimizer {
 		this.client = options.client;
 		this.now = options.now ?? (() => new Date());
 		this.toolName = options.toolName ?? DSPY_OPTIMIZE_TOOL_NAME;
-		this.optimizerChoice =
-			options.optimizerChoice ?? DEFAULT_DSPY_OPTIMIZER_CHOICE;
 	}
 
 	async optimize(
@@ -452,7 +425,6 @@ export class DspyOfflineOptimizer implements OfflineOptimizer {
 			trajectories: trajectoriesPayload,
 			failure_categories: failureCategories,
 			dry_run: input.dryRun === true,
-			optimizer_choice: this.optimizerChoice,
 		};
 
 		let raw: string;

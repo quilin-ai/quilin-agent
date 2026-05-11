@@ -1,32 +1,21 @@
 [project]
 name = "quilin-optimizer"
 version = "0.0.2"
-description = "Quilin offline optimizer — DSPy/GEPA-backed MCP server (Stage C: real integration with lazy import + graceful degrade)"
+description = "Quilin offline optimizer — DSPy/GEPA MCP server (singular optimizer; MIPROv2 + PromptRewrite removed 2026-05-12)"
 requires-python = ">=3.14"
 dependencies = [
     "mcp[cli]>=1.27.0",
     "structlog>=25.5.0",
+    # DSPy + GEPA is the singular self-evolution optimizer; required at
+    # install time so the agent's self-evolution path works out of the box.
+    # GEPA was accepted at ICLR 2026 (Oral) and is DSPy's recommended SOTA
+    # optimizer. MIPROv2 (the prior alternative compiler) and the TS
+    # PromptRewrite heuristic were removed 2026-05-12 — see
+    # docs/10-self-evolution/README.md §2.4 for the decision rationale.
+    "dspy-ai>=2.5",
 ]
 
-# IMPORTANT: dspy-ai is OPT-IN via the `dspy` extra. The default install MUST
-# NOT pull dspy-ai (heavy dep tree: torch/litellm/optuna/...). The optimizer
-# server imports `dspy` lazily inside the `optimize` tool body so a missing
-# extra produces a structured "DSPy unavailable" warning instead of an
-# import-time crash.
-#
-# 关键约束：dspy-ai 通过 `dspy` extra 选装。默认安装不拉 dspy-ai
-# （依赖树包含 torch/litellm/optuna 等重型依赖）。server 在 `optimize` 工具
-# 内部 lazy import `dspy`，缺失 extra 时产生结构化告警，不会在导入期崩溃。
 [project.optional-dependencies]
-dspy = [
-    "dspy-ai>=2.5",
-    # MIPROv2 internally calls `optuna` for Bayesian instruction search;
-    # DSPy lists it as an optional extra (`dspy[optuna]`) but our
-    # graceful-degrade path can't surface "missing optuna" as nicely as
-    # "missing dspy-ai", so we pull it eagerly when the user opts into
-    # the dspy extra. Adds ~5 MB.
-    "optuna>=3.0",
-]
 dev = [
     "pytest>=9.0.3",
     "pytest-asyncio>=1.3.0",

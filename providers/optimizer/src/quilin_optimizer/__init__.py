@@ -1,23 +1,26 @@
 """Quilin offline optimizer MCP server — Stage C real DSPy integration.
 
-This package exposes a single MCP tool, ``optimize``, that runs a real
-DSPy compiler (``MIPROv2`` or ``GEPA``) over input trajectories. ``dspy-ai``
-is opt-in via the ``dspy`` extra; the server falls back to structured
-"DSPy unavailable" warnings when the extra is missing rather than crashing.
+This package exposes a single MCP tool, ``optimize``, that runs the
+**DSPy GEPA** compiler (Genetic-Pareto reflective prompt evolution; ICLR
+2026 Oral) over input trajectories. ``dspy-ai`` is a hard dependency
+required at install time. MIPROv2 (the prior alternative compiler) and
+the TS PromptRewrite heuristic were removed 2026-05-12 — see
+docs/10-self-evolution/README.md §2.4 for the decision rationale.
 
-本包暴露唯一的 MCP 工具 ``optimize``：在输入轨迹上跑真实 DSPy 编译器
-（``MIPROv2`` 或 ``GEPA``）。``dspy-ai`` 通过 ``dspy`` extra 选装；
-extra 缺失时返回结构化"DSPy unavailable"告警，不会让 server 崩溃。
+本包暴露唯一的 MCP 工具 ``optimize``：在输入轨迹上跑真实 DSPy **GEPA**
+编译器（Genetic-Pareto 反射式 prompt 进化；ICLR 2026 Oral）。
+``dspy-ai`` 是装包时的硬依赖。MIPROv2（原备选编译器）与 TS 端 PromptRewrite
+启发式于 2026-05-12 移除，决策依据见 docs/10-self-evolution/README.md §2.4。
 """
 
 from .server import (
-    DEFAULT_OPTIMIZER_CHOICE,
     JUDGE_MODE_DUMMY,
     JUDGE_MODE_LLM,
     MIN_TRAJECTORIES,
+    OPTIMIZER_DISPLAY,
     OPTIMIZER_ID,
+    OPTIMIZER_NAME,
     SCHEMA_VERSION,
-    SUPPORTED_OPTIMIZER_CHOICES,
     OptimizerConfig,
     OptimizerOperationError,
     create_server,
@@ -26,13 +29,13 @@ from .server import (
 )
 
 __all__ = [
-    "DEFAULT_OPTIMIZER_CHOICE",
     "JUDGE_MODE_DUMMY",
     "JUDGE_MODE_LLM",
     "MIN_TRAJECTORIES",
+    "OPTIMIZER_DISPLAY",
     "OPTIMIZER_ID",
+    "OPTIMIZER_NAME",
     "SCHEMA_VERSION",
-    "SUPPORTED_OPTIMIZER_CHOICES",
     "OptimizerConfig",
     "OptimizerOperationError",
     "create_server",

@@ -307,11 +307,12 @@ export function harnessFromEntries(
 
 /**
  * Convert a benchmark entry into a `StoredTrajectoryRecord` so it can be fed
- * to the existing `OfflineOptimizer` pipeline (`PromptRewriteOptimizer`,
- * `DspyOfflineOptimizer`, etc.) without reshaping the optimizer interface.
+ * to the existing `OfflineOptimizer` pipeline (`DspyOfflineOptimizer`, or
+ * `PromptRewriteOptimizer` for bench-only baseline) without reshaping the
+ * optimizer interface.
  *
- * 把 benchmark 条目转换成 `StoredTrajectoryRecord`，方便复用现有
- * optimizer 管线（`PromptRewriteOptimizer`、`DspyOfflineOptimizer` 等）。
+ * 把 benchmark 条目转换成 `StoredTrajectoryRecord`，方便复用现有 optimizer
+ * 管线（`DspyOfflineOptimizer`；bench 内部 baseline 用 `PromptRewriteOptimizer`）。
  */
 export function entryToTrajectoryRecord(
 	entry: BenchmarkTrajectoryEntry,

@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import {
 	DspyOfflineOptimizer,
-	type DspyOptimizerChoice,
 	type DspyOptimizerMCPClient,
 } from "./dspy-offline-optimizer.js";
 import { analyzeTrajectoryFailures } from "./failure-analyzer.js";
@@ -39,7 +38,6 @@ export interface ArmResult {
 
 export interface ReportInput {
 	readonly baseline: ArmResult;
-	readonly mipro: ArmResult;
 	readonly gepa: ArmResult;
 	readonly trajectoryCount: number;
 	readonly seeds: number;
@@ -92,21 +90,18 @@ const FIX_DIRECTION_TEMPLATES: Readonly<Record<string, readonly string[]>> = {
 };
 
 /**
- * Mock DSPy MCP client. Returns proposals that simulate `MIPROv2` (~80%
- * full coverage) or `GEPA` (~70% full coverage) of the ground-truth fix
- * direction. Deterministic per (seed, choice). Used by the bench script
- * and the integration tests.
+ * Mock DSPy MCP client. Returns proposals simulating `GEPA` (~70%
+ * full coverage of the ground-truth fix direction). Deterministic per
+ * seed. Used by the bench script and the integration tests.
  *
- * Mock DSPy MCP client：模拟 `MIPROv2`（~80% 完全覆盖）/`GEPA`（~70% 完全
- * 覆盖）的地面真相修复方向输出。给定 (seed, choice) 完全确定。bench script
- * 与集成测试都使用它。
+ * Mock DSPy MCP client：模拟 `GEPA`（~70% 完全覆盖 ground-truth 修复方向）。
+ * 给定 seed 完全确定。bench script 与集成测试都使用它。
  */
 export function createMockDspyClient(
-	choice: DspyOptimizerChoice,
 	entries: readonly BenchmarkTrajectoryEntry[],
 	seed: number,
 ): DspyOptimizerMCPClient {
-	const fullCoverageRate = choice === "mipro" ? 0.8 : 0.7;
+	const fullCoverageRate = 0.7;
 	return {
 		async callTool(
 			name: string,
@@ -122,13 +117,13 @@ export function createMockDspyClient(
 			// to 1000 to give meaningful variance across seeds; the previous
 			// (seed * 17 + i * 31) mod 100 hash combined with category dedupe
 			// only fed ~5 trajectories per call AND repeated thresholds across
-			// seeds, so 3 mipro seeds produced identical numbers.
+			// seeds, so 3 seeds produced identical numbers.
 			//
 			// 注意（round-2 修复）：去掉了按类别去重 —— 我们希望每条 entry 都参与，
 			// 让 seed 乘子能够覆盖到完整样本。`(seed * 991 + i * 71) mod 1000`
 			// 使用两个与 1000 互质的质数，跨 seed 给出可观察的方差；之前的
 			// `(seed * 17 + i * 31) mod 100` 加上类别去重，每次只喂 ~5 条
-			// trajectory，且阈值上映射重复值，最终 3 个 mipro seed 输出完全相同。
+			// trajectory，且阈值上映射重复值，最终 3 个 seed 输出完全相同。
 			// Build a list of "wrong-category" template strings so the
 			// `!fullCoverage` branch picks guidance that does NOT cover the
 			// entry's ground-truth keywords. Without this, the same-category
@@ -169,18 +164,18 @@ export function createMockDspyClient(
 							? ((FIX_DIRECTION_TEMPLATES[entry.category] ?? [])[0] ?? "")
 							: (others[seedHash % others.length] ?? "");
 				}
-				const summary = `${name}/${choice} guidance for ${entry.category}: ${guidance}`;
+				const summary = `${name}/gepa guidance for ${entry.category}: ${guidance}`;
 				proposals.push({
-					title: `${choice.toUpperCase()} candidate for ${entry.category}`,
+					title: `GEPA candidate for ${entry.category}`,
 					summary,
 					artifacts: [
 						{
 							artifactId: `artifact:${entry.category}-${i}`,
 							kind: "markdown",
-							title: `${choice} guidance — ${entry.category}`,
+							title: `gepa guidance — ${entry.category}`,
 							content: `# guidance\n\n${guidance}\n\nfailure: ${entry.failure_signal}`,
 							contentHash: createHash("sha256")
-								.update(`${entry.category}-${i}-${seed}-${choice}`)
+								.update(`${entry.category}-${i}-${seed}-gepa`)
 								.digest("hex"),
 							sourceRefs: [ref],
 						},
@@ -188,7 +183,7 @@ export function createMockDspyClient(
 					evidenceHashes: [],
 					riskPreview: {
 						level: "low",
-						reasons: [`mock ${choice} run`],
+						reasons: ["mock gepa run"],
 						touchesRuntime: false,
 						requiresHumanReview: true,
 					},
@@ -196,7 +191,7 @@ export function createMockDspyClient(
 			}
 			return JSON.stringify({
 				schema_version: 1,
-				optimizer_id: `dspy-${choice}-mock`,
+				optimizer_id: "dspy-gepa-mock",
 				mode: "prompt_rewrite",
 				created_at: new Date().toISOString(),
 				proposals: proposals.map((p) => ({
@@ -245,13 +240,11 @@ export async function runBaselineArm(
 
 export async function runDspyArm(
 	entries: readonly BenchmarkTrajectoryEntry[],
-	choice: DspyOptimizerChoice,
 	seed: number,
 ): Promise<BenchmarkResult> {
-	const client = createMockDspyClient(choice, entries, seed);
+	const client = createMockDspyClient(entries, seed);
 	const optimizer = new DspyOfflineOptimizer({
 		client,
-		optimizerChoice: choice,
 		now: () =>
 			new Date(
 				// Round-2 fix: use padStart so the hours field is two digits, and
@@ -408,48 +401,49 @@ export function decisionFor(lift: number): {
 	readonly bucket: string;
 	readonly recommendation: string;
 } {
+	// Decision-ladder strings are kept as informational signals only.
+	// Post 2026-05-12 GEPA-only refactor the *picking* decision is closed
+	// (GEPA is the singular optimizer per
+	// docs/10-self-evolution/README.md §2.4); this bench now measures the
+	// *size* of GEPA's contribution rather than choosing among
+	// alternatives.
 	if (lift >= 0.3) {
 		return {
 			bucket: "lift ≥ 30%",
 			recommendation:
-				"Make DSPy the default optimizer; PromptRewrite stays as fallback. 把 DSPy 设为默认 optimizer，PromptRewrite 作为 fallback 保留。",
+				"GEPA lift exceeds 30% — strong contribution on this dataset. GEPA 贡献显著（lift ≥ 30%）。",
 		};
 	}
 	if (lift >= 0.1) {
 		return {
 			bucket: "10% ≤ lift < 30%",
 			recommendation:
-				"DSPy stays opt-in; default remains PromptRewrite. DSPy 仍保持 opt-in，默认仍是 PromptRewrite。",
+				"GEPA lift in the moderate 10–30% band. GEPA 贡献中等（10% ≤ lift < 30%）。",
 		};
 	}
 	return {
 		bucket: "lift < 10%",
 		recommendation:
-			"Trigger Stage E follow-up — evaluate Trace optimizer / OPRO / PromptBreeder alternatives. 触发 Stage E follow-up，评估 Trace optimizer / OPRO / PromptBreeder 等替代算法。",
+			"GEPA lift below 10% — investigate whether the scoring metric or dataset is masking signal (see §2.4 historical bench-judge-sensitivity context). GEPA lift 低于 10% —— 检查评分指标或数据集是否压制了信号（参见 §2.4 历史 bench 评委敏感性背景）。",
 	};
 }
 
 export function renderReport(input: ReportInput): string {
-	const liftMipro = relativeLift(
-		input.baseline.meanFailureRate,
-		input.mipro.meanFailureRate,
-	);
 	const liftGepa = relativeLift(
 		input.baseline.meanFailureRate,
 		input.gepa.meanFailureRate,
 	);
-	const bestLift = Math.max(liftMipro, liftGepa);
-	const decision = decisionFor(bestLift);
+	const decision = decisionFor(liftGepa);
 	const lines: string[] = [];
 
-	lines.push("# Stage D — DSPy Validation Report (QUI-147)");
+	lines.push("# Stage D — DSPy GEPA Validation Report (QUI-147)");
 	lines.push("");
 	lines.push(
-		"> ⚠️ **MOCKED BENCHMARK DISCLOSURE** — This report is generated from a fully mocked benchmark run. No real LLM was invoked; DSPy MIPROv2 / GEPA arms use a deterministic mock MCP client that simulates ~80% (MIPRO) / ~70% (GEPA) ground-truth keyword coverage. Replay scoring uses keyword-overlap heuristics, not full agent re-execution. Numbers below are illustrative of the harness wiring, not production validation. Real-LLM benchmarking is deferred to a follow-up task.",
+		"> ⚠️ **MOCKED BENCHMARK DISCLOSURE** — This report is generated from a fully mocked benchmark run. No real LLM was invoked; the DSPy GEPA arm uses a deterministic mock MCP client that simulates ~70% ground-truth keyword coverage. Replay scoring uses keyword-overlap heuristics, not full agent re-execution. Numbers below are illustrative of the harness wiring, not production validation. Real-LLM benchmarking lives in `scripts/bench-real-dspy.py`.",
 	);
 	lines.push("");
 	lines.push(
-		"> ⚠️ **MOCK 数据声明** —— 本报告基于完全 mock 的 benchmark 运行。没有调用真实 LLM；DSPy MIPROv2 / GEPA 通路使用确定性 mock MCP client（MIPRO 模拟 ~80%，GEPA ~70% 地面真相关键字覆盖率）。Replay 评分用关键字重叠启发式，没有完整重跑 agent。下方数字仅展示 harness 接线是否正确，不能代表生产级验证。真实 LLM benchmarking 推后到 follow-up 任务。",
+		"> ⚠️ **MOCK 数据声明** —— 本报告基于完全 mock 的 benchmark 运行。没有调用真实 LLM；DSPy GEPA 通路使用确定性 mock MCP client（模拟 ~70% 地面真相关键字覆盖率）。Replay 评分用关键字重叠启发式，没有完整重跑 agent。下方数字仅展示 harness 接线是否正确，不能代表生产级验证。真实 LLM benchmark 在 `scripts/bench-real-dspy.py`。",
 	);
 	lines.push("");
 	lines.push("## Reproducibility / 可复现性");
@@ -465,7 +459,7 @@ export function renderReport(input: ReportInput): string {
 		"| Arm | Mean failure rate | 95% CI (Wilson) | Per-seed failure rates |",
 	);
 	lines.push("|---|---|---|---|");
-	for (const arm of [input.baseline, input.mipro, input.gepa]) {
+	for (const arm of [input.baseline, input.gepa]) {
 		const ci = `[${fmtPercent(arm.wilsonLower)}, ${fmtPercent(
 			arm.wilsonUpper,
 		)}]`;
@@ -481,7 +475,7 @@ export function renderReport(input: ReportInput): string {
 	);
 	lines.push("");
 	lines.push("```");
-	for (const arm of [input.baseline, input.mipro, input.gepa]) {
+	for (const arm of [input.baseline, input.gepa]) {
 		lines.push(
 			`${arm.label.padEnd(28)} | ${asciiBar(arm.meanFailureRate)} ${fmtPercent(
 				arm.meanFailureRate,
@@ -494,15 +488,11 @@ export function renderReport(input: ReportInput): string {
 	lines.push("## Lift summary / Lift 总结");
 	lines.push("");
 	lines.push(
-		`- Lift (MIPROv2 vs baseline): ${fmtPercent(liftMipro)} relative failure-rate reduction`,
-	);
-	lines.push(
 		`- Lift (GEPA vs baseline): ${fmtPercent(liftGepa)} relative failure-rate reduction`,
 	);
-	lines.push(`- Best arm lift: ${fmtPercent(bestLift)}`);
 	lines.push("");
 	lines.push(
-		`Lift（MIPROv2 vs baseline）：${fmtPercent(liftMipro)} 相对失败率降幅；Lift（GEPA vs baseline）：${fmtPercent(liftGepa)} 相对失败率降幅。最优 arm lift = ${fmtPercent(bestLift)}。`,
+		`Lift（GEPA vs baseline）：${fmtPercent(liftGepa)} 相对失败率降幅。`,
 	);
 	lines.push("");
 
@@ -515,11 +505,11 @@ export function renderReport(input: ReportInput): string {
 		"missing_evidence",
 		"unknown",
 	];
-	lines.push("| Category | baseline | MIPROv2 | GEPA |");
-	lines.push("|---|---|---|---|");
+	lines.push("| Category | baseline | GEPA |");
+	lines.push("|---|---|---|");
 	for (const category of categories) {
 		lines.push(
-			`| ${category} | ${fmtPercent(input.baseline.perCategory[category])} | ${fmtPercent(input.mipro.perCategory[category])} | ${fmtPercent(input.gepa.perCategory[category])} |`,
+			`| ${category} | ${fmtPercent(input.baseline.perCategory[category])} | ${fmtPercent(input.gepa.perCategory[category])} |`,
 		);
 	}
 	lines.push("");
@@ -540,7 +530,7 @@ export function renderReport(input: ReportInput): string {
 	lines.push("## Caveats / 限制说明");
 	lines.push("");
 	lines.push(
-		"- Mock arms are deterministic and intentionally skewed in favor of MIPROv2 / GEPA to verify the harness math; real DSPy lift may be lower or higher.",
+		"- The mock GEPA arm is deterministic and intentionally skewed in favor of GEPA to verify the harness math; real DSPy lift may be lower or higher.",
 	);
 	lines.push(
 		"- Replay scoring is keyword-overlap based; it does not re-execute the agent loop end-to-end.",
@@ -550,7 +540,7 @@ export function renderReport(input: ReportInput): string {
 	);
 	lines.push("");
 	lines.push(
-		"- Mock arm 是确定性的并刻意偏向 MIPROv2 / GEPA，仅用于验证 harness 数学；真实 DSPy lift 会更低或更高。",
+		"- Mock GEPA arm 是确定性的并刻意偏向 GEPA，仅用于验证 harness 数学；真实 DSPy lift 会更低或更高。",
 	);
 	lines.push("- Replay 评分基于关键字重叠，不会端到端重跑 agent loop。");
 	lines.push("- 数据集是合成的（50 条）—— 生产级验证需要真实 prod trace。");

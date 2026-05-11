@@ -1133,34 +1133,25 @@ export async function main(options: MainOptions = {}): Promise<void> {
 			dataRoot: selfEvolutionDataRoot,
 			filePath: "proposals.jsonl",
 		});
-		// Optimizer choice is opt-in via user.toml [self_evolution] optimizer.
-		// Default `prompt_rewrite` keeps existing behavior; `dspy` resolves
-		// the MCP client lazily through `mcpRegistryRef`, populated by
-		// `onRuntimeReady` once `startRepl` constructs `MCPRegistry` and
-		// `syncRuntimeSurface` registers `quilin-optimizer`. When a user
-		// opts into `dspy` but the optimizer entry is absent from the loaded
-		// capabilities config (no provider dir, no judge API key),
+		// Optimizer choice is configured via user.toml [self_evolution] optimizer.
+		// Default `dspy` resolves the MCP client lazily through `mcpRegistryRef`,
+		// populated by `onRuntimeReady` once `startRepl` constructs
+		// `MCPRegistry` and `syncRuntimeSurface` registers `quilin-optimizer`.
+		// When the optimizer entry is absent from the loaded capabilities config
+		// (no provider dir, no judge API key),
 		// `buildDspyClientFactoryFromRegistryRef` returns `undefined` and
-		// `createOfflineOptimizer` falls back to PromptRewrite with a warn
-		// log — preserving self-evolution rather than crashing.
+		// `createOfflineOptimizer` falls back to noop with a warn log —
+		// preserving agent startup rather than crashing.
 		//
-		// 离线优化器选择通过 user.toml `[self_evolution] optimizer` 显式 opt-in。
-		// 默认 `prompt_rewrite` 保持现有行为；`dspy` 通过 `mcpRegistryRef`
-		// 懒查询 MCP client，registry 在 `onRuntimeReady` 触发后由 `startRepl`
-		// 填充，`syncRuntimeSurface` 完成 `quilin-optimizer` 注册。用户选择
-		// `dspy` 但 capabilities config 没有 optimizer entry（缺 provider
-		// 目录或 judge API key）时，`buildDspyClientFactoryFromRegistryRef`
-		// 返回 `undefined`，`createOfflineOptimizer` 退化到 PromptRewrite
-		// 并记录 warn——保留 self-evolution 而不是直接崩。
+		// 离线优化器通过 user.toml `[self_evolution] optimizer` 配置。默认 `dspy`
+		// 通过 `mcpRegistryRef` 懒查询 MCP client，registry 在 `onRuntimeReady`
+		// 触发后由 `startRepl` 填充，`syncRuntimeSurface` 完成 `quilin-optimizer`
+		// 注册。capabilities config 没有 optimizer entry 时（缺 provider 目录或
+		// judge API key），`buildDspyClientFactoryFromRegistryRef` 返回 `undefined`，
 		//
-		// `optimizer_choice` (mipro / gepa) 是 dspy 通路的二级选项，
-		// 转发给 Python `optimize` 工具决定使用哪个 DSPy 编译器。
-		// `optimizer_choice` (mipro / gepa) is the second-level option for the
-		// dspy path; forwarded to the Python `optimize` tool to pick which
-		// DSPy compiler runs.
+		// GEPA-only refactor (2026-05-12): `optimizer_choice`
+		// (mipro/gepa) field removed; GEPA is the singular DSPy compiler.
 		const optimizerChoice = userRuntime.result.config.self_evolution.optimizer;
-		const dspyOptimizerChoice =
-			userRuntime.result.config.self_evolution.optimizer_choice;
 		const mcpRegistryRef: MCPRegistryRef = {};
 		const dspyClientFactory = buildDspyClientFactoryFromRegistryRef({
 			registryRef: mcpRegistryRef,
@@ -1178,14 +1169,12 @@ export async function main(options: MainOptions = {}): Promise<void> {
 			proposalStore,
 			optimizer: createOfflineOptimizer({
 				choice: optimizerChoice,
-				dspyOptimizerChoice,
 				...(dspyClientFactory == null ? {} : { dspyClientFactory }),
 			}),
 		});
 		logger.info(
 			{
 				optimizerChoice,
-				dspyOptimizerChoice,
 				dspyClientFactoryWired: dspyClientFactory != null,
 			},
 			"Self-evolution engine online",

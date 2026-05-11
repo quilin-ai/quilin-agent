@@ -10,7 +10,7 @@ import {
 import { DSPY_OFFLINE_OPTIMIZER_ID } from "./dspy-offline-optimizer.js";
 import { IdleEvolutionRunner } from "./idle-runner.js";
 import { createOfflineOptimizer } from "./optimizer-factory.js";
-import { PromptRewriteOptimizer } from "./prompt-rewrite-optimizer.js";
+import { LocalNoopOfflineOptimizer } from "./offline-optimizer.js";
 import type {
 	FailureAnalysis,
 	OptimizationProposalDraft,
@@ -207,7 +207,10 @@ describe("createOfflineOptimizer + dspy-client-factory wiring", () => {
 		expect(optimizer.optimizerId).toBe(DSPY_OFFLINE_OPTIMIZER_ID);
 	});
 
-	it("falls back to PromptRewriteOptimizer when choice=dspy but registry has no quilin-optimizer entry", () => {
+	it("falls back to LocalNoopOfflineOptimizer when choice=dspy but registry has no quilin-optimizer entry", () => {
+		// Post 2026-05-12 refactor: the fallback path is `noop`, not the
+		// deleted `PromptRewriteOptimizer`. Users get a clear warning log
+		// and no proposals until they wire the MCP server.
 		const ref: MCPRegistryRef = {};
 		const dspyClientFactory = buildDspyClientFactoryFromRegistryRef({
 			registryRef: ref,
@@ -218,7 +221,7 @@ describe("createOfflineOptimizer + dspy-client-factory wiring", () => {
 			choice: "dspy",
 			...(dspyClientFactory == null ? {} : { dspyClientFactory }),
 		});
-		expect(optimizer).toBeInstanceOf(PromptRewriteOptimizer);
+		expect(optimizer).toBeInstanceOf(LocalNoopOfflineOptimizer);
 	});
 });
 

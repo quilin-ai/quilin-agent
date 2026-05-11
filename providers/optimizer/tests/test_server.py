@@ -184,26 +184,6 @@ async def test_optimize_rejects_overlong_string_field() -> None:
 
 
 @pytest.mark.asyncio
-async def test_optimize_rejects_invalid_optimizer_choice() -> None:
-    with pytest.raises(OptimizerOperationError, match="optimizer_choice must be one of"):
-        await optimize(
-            trajectories=[{"trajectoryRef": "t", "runId": "r"}],
-            failure_categories=["tool_error"],
-            optimizer_choice="random_invalid_choice",
-        )
-
-
-@pytest.mark.asyncio
-async def test_optimize_rejects_non_string_optimizer_choice() -> None:
-    with pytest.raises(OptimizerOperationError, match="optimizer_choice must be a string"):
-        await optimize(
-            trajectories=[{"trajectoryRef": "t", "runId": "r"}],
-            failure_categories=["tool_error"],
-            optimizer_choice=123,
-        )
-
-
-@pytest.mark.asyncio
 async def test_optimize_wraps_unexpected_errors_as_operation_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -262,6 +242,9 @@ async def test_optimize_with_no_judge_key_returns_insufficient_signal(
     fake_dspy = types.ModuleType("dspy")
     monkeypatch.setitem(sys.modules, "dspy", fake_dspy)
 
+    # Lock JUDGE_MODE=llm so the .env-loaded "dummy" default (LiteLLM
+    # auto-loads .env at import time) doesn't bypass the api-key gate.
+    monkeypatch.setenv("QUILIN_OPTIMIZER_JUDGE_MODE", "llm")
     monkeypatch.delenv("QUILIN_OPTIMIZER_JUDGE_API_KEY", raising=False)
     monkeypatch.delenv("QUILIN_OPTIMIZER_JUDGE_MODEL", raising=False)
     monkeypatch.delenv("QUILIN_OPTIMIZER_JUDGE_BASE_URL", raising=False)

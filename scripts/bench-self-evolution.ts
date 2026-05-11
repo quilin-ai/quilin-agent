@@ -42,12 +42,12 @@ const DEFAULT_REPORT = "docs/10-self-evolution/dspy-validation-report.md";
 
 const USAGE = `Usage: bun run scripts/bench-self-evolution.ts [options]
 
-Stage D — DSPy benchmark validation script (QUI-147). Runs the 3-arm
-benchmark (PromptRewrite baseline + DSPy MIPROv2 mock + DSPy GEPA mock)
+Stage D — DSPy GEPA benchmark validation script (QUI-147). Runs the
+2-arm benchmark (PromptRewrite bench-only baseline + DSPy GEPA mock)
 on the labeled trajectories corpus and writes a markdown report.
 
-Stage D（QUI-147）DSPy 验证脚本，跑 3-arm benchmark（PromptRewrite
-baseline + DSPy MIPROv2 mock + DSPy GEPA mock），输出 markdown 报告。
+Stage D（QUI-147）DSPy GEPA 验证脚本，跑 2-arm benchmark（PromptRewrite
+bench-only baseline + DSPy GEPA mock），输出 markdown 报告。
 
 Options:
   --trajectories <path>   JSONL trajectories file (default: ${DEFAULT_TRAJ})
@@ -158,25 +158,19 @@ async function main(): Promise<void> {
 	}
 
 	const baseline = await runArmWithSeeds(
-		"PromptRewrite (baseline)",
+		"PromptRewrite (bench-only baseline)",
 		(seed) => runBaselineArm(harness.entries, seed),
-		options.seeds,
-	);
-	const mipro = await runArmWithSeeds(
-		"DSPy + MIPROv2 (mocked)",
-		(seed) => runDspyArm(harness.entries, "mipro", seed),
 		options.seeds,
 	);
 	const gepa = await runArmWithSeeds(
 		"DSPy + GEPA (mocked)",
-		(seed) => runDspyArm(harness.entries, "gepa", seed),
+		(seed) => runDspyArm(harness.entries, seed),
 		options.seeds,
 	);
 
 	const datasetHash = await getDatasetHash(trajectoriesAbsPath);
 	const report = renderReport({
 		baseline,
-		mipro,
 		gepa,
 		trajectoryCount: harness.entries.length,
 		seeds: options.seeds,
@@ -188,9 +182,7 @@ async function main(): Promise<void> {
 	await writeFile(reportAbsPath, report, "utf-8");
 	console.log(`bench-self-evolution: report written to ${reportAbsPath}`);
 	console.log(
-		`bench-self-evolution: baseline=${fmtPercent(baseline.meanFailureRate)} mipro=${fmtPercent(
-			mipro.meanFailureRate,
-		)} gepa=${fmtPercent(gepa.meanFailureRate)}`,
+		`bench-self-evolution: baseline=${fmtPercent(baseline.meanFailureRate)} gepa=${fmtPercent(gepa.meanFailureRate)}`,
 	);
 }
 

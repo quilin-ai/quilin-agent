@@ -22,7 +22,14 @@ describe("buildFirstRunOnboardingPlan", () => {
 
 		expect(plan.firstRun).toBe(true);
 		expect(plan.ready).toBe(false);
-		expect(plan.requiredStepIds).toEqual(["provider", "safety", "review"]);
+		// self_evolution is now required by default (dspy is the singular
+		// optimizer post 2026-05-12 refactor; needs MCP server + judge LM).
+		expect(plan.requiredStepIds).toEqual([
+			"provider",
+			"self_evolution",
+			"safety",
+			"review",
+		]);
 		expect(plan.redactedConfigSummary.llm.providers).toEqual(["deepseek"]);
 		// Real assertion: the secret VALUE never appears in plan output.
 		// The env var NAME (DEEPSEEK_API_KEY) is fine to mention — users
@@ -38,6 +45,13 @@ describe("buildFirstRunOnboardingPlan", () => {
 					command: "uv",
 					args: ["run", "python", "-m", "quilin_mem"],
 					namespace: "quilin-mem",
+				},
+				// quilin-optimizer (DSPy GEPA backend) registered so self_evolution
+				// step reaches the wired-and-judge-LM-available terminal "complete"
+				// status. Default optimizer = "dspy" after the 2026-05-12 refactor.
+				"quilin-optimizer": {
+					command: "uv",
+					args: ["run", "python", "-m", "quilin_optimizer"],
 				},
 			},
 			skills: {
@@ -58,6 +72,10 @@ describe("buildFirstRunOnboardingPlan", () => {
 			providerMatrix: buildProviderLiveMatrix(undefined, {
 				env: { DEEPSEEK_API_KEY: "redacted-in-tests" },
 			}),
+			env: {
+				DEEPSEEK_API_KEY: "redacted-in-tests",
+				QUILIN_OPTIMIZER_JUDGE_API_KEY: "sk-judge-redacted",
+			},
 		});
 
 		expect(plan.steps.map((step) => [step.id, step.status])).toEqual([
@@ -182,7 +200,11 @@ describe("buildFirstRunOnboardingPlan", () => {
 
 	// Self-evolution optimizer first-run visibility.
 
-	it("self-evolution step surfaces prompt_rewrite default + upgrade path to DSPy", async () => {
+	it("self-evolution step escalates to required for default dspy when nothing is wired", async () => {
+		// Post 2026-05-12 refactor: `optimizer = "dspy"` is the default; with
+		// no MCP server registered and no judge LM env, the step lands in
+		// "required" (the user must wire either the MCP server + judge key,
+		// or fall back to `optimizer = "noop"`).
 		const userConfig = await loadUserConfig({
 			configPath: "/tmp/quilin-missing-config.toml",
 			env: {},
@@ -194,11 +216,11 @@ describe("buildFirstRunOnboardingPlan", () => {
 		});
 
 		const se = plan.steps.find((step) => step.id === "self_evolution");
-		expect(se?.status).toBe("complete");
-		expect(se?.summary).toContain("prompt_rewrite");
-		expect(se?.actions.some((a) => a.includes("To upgrade to real DSPy"))).toBe(
-			true,
-		);
+		expect(se?.status).toBe("required");
+		expect(se?.summary).toContain("dspy (GEPA)");
+		expect(
+			se?.actions.some((a) => a.includes("self_evolution.optimizer")),
+		).toBe(true);
 	});
 
 	it("self-evolution step escalates to required when dspy is selected but quilin-optimizer MCP is missing", async () => {
@@ -280,7 +302,7 @@ describe("buildFirstRunOnboardingPlan", () => {
 			configPath: "/tmp/quilin-missing-config.toml",
 			env: {},
 			cliOverrides: {
-				self_evolution: { optimizer: "dspy", optimizer_choice: "gepa" },
+				self_evolution: { optimizer: "dspy" },
 			},
 		});
 		const plan = buildFirstRunOnboardingPlan({
@@ -292,7 +314,7 @@ describe("buildFirstRunOnboardingPlan", () => {
 
 		const se = plan.steps.find((step) => step.id === "self_evolution");
 		expect(se?.status).toBe("complete");
-		expect(se?.summary).toContain("dspy (gepa)");
+		expect(se?.summary).toContain("dspy (GEPA)");
 		expect(se?.summary).toContain("DummyLM");
 	});
 

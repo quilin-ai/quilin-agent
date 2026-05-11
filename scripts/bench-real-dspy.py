@@ -1,9 +1,17 @@
-"""Stage D real-DSPy benchmark (QUI-147 follow-up).
+"""Stage D real-DSPy GEPA benchmark (QUI-147 follow-up).
 
-Runs the same 3-arm A/B harness as ``scripts/bench-self-evolution.ts``
-``--mode mock`` BUT against the **real** ``providers/optimizer``
-``optimize()`` tool, so the DSPy compile loop actually executes
-(MIPROv2's Bayesian search, GEPA's genetic-pareto rollouts).
+Runs a **2-arm A/B harness** against the **real** ``providers/optimizer``
+``optimize()`` tool, so the DSPy GEPA compile loop (Genetic-Pareto
+reflective prompt evolution; ICLR 2026 Oral) actually executes.
+
+The two arms are:
+
+- ``PromptRewrite (bench-only baseline)``: deterministic per-category
+  heuristic mirror of the legacy TS PromptRewriteOptimizer. Kept as
+  bench-internal infrastructure ONLY — it was removed as a user-config
+  optimizer choice on 2026-05-12 (see
+  ``docs/10-self-evolution/README.md`` §2.4).
+- ``DSPy + GEPA``: the singular production optimizer.
 
 Two judge-LM modes (``--mode`` flag):
 
@@ -15,19 +23,26 @@ Two judge-LM modes (``--mode`` flag):
   the per-run cost. Reports to
   ``docs/10-self-evolution/dspy-validation-report-real-llm.md``.
 
-The TS bench (mock mode) verifies harness math; this Python bench
-verifies real DSPy code path. Two scripts are kept for separation:
+The TS bench (``scripts/bench-self-evolution.ts``, mock mode) verifies
+harness math; this Python bench verifies real DSPy code path. Two
+scripts are kept for separation:
 
 - TS mock: zero deps, fast, deterministic — runs in CI on every change.
-- Python real: opt-in, requires ``uv sync --extra dspy``, exercises
-  actual DSPy compilers — run before report-update commits.
+- Python real: requires ``dspy-ai`` (now a hard dep of
+  ``providers/optimizer``), exercises the real DSPy compiler.
 
-Stage D real-DSPy benchmark（QUI-147 follow-up）。
+Stage D real-DSPy GEPA benchmark（QUI-147 follow-up）。
 
-跑与 ``scripts/bench-self-evolution.ts --mode mock`` 同一个 3-arm A/B
-框架，但调真实的 ``providers/optimizer`` ``optimize()`` 工具，让 DSPy
-compile loop 真跑起来（MIPROv2 的 Bayesian 搜索、GEPA 的 genetic-pareto
-rollouts）。
+跑 **2-arm A/B 框架**，调真实的 ``providers/optimizer`` ``optimize()`` 工具，
+让 DSPy GEPA（Genetic-Pareto 反射式 prompt 进化；ICLR 2026 Oral）真跑起来。
+
+两个 arm：
+
+- ``PromptRewrite (bench-only baseline)``：确定性 per-category 启发式，
+  镜像旧的 TS ``PromptRewriteOptimizer`` 逻辑。**只作为 bench 内部基础设施**
+  保留，2026-05-12 已从用户可选 optimizer 中删除（见
+  ``docs/10-self-evolution/README.md`` §2.4）。
+- ``DSPy + GEPA``：生产唯一 optimizer。
 
 通过 ``--mode`` 切换 judge LM：
 
@@ -37,11 +52,12 @@ rollouts）。
   需要 ``--confirm-real-llm-cost`` 显式确认烧钱。报告写到
   ``dspy-validation-report-real-llm.md``。
 
-TS bench（mock 模式）验证 harness 数学；本 Python bench 验证真实 DSPy
-代码路径。两个脚本分离保留，分工不同。
+TS bench（``scripts/bench-self-evolution.ts``，mock 模式）验证 harness
+数学；本 Python bench 验证真实 DSPy 代码路径。两个脚本分离保留，分工不同。
 
 Usage:
-    cd providers/optimizer && uv sync --extra dspy --extra dev
+    # `dspy-ai` is now a hard dep of providers/optimizer — `uv sync`
+    # in providers/optimizer (no `--extra`) pulls it.
     # Dummy mode (no cost, validates wiring):
     uv --directory providers/optimizer run python \\
         ../../scripts/bench-real-dspy.py --seeds 3
@@ -219,16 +235,15 @@ def _trajectory_to_optimize_input(traj: Trajectory) -> dict[str, object]:
 async def dspy_arm_proposal(
     optimize_fn,
     trajectories: list[Trajectory],
-    optimizer_choice: str,
 ) -> str:
-    """Call optimize() once across the trajectory cluster, extract the
-    optimized prompt from the returned proposal.
+    """Call optimize() once across the trajectory cluster (GEPA implicit
+    post 2026-05-12), extract the optimized prompt from the returned
+    proposal.
 
     Returns empty string on graceful-degradation paths so the scorer
     treats DSPy as "no useful proposal" rather than crashing.
     """
     payload = await optimize_fn(
-        optimizer_choice=optimizer_choice,
         trajectories=[_trajectory_to_optimize_input(t) for t in trajectories],
         failure_categories=sorted({t.category for t in trajectories}),
         dry_run=False,
@@ -297,11 +312,11 @@ async def run_seed_arm(
     trajectories: list[Trajectory],
     seed: int,
     *,
-    optimizer_choice: str | None = None,
+    is_dspy_arm: bool = False,
 ) -> ArmResult:
     """Score every trajectory for one arm × one seed.
 
-    For DSPy arms we call optimize() ONCE per seed (the optimizer
+    For the DSPy GEPA arm we call optimize() ONCE per seed (the optimizer
     consumes the whole training set), then score each trajectory's
     ground-truth against the single emitted proposal. For baseline we
     pick the per-category heuristic.
@@ -309,7 +324,7 @@ async def run_seed_arm(
     result = ArmResult(arm=arm_name)
     os.environ["QUILIN_OPTIMIZER_SEED"] = str(seed)  # passes through to compile
 
-    if optimizer_choice is None:
+    if not is_dspy_arm:
         # Baseline arm — per-category heuristic, no LM call.
         for traj in trajectories:
             candidate = baseline_arm_proposal(traj.category)
@@ -317,7 +332,7 @@ async def run_seed_arm(
             _record(result, traj.category, outcome)
         return result
 
-    proposal_text = await dspy_arm_proposal(optimize_fn, trajectories, optimizer_choice)
+    proposal_text = await dspy_arm_proposal(optimize_fn, trajectories)
     for traj in trajectories:
         outcome = passes(proposal_text, traj.ground_truth_fix_direction)
         _record(result, traj.category, outcome)
@@ -423,12 +438,14 @@ def render_report(
 ) -> str:
     baseline = next(a for a in aggregates if "baseline" in a.arm.lower())
     arms_lookup = {a.arm: a for a in aggregates}
-    mipro = arms_lookup.get("DSPy + MIPROv2")
     gepa = arms_lookup.get("DSPy + GEPA")
 
-    lift_mipro = relative_lift(baseline.pooled_failure_rate, mipro.pooled_failure_rate) if mipro else 0.0
-    lift_gepa = relative_lift(baseline.pooled_failure_rate, gepa.pooled_failure_rate) if gepa else 0.0
-    best_lift = max(lift_mipro, lift_gepa)
+    lift_gepa = (
+        relative_lift(baseline.pooled_failure_rate, gepa.pooled_failure_rate)
+        if gepa
+        else 0.0
+    )
+    best_lift = lift_gepa
 
     def bucket_for(lift: float) -> str:
         if lift >= 0.30:
@@ -484,30 +501,39 @@ def render_report(
             "框架接线，正式决策需要真实 LLM bench。"
         )
     else:
+        # Decision-ladder strings are kept as informational signals only.
+        # Post 2026-05-12 GEPA-only refactor the *picking* decision is
+        # closed (GEPA is the singular optimizer per
+        # docs/10-self-evolution/README.md §2.4); this bench now measures
+        # the *size* of GEPA's contribution rather than choosing among
+        # alternatives. The bucket text still ladder-grades the lift for
+        # operator readability.
         decision_recommend = (
-            "DSPy default (lift ≥ 30% threshold met)" if best_lift >= 0.30
-            else "DSPy stays opt-in; default remains PromptRewrite. DSPy 仍保持 opt-in，默认仍是 PromptRewrite."
+            "GEPA lift exceeds 30% — strong contribution. GEPA 贡献显著（lift ≥ 30%）。"
+            if best_lift >= 0.30
+            else "GEPA lift in the moderate 10–30% band. GEPA 贡献中等（10% ≤ lift < 30%）。"
             if best_lift >= 0.10
-            else "Trigger Stage E follow-up (Trace optimizer / OPRO / PromptBreeder evaluation). 触发 Stage E follow-up 评估替代算法."
+            else "GEPA lift below 10% — investigate whether the scoring metric or dataset is masking signal (see §2.4 historical context for the keyword-overlap fragility). GEPA lift 低于 10% —— 检查评分指标或数据集是否压制了信号。"
         )
 
     if judge_mode == "dummy":
         banner_en = (
-            "✅ **REAL DSPy CODE PATH** — DSPy 3.2.1 actually invoked. Both "
-            "MIPROv2 (Bayesian instruction search via `optuna`) and GEPA "
-            "(Genetic-Pareto rollouts) execute their full compile loops. "
-            "Judge LM is `dspy.utils.DummyLM` (zero LLM cost, deterministic). "
-            "Real-LLM benchmarking remains user-initiated; this report exercises "
+            "✅ **REAL DSPy CODE PATH** — DSPy 3.2.1 actually invoked. The "
+            "GEPA compiler (Genetic-Pareto reflective prompt evolution; "
+            "ICLR 2026 Oral) executes its full compile loop. Judge LM is "
+            "`dspy.utils.DummyLM` (zero LLM cost, deterministic). Real-LLM "
+            "benchmarking remains user-initiated; this report exercises "
             "the real DSPy framework with a deterministic stub judge so "
             "`dspy_compile_starting` and the entire optimizer pipeline run "
             "in production-like conditions."
         )
         banner_zh = (
-            "✅ **真实 DSPy 代码路径** —— DSPy 3.2.1 真实调用。MIPROv2（基于 `optuna` "
-            "的 Bayesian instruction 搜索）与 GEPA（Genetic-Pareto rollouts）的完整 "
-            "compile loop 都在运行。Judge LM 用 `dspy.utils.DummyLM`（零 LLM 成本，"
-            "确定性）。真实 LLM benchmark 仍由用户触发；本报告用确定性 stub judge 让 "
-            "`dspy_compile_starting` 和整个 optimizer pipeline 在接近生产的条件下跑起来。"
+            "✅ **真实 DSPy 代码路径** —— DSPy 3.2.1 真实调用。GEPA 编译器"
+            "（Genetic-Pareto 反射式 prompt 进化；ICLR 2026 Oral）的完整 "
+            "compile loop 都在运行。Judge LM 用 `dspy.utils.DummyLM`（零 LLM "
+            "成本，确定性）。真实 LLM benchmark 仍由用户触发；本报告用确定性 "
+            "stub judge 让 `dspy_compile_starting` 和整个 optimizer pipeline "
+            "在接近生产的条件下跑起来。"
         )
         judge_mode_line = "`QUILIN_OPTIMIZER_JUDGE_MODE=dummy` → `dspy.utils.DummyLM`"
         caveats_block = (
@@ -524,16 +550,15 @@ def render_report(
     else:
         banner_en = (
             "🔥 **REAL LLM JUDGE** — DSPy 3.2.1 actually invoked with a real "
-            f"LLM judge (`{judge_model}`). MIPROv2 (Bayesian instruction search "
-            "via `optuna`) and GEPA (Genetic-Pareto rollouts) get **real "
+            f"LLM judge (`{judge_model}`). The GEPA compiler (Genetic-Pareto "
+            "reflective prompt evolution; ICLR 2026 Oral) gets **real "
             "semantic feedback** during compile — this is the canonical lift "
             "measurement, not a code-path smoke test."
         )
         banner_zh = (
             f"🔥 **真实 LLM 评委** —— DSPy 3.2.1 真实调用，judge 用真实 LLM（`{judge_model}`）。"
-            "MIPROv2（基于 `optuna` 的 Bayesian instruction 搜索）与 GEPA（Genetic-Pareto "
-            "rollouts）在 compile loop 中**获得真实语义反馈** —— 本次是 lift 的正式测量，"
-            "不再是代码路径冒烟测试。"
+            "GEPA 编译器（Genetic-Pareto 反射式 prompt 进化；ICLR 2026 Oral）在 compile "
+            "loop 中**获得真实语义反馈** —— 本次是 lift 的正式测量，不再是代码路径冒烟测试。"
         )
         judge_mode_line = f"`QUILIN_OPTIMIZER_JUDGE_MODE=llm` → real LLM (`{judge_model}`)"
         caveats_block = (
@@ -567,7 +592,8 @@ def render_report(
 - Pooled samples per arm: {trajectory_count * seeds}
 - Bench script: `scripts/bench-real-dspy.py`
 - Judge mode: {judge_mode_line}
-- DSPy version: 3.2.1 (with optuna)
+- DSPy version: 3.2.1
+- Optimizer: DSPy GEPA (singular post 2026-05-12; see README §2.4)
 
 ## Aggregate failure-rate table / 失败率聚合表
 
@@ -583,11 +609,9 @@ def render_report(
 
 ## Lift summary / Lift 总结
 
-- Lift (MIPROv2 vs baseline): {fmt_lift(lift_mipro)} relative failure-rate reduction
 - Lift (GEPA vs baseline): {fmt_lift(lift_gepa)} relative failure-rate reduction
-- Best arm lift: {fmt_lift(best_lift)}
 
-Lift（MIPROv2 vs baseline）：{fmt_lift(lift_mipro)} 相对失败率降幅；Lift（GEPA vs baseline）：{fmt_lift(lift_gepa)} 相对失败率降幅。最优 arm lift = {fmt_lift(best_lift)}。
+Lift（GEPA vs baseline）：{fmt_lift(lift_gepa)} 相对失败率降幅。
 
 ## Per-FailureCategory breakdown / 按失败类型拆分
 
@@ -725,14 +749,17 @@ async def main() -> int:
     print(f"loaded {len(trajectories)} trajectories from {args.trajectories}", file=sys.stderr)
     print(f"dataset sha-256: {dataset_sha}", file=sys.stderr)
 
-    arm_specs = [
-        ("PromptRewrite (baseline)", None),
-        ("DSPy + MIPROv2", "mipro"),
-        ("DSPy + GEPA", "gepa"),
+    # 2-arm comparison post 2026-05-12 GEPA-only refactor. The MIPROv2 arm
+    # was deleted along with the singular-optimizer decision in
+    # docs/10-self-evolution/README.md §2.4. PromptRewrite is bench-only
+    # baseline (not user-selectable).
+    arm_specs: list[tuple[str, bool]] = [
+        ("PromptRewrite (bench-only baseline)", False),
+        ("DSPy + GEPA", True),
     ]
 
     aggregates: list[ArmAggregate] = []
-    for arm_name, choice in arm_specs:
+    for arm_name, is_dspy_arm in arm_specs:
         per_seed_results: list[ArmResult] = []
         for seed in range(args.seeds):
             print(f"  arm={arm_name!r} seed={seed} starting...", file=sys.stderr)
@@ -741,7 +768,7 @@ async def main() -> int:
                 optimize,
                 trajectories,
                 seed,
-                optimizer_choice=choice,
+                is_dspy_arm=is_dspy_arm,
             )
             print(
                 f"  arm={arm_name!r} seed={seed} done: "

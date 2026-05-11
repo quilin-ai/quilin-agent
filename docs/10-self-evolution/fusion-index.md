@@ -244,7 +244,8 @@
 |--------|---------|-------------|-------------|------|------|
 | 签名式 Prompt 模块化（功能区分离为独立签名，精准定位优化目标） | DSPy | latest (2026-04) | `github.com/stanfordnlp/dspy` → `dspy/signatures/` | 📋 | 深入 |
 | BootstrapFewShot（从成功轨迹自动提取高质量少样本示例） | DSPy | latest (2026-04) | `github.com/stanfordnlp/dspy` → `dspy/teleprompt/bootstrap.py` | 📋 | 深入 |
-| MIPROv2 贝叶斯搜索（候选修改方案生成 + 对比选优） | DSPy | latest (2026-04) | `github.com/stanfordnlp/dspy` → `dspy/teleprompt/mipro_optimizer_v2.py` | 📋 | 深入 |
+| ~~MIPROv2 贝叶斯搜索~~（2026-05-12 已弃用，由 GEPA 取代；详见 [README §2.4](./README.md#stage-d-outcome--dspy--gepa-as-the-singular-optimizer-2026-05-12)） | DSPy | — | — | ❌ | — |
+| GEPA Genetic-Pareto 反射式 prompt 进化（ICLR 2026 Oral；Quilin 自进化的唯一 optimizer） | DSPy | latest (2026-04) | `github.com/stanfordnlp/dspy` → `dspy/teleprompt/gepa/` | 📋 | 深入 |
 | Skill Library 技能库（成功代码按 embedding 索引 + 技能组合） | Voyager | latest (2026-04) | `github.com/MineDojo/Voyager` → `voyager/skill_manager.py` | 📋 | 深入 |
 | Automatic Curriculum（递增难度任务自动生成，推动持续探索） | Voyager | latest (2026-04) | `github.com/MineDojo/Voyager` → `voyager/curriculum_agent.py` | 📋 | 深入 |
 | Action/Observation 配对记录模式（严格轨迹格式） | OpenHands | latest (2026-04) | `github.com/All-Hands-AI/OpenHands` → `openhands/core/main.py` | 📋 | 深入 |

@@ -1,16 +1,18 @@
-"""Tests for the Stage C real-DSPy optimizer happy path + degradation modes.
+"""Tests for the Stage C real-DSPy GEPA optimizer happy path + degradation modes.
 
 These tests inject a fake ``dspy`` module via ``sys.modules`` so the
-real ``dspy-ai`` extra does NOT need to be installed during CI. The
-fake covers MIPROv2, GEPA, ``Example``, ``Predict``, ``Signature``,
-``LM``, and ``settings``; tests assert that the server wires them up
-correctly and that the compiled program output is decoded into the
-contract-shape proposal.
+real ``dspy-ai`` package does NOT need to be loaded during these unit
+tests (the e2e file `test_server_real_dspy_e2e.py` covers the real
+package). The fake covers GEPA, ``Example``, ``Predict``,
+``Signature``, ``LM``, and ``settings``; tests assert that the server
+wires them up correctly and that the compiled program output is
+decoded into the contract-shape proposal.
 
-测试通过 ``sys.modules`` 注入伪造的 ``dspy`` 模块，使得真实
-``dspy-ai`` extra 在 CI 中**无需**安装。伪造模块覆盖 MIPROv2、GEPA、
-``Example``、``Predict``、``Signature``、``LM``、``settings``；
-测试断言 server 正确装配并把编译产物解码成契约要求的提案形状。
+测试通过 ``sys.modules`` 注入伪造的 ``dspy`` 模块，让单元测试不用真
+``dspy-ai`` 包（真包覆盖在 e2e 文件 `test_server_real_dspy_e2e.py`）。
+伪造模块覆盖 GEPA、``Example``、``Predict``、``Signature``、``LM``、
+``settings``；测试断言 server 正确装配并把编译产物解码成契约要求的
+提案形状。
 """
 
 from __future__ import annotations
@@ -81,7 +83,6 @@ def _make_fake_dspy(
     compiled_instructions: str = "Optimized: be concise.",
     compiled_demos: list[_FakeExample] | None = None,
     compile_raises: Exception | None = None,
-    expose_mipro: bool = True,
     expose_gepa: bool = True,
     lm_raises: Exception | None = None,
 ) -> types.ModuleType:
@@ -165,8 +166,6 @@ def _make_fake_dspy(
             demos = compiled_demos if compiled_demos is not None else trainset
             return _FakeCompiledProgram(compiled_instructions, list(demos))
 
-    if expose_mipro:
-        fake.MIPROv2 = _CompilerBase
     if expose_gepa:
         fake.GEPA = _CompilerBase
 
@@ -186,6 +185,12 @@ def fake_dspy(monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:
 
 @pytest.fixture
 def configured_judge_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Lock JUDGE_MODE to llm explicitly. LiteLLM (now a hard transitive
+    # dep via dspy-ai) calls load_dotenv() on import, which can leak the
+    # project's .env QUILIN_OPTIMIZER_JUDGE_MODE value (commonly "dummy"
+    # for local-dev convenience) into the test process — making any
+    # test that expects the llm-mode path silently take the dummy path.
+    monkeypatch.setenv("QUILIN_OPTIMIZER_JUDGE_MODE", "llm")
     monkeypatch.setenv("QUILIN_OPTIMIZER_JUDGE_API_KEY", "sk-fake-test-key")
     monkeypatch.setenv("QUILIN_OPTIMIZER_JUDGE_MODEL", "openai/gpt-4o-mini")
 
@@ -204,12 +209,12 @@ def _trajectories(count: int = MIN_TRAJECTORIES) -> list[dict[str, object]]:
 
 
 # ---------------------------------------------------------------------------
-# Happy path: MIPROv2 (default optimizer_choice)
+# Happy path: GEPA (the singular optimizer)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_mipro_happy_path_returns_proposal_with_optimized_prompt(
+async def test_gepa_happy_path_returns_proposal_with_optimized_prompt(
     fake_dspy: types.ModuleType,  # noqa: ARG001
     configured_judge_env: None,  # noqa: ARG001
 ) -> None:
@@ -220,12 +225,13 @@ async def test_mipro_happy_path_returns_proposal_with_optimized_prompt(
     payload = json.loads(raw)
 
     assert payload["proposals"], f"expected ≥1 proposal, got: {payload}"
+    assert payload["optimizer_choice"] == "gepa"
     proposal = payload["proposals"][0]
-    assert proposal["title"] == "DSPy MIPRO optimization proposal"
+    assert proposal["title"] == "DSPy GEPA optimization proposal"
     assert proposal["riskPreview"]["level"] == "medium"
     assert proposal["riskPreview"]["touchesRuntime"] is False
     assert proposal["riskPreview"]["requiresHumanReview"] is True
-    assert proposal["metadata"]["optimizer_choice"] == "mipro"
+    assert proposal["metadata"]["optimizer_choice"] == "gepa"
     assert proposal["metadata"]["stage"] == "C"
     assert proposal["metadata"]["application_mode"] == "proposal_only"
 
@@ -242,64 +248,27 @@ async def test_mipro_happy_path_returns_proposal_with_optimized_prompt(
     json_artifact = next(a for a in artifacts if a["kind"] == "json")
     decoded = json.loads(json_artifact["content"])
     assert decoded["optimized_prompt"] == "Optimized: be concise."
-    assert decoded["optimizer_choice"] == "mipro"
+    assert decoded["optimizer_choice"] == "gepa"
     assert isinstance(decoded["few_shot_examples"], list)
     assert len(decoded["few_shot_examples"]) == MIN_TRAJECTORIES
 
 
-@pytest.mark.asyncio
-async def test_mipro_explicit_choice_matches_default(
-    fake_dspy: types.ModuleType,  # noqa: ARG001
-    configured_judge_env: None,  # noqa: ARG001
-) -> None:
-    """``optimizer_choice="mipro"`` must produce identical structure to default."""
-    raw = await optimize(
-        trajectories=_trajectories(),
-        failure_categories=["tool_error"],
-        optimizer_choice="mipro",
-    )
-    payload = json.loads(raw)
-    assert payload["optimizer_choice"] == "mipro"
-    assert payload["proposals"][0]["metadata"]["optimizer_choice"] == "mipro"
-
-
 # ---------------------------------------------------------------------------
-# Happy path: GEPA
+# Graceful degradation: dspy-ai import fails (broken venv)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_gepa_happy_path_returns_proposal_with_gepa_branding(
-    fake_dspy: types.ModuleType,  # noqa: ARG001
-    configured_judge_env: None,  # noqa: ARG001
-) -> None:
-    raw = await optimize(
-        trajectories=_trajectories(),
-        failure_categories=["tool_error"],
-        optimizer_choice="gepa",
-    )
-    payload = json.loads(raw)
-
-    assert payload["optimizer_choice"] == "gepa"
-    proposal = payload["proposals"][0]
-    assert proposal["title"] == "DSPy GEPA optimization proposal"
-    assert proposal["metadata"]["optimizer_choice"] == "gepa"
-
-
-# ---------------------------------------------------------------------------
-# Graceful degradation: dspy-ai not installed
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_dspy_extra_not_installed_returns_structured_warning(
+async def test_dspy_import_failure_returns_structured_warning(
     monkeypatch: pytest.MonkeyPatch,
     configured_judge_env: None,  # noqa: ARG001
 ) -> None:
     """When ``import dspy`` fails, return empty proposals + structured reason.
 
-    We force the failure by patching ``importlib.import_module`` to raise
-    ``ImportError`` for the ``dspy`` module name (and only that name).
+    Post 2026-05-12 GEPA-only refactor: dspy-ai is a HARD dep, so this
+    branch should only fire on a broken venv. We force the failure by
+    patching ``importlib.import_module`` to raise ``ImportError`` for
+    the ``dspy`` module name (and only that name).
     """
     real_import = importlib.import_module
 
@@ -327,7 +296,7 @@ async def test_dspy_extra_not_installed_returns_structured_warning(
     assert codes == ["insufficient_signal"]
     msg = payload["no_proposal_reasons"][0]["message"]
     assert "dspy-ai" in msg
-    assert "uv sync --extra dspy" in msg
+    assert "reinstall" in msg
 
 
 # ---------------------------------------------------------------------------
@@ -376,7 +345,6 @@ async def test_dspy_compile_exception_returns_structured_warning(
     raw = await optimize(
         trajectories=_trajectories(),
         failure_categories=["tool_error"],
-        optimizer_choice="mipro",
     )
     payload = json.loads(raw)
 
@@ -396,25 +364,6 @@ async def test_dspy_compile_exception_returns_structured_warning(
 
 
 @pytest.mark.asyncio
-async def test_missing_mipro_compiler_returns_structured_warning(
-    monkeypatch: pytest.MonkeyPatch,
-    configured_judge_env: None,  # noqa: ARG001
-) -> None:
-    fake = _make_fake_dspy(expose_mipro=False)
-    monkeypatch.setitem(sys.modules, "dspy", fake)
-
-    raw = await optimize(
-        trajectories=_trajectories(),
-        failure_categories=["tool_error"],
-        optimizer_choice="mipro",
-    )
-    payload = json.loads(raw)
-    assert payload["proposals"] == []
-    msg = payload["no_proposal_reasons"][0]["message"]
-    assert "MIPROv2" in msg
-
-
-@pytest.mark.asyncio
 async def test_missing_gepa_compiler_returns_structured_warning(
     monkeypatch: pytest.MonkeyPatch,
     configured_judge_env: None,  # noqa: ARG001
@@ -425,7 +374,6 @@ async def test_missing_gepa_compiler_returns_structured_warning(
     raw = await optimize(
         trajectories=_trajectories(),
         failure_categories=["tool_error"],
-        optimizer_choice="gepa",
     )
     payload = json.loads(raw)
     assert payload["proposals"] == []
@@ -496,13 +444,13 @@ async def test_compiled_program_returning_none_returns_structured_warning(
     """A None compile() result is a malformed contract; surface as warning."""
     fake = _make_fake_dspy()
     # Override compile() on the compiler class to return None.
-    original_mipro_cls = fake.MIPROv2
+    original_gepa_cls = fake.GEPA
 
-    class _NoneCompiler(original_mipro_cls):
+    class _NoneCompiler(original_gepa_cls):
         def compile(self, program: Any, trainset: list[Any]) -> Any:
             return None
 
-    fake.MIPROv2 = _NoneCompiler
+    fake.GEPA = _NoneCompiler
     monkeypatch.setitem(sys.modules, "dspy", fake)
 
     raw = await optimize(
@@ -740,7 +688,6 @@ async def test_optimize_tool_round_trip_via_mcp_handler(
             ],
             "failure_categories": ["tool_error"],
             "dry_run": False,
-            "optimizer_choice": "gepa",
         }
     )
 
@@ -819,7 +766,6 @@ class TestDummyJudgeMode:
         monkeypatch.setenv("QUILIN_OPTIMIZER_JUDGE_MODE", "dummy")
 
         result = await optimize(
-            optimizer_choice="mipro",
             trajectories=_trajectories(),
             failure_categories=["tool_error"],
             dry_run=False,
@@ -841,7 +787,7 @@ class TestDummyJudgeMode:
             "dummy mode should produce real proposals, not bail at readiness gate; "
             f"no_proposal_reasons={payload.get('no_proposal_reasons')}"
         )
-        assert payload["proposals"][0]["title"].startswith("DSPy MIPRO")
+        assert payload["proposals"][0]["title"].startswith("DSPy GEPA")
 
     @pytest.mark.asyncio
     async def test_optimize_dummy_mode_binds_dummy_lm_to_dspy_settings(
@@ -866,17 +812,16 @@ class TestDummyJudgeMode:
         # exit; we patch the compiler's `compile()` to record what
         # `settings.lm` was while the LM was active.
         captured_lm: list[Any] = []
-        original_compile = fake_dspy.MIPROv2.compile
+        original_compile = fake_dspy.GEPA.compile
 
         def _recording_compile(self: Any, program: Any, trainset: list[Any]) -> Any:
             # Inside compile(), the per-call context block is active.
             captured_lm.append(getattr(fake_dspy.settings, "lm", None))
             return original_compile(self, program, trainset)
 
-        monkeypatch.setattr(fake_dspy.MIPROv2, "compile", _recording_compile)
+        monkeypatch.setattr(fake_dspy.GEPA, "compile", _recording_compile)
 
         await optimize(
-            optimizer_choice="mipro",
             trajectories=_trajectories(),
             failure_categories=["tool_error"],
             dry_run=False,
@@ -891,8 +836,7 @@ class TestDummyJudgeMode:
             f"dummy mode should bind a DummyLM (with .answers), got {type(bound_lm).__name__}"
         )
         # The server cycles 5 templates × 200 = 1000 responses (locked
-        # by DUMMY_LM_ANSWER_BUDGET constant) to cover MIPROv2's
-        # data-aware proposer + instruction generator + GEPA rollouts
+        # by DUMMY_LM_ANSWER_BUDGET constant) to cover GEPA's rollouts
         # (which empirically use up to ~580 LM calls per 50-trajectory
         # compile). Locking the exact size catches a regression where
         # the budget constant is tuned down silently.
@@ -919,7 +863,6 @@ class TestDummyJudgeMode:
         monkeypatch.setenv("QUILIN_OPTIMIZER_JUDGE_MODE", "dummy")
 
         await optimize(
-            optimizer_choice="mipro",
             trajectories=_trajectories(),
             failure_categories=["tool_error"],
             dry_run=False,
@@ -932,13 +875,13 @@ class TestDummyJudgeMode:
             f"dummy mode must not emit judge_api_key_missing warning; got {api_key_warnings}"
         )
 
-    def test_judge_metric_accepts_both_mipro_and_gepa_signatures(self) -> None:
-        # MIPROv2 calls metric(example, prediction, trace=None) — 3 args.
-        # GEPA calls metric(gold, pred, trace, pred_name, pred_trace) —
-        # 5 args. The metric implementation must accept BOTH signatures
-        # via *args/**kwargs without raising TypeError.
-        # Reviewer A (round-3) RECOMMEND: locks the contract that
-        # historically broke once when MIPROv2 was upgraded to GEPA.
+    def test_judge_metric_accepts_gepa_multi_arg_signature(self) -> None:
+        # DSPy 3.x calls the metric with multiple signatures depending on
+        # the evaluation context. The 3-arg form (example, prediction,
+        # trace=None) is the most common; the 5-arg form (gold, pred,
+        # trace, pred_name, pred_trace) appears under GEPA's pareto
+        # evaluation. The metric must accept BOTH via *args/**kwargs
+        # without raising TypeError.
         from quilin_optimizer.server import OptimizerConfig, _build_judge_metric
 
         config = OptimizerConfig(
@@ -956,21 +899,21 @@ class TestDummyJudgeMode:
         example = _Example("expected response text with shared keywords")
         prediction = _Example("expected response text")
 
-        # MIPROv2 shape: (example, prediction, trace=None)
-        score_mipro = metric(example, prediction)
-        assert isinstance(score_mipro, float) and 0.0 <= score_mipro <= 1.0, (
-            f"MIPROv2 3-arg call must return a float in [0,1]; got {score_mipro!r}"
+        # 3-arg shape: (example, prediction, trace=None)
+        score_3arg = metric(example, prediction)
+        assert isinstance(score_3arg, float) and 0.0 <= score_3arg <= 1.0, (
+            f"3-arg call must return a float in [0,1]; got {score_3arg!r}"
         )
 
-        # GEPA shape: (gold, pred, trace, pred_name, pred_trace)
-        score_gepa = metric(example, prediction, None, "pred_main", object())
-        assert isinstance(score_gepa, float) and 0.0 <= score_gepa <= 1.0, (
-            f"GEPA 5-arg call must return a float in [0,1]; got {score_gepa!r}"
+        # GEPA 5-arg shape: (gold, pred, trace, pred_name, pred_trace)
+        score_5arg = metric(example, prediction, None, "pred_main", object())
+        assert isinstance(score_5arg, float) and 0.0 <= score_5arg <= 1.0, (
+            f"GEPA 5-arg call must return a float in [0,1]; got {score_5arg!r}"
         )
 
         # Same inputs → same score regardless of compiler-shape extras.
-        assert score_mipro == score_gepa, (
-            "metric must be deterministic across MIPROv2 and GEPA signatures"
+        assert score_3arg == score_5arg, (
+            "metric must be deterministic across argument-shape variants"
         )
 
     # Note on the missing log-content test: a previous draft asserted on

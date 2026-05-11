@@ -50,12 +50,14 @@ export class DspyOptimizerNotConnectedError extends Error {
  * underlying transport from the registry on every invocation. Returning
  * `undefined` when the registry-bound `quilin-optimizer` entry is not
  * present in the loaded capabilities config tells `createOfflineOptimizer`
- * to fall back to PromptRewriteOptimizer with a warn log.
+ * to fall back to LocalNoopOfflineOptimizer with a warn log (post 2026-05-12
+ * GEPA-only refactor; the prior PromptRewrite fallback was removed).
  *
  * 构造一个 `DspyOptimizerMCPClient`，其 `callTool` 在每次调用时从
  * registry 取出底层 transport。capabilities config 未载入
  * `quilin-optimizer` entry 时返回 `undefined`，告诉
- * `createOfflineOptimizer` 退化到 PromptRewriteOptimizer 并打 warn。
+ * `createOfflineOptimizer` 退化到 LocalNoopOfflineOptimizer 并打 warn
+ * （2026-05-12 GEPA-only 重构后；原 PromptRewrite 回退已移除）。
  *
  * @param registryRef Late-bound MCPRegistry container (populated when
  *   `onRuntimeReady` fires inside `startRepl`).
