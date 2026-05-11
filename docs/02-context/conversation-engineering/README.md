@@ -508,3 +508,43 @@ Quilin 的策略：**不改 Character（改不了），优化 Persona（6 层对
 > **实施阶段**：对话工程对应 `implementation-plan.md` 的 Phase 1（基础 prompt 层）和 Phase 2（关系建模 + 时间连续性 + A/B 评估）。
 >
 > Phase 0 不涉及对话工程（先把功能跑通）；Phase 1 实现第 1-3 层（prompt 可控）；Phase 2 实现第 4-6 层（需要 Memory/Context 深度集成）。
+
+---
+
+## 外部参考 / External References
+
+### Thinking Machines — Interaction Models (2026-05-12 reviewed)
+
+URL: https://thinkingmachines.ai/blog/interaction-models/
+
+The article describes a foundation-model approach to real-time multimodal interaction: a single end-to-end system that perceives and responds across audio, video, and text simultaneously at 200ms granularity, with an interaction / background two-layer split sharing full conversation state. The model-training innovations are out of scope for Quilin — we do not train models — but the **harness-level interaction patterns** inform what the 6-layer "alive feeling" formula should actually deliver once Quilin's conversation engineering is fully re-engaged.
+
+文章描述了实时多模态交互的基础模型路径：一个端到端系统在 200ms 粒度同时跨音频 / 视频 / 文本感知与响应，interaction / background 两层共享完整对话状态。模型训练那些创新对 Quilin 不适用 —— 我们不训练模型 —— 但 **harness 层面的交互模式**告诉我们 Quilin 对话工程全面重启后，6 层"活人感"配方该真正交付什么。
+
+### Patterns mapped to the 6 layers
+
+| 文章模式 / Article Pattern | 映射到的层 / Mapped Layer | 重启后的设计约束 / Restart Design Constraint |
+|---------|-----------|----------------|
+| **Time-aligned micro-turns**（200ms 输入输出交错） | Layer 3 节奏感 | 即使在文本模式下，回复节奏也应避免"一次性吐完一大段"的刚性 turn 感；流式输出应在语义边界打断，让用户能在生成期间打断、补充。Even in text mode, response cadence should avoid the rigid "dump-one-block-at-once" turn feel; streaming output should pause at semantic boundaries so the user can interrupt or amend during generation. |
+| **Anticipatory updates**（预测用户即将问状态而主动推） | Layer 1 主动性 + Layer 4 状态漂移 | "活人感"的具体表现之一是主动报状态而非被问才答。需要 sub-agent 进度的预期推送接口；见 [QUI-153](https://linear.app/quilin-agent/issue/QUI-153/预期性-sub-agent-状态推送-anticipatory-sub-agent-status-surfacing)。One concrete embodiment of "alive feeling" is proactive status, not on-demand answers. Requires an anticipatory-push API on sub-agent progress; tracked at QUI-153. |
+| **Native time awareness**（"我说了多久？""每 4 秒提醒我"） | Layer 6 时间连续性 | 02-context 已有 3 层时间感知；对话工程层应能在自然语言中显式利用这些信号（"距上次会话已 3 天"、"现在已经聊 20 分钟了"），而不是把时间只当作内部状态。02-context already has 3-layer temporal awareness; the conversation-engineering layer should surface these signals explicitly in natural language ("3 days since our last session", "we've been chatting for 20 minutes"), not treat time as internal-only. |
+| **Context-aware weaving of background results**（后台任务结果织进合适时机） | Layer 4 状态漂移 + Layer 5 长程一致性 | sub-agent 完成时不要硬切话题倾倒结果；保留织入点，让"活人感"在多任务并行时仍连贯。On sub-agent completion, do not hard-cut the topic to dump the result; reserve weave-in points so "alive feeling" stays coherent under parallel tasks. |
+| **Interaction / Background split sharing full context** | 全局架构约束 / Global Constraint | 对话工程不能脱离 supervisor 架构独立设计；Layer 4-6 必须读完整 sub-agent 状态，否则会"忘了刚才让那边干啥"。Conversation engineering cannot be designed independent of supervisor architecture; Layers 4-6 must read full sub-agent state, otherwise the agent "forgets what it asked the other side to do". |
+| **Modality-appropriate refusals**（拒绝方式随模态变化） | Layer 2 错误气质 | 文章把"拒绝"也当作风格的一部分，与本 spec 已有"错误气质"层吻合。The article treats "refusal" as part of style, aligning with this spec's existing "error temperament" layer. |
+
+### Patterns explicitly out of scope
+
+- 200ms multimodal early fusion / encoder-free processing / bitwise deterministic attention — all at the model training layer; Quilin cannot reach them.
+- 200ms 多模态早融合 / encoder-free 处理 / bitwise 确定性 attention —— 全在模型训练层，Quilin 触不到。
+- Full-duplex audio / video streams — Quilin is a text agent; visual / auditory perception can only ride on top-tier provider primitives (GPT-4o audio, Gemini Live, etc.), and would require rewriting REPL / WebUI.
+- 音视频全双工流 —— Quilin 是文本 agent；视听感知只能依赖底层 provider（GPT-4o audio、Gemini Live 等），且需要重写 REPL / WebUI。
+
+### 重启条件补充 / Restart Condition Addendum
+
+The original restart condition was "core loop and dependent runtime components have local evidence". Add a complementary clause: **when conversation engineering is fully unparked, each of the 6 layers must explicitly note whether the matched pattern from the table above is adopted**, and non-adoption must be justified (e.g., "Layer 3 does not implement streaming interruption due to REPL rewrite cost"). This prevents reverting to "feature pile" inertia and losing the "alive feeling" differentiation.
+
+之前的重启条件是"core loop 与依赖 runtime 组件具备本地实证"。增加一条配套：**对话工程全面解 park 时，6 层架构每一层必须显式标注是否吸收了上表对应模式**，不吸收的明确说明理由（如"Layer 3 不做流式打断，因 REPL 改造成本过高"）。这是为了避免重启时回到"功能堆砌"惯性，丢失"活人感"差异化定位。
+
+> **状态校准 / Status Correction**：文档头标注的"Parked → Iter F"对当前现状不完全准确 —— Iter K 对话工程重启 project 下的 QUI-13 / QUI-122 / QUI-123 都已 Done（6 层架构 + 3 modes + 7 presets 已接入 ContextAssembler，commit `3ba97bc`）。本"外部参考"章节是对**剩余未做工作**的设计约束补充，不是对未启动工作的预先规划。
+>
+> The "Parked → Iter F" label at the document head no longer fully reflects reality — under the Iter K Conversation Engineering Restart project, QUI-13 / QUI-122 / QUI-123 are all Done (6-layer architecture + 3 modes + 7 presets are wired into ContextAssembler, commit `3ba97bc`). This "External References" section is a design-constraint supplement for the **remaining unbuilt work**, not pre-planning for unstarted work.

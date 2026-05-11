@@ -952,3 +952,35 @@ class Supervisor:
 - [ ] 死锁检测有专项测试（循环/非循环各 5 个用例）
 - [ ] 所有 Agent 通信通过 `MCPBus`，禁止直接调用其他 Agent 的内部方法
 - [ ] `AgentResult` 不可变（dataclass frozen=True），聚合层创建新对象
+
+---
+
+## 十、外部参考 / External References
+
+### Thinking Machines — Interaction Models (2026-05-12 reviewed)
+
+URL: https://thinkingmachines.ai/blog/interaction-models/
+
+The article presents a real-time multimodal foundation model with an explicit two-layer architecture: an **Interaction Model** (fast, responsive, handles concurrent I/O) and a **Background Model** (asynchronous heavy reasoning, tool use, long-horizon tasks). Both layers share full conversation state; the background model streams results back to the interaction layer at contextually appropriate moments rather than as disruptive context switches.
+
+文章给出了实时多模态基础模型的明确两层架构：**Interaction Model**（快速响应层，处理并发 I/O）和 **Background Model**（异步重推理 / 工具使用 / 长程任务）。两层共享完整对话状态；background model 把结果异步流回 interaction 层，在合适时机织进对话，而不是当成生硬的 context switch。
+
+This independently validates Quilin's "non-blocking main agent as coordination / command center, sub-region executors do the work" design (see updated `project_nonblocking_main_agent` memory + `InProcessSupervisorRuntime`). No architectural change is required from this validation alone — it is supporting evidence for an already-converged design.
+
+这独立验证了 Quilin "主 Agent 作为协调 / 指挥中心、sub-region 执行单元干活"的设计（见已更新的 `project_nonblocking_main_agent` memory 和 `InProcessSupervisorRuntime`）。仅凭这个验证不需要改架构 —— 它是对已经收敛设计的支持证据。
+
+### Patterns we have not yet adopted
+
+**Anticipatory status surfacing** — the article's interaction layer does not only emit fixed-interval heartbeats; it surfaces background-task status at moments when the user is likely to want it. Quilin's current supervisor only uses fixed heartbeats + post-completion checkpoint. Tracked separately as [QUI-153](https://linear.app/quilin-agent/issue/QUI-153/预期性-sub-agent-状态推送-anticipatory-sub-agent-status-surfacing).
+
+**预期性状态推送** —— 文章的 interaction 层不只是定时心跳，而是在用户可能想看状态的时刻主动推送 background task 的进展。Quilin 当前 supervisor 只有定时 heartbeat + 任务完成 checkpoint。已立 [QUI-153](https://linear.app/quilin-agent/issue/QUI-153/预期性-sub-agent-状态推送-anticipatory-sub-agent-status-surfacing) 独立跟踪。
+
+**Context-aware result weaving** — instead of dumping sub-agent output verbatim on completion, weave the result into the next response at the right moment. This is closer to a conversation-engineering concern; see [02-context/conversation-engineering](../02-context/conversation-engineering/README.md) "外部参考" section.
+
+**上下文感知的结果织入** —— sub-agent 完成时不直接倾倒输出，而是在合适时机织进下一次回复。这更像对话工程的事，见 [02-context/conversation-engineering](../02-context/conversation-engineering/README.md) 的 "外部参考" 章节。
+
+### Patterns we cannot adopt
+
+Anything at the foundation-model layer — 200ms multimodal micro-turns, encoder-free early fusion, bitwise deterministic attention, full-duplex audio/video streams. Quilin is a harness on top of provider LLMs; we do not train models. These are documented here so future readers do not re-evaluate them and reach the same conclusion.
+
+任何基础模型层的东西 —— 200ms 多模态微回合、encoder-free 早融合、bitwise 确定性 attention、音视频全双工流。Quilin 是 provider LLM 之上的 harness，我们不训练模型。把它们记在这里是为了避免后续读者再走一遍同样的评估、得出同样的结论。
