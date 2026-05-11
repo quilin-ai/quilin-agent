@@ -480,8 +480,29 @@ _DUMMY_LM_RESPONSES: tuple[dict[str, str], ...] = (
 )
 
 
-def _configure_dspy_lm(dspy_module: Any, config: OptimizerConfig) -> None:
-    """Wire the configured judge into ``dspy.settings``.
+# DummyLM cycle budget — pre-flatten this many response slots from
+# ``_DUMMY_LM_RESPONSES``. MIPROv2 / GEPA make many internal Predict
+# calls during compile (data-aware proposer, instruction generator,
+# demo bootstrapping, reflection rollouts) and DummyLM's underlying
+# iterator does NOT cycle by itself. 1000 = 200 × 5 comfortably covers
+# a single compile run on a 5-50 trajectory training set
+# (empirically GEPA hits ~580 rollouts; MIPROv2 < 100).
+#
+# Locked by test_server_real_dspy_e2e.py
+# ::test_configure_dspy_lm_dummy_pool_sized_for_mipro_and_gepa.
+DUMMY_LM_ANSWER_BUDGET = 1000
+
+
+def _build_judge_lm(dspy_module: Any, config: OptimizerConfig) -> Any:
+    """Construct (but do NOT install) the DSPy judge LM.
+
+    Returns the LM object — the caller is responsible for activating it
+    via ``with dspy.context(lm=...)`` (per-call scoping) instead of
+    ``dspy.settings.configure(lm=...)`` (process-global). The per-call
+    pattern dodges DSPy 3.x's "configure can only be called from the
+    same async task" RuntimeError, which fires whenever the optimizer
+    runs in a fresh event loop (e.g., pytest-asyncio's default
+    per-test loop).
 
     Two modes:
 
@@ -495,39 +516,27 @@ def _configure_dspy_lm(dspy_module: Any, config: OptimizerConfig) -> None:
     ``OptimizerOperationError`` so the caller surfaces a structured
     warning instead of a raw stack trace.
 
-    两种模式：
-
-    - ``judge_mode = "llm"``（默认）：真实 ``dspy.LM`` + LiteLLM。
-      必须有 ``judge_api_key``。
-    - ``judge_mode = "dummy"``：确定性 ``dspy.utils.DummyLM`` —— 零
-      LLM 成本，让 DSPy compile loop 真跑起来，便于在不烧 API 配额的
-      前提下 benchmark 真实 DSPy 代码路径。
-
-    防御性处理：LM 构造异常会包装成 ``OptimizerOperationError``，
-    避免原始堆栈泄露给调用方。
+    构造（但不激活）DSPy judge LM。返回 LM 对象，由 caller 通过
+    ``with dspy.context(lm=...)`` 做 per-call 激活；不再用
+    ``dspy.settings.configure(lm=...)`` 全局设置 —— 那条路径在 DSPy 3.x
+    的"configure 只能在同一 async task 调用"约束下，遇到 pytest-asyncio
+    每测试独立 event loop 就会抛 RuntimeError。
     """
     try:
         if config.judge_mode == JUDGE_MODE_DUMMY:
             # DummyLM is the canonical zero-cost stand-in for a real LM
-            # when exercising DSPy's compile loop. We pre-flatten 200
-            # cycles of the response pool because MIPROv2 / GEPA make
-            # many internal Predict calls during compile (data-aware
-            # proposer, instruction generator, demo bootstrapping, etc.)
-            # and DummyLM's underlying iterator does NOT cycle by itself.
-            # 200 × 5 = 1000 responses comfortably covers a single
-            # compile run on a 5-50 trajectory training set.
-            cycled = list(itertools.islice(itertools.cycle(_DUMMY_LM_RESPONSES), 1000))
-            dummy = dspy_module.utils.DummyLM(cycled)
-            dspy_module.settings.configure(lm=dummy)
-            return
+            # when exercising DSPy's compile loop.
+            cycled = list(
+                itertools.islice(itertools.cycle(_DUMMY_LM_RESPONSES), DUMMY_LM_ANSWER_BUDGET)
+            )
+            return dspy_module.utils.DummyLM(cycled)
         lm_kwargs: dict[str, object] = {}
         if config.judge_api_key:
             lm_kwargs["api_key"] = config.judge_api_key
         if config.judge_base_url:
             lm_kwargs["api_base"] = config.judge_base_url
         model_id = config.judge_model or "openai/gpt-4o-mini"
-        lm = dspy_module.LM(model_id, **lm_kwargs)
-        dspy_module.settings.configure(lm=lm)
+        return dspy_module.LM(model_id, **lm_kwargs)
     except Exception as exc:
         # Sanitize: never echo the API key. The exc.__str__ may include
         # config details, so we hard-replace with a generic message.
@@ -535,6 +544,31 @@ def _configure_dspy_lm(dspy_module: Any, config: OptimizerConfig) -> None:
         raise OptimizerOperationError(
             f"failed to configure DSPy judge LM (mode={config.judge_mode}, model={model})"
         ) from exc
+
+
+def _configure_dspy_lm(dspy_module: Any, config: OptimizerConfig) -> None:
+    """**LEGACY** wrapper that calls ``_build_judge_lm`` + global
+    ``dspy.settings.configure``.
+
+    The compile path (``_run_dspy_compile``) does NOT use this — it
+    calls ``_build_judge_lm`` directly and scopes the LM with
+    ``dspy.context(lm=...)`` per-call. This wrapper exists solely to
+    preserve the public surface that existing tests assert against
+    (specifically: tests that verify ``dspy.settings.configure`` was
+    called with a specific LM type). New code should prefer
+    ``_build_judge_lm`` + ``dspy.context``.
+
+    Pre-existing kept for backward compat with the 9 fake-module tests
+    in ``test_server_real_dspy.py::TestDummyJudgeMode``.
+
+    **遗留**包装器：调 ``_build_judge_lm`` 再用全局 ``settings.configure``
+    激活。**编译路径不走这个**（``_run_dspy_compile`` 直接用
+    ``dspy.context`` 做 per-call 激活）。本函数仅为兼容 9 个
+    fake-module 测试保留。新代码应直接用 ``_build_judge_lm`` +
+    ``dspy.context``。
+    """
+    lm = _build_judge_lm(dspy_module, config)
+    dspy_module.settings.configure(lm=lm)
 
 
 def _extract_optimized_prompt(compiled_program: Any) -> str:
@@ -711,22 +745,40 @@ def _run_dspy_compile(
     返回 ``(optimized_prompt, few_shot_examples)``。
     遇到可控错误（LM 构造、编译器缺失、产物异常）抛
     ``OptimizerOperationError``，message 已 sanitize。
+
+    LM scoping: this function uses ``with dspy.context(lm=lm):`` for
+    per-call activation instead of ``dspy.settings.configure``, dodging
+    DSPy 3.x's "configure can only be called from the same async task"
+    RuntimeError that fires under pytest-asyncio's per-test event
+    loops. ``MIPROv2.__init__`` itself reads ``dspy.settings.lm`` at
+    construction time — ``_select_compiler`` MUST therefore run
+    **inside** the context block, not before.
+
+    LM 作用域：本函数用 ``with dspy.context(lm=lm)`` 做 per-call
+    激活，**不再用** ``dspy.settings.configure``，避开 DSPy 3.x 在
+    pytest-asyncio 多 event loop 下抛 RuntimeError 的"configure 只能
+    在同一 async task 调用"约束。注意 ``MIPROv2.__init__`` 构造期会读
+    ``dspy.settings.lm``，所以 ``_select_compiler`` 必须**放在
+    context 块内**，不能在外面先 new。
     """
-    _configure_dspy_lm(dspy_module, config)
+    lm = _build_judge_lm(dspy_module, config)
 
     program = _build_dspy_program(dspy_module)
     metric = _build_judge_metric(config)
-    compiler = _select_compiler(dspy_module, optimizer_choice, metric)
     examples = _build_training_examples(trajectories, dspy_module)
 
     try:
-        # Different DSPy compilers expose slightly different compile()
-        # kwargs; we pass the trainset under both common names so the
-        # call works against MIPROv2 and GEPA without branching.
-        compiled = compiler.compile(
-            program,
-            trainset=examples,
-        )
+        with dspy_module.context(lm=lm):
+            # Compiler instantiation reads dspy.settings.lm — keep it
+            # inside the context block to avoid the "no default LM" gate.
+            compiler = _select_compiler(dspy_module, optimizer_choice, metric)
+            # Different DSPy compilers expose slightly different compile()
+            # kwargs; we pass the trainset under both common names so the
+            # call works against MIPROv2 and GEPA without branching.
+            compiled = compiler.compile(
+                program,
+                trainset=examples,
+            )
     except OptimizerOperationError:
         raise
     except Exception as exc:

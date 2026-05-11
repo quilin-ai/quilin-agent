@@ -123,6 +123,27 @@ def _make_fake_dspy(
     settings = MagicMock()
     fake.settings = settings
 
+    # ``dspy.context(lm=...)`` is the per-call LM activation API the
+    # compile path uses (instead of process-global
+    # ``settings.configure``). We model it as a contextmanager that
+    # writes ``settings.lm`` on enter and restores on exit — that
+    # matches what real DSPy does for our compile-path consumers.
+    # Tests that previously asserted on ``settings.configure(lm=...)``
+    # via the legacy ``_configure_dspy_lm`` wrapper still work because
+    # the wrapper still calls ``settings.configure``.
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _fake_context(lm: Any = None) -> Any:
+        previous = getattr(settings, "lm", None)
+        settings.lm = lm
+        try:
+            yield
+        finally:
+            settings.lm = previous
+
+    fake.context = _fake_context
+
     class _CompilerBase:
         # GEPA in DSPy 3.x requires an explicit `reflection_lm` kwarg in
         # addition to metric / auto. We accept (and ignore) it here so
@@ -828,11 +849,31 @@ class TestDummyJudgeMode:
         fake_dspy: types.ModuleType,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        # The settings.configure(lm=...) call should receive a DummyLM
-        # instance (not a real dspy.LM) when judge_mode=dummy. This test
-        # verifies the wire that prevents real LLM calls in dummy mode.
+        # In dummy mode the compile path must bind a DummyLM (not a
+        # real dspy.LM). The compile path uses ``with dspy.context(lm=lm):``
+        # for per-call scoping (NOT ``dspy.settings.configure``) — this
+        # dodges DSPy 3.x's "configure can only be called from same async
+        # task" RuntimeError under pytest-asyncio's per-test event loops.
+        # The fake module's ``_fake_context`` writes ``settings.lm`` on
+        # enter; we use a side-effect probe to capture what was bound
+        # because the context manager restores ``settings.lm`` on exit
+        # so it's gone by the time the test resumes.
         monkeypatch.delenv("QUILIN_OPTIMIZER_JUDGE_API_KEY", raising=False)
         monkeypatch.setenv("QUILIN_OPTIMIZER_JUDGE_MODE", "dummy")
+
+        # Snapshot the LM bound inside the context block. The fake's
+        # `_fake_context` writes `settings.lm` on enter and restores on
+        # exit; we patch the compiler's `compile()` to record what
+        # `settings.lm` was while the LM was active.
+        captured_lm: list[Any] = []
+        original_compile = fake_dspy.MIPROv2.compile
+
+        def _recording_compile(self: Any, program: Any, trainset: list[Any]) -> Any:
+            # Inside compile(), the per-call context block is active.
+            captured_lm.append(getattr(fake_dspy.settings, "lm", None))
+            return original_compile(self, program, trainset)
+
+        monkeypatch.setattr(fake_dspy.MIPROv2, "compile", _recording_compile)
 
         await optimize(
             optimizer_choice="mipro",
@@ -841,22 +882,27 @@ class TestDummyJudgeMode:
             dry_run=False,
         )
 
-        configure_calls = fake_dspy.settings.configure.call_args_list
-        assert configure_calls, "settings.configure must have been called"
-        bound_lm = configure_calls[-1].kwargs.get("lm")
+        assert captured_lm, "compile() must have run inside dspy.context(lm=...) block"
+        bound_lm = captured_lm[-1]
         # The bound LM is a DummyLM instance — it has the canned answers
         # list we hand it in `_DUMMY_LM_RESPONSES`. Real `dspy.LM` would
         # have a `.model` string; DummyLM has `.answers` list.
         assert hasattr(bound_lm, "answers"), (
             f"dummy mode should bind a DummyLM (with .answers), got {type(bound_lm).__name__}"
         )
-        # The server cycles 5 templates × 200 = 1000 responses to cover
-        # MIPROv2's data-aware proposer + instruction generator + GEPA
-        # rollouts (which empirically use up to ~580 LM calls per
-        # 50-trajectory compile). Locking the exact size catches a
-        # regression where the cycle constant is tuned down silently.
-        assert isinstance(bound_lm.answers, list) and len(bound_lm.answers) == 1000, (
-            f"dummy mode must cycle to exactly 1000 responses; got {len(bound_lm.answers)}"
+        # The server cycles 5 templates × 200 = 1000 responses (locked
+        # by DUMMY_LM_ANSWER_BUDGET constant) to cover MIPROv2's
+        # data-aware proposer + instruction generator + GEPA rollouts
+        # (which empirically use up to ~580 LM calls per 50-trajectory
+        # compile). Locking the exact size catches a regression where
+        # the budget constant is tuned down silently.
+        from quilin_optimizer.server import DUMMY_LM_ANSWER_BUDGET
+
+        assert (
+            isinstance(bound_lm.answers, list) and len(bound_lm.answers) == DUMMY_LM_ANSWER_BUDGET
+        ), (
+            f"dummy mode must cycle to exactly {DUMMY_LM_ANSWER_BUDGET} responses; "
+            f"got {len(bound_lm.answers)}"
         )
 
     @pytest.mark.asyncio

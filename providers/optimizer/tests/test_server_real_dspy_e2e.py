@@ -41,6 +41,7 @@ pytest.importorskip(
 
 from quilin_optimizer.server import (  # noqa: E402 — import after skip guard
     _DUMMY_LM_RESPONSES,
+    DUMMY_LM_ANSWER_BUDGET,
     JUDGE_MODE_DUMMY,
     MIN_TRAJECTORIES,
     OptimizerConfig,
@@ -176,8 +177,11 @@ def test_configure_dspy_lm_dummy_pool_sized_for_mipro_and_gepa() -> None:
     # when given a list. ``list(iterator)`` drains it; ``list(list)``
     # copies it — both reach a count without partial state.
     collected = list(bound_lm.answers)
-    assert len(collected) == 1000, (
-        f"DummyLM answer pool must be exactly 1000 (cycle of 5 × 200); got {len(collected)}"
+    # Import the constant rather than hardcoding so a future tuning
+    # of DUMMY_LM_ANSWER_BUDGET auto-syncs both sides.
+    assert len(collected) == DUMMY_LM_ANSWER_BUDGET, (
+        f"DummyLM answer pool must be exactly {DUMMY_LM_ANSWER_BUDGET} "
+        f"(cycle of 5 templates × N); got {len(collected)}"
     )
 
 
@@ -225,30 +229,39 @@ async def test_optimize_mipro_real_dspy_dummy_lm_emits_proposal(
     assert kinds == ["json", "markdown"], kinds
 
 
-# NOTE on the missing GEPA e2e test: a previous draft included a
-# parallel ``test_optimize_gepa_real_dspy_dummy_lm_emits_proposal``
-# but it surfaced a real latent constraint: ``dspy.settings.configure``
-# in DSPy 3.x is guarded against multi-task re-entry, and pytest-asyncio
-# runs each test in a fresh event loop. After the MIPROv2 e2e test
-# above completes, a second ``_configure_dspy_lm`` call from a new
-# event loop raises a RuntimeError that the server's catch-all wraps
-# as ``OptimizerOperationError("failed to configure DSPy judge LM …")``.
-#
-# The clean fix is to scope LM activation per-call via
-# ``with dspy.context(lm=lm):`` instead of ``dspy.settings.configure``
-# (the cross-review subagent flagged this in QUI-147 round-3 and shipped
-# a draft refactor). Applying that refactor here would require touching
-# ``_configure_dspy_lm`` + ``_run_dspy_compile`` + updating the 9 existing
-# fake-module tests that assert ``settings.configure`` was called. That's
-# a separate cross-review cycle, deferred to a follow-up.
-#
-# GEPA's real-DSPy code path is still exercised end-to-end by
-# ``scripts/bench-real-dspy.py`` (which runs MIPROv2 then GEPA in the
-# SAME ``asyncio.run`` event loop, avoiding the multi-task constraint).
-# The fake-module test ``test_server_real_dspy.py::test_gepa_happy_path
-# _returns_proposal_with_gepa_branding`` covers GEPA's branding + wiring
-# against the stub; the missing piece is "real DSPy GEPA + real DummyLM
-# end-to-end inside pytest" — that's the gap the refactor would close.
+@pytest.mark.asyncio
+async def test_optimize_gepa_real_dspy_dummy_lm_emits_proposal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end smoke for GEPA — same as the MIPROv2 e2e test but
+    exercises the ``reflection_lm=dspy.settings.lm`` wiring. GEPA in
+    DSPy 3.x raises if ``reflection_lm`` is not explicitly provided,
+    so this test guards that branch.
+
+    Historical note: this test was previously dropped because DSPy 3.x's
+    ``dspy.settings.configure`` was guarded against multi-task re-entry,
+    and pytest-asyncio runs each test in a fresh event loop —
+    sequential MIPROv2-then-GEPA e2e tests raised RuntimeError. The
+    compile path now uses ``with dspy.context(lm=lm):`` per-call
+    scoping (see ``_run_dspy_compile`` in server.py), which dodges
+    that constraint. Re-added as part of the QUI-147 follow-up that
+    closed the latent bug.
+    """
+    monkeypatch.delenv("QUILIN_OPTIMIZER_JUDGE_API_KEY", raising=False)
+    monkeypatch.setenv("QUILIN_OPTIMIZER_JUDGE_MODE", "dummy")
+
+    result = await optimize(
+        optimizer_choice="gepa",
+        trajectories=_trajectories(MIN_TRAJECTORIES),
+        failure_categories=["schema_violation"],
+        dry_run=False,
+    )
+    payload = _extract_payload(result)
+    assert payload["proposals"], (
+        f"real-DSPy GEPA + DummyLM must produce a proposal; "
+        f"no_proposal_reasons={payload.get('no_proposal_reasons')}"
+    )
+    assert payload["proposals"][0]["title"].startswith("DSPy GEPA")
 
 
 @pytest.mark.asyncio
