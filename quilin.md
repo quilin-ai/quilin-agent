@@ -102,7 +102,9 @@ quilin-agent/
 │   ├── ...
 │   ├── 11-agent-mesh/
 │   ├── 13-skills/
-│   └── 14-benchmark-harness/       # frozen/read-only unless user explicitly asks
+│   ├── 14-benchmark-harness/       # frozen — only modify on explicit user ask
+│   ├── 15-introspection/           # 元思考 / Introspection (design doc, pre-impl gate)
+│   └── 16-soul-import/             # 灵魂导入 / Soul Import (spec; QUI-102 implementation)
 ├── scripts/                        # 自动化脚本
 ├── .devcontainer/                  # Dev Container（Bun + Python 3.14 + Rust 1.94）
 ├── .github/workflows/ci.yml       # CI（三语言矩阵）
@@ -113,7 +115,7 @@ quilin-agent/
 └── readme.md
 ```
 
-## 12 Active Engineering Domains
+## 14 Active Engineering Domains
 
 | # | Domain | Key Design | Spec |
 |---|--------|-----------|------|
@@ -129,12 +131,20 @@ quilin-agent/
 | 10 | Self-Evolution | Trajectory analysis, opt-in idle evolution, human-in-loop scaffold patches, skill creation, User Insight Engine | [10](docs/10-self-evolution/README.md) |
 | 11 | Agent Mesh | Mesh connectivity via AgentMesh SDK (Iter D) | [11](docs/11-agent-mesh/README.md) |
 | 13 | Skills | SKILL.md + frontmatter, catalog + on-demand load, path/size safety, M0/M1/M2+ phased | [13](docs/13-skills/README.md) |
+| 15 | Introspection | Meta-cognition: trace-anchored reflection feeding back into the next plan, with controlled user-facing rhythm | [15](docs/15-introspection/README.md) |
+| 16 | Soul Import | Install-time scan of 6 agent frameworks → seed global `~/.quilin/{soul,user}.md` body + per-project `QUILIN.md`; all writes CRITICAL | [16](docs/16-soul-import/README.md) |
 
 ### Parked (sub-module)
 
 | # | Domain | Status |
 |---|--------|--------|
 | 02.x | Conversation Engineering（原 12-） | **Parked sub-module under 02-context** — 6-layer "alive feeling" 研究延后到 Iter F+（core loop 与依赖 runtime 组件有本地实证后再启动）。spec 保留为 research note，见 [02-context/conversation-engineering](docs/02-context/conversation-engineering/README.md)。 |
+
+### Frozen
+
+| # | Domain | Status |
+|---|--------|--------|
+| 14 | Benchmark Harness | **Frozen since 2026-05-02** — existing code remains as historical/current evidence only; do not add or modify Benchmark code unless the user explicitly asks. See `基准冻结 / Benchmark Freeze` section in [docs/STATUS.md](docs/STATUS.md). |
 
 ## Code Style & Conventions
 

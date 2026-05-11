@@ -117,6 +117,8 @@ The cross-review posture is now: benchmark（standardized capability evaluation�
 | [11 Agent Mesh](11-agent-mesh/README.md) | Rust `crates/mesh-sdk` stub + CI wiring 已实现；runtime mesh 是 Iter F。 |
 | [13 Skills](13-skills/README.md) | SKILL.md catalog、`skill_view`、CRUD + merge、guard、restore、watcher、`skill_search`（本地+远程 skills.sh）、provenance 签名验证已闭合到 M2。 |
 | [14 Benchmark Harness](14-benchmark-harness/README.md) | Existing harness code remains in-tree; component is frozen/read-only for future implementation unless the user asks. |
+| [15 Introspection](15-introspection/README.md) | Step 2 设计文档已落地（Iter L+3，QUI-151 总入口）；元思考 / 反思链路尚未实现，spec 作为实施前 review gate。 |
+| [16 Soul Import](16-soul-import/README.md) | Bilingual spec 已落地（2026-05-12）；6 框架扫描 + QUILIN.md 生成器 + body 填充由 [QUI-102](https://linear.app/quilin-agent/issue/QUI-102) 承接，artifact schema 已由 QUI-108 / `soul-profile.ts` 实现（`1d57d08`）。 |
 
 ## 任务追踪 / Task Tracking
 
