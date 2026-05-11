@@ -192,7 +192,7 @@ export function createMockDspyClient(
 			return JSON.stringify({
 				schema_version: 1,
 				optimizer_id: "dspy-gepa-mock",
-				mode: "prompt_rewrite",
+				mode: "prompt_optimization",
 				created_at: new Date().toISOString(),
 				proposals: proposals.map((p) => ({
 					title: p.title,

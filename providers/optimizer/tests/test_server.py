@@ -27,7 +27,7 @@ import pytest
 
 from quilin_optimizer.server import (
     OPTIMIZER_ID,
-    OPTIMIZER_MODE,
+    PROPOSAL_MODE,
     SCHEMA_VERSION,
     OptimizerConfig,
     OptimizerOperationError,
@@ -91,7 +91,7 @@ async def test_optimize_returns_no_failure_detected_when_trajectories_empty() ->
     assert payload["proposals"] == []
     assert payload["schema_version"] == SCHEMA_VERSION
     assert payload["optimizer_id"] == OPTIMIZER_ID
-    assert payload["mode"] == OPTIMIZER_MODE
+    assert payload["mode"] == PROPOSAL_MODE
     assert payload["stage"] == "C"
     codes = [reason["code"] for reason in payload["no_proposal_reasons"]]
     assert codes == ["no_failure_detected"]

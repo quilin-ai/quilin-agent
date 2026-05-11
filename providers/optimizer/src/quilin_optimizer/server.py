@@ -60,7 +60,13 @@ from .logging import configure_once, logger
 # packages/agent-core/src/self-evolution/types.ts. Bump in lockstep.
 SCHEMA_VERSION = 1
 OPTIMIZER_ID = "dspy"
-OPTIMIZER_MODE = "prompt_rewrite"
+# Wire-protocol label for the `mode` field of emitted proposals.
+# Semantically: "this proposal IS a prompt-optimization suggestion"
+# (parallel to the other supported mode "artifact_only"). It is NOT
+# the optimizer algorithm name — that was historically misleading
+# when the value was "prompt_rewrite" alongside the now-deleted
+# `PromptRewriteOptimizer` class; renamed 2026-05-12 for clarity.
+PROPOSAL_MODE = "prompt_optimization"
 STAGE = "C"
 
 # Hard caps on inputs accepted by ``optimize``. The optimizer never
@@ -1017,7 +1023,7 @@ async def _optimize(
     return {
         "schema_version": SCHEMA_VERSION,
         "optimizer_id": OPTIMIZER_ID,
-        "mode": OPTIMIZER_MODE,
+        "mode": PROPOSAL_MODE,
         "created_at": _now_iso(),
         "proposals": [proposal],
         "no_proposal_reasons": [],
@@ -1035,7 +1041,7 @@ def _empty_result(
     return {
         "schema_version": SCHEMA_VERSION,
         "optimizer_id": OPTIMIZER_ID,
-        "mode": OPTIMIZER_MODE,
+        "mode": PROPOSAL_MODE,
         "created_at": _now_iso(),
         "proposals": [],
         "no_proposal_reasons": no_proposal_reasons,

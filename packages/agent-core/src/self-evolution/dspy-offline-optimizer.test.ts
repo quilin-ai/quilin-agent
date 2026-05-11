@@ -81,7 +81,7 @@ function stubServerPayload(
 	return JSON.stringify({
 		schema_version: SELF_EVOLUTION_SCHEMA_VERSION,
 		optimizer_id: "dspy-stub",
-		mode: "prompt_rewrite",
+		mode: "prompt_optimization",
 		created_at: "2026-05-09T00:00:00.000Z",
 		stage: "A",
 		dry_run: false,
@@ -165,7 +165,7 @@ describe("DspyOfflineOptimizer", () => {
 		expect(categories).toContain("tool_error");
 
 		expect(result.optimizerId).toBe(DSPY_OFFLINE_OPTIMIZER_ID);
-		expect(result.mode).toBe("prompt_rewrite");
+		expect(result.mode).toBe("prompt_optimization");
 		expect(result.proposals).toHaveLength(1);
 		const proposal = result.proposals[0];
 		expect(proposal?.title).toBe("DSPy placeholder optimization proposal");

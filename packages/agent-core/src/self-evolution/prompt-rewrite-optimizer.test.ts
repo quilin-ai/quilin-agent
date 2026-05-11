@@ -56,7 +56,7 @@ describe("PromptRewriteOptimizer", () => {
 		const result = await optimizer.optimize({ trajectories: [] });
 
 		expect(result.optimizerId).toBe(PROMPT_REWRITE_OPTIMIZER_ID);
-		expect(result.mode).toBe("prompt_rewrite");
+		expect(result.mode).toBe("prompt_optimization");
 		expect(result.proposals).toHaveLength(0);
 		expect(result.noProposalReasons).toHaveLength(1);
 		expect(result.noProposalReasons[0]?.code).toBe("no_failure_detected");

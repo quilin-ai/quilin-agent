@@ -12,7 +12,7 @@ class StubMCPClient implements DspyOptimizerMCPClient {
 		return JSON.stringify({
 			schema_version: 1,
 			optimizer_id: "dspy",
-			mode: "prompt_rewrite",
+			mode: "prompt_optimization",
 			created_at: "2026-05-09T00:00:00.000Z",
 			proposals: [],
 			no_proposal_reasons: [],
@@ -60,7 +60,7 @@ describe("createOfflineOptimizer", () => {
 					return JSON.stringify({
 						schema_version: 1,
 						optimizer_id: "dspy",
-						mode: "prompt_rewrite",
+						mode: "prompt_optimization",
 						created_at: "2026-05-09T00:00:00.000Z",
 						proposals: [],
 						no_proposal_reasons: [],
@@ -95,7 +95,7 @@ describe("createOfflineOptimizer", () => {
 					return JSON.stringify({
 						schema_version: 1,
 						optimizer_id: "dspy",
-						mode: "prompt_rewrite",
+						mode: "prompt_optimization",
 						created_at: "2026-05-09T00:00:00.000Z",
 						proposals: [],
 						no_proposal_reasons: [],

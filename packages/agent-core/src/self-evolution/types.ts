@@ -239,7 +239,7 @@ export interface OfflineOptimizerInput {
 	readonly dryRun?: boolean;
 }
 
-export type OfflineOptimizerMode = "artifact_only" | "prompt_rewrite";
+export type OfflineOptimizerMode = "artifact_only" | "prompt_optimization";
 
 export interface OfflineOptimizerResult {
 	readonly schemaVersion: typeof SELF_EVOLUTION_SCHEMA_VERSION;

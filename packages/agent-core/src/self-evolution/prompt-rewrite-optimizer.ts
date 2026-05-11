@@ -413,7 +413,7 @@ export class PromptRewriteOptimizer implements OfflineOptimizer {
 			return {
 				schemaVersion: SELF_EVOLUTION_SCHEMA_VERSION,
 				optimizerId: this.optimizerId,
-				mode: "prompt_rewrite",
+				mode: "prompt_optimization",
 				createdAt,
 				proposals: [],
 				noProposalReasons: [emptyTrajectoryReason()],
@@ -463,7 +463,7 @@ export class PromptRewriteOptimizer implements OfflineOptimizer {
 		return {
 			schemaVersion: SELF_EVOLUTION_SCHEMA_VERSION,
 			optimizerId: this.optimizerId,
-			mode: "prompt_rewrite",
+			mode: "prompt_optimization",
 			createdAt,
 			proposals,
 			noProposalReasons,

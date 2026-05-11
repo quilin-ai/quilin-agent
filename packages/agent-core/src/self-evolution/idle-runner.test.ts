@@ -79,7 +79,7 @@ function fakeOptimizer(
 			return {
 				schemaVersion: SELF_EVOLUTION_SCHEMA_VERSION,
 				optimizerId: "test-optimizer",
-				mode: "prompt_rewrite",
+				mode: "prompt_optimization",
 				createdAt: "2026-05-09T00:00:00.000Z",
 				proposals,
 				noProposalReasons: [],

@@ -330,7 +330,7 @@ function emptyResultWithReason(
 	return {
 		schemaVersion: SELF_EVOLUTION_SCHEMA_VERSION,
 		optimizerId: DSPY_OFFLINE_OPTIMIZER_ID,
-		mode: "prompt_rewrite",
+		mode: "prompt_optimization",
 		createdAt,
 		proposals: [],
 		noProposalReasons: [
@@ -471,7 +471,7 @@ export class DspyOfflineOptimizer implements OfflineOptimizer {
 		return {
 			schemaVersion: SELF_EVOLUTION_SCHEMA_VERSION,
 			optimizerId: DSPY_OFFLINE_OPTIMIZER_ID,
-			mode: "prompt_rewrite",
+			mode: "prompt_optimization",
 			createdAt,
 			proposals,
 			noProposalReasons,

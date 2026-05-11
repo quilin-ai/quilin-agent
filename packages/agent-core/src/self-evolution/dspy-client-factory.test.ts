@@ -232,7 +232,7 @@ describe("end-to-end: IdleEvolutionRunner + dspy client factory + proposalStore"
 		const dspyPayload = {
 			schema_version: SELF_EVOLUTION_SCHEMA_VERSION,
 			optimizer_id: DSPY_OFFLINE_OPTIMIZER_ID,
-			mode: "prompt_rewrite",
+			mode: "prompt_optimization",
 			created_at: "2026-05-09T00:00:00.000Z",
 			proposals: [
 				{
@@ -315,7 +315,7 @@ describe("end-to-end: IdleEvolutionRunner + dspy client factory + proposalStore"
 				JSON.stringify({
 					schema_version: SELF_EVOLUTION_SCHEMA_VERSION,
 					optimizer_id: DSPY_OFFLINE_OPTIMIZER_ID,
-					mode: "prompt_rewrite",
+					mode: "prompt_optimization",
 					created_at: "2026-05-09T00:00:00.000Z",
 					proposals: [
 						{
