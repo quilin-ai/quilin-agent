@@ -20,15 +20,15 @@
 | Arm | Mean failure rate | 95% CI (Wilson) | Per-seed failure rates |
 |---|---|---|---|
 | PromptRewrite (baseline) | 82.0% | [75.1%, 87.3%] | 82.0%, 82.0%, 82.0% |
-| DSPy + MIPROv2 (real, DummyLM) | 100.0% | [97.5%, 100.0%] | 100.0%, 100.0%, 100.0% |
-| DSPy + GEPA (real, DummyLM) | 100.0% | [97.5%, 100.0%] | 100.0%, 100.0%, 100.0% |
+| DSPy + MIPROv2 | 100.0% | [97.5%, 100.0%] | 100.0%, 100.0%, 100.0% |
+| DSPy + GEPA | 100.0% | [97.5%, 100.0%] | 100.0%, 100.0%, 100.0% |
 
 ## ASCII bar chart — failure rate (lower is better) / ASCII 条形图 —— 失败率（越低越好）
 
 ```
 PromptRewrite (baseline)            | █████████████████████████████████░░░░░░░ 82.0%
-DSPy + MIPROv2 (real, DummyLM)      | ████████████████████████████████████████ 100.0%
-DSPy + GEPA (real, DummyLM)         | ████████████████████████████████████████ 100.0%
+DSPy + MIPROv2                      | ████████████████████████████████████████ 100.0%
+DSPy + GEPA                         | ████████████████████████████████████████ 100.0%
 ```
 
 ## Lift summary / Lift 总结
@@ -41,7 +41,7 @@ Lift（MIPROv2 vs baseline）：-22.0% 相对失败率降幅；Lift（GEPA vs ba
 
 ## Per-FailureCategory breakdown / 按失败类型拆分
 
-| Category | PromptRewrite (baseline) | DSPy + MIPROv2 (real, DummyLM) | DSPy + GEPA (real, DummyLM) |
+| Category | PromptRewrite (baseline) | DSPy + MIPROv2 | DSPy + GEPA |
 |---|---|---|---|
 | budget_exhaustion | 100.0% | 100.0% | 100.0% |
 | missing_evidence | 100.0% | 100.0% | 100.0% |

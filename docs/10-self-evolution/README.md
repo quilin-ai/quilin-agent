@@ -439,7 +439,37 @@ Production trade-off: `DockerProposalSandboxPolicyGate` accepts a `requireDocker
 
 **为什么把 C 和 D 拆成独立 Linear issue**：Stage D 被 Stage C 阻塞（不存在的代码无法被 benchmark），但它有独立的验收证据（benchmark 数据集 + 验证报告），且数据策划那一段可以与 Stage C 工程实现并行。拆分让 Stage C 落地 cherry-pick 不必等到 benchmark 数据策划完成。
 
-**Stage D Validation Outcome (2026-05-10 round-3, REAL DSPy code path with DummyLM judge — supersedes round-2 mocked numbers)** — On 2026-05-10 the bench was re-run against the **real** DSPy 3.2.1 framework via `scripts/bench-real-dspy.py`: real `MIPROv2` (Bayesian instruction search via `optuna`) and real `GEPA` (Genetic-Pareto rollouts) both execute their full compile loops, with `dspy.utils.DummyLM` as a deterministic zero-cost judge (`QUILIN_OPTIMIZER_JUDGE_MODE=dummy`). 3-seed pooled (n=150) results:
+**Stage D Validation Outcome — REAL LLM JUDGE (2026-05-12, supersedes the DummyLM round-3 numbers below)** — On 2026-05-12 the bench was run with a **real LLM judge** (`deepseek/deepseek-chat`) via `scripts/bench-real-dspy.py --mode llm --confirm-real-llm-cost --seeds 3`. 3-seed pooled (n=150) results:
+
+| Arm | Pooled failure rate | 95% CI (Wilson) | Lift vs baseline |
+|---|---|---|---|
+| `PromptRewrite` (baseline heuristic) | 82.0% | [75.1%, 87.3%] | — |
+| **DSPy + MIPROv2** | **70.0%** | [62.2%, 76.8%] | **−12pp / 14.6% relative** 🟢 |
+| DSPy + GEPA | 86.0% | [79.5%, 90.7%] | +4pp / −4.9% regression 🔴 |
+
+**Decision bucket = `10% ≤ lift < 30%`** → DSPy stays opt-in (default remains `PromptRewrite`). **Stage E NOT triggered** (lift 14.6% clears the 10% threshold).
+
+Per-category breakdown reveals MIPROv2's entire lift comes from `tool_error` (46.7% → 0%). Of the other 4 categories, `budget_exhaustion` / `missing_evidence` / `unknown` saturate at 100% across all arms (synthetic dataset cannot differentiate them); `schema_violation` sits at 92.9% baseline → 100% MIPROv2 (slight regression) → 92.9% GEPA (flat). GEPA *regresses* on `tool_error` (46.7% → 60%) because its reflection LM proposes over-specific instructions (e.g., long `docker run` boilerplate) that over-fit to particular tasks.
+
+Caveats: (1) DeepSeek runs at low temperature → all 3 seeds returned identical numbers (zero variance); Wilson CI reflects sample size, not randomness. (2) DeepSeek's JSON adapter failed ~10 times during the run — `openai/gpt-4o-mini` cross-validation tracked as [QUI-152](https://linear.app/quilin-agent/issue/QUI-152) E-11. Full report: [`docs/10-self-evolution/dspy-validation-report-real-llm.md`](./dspy-validation-report-real-llm.md). Linear: [QUI-147](https://linear.app/quilin-agent/issue/QUI-147).
+
+**Stage D 验证产出 —— 真实 LLM 评委（2026-05-12，取代下方 DummyLM round-3 数据）** —— 2026-05-12 用真实 LLM 评委（`deepseek/deepseek-chat`）跑 `scripts/bench-real-dspy.py --mode llm --confirm-real-llm-cost --seeds 3`。3-seed 池化（n=150）结果：
+
+| Arm | 池化失败率 | 95% CI (Wilson) | vs baseline |
+|---|---|---|---|
+| `PromptRewrite`（启发式 baseline）| 82.0% | [75.1%, 87.3%] | — |
+| **DSPy + MIPROv2** | **70.0%** | [62.2%, 76.8%] | **−12pp / 14.6% 相对降幅** 🟢 |
+| DSPy + GEPA | 86.0% | [79.5%, 90.7%] | +4pp / −4.9% 相对回归 🔴 |
+
+**Decision bucket = `10% ≤ lift < 30%`** → DSPy 保持 opt-in（默认仍是 `PromptRewrite`）。**Stage E 未触发**（lift 14.6% 越过 10% 阈值）。
+
+按失败类型拆分：MIPROv2 的全部 lift 来自 `tool_error` 类别（46.7% → 0%）。其他 4 类中，`budget_exhaustion`/`missing_evidence`/`unknown` 在所有 arm 上都是 100%（合成数据集分辨不出）；`schema_violation` 基线 92.9% → MIPROv2 100%（小幅回归）→ GEPA 92.9%（持平）。GEPA 在 `tool_error` 上**回归**（46.7% → 60%）：reflection LM 提议的指令过度具体化（如长篇 `docker run` 样板），对特定任务过拟合。
+
+限制说明：(1) DeepSeek 低温确定性 → 3 个 seed 完全相同（方差为零）；Wilson CI 反映样本量界限不反映随机性。(2) DeepSeek JSON adapter 报错 ~10 次 —— `openai/gpt-4o-mini` 交叉验证记在 [QUI-152](https://linear.app/quilin-agent/issue/QUI-152) E-11。完整报告：[`docs/10-self-evolution/dspy-validation-report-real-llm.md`](./dspy-validation-report-real-llm.md)。Linear：[QUI-147](https://linear.app/quilin-agent/issue/QUI-147)。
+
+---
+
+**Prior Stage D outcome (2026-05-10 round-3, DummyLM judge — kept for historical context)** — On 2026-05-10 the bench was re-run against the **real** DSPy 3.2.1 framework via `scripts/bench-real-dspy.py`: real `MIPROv2` (Bayesian instruction search via `optuna`) and real `GEPA` (Genetic-Pareto rollouts) both execute their full compile loops, with `dspy.utils.DummyLM` as a deterministic zero-cost judge (`QUILIN_OPTIMIZER_JUDGE_MODE=dummy`). 3-seed pooled (n=150) results:
 
 | Arm | Pooled failure rate | 95% CI (Wilson) |
 |---|---|---|
@@ -463,14 +493,14 @@ Both DSPy arms regress to total failure (lift = **−22.0%** for both), landing 
 
 - `providers/optimizer/src/quilin_optimizer/server.py`: `OptimizerConfig.judge_mode: "llm" | "dummy"` field reading `QUILIN_OPTIMIZER_JUDGE_MODE`; `_configure_dspy_lm` dummy-mode branch binds `dspy.utils.DummyLM(list)` via `itertools.cycle` ×1000 to satisfy MIPROv2/GEPA's many internal Predict calls; metric signature accepts both MIPROv2 (`example, prediction, trace`) and GEPA (`gold, pred, trace, pred_name, pred_trace`) shapes via `*args, **kwargs`; `_select_compiler` GEPA branch passes `reflection_lm=dspy.settings.lm` (DSPy 3.x requires this).
 - `providers/optimizer/pyproject.toml`: `[project.optional-dependencies] dspy = ["dspy-ai>=2.5", "optuna>=3.0"]` — `optuna` is eagerly required for MIPROv2's Bayesian search.
-- `scripts/bench-real-dspy.py`: 3-arm A/B harness, Python-side keyword-overlap scoring + Wilson 95% CI pooling, deterministic per-category baseline mirror of `PromptRewriteOptimizer`. Forces `JUDGE_MODE=dummy` and strips any real API key on entry to prevent accidental LLM cost.
+- `scripts/bench-real-dspy.py`: 3-arm A/B harness, Python-side keyword-overlap scoring + Wilson 95% CI pooling, deterministic per-category baseline mirror of `PromptRewriteOptimizer`. **Default (`--mode=dummy`)** forces `JUDGE_MODE=dummy` and strips any real API key on entry to prevent accidental LLM cost. **`--mode=llm`** requires both `--confirm-real-llm-cost` and `QUILIN_OPTIMIZER_JUDGE_API_KEY` in env; otherwise exits with code 2. Reports default to `dspy-validation-report.md` (dummy) and `dspy-validation-report-real-llm.md` (llm) so re-runs don't overwrite each other's artifacts.
 - Tests: `providers/optimizer/tests/test_server_real_dspy.py::TestDummyJudgeMode` — 9 tests covering the dummy-mode contract (default-mode-fallback, env-var read, invalid-value coercion, `is_ready()` true/false, real-DSPy compile path runs without API key, `DummyLM` actually bound to `dspy.settings`, no `judge_api_key_missing` warning in dummy mode).
 
 **实现实证（Stage D 真实 DSPy 路径，2026-05-10）** —— 下游消费者参考点：
 
 - `providers/optimizer/src/quilin_optimizer/server.py`：`OptimizerConfig.judge_mode: "llm" | "dummy"` 字段读取 `QUILIN_OPTIMIZER_JUDGE_MODE`；`_configure_dspy_lm` 的 dummy 分支用 `itertools.cycle` 把 `dspy.utils.DummyLM(list)` 喂到 1000 条响应（满足 MIPROv2/GEPA 内部多次 Predict 调用）；metric 签名同时接受 MIPROv2（`example, prediction, trace`）和 GEPA（`gold, pred, trace, pred_name, pred_trace`），用 `*args, **kwargs`；`_select_compiler` 的 GEPA 分支传 `reflection_lm=dspy.settings.lm`（DSPy 3.x 必需）。
 - `providers/optimizer/pyproject.toml`：`[project.optional-dependencies] dspy = ["dspy-ai>=2.5", "optuna>=3.0"]` —— `optuna` 是 MIPROv2 Bayesian 搜索的硬依赖，主动拉取。
-- `scripts/bench-real-dspy.py`：3-arm A/B 框架，Python 端关键字重叠评分 + Wilson 95% CI 池化，确定性 per-category baseline 镜像 `PromptRewriteOptimizer` 的逻辑。入口强制 `JUDGE_MODE=dummy` 并 strip 真实 API key 防止意外烧钱。
+- `scripts/bench-real-dspy.py`：3-arm A/B 框架，Python 端关键字重叠评分 + Wilson 95% CI 池化，确定性 per-category baseline 镜像 `PromptRewriteOptimizer` 的逻辑。**默认 `--mode=dummy`** 强制 `JUDGE_MODE=dummy` 并 strip 真实 API key 防止意外烧钱。**`--mode=llm`** 需要同时配 `--confirm-real-llm-cost` 与 env 里的 `QUILIN_OPTIMIZER_JUDGE_API_KEY`，否则 exit code 2。报告默认输出按 mode 拆分（`dspy-validation-report.md` for dummy / `dspy-validation-report-real-llm.md` for llm）防止互相覆盖。
 - 测试：`providers/optimizer/tests/test_server_real_dspy.py::TestDummyJudgeMode` —— 9 个测试覆盖 dummy 模式契约（默认回退、env 读取、非法值降级、`is_ready()` true/false、无 API key 真 DSPy 跑得通、`DummyLM` 真绑到 `dspy.settings`、dummy 模式不发 `judge_api_key_missing` 警告）。
 
 **Next steps for Stage D follow-up / Stage D follow-up 的下一步**:

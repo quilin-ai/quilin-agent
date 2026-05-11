@@ -2,33 +2,53 @@
 
 Runs the same 3-arm A/B harness as ``scripts/bench-self-evolution.ts``
 ``--mode mock`` BUT against the **real** ``providers/optimizer``
-``optimize()`` tool with ``QUILIN_OPTIMIZER_JUDGE_MODE=dummy`` so the
-DSPy compile loop actually executes (MIPROv2's Bayesian search, GEPA's
-genetic-pareto rollouts) without burning real LLM budget.
+``optimize()`` tool, so the DSPy compile loop actually executes
+(MIPROv2's Bayesian search, GEPA's genetic-pareto rollouts).
+
+Two judge-LM modes (``--mode`` flag):
+
+- ``--mode dummy`` (default): ``dspy.utils.DummyLM`` judge, zero LLM cost.
+  Validates DSPy code-path wiring. Reports to
+  ``docs/10-self-evolution/dspy-validation-report.md``.
+- ``--mode llm``: real LLM judge driven by ``QUILIN_OPTIMIZER_JUDGE_*``
+  env vars. Requires ``--confirm-real-llm-cost`` flag to acknowledge
+  the per-run cost. Reports to
+  ``docs/10-self-evolution/dspy-validation-report-real-llm.md``.
 
 The TS bench (mock mode) verifies harness math; this Python bench
 verifies real DSPy code path. Two scripts are kept for separation:
+
 - TS mock: zero deps, fast, deterministic — runs in CI on every change.
-- Python real: opt-in, requires `uv sync --extra dspy`, exercises actual
-  DSPy compilers — run before report-update commits.
+- Python real: opt-in, requires ``uv sync --extra dspy``, exercises
+  actual DSPy compilers — run before report-update commits.
 
 Stage D real-DSPy benchmark（QUI-147 follow-up）。
 
 跑与 ``scripts/bench-self-evolution.ts --mode mock`` 同一个 3-arm A/B
-框架，但调真实的 ``providers/optimizer`` ``optimize()`` 工具，用
-``QUILIN_OPTIMIZER_JUDGE_MODE=dummy`` 让 DSPy compile loop 真跑起来
-（MIPROv2 的 Bayesian 搜索、GEPA 的 genetic-pareto rollouts），不烧
-真实 LLM 配额。
+框架，但调真实的 ``providers/optimizer`` ``optimize()`` 工具，让 DSPy
+compile loop 真跑起来（MIPROv2 的 Bayesian 搜索、GEPA 的 genetic-pareto
+rollouts）。
 
-TS bench (mock 模式) 验证 harness 数学；本 Python bench 验证真实
-DSPy 代码路径。两个脚本分离保留，分工不同。
+通过 ``--mode`` 切换 judge LM：
+
+- ``--mode dummy``（默认）：用 ``dspy.utils.DummyLM`` 当 judge，零成本，
+  验证 DSPy 代码路径接线。报告写到 ``dspy-validation-report.md``。
+- ``--mode llm``：真实 LLM 评委，读 ``QUILIN_OPTIMIZER_JUDGE_*`` env，
+  需要 ``--confirm-real-llm-cost`` 显式确认烧钱。报告写到
+  ``dspy-validation-report-real-llm.md``。
+
+TS bench（mock 模式）验证 harness 数学；本 Python bench 验证真实 DSPy
+代码路径。两个脚本分离保留，分工不同。
 
 Usage:
     cd providers/optimizer && uv sync --extra dspy --extra dev
-    cd ../..
-    QUILIN_OPTIMIZER_JUDGE_MODE=dummy uv --directory providers/optimizer \\
-        run python ../../scripts/bench-real-dspy.py --seeds 3 --output \\
-        docs/10-self-evolution/dspy-validation-report.md
+    # Dummy mode (no cost, validates wiring):
+    uv --directory providers/optimizer run python \\
+        ../../scripts/bench-real-dspy.py --seeds 3
+    # Real-LLM mode (requires QUILIN_OPTIMIZER_JUDGE_API_KEY in env):
+    uv --directory providers/optimizer run python \\
+        ../../scripts/bench-real-dspy.py --mode llm \\
+        --confirm-real-llm-cost --seeds 3
 """
 
 from __future__ import annotations
@@ -49,7 +69,8 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TRAJECTORIES_PATH = REPO_ROOT / "docs" / "10-self-evolution" / "benchmark" / "trajectories.jsonl"
-DEFAULT_OUTPUT = REPO_ROOT / "docs" / "10-self-evolution" / "dspy-validation-report.md"
+DEFAULT_OUTPUT_DUMMY = REPO_ROOT / "docs" / "10-self-evolution" / "dspy-validation-report.md"
+DEFAULT_OUTPUT_LLM = REPO_ROOT / "docs" / "10-self-evolution" / "dspy-validation-report-real-llm.md"
 
 # Make providers/optimizer importable when this script is run directly.
 sys.path.insert(0, str(REPO_ROOT / "providers" / "optimizer" / "src"))
@@ -398,11 +419,12 @@ def render_report(
     seeds: int,
     dataset_sha: str,
     judge_mode: str,
+    judge_model: str = "(default)",
 ) -> str:
     baseline = next(a for a in aggregates if "baseline" in a.arm.lower())
     arms_lookup = {a.arm: a for a in aggregates}
-    mipro = arms_lookup.get("DSPy + MIPROv2 (real, DummyLM)")
-    gepa = arms_lookup.get("DSPy + GEPA (real, DummyLM)")
+    mipro = arms_lookup.get("DSPy + MIPROv2")
+    gepa = arms_lookup.get("DSPy + GEPA")
 
     lift_mipro = relative_lift(baseline.pooled_failure_rate, mipro.pooled_failure_rate) if mipro else 0.0
     lift_gepa = relative_lift(baseline.pooled_failure_rate, gepa.pooled_failure_rate) if gepa else 0.0
@@ -469,11 +491,72 @@ def render_report(
             else "Trigger Stage E follow-up (Trace optimizer / OPRO / PromptBreeder evaluation). 触发 Stage E follow-up 评估替代算法."
         )
 
+    if judge_mode == "dummy":
+        banner_en = (
+            "✅ **REAL DSPy CODE PATH** — DSPy 3.2.1 actually invoked. Both "
+            "MIPROv2 (Bayesian instruction search via `optuna`) and GEPA "
+            "(Genetic-Pareto rollouts) execute their full compile loops. "
+            "Judge LM is `dspy.utils.DummyLM` (zero LLM cost, deterministic). "
+            "Real-LLM benchmarking remains user-initiated; this report exercises "
+            "the real DSPy framework with a deterministic stub judge so "
+            "`dspy_compile_starting` and the entire optimizer pipeline run "
+            "in production-like conditions."
+        )
+        banner_zh = (
+            "✅ **真实 DSPy 代码路径** —— DSPy 3.2.1 真实调用。MIPROv2（基于 `optuna` "
+            "的 Bayesian instruction 搜索）与 GEPA（Genetic-Pareto rollouts）的完整 "
+            "compile loop 都在运行。Judge LM 用 `dspy.utils.DummyLM`（零 LLM 成本，"
+            "确定性）。真实 LLM benchmark 仍由用户触发；本报告用确定性 stub judge 让 "
+            "`dspy_compile_starting` 和整个 optimizer pipeline 在接近生产的条件下跑起来。"
+        )
+        judge_mode_line = "`QUILIN_OPTIMIZER_JUDGE_MODE=dummy` → `dspy.utils.DummyLM`"
+        caveats_block = (
+            "- DummyLM provides deterministic but **content-free** judge signal — "
+            "DSPy's compile loops run end-to-end but cannot meaningfully optimize "
+            "without real semantic feedback. Resulting \"optimized prompts\" tend "
+            "to revert toward the seed instruction. This is by-design for "
+            "cost-free real-code-path benchmarking; it is NOT a substitute for "
+            "real-LLM validation.\n"
+            "- DummyLM 提供确定性但**没有语义内容**的 judge 信号 —— DSPy compile loop "
+            "端到端运行，但缺乏真实语义反馈无法有效优化。生成的\"优化后 prompt\"倾向回退到种子指令。"
+            "这是无成本测试真实代码路径的有意设计，**不能替代真实 LLM 验证**。"
+        )
+    else:
+        banner_en = (
+            "🔥 **REAL LLM JUDGE** — DSPy 3.2.1 actually invoked with a real "
+            f"LLM judge (`{judge_model}`). MIPROv2 (Bayesian instruction search "
+            "via `optuna`) and GEPA (Genetic-Pareto rollouts) get **real "
+            "semantic feedback** during compile — this is the canonical lift "
+            "measurement, not a code-path smoke test."
+        )
+        banner_zh = (
+            f"🔥 **真实 LLM 评委** —— DSPy 3.2.1 真实调用，judge 用真实 LLM（`{judge_model}`）。"
+            "MIPROv2（基于 `optuna` 的 Bayesian instruction 搜索）与 GEPA（Genetic-Pareto "
+            "rollouts）在 compile loop 中**获得真实语义反馈** —— 本次是 lift 的正式测量，"
+            "不再是代码路径冒烟测试。"
+        )
+        judge_mode_line = f"`QUILIN_OPTIMIZER_JUDGE_MODE=llm` → real LLM (`{judge_model}`)"
+        caveats_block = (
+            f"- Real-LLM judge (`{judge_model}`) provides semantic feedback, but "
+            "results are **deterministic across seeds** when the judge model "
+            "runs at low temperature — Wilson CI is computed over pooled samples "
+            "but per-seed variance may be zero. Treat the CI as a sample-size "
+            "bound, not a randomness bound.\n"
+            f"- 真实 LLM 评委（`{judge_model}`）提供语义反馈，但 judge 在低温下"
+            "**跨 seed 输出确定**时，per-seed 方差可能为零。Wilson CI 反映样本量界限，"
+            "不反映随机性界限。\n"
+            "- Judge LM JSON-adapter failures (DeepSeek struggles with structured "
+            "output) may inflate failure rates artificially; cross-validate with "
+            "another judge model before treating absolute lift as canonical.\n"
+            "- Judge LM 的 JSON adapter 报错（DeepSeek 结构化输出弱）可能拉高失败率，"
+            "把 lift 当正式数据前需要用另一个评委模型交叉验证。"
+        )
+
     return f"""# Stage D — DSPy Validation Report (QUI-147)
 
-> ✅ **REAL DSPy CODE PATH** — DSPy 3.2.1 actually invoked. Both MIPROv2 (Bayesian instruction search via `optuna`) and GEPA (Genetic-Pareto rollouts) execute their full compile loops. Judge LM is `dspy.utils.DummyLM` (zero LLM cost, deterministic). Real-LLM benchmarking remains user-initiated; this report exercises the real DSPy framework with a deterministic stub judge so `dspy_compile_starting` and the entire optimizer pipeline run in production-like conditions.
+> {banner_en}
 
-> ✅ **真实 DSPy 代码路径** —— DSPy 3.2.1 真实调用。MIPROv2（基于 `optuna` 的 Bayesian instruction 搜索）与 GEPA（Genetic-Pareto rollouts）的完整 compile loop 都在运行。Judge LM 用 `dspy.utils.DummyLM`（零 LLM 成本，确定性）。真实 LLM benchmark 仍由用户触发；本报告用确定性 stub judge 让 `dspy_compile_starting` 和整个 optimizer pipeline 在接近生产的条件下跑起来。
+> {banner_zh}
 
 ## Reproducibility / 可复现性
 
@@ -483,7 +566,7 @@ def render_report(
 - Seeds per arm: {seeds}
 - Pooled samples per arm: {trajectory_count * seeds}
 - Bench script: `scripts/bench-real-dspy.py`
-- Judge mode: `QUILIN_OPTIMIZER_JUDGE_MODE=dummy` → `dspy.utils.DummyLM`
+- Judge mode: {judge_mode_line}
 - DSPy version: 3.2.1 (with optuna)
 
 ## Aggregate failure-rate table / 失败率聚合表
@@ -523,8 +606,7 @@ Decision branches per docs/10-self-evolution/README.md §2.4.0.1: lift ≥ 30% �
 
 ## Caveats / 限制说明
 
-- DummyLM provides deterministic but **content-free** judge signal — DSPy's compile loops run end-to-end but cannot meaningfully optimize without real semantic feedback. Resulting "optimized prompts" tend to revert toward the seed instruction. This is by-design for cost-free real-code-path benchmarking; it is NOT a substitute for real-LLM validation.
-- DummyLM 提供确定性但**没有语义内容**的 judge 信号 —— DSPy compile loop 端到端运行，但缺乏真实语义反馈无法有效优化。生成的"优化后 prompt"倾向回退到种子指令。这是无成本测试真实代码路径的有意设计，**不能替代真实 LLM 验证**。
+{caveats_block}
 - Replay scoring is keyword-overlap based; it does not re-execute the agent loop end-to-end.
 - Replay 评分基于关键字重叠，没有完整重跑 agent loop。
 - Synthetic 50-trajectory dataset (not real production traces). Real ≥200 prod-trace dataset is the canonical Stage D follow-up.
@@ -539,14 +621,21 @@ Decision branches per docs/10-self-evolution/README.md §2.4.0.1: lift ≥ 30% �
 
 async def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Stage D real-DSPy benchmark with DummyLM judge (QUI-147).",
+        description=(
+            "Stage D real-DSPy benchmark (QUI-147). Supports both dummy "
+            "(DummyLM, default, zero LLM cost) and llm (real judge LM, "
+            "requires --confirm-real-llm-cost) modes."
+        ),
     )
     parser.add_argument("--seeds", type=int, default=3, help="Seeds per arm (default 3).")
     parser.add_argument(
         "--output",
         type=Path,
-        default=DEFAULT_OUTPUT,
-        help=f"Report output path (default: {DEFAULT_OUTPUT}).",
+        default=None,
+        help=(
+            "Report output path. Defaults to dspy-validation-report.md "
+            "(dummy mode) or dspy-validation-report-real-llm.md (llm mode)."
+        ),
     )
     parser.add_argument(
         "--trajectories",
@@ -559,7 +648,33 @@ async def main() -> int:
         action="store_true",
         help="Run all arms but do not write the report file.",
     )
+    parser.add_argument(
+        "--mode",
+        choices=["dummy", "llm"],
+        default="dummy",
+        help=(
+            "Judge LM mode. 'dummy' (default) = zero-cost DummyLM, validates "
+            "code path. 'llm' = real API spend, requires --confirm-real-llm-cost "
+            "and QUILIN_OPTIMIZER_JUDGE_API_KEY in env."
+        ),
+    )
+    parser.add_argument(
+        "--confirm-real-llm-cost",
+        action="store_true",
+        help=(
+            "Required when --mode=llm. Acknowledges that the bench will issue "
+            "real LLM calls (thousands per run) and incur cost on the configured "
+            "judge model."
+        ),
+    )
     args = parser.parse_args()
+
+    # Resolve --output default based on --mode (post-parse so we know args.mode).
+    # Splitting paths prevents an llm-mode rerun from silently overwriting the
+    # dummy-mode canonical report (and vice versa). HIGH issue caught by
+    # Round-1 Reviewer B QUI-152 E-1 follow-up.
+    if args.output is None:
+        args.output = DEFAULT_OUTPUT_LLM if args.mode == "llm" else DEFAULT_OUTPUT_DUMMY
 
     if args.seeds <= 0 or args.seeds > 100:
         print(f"ERROR: --seeds must be 1..100 (got {args.seeds})", file=sys.stderr)
@@ -569,11 +684,37 @@ async def main() -> int:
         print(f"ERROR: trajectories file not found: {args.trajectories}", file=sys.stderr)
         return 2
 
-    # Force dummy judge mode for the entire bench. Override any preset
-    # so a developer can't accidentally burn real LLM budget.
-    os.environ["QUILIN_OPTIMIZER_JUDGE_MODE"] = "dummy"
-    # Strip any real API key so a leaked env can't be picked up.
-    os.environ.pop("QUILIN_OPTIMIZER_JUDGE_API_KEY", None)
+    if args.mode == "llm":
+        if not args.confirm_real_llm_cost:
+            print(
+                "ERROR: --mode=llm requires --confirm-real-llm-cost to unlock "
+                "real-API spend",
+                file=sys.stderr,
+            )
+            return 2
+        if not os.environ.get("QUILIN_OPTIMIZER_JUDGE_API_KEY"):
+            print(
+                "ERROR: --mode=llm requires QUILIN_OPTIMIZER_JUDGE_API_KEY in "
+                "env (set in .env or export)",
+                file=sys.stderr,
+            )
+            return 2
+        # Activate real LLM mode for the entire bench. Don't strip the key;
+        # the server.py judge LM constructor reads it through OptimizerConfig.
+        os.environ["QUILIN_OPTIMIZER_JUDGE_MODE"] = "llm"
+        print(
+            f"  ⚠ real-LLM mode unlocked: model="
+            f"{os.environ.get('QUILIN_OPTIMIZER_JUDGE_MODEL', '(default)')} "
+            f"base_url={os.environ.get('QUILIN_OPTIMIZER_JUDGE_BASE_URL', '(litellm default)')}",
+            file=sys.stderr,
+        )
+    else:
+        # Default safety: force dummy judge mode for the entire bench.
+        # Override any preset so a developer can't accidentally burn real
+        # LLM budget by exporting JUDGE_MODE=llm before invoking the bench.
+        os.environ["QUILIN_OPTIMIZER_JUDGE_MODE"] = "dummy"
+        # Strip any real API key so a leaked env can't be picked up.
+        os.environ.pop("QUILIN_OPTIMIZER_JUDGE_API_KEY", None)
 
     # Lazy import to keep the script importable without dspy installed
     # (e.g., for --help on a fresh checkout).
@@ -586,8 +727,8 @@ async def main() -> int:
 
     arm_specs = [
         ("PromptRewrite (baseline)", None),
-        ("DSPy + MIPROv2 (real, DummyLM)", "mipro"),
-        ("DSPy + GEPA (real, DummyLM)", "gepa"),
+        ("DSPy + MIPROv2", "mipro"),
+        ("DSPy + GEPA", "gepa"),
     ]
 
     aggregates: list[ArmAggregate] = []
@@ -617,6 +758,7 @@ async def main() -> int:
         seeds=args.seeds,
         dataset_sha=dataset_sha,
         judge_mode=os.environ.get("QUILIN_OPTIMIZER_JUDGE_MODE", "dummy"),
+        judge_model=os.environ.get("QUILIN_OPTIMIZER_JUDGE_MODEL", "(default)"),
     )
 
     if args.dry_run:
