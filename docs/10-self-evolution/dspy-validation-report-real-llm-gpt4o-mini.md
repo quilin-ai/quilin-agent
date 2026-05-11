@@ -1,5 +1,9 @@
 # Stage D — DSPy Validation Report (QUI-147)
 
+> ⚠️ **DEPRECATED — HISTORICAL EVIDENCE ONLY (post 2026-05-12)** — The GEPA-only outcome in [README §2.4](./README.md) supersedes this report. The MIPROv2 −19.5% lift below (vs +14.6% under DeepSeek judge on the same code + dataset) is the canonical evidence that the bench's keyword-overlap scorer is judge-LM-sensitive, not a current production validation. Do not act on the decision-bucket recommendation in this file. ⚠️ **历史证据 —— 已弃用**：当前真相以 README §2.4 为准；MIPROv2 −19.5%（gpt-4o-mini）vs +14.6%（DeepSeek）是 bench 评委敏感性的关键证据。
+>
+> Pre-deprecation banner (preserved verbatim):
+
 > 🔥 **REAL LLM JUDGE** — DSPy 3.2.1 actually invoked with a real LLM judge (`openrouter/openai/gpt-4o-mini`). MIPROv2 (Bayesian instruction search via `optuna`) and GEPA (Genetic-Pareto rollouts) get **real semantic feedback** during compile — this is the canonical lift measurement, not a code-path smoke test.
 
 > 🔥 **真实 LLM 评委** —— DSPy 3.2.1 真实调用，judge 用真实 LLM（`openrouter/openai/gpt-4o-mini`）。MIPROv2（基于 `optuna` 的 Bayesian instruction 搜索）与 GEPA（Genetic-Pareto rollouts）在 compile loop 中**获得真实语义反馈** —— 本次是 lift 的正式测量，不再是代码路径冒烟测试。

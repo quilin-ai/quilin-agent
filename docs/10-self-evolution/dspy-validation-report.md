@@ -1,5 +1,9 @@
 # Stage D — DSPy Validation Report (QUI-147)
 
+> ⚠️ **DEPRECATED — HISTORICAL EVIDENCE ONLY (post 2026-05-12)** — The GEPA-only outcome in [README §2.4](./README.md) supersedes this report. Numbers below are retained as evidence that the bench was judge-sensitive, NOT as current production validation. Do not act on any decision-bucket recommendation in this file. ⚠️ **历史证据 —— 已弃用**：当前真相以 README §2.4 为准。
+>
+> Pre-deprecation banner (preserved verbatim):
+
 > ✅ **REAL DSPy CODE PATH** — DSPy 3.2.1 actually invoked. Both MIPROv2 (Bayesian instruction search via `optuna`) and GEPA (Genetic-Pareto rollouts) execute their full compile loops. Judge LM is `dspy.utils.DummyLM` (zero LLM cost, deterministic). Real-LLM benchmarking remains user-initiated; this report exercises the real DSPy framework with a deterministic stub judge so `dspy_compile_starting` and the entire optimizer pipeline run in production-like conditions.
 
 > ✅ **真实 DSPy 代码路径** —— DSPy 3.2.1 真实调用。MIPROv2（基于 `optuna` 的 Bayesian instruction 搜索）与 GEPA（Genetic-Pareto rollouts）的完整 compile loop 都在运行。Judge LM 用 `dspy.utils.DummyLM`（零 LLM 成本，确定性）。真实 LLM benchmark 仍由用户触发；本报告用确定性 stub judge 让 `dspy_compile_starting` 和整个 optimizer pipeline 在接近生产的条件下跑起来。

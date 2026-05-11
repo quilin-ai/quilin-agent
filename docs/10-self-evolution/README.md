@@ -383,9 +383,9 @@ Production trade-off: `DockerProposalSandboxPolicyGate` accepts a `requireDocker
 
 **Optimizer 范围** —— 在 DSPy 2.5+ 框架内同时接入 `MIPROv2`（在 instruction + few-shot 子集两维上跑 Bayesian 搜索，DSPy 2.x 旗舰算法）与 `GEPA`（Genetic-Pareto，DSPy 2.5+ 已内置 `dspy.GEPA`；输出 Pareto 前沿，可以看到 accuracy / cost 的权衡）。两个 compiler 都走 DSPy 的默认单 judge 评分路径：一个用户配置的 judge LLM（默认 = 用户主 LLM，经 Vercel AI SDK 调用）。**Multi-judge ensemble 刻意推后** —— Stage C 先做单 judge 版，让实现规模适配单 user-key 用户；如果 Stage D 的 benchmark 显示 GEPA 已知的单 judge 方差伤到 lift，再在 Stage E 与 Trace optimizer 评估一起重启 ensemble。
 
-**单 judge 即可用 / Single judge keeps it usable**: only one LLM provider key is required. If no key is configured, the optimizer is disabled and `IdleEvolutionRunner` falls back to the `PromptRewriteOptimizer` baseline with a warn-level log.
+**单 judge 即可用 / Single judge keeps it usable** ⚠️ **HISTORICAL — fallback target changed to `LocalNoopOfflineOptimizer` post 2026-05-12 (banner item #6 above)**: only one LLM provider key is required. If no key is configured, the optimizer is disabled and `IdleEvolutionRunner` falls back to the ~~`PromptRewriteOptimizer`~~ **`LocalNoopOfflineOptimizer`** baseline with a warn-level log.
 
-**单 judge 即可用**：用户只需配置任意一个 LLM provider key 即可使用。如果没有可用 key，optimizer 自动禁用，`IdleEvolutionRunner` 回退到 `PromptRewriteOptimizer` 基线并 warn-level 打日志。
+**单 judge 即可用** ⚠️ **历史 —— 2026-05-12 起回退目标改为 `LocalNoopOfflineOptimizer`（上文 banner 第 6 条）**：用户只需配置任意一个 LLM provider key 即可使用。如果没有可用 key，optimizer 自动禁用，`IdleEvolutionRunner` 回退到 ~~`PromptRewriteOptimizer`~~ **`LocalNoopOfflineOptimizer`** 基线并 warn-level 打日志。
 
 **Excluded from scope (项目约束 / project constraint)**: model finetuning paths (GRPO / DeepSeek R1-zero / open-weights RL) are off-limits — Quilin is an agent project that consumes models through API only, with no GPU cluster or open-weights training pipeline. PromptBreeder / OPRO / Trace optimizer also deferred (only revisited if Stage D shows MIPROv2 + GEPA lift insufficient).
 
@@ -406,7 +406,7 @@ Production trade-off: `DockerProposalSandboxPolicyGate` accepts a `requireDocker
 - `packages/agent-core/src/config/loader.ts` — `quilin-optimizer` MCP server entry added to default capabilities config, gated on (a) `providers/optimizer/` exists AND (b) `QUILIN_OPTIMIZER_JUDGE_API_KEY` env var present; absence of either skips the spawn.
 - TS test count: 1962 passing (+ 1 skipped) — was 1958 baseline; +4 new tests in `dspy-offline-optimizer.test.ts` (2 — `optimizer_choice` default + override) and `optimizer-factory.test.ts` (2 — `dspyOptimizerChoice` flow-through).
 
-**Stage C+ wiring landed (2026-05-10)** — the deferred `dspyClientFactory` inside `index.ts` is now wired to the spawned `quilin-optimizer` MCP server, so `createOfflineOptimizer({ choice: "dspy" })` actually returns `DspyOfflineOptimizer` when (a) the loaded capabilities config contains a `quilin-optimizer` entry AND (b) the registry's transport is connected. When the entry is absent the factory returns `undefined` and `createOfflineOptimizer` still falls back to `PromptRewriteOptimizer` with a warn log — a misconfigured user does not lose self-evolution. Reference points:
+**Stage C+ wiring landed (2026-05-10)** — ⚠️ **HISTORICAL** — see SUPERSEDED banner above (banner item #6). The post-2026-05-12 fallback is `LocalNoopOfflineOptimizer`, NOT `PromptRewriteOptimizer`. The wiring described here is otherwise still accurate. The deferred `dspyClientFactory` inside `index.ts` is wired to the spawned `quilin-optimizer` MCP server, so `createOfflineOptimizer({ choice: "dspy" })` returns `DspyOfflineOptimizer` when (a) the loaded capabilities config contains a `quilin-optimizer` entry AND (b) the registry's transport is connected. When the entry is absent the factory returns `undefined` and `createOfflineOptimizer` falls back to ~~`PromptRewriteOptimizer`~~ **`LocalNoopOfflineOptimizer`** with a warn log. Reference points:
 
 - `packages/agent-core/src/self-evolution/dspy-client-factory.ts` — `buildDspyClientFactoryFromRegistryRef` returns a lazy factory whose `callTool` resolves the transport from a late-bound `MCPRegistryRef` on every invocation; `DspyOptimizerNotConnectedError` covers the "registry bound but transport missing" case.
 - `packages/agent-core/src/index.ts` (REPL bootstrap, around the `createOfflineOptimizer({...})` call site) — `mcpRegistryRef` is constructed before `IdleEvolutionRunner`, the factory captures it, and `onRuntimeReady` flips `mcpRegistryRef.registry` to the live `MCPRegistry` once `startRepl` builds it. The `Self-evolution engine online` log line carries `dspyClientFactoryWired: bool` so operators can confirm the wire from a single log record without leaking secrets.
@@ -443,7 +443,7 @@ Production trade-off: `DockerProposalSandboxPolicyGate` accepts a `requireDocker
 
 **为什么把 C 和 D 拆成独立 Linear issue**：Stage D 被 Stage C 阻塞（不存在的代码无法被 benchmark），但它有独立的验收证据（benchmark 数据集 + 验证报告），且数据策划那一段可以与 Stage C 工程实现并行。拆分让 Stage C 落地 cherry-pick 不必等到 benchmark 数据策划完成。
 
-**Stage D Outcome — DSPy + GEPA AS THE SINGULAR OPTIMIZER (2026-05-12)** — After running the bench with two different real judges (`deepseek/deepseek-chat` and `openai/gpt-4o-mini` via OpenRouter), the lift signal **flipped sign** depending on the judge — MIPROv2 went from +14.6% (DeepSeek) to −19.5% (gpt-4o-mini) on the same code + dataset. The bench's keyword-overlap scorer rewards keyword-dense proposals (DeepSeek's style) and penalizes abstract proposals (gpt-4o-mini's style), measuring **proposal style alignment with the keyword pool**, not optimization quality. The bench cannot decide which DSPy compiler is "better".
+**Stage D Outcome — DSPy + GEPA AS THE SINGULAR OPTIMIZER (2026-05-12, [QUI-152](https://linear.app/quilin-agent/issue/QUI-152) E-1/E-11 evidence)** — After running the bench with two different real judges (`deepseek/deepseek-chat` and `openai/gpt-4o-mini` via OpenRouter) under [QUI-152](https://linear.app/quilin-agent/issue/QUI-152) E-1 and E-11, the lift signal **flipped sign** depending on the judge — MIPROv2 went from +14.6% (DeepSeek) to −19.5% (gpt-4o-mini) on the same code + dataset. The bench's keyword-overlap scorer rewards keyword-dense proposals (DeepSeek's style) and penalizes abstract proposals (gpt-4o-mini's style), measuring **proposal style alignment with the keyword pool**, not optimization quality. The bench cannot decide which DSPy compiler is "better".
 
 **Decision: adopt GEPA as the singular optimizer**, based on three independent sources of evidence that bypass the broken bench:
 
@@ -454,6 +454,8 @@ Production trade-off: `DockerProposalSandboxPolicyGate` accepts a `requireDocker
 **Removed 2026-05-12**: TS `PromptRewriteOptimizer` (heuristic, deleted as a user-config choice — kept only as bench-internal baseline), Python `MIPROv2` compile path, `optimizer_choice` config field. The MCP `optimize` tool no longer takes an `optimizer_choice` arg; GEPA is implicit.
 
 **Bench scope after refactor**: the real-LLM bench (`scripts/bench-real-dspy.py`) now runs a **2-arm comparison** — PromptRewrite (bench-only baseline) vs DSPy GEPA. The bench is for measuring the **size** of GEPA's contribution, not for picking which optimizer to use; that picking decision is now closed.
+
+**Stage E status — CLOSED, not deferred**: Stage E ("Trace optimizer / OPRO / PromptBreeder evaluation, conditional on insufficient MIPROv2 + GEPA lift") was originally gated on real-LLM Stage D bench data. After 2026-05-12 the picking-decision is closed via industry evidence (GEPA-only) — there is no longer a "MIPROv2 + GEPA lift insufficient" condition to trigger Stage E. If GEPA itself turns out to underperform in future production data, the next iteration may revisit alternative optimizers, but that would be a fresh exploration, not a resumption of Stage E.
 
 Full Linear: [QUI-147](https://linear.app/quilin-agent/issue/QUI-147). Historical bench reports (DeepSeek run, gpt-4o-mini run, DummyLM run) preserved as evidence of bench unreliability: [`dspy-validation-report-real-llm.md`](./dspy-validation-report-real-llm.md), [`dspy-validation-report-real-llm-gpt4o-mini.md`](./dspy-validation-report-real-llm-gpt4o-mini.md), [`dspy-validation-report.md`](./dspy-validation-report.md).
 
@@ -468,6 +470,8 @@ Full Linear: [QUI-147](https://linear.app/quilin-agent/issue/QUI-147). Historica
 **2026-05-12 移除**：TS `PromptRewriteOptimizer`（启发式，从用户配置选项中删除 —— 仅作为 bench 内部 baseline 保留）、Python `MIPROv2` 编译路径、`optimizer_choice` 配置字段。MCP `optimize` 工具不再接受 `optimizer_choice` 参数，GEPA 是隐式默认。
 
 **重构后的 bench 范围**：真实 LLM bench（`scripts/bench-real-dspy.py`）现在跑 **2-arm 对比** —— PromptRewrite（bench 内部 baseline）vs DSPy GEPA。bench 用于**测量 GEPA 的贡献量级**，不再用于"选哪个 optimizer"的决策（这个决策已闭）。
+
+**Stage E 状态 —— CLOSED，非 deferred**：Stage E（"Trace optimizer / OPRO / PromptBreeder 评估，条件触发"）原本依赖真实 LLM Stage D bench 数据决定是否启动。2026-05-12 后，picking 决策已经基于业界证据闭合（GEPA-only），"MIPROv2 + GEPA lift 不足"的触发条件不再存在。如果未来 GEPA 在真实生产数据上表现不佳，下一轮迭代会重新探索其他 optimizer —— 但那是新调研，不是 Stage E 的延续。
 
 Linear：[QUI-147](https://linear.app/quilin-agent/issue/QUI-147)。历史 bench 报告（DeepSeek 跑 / gpt-4o-mini 跑 / DummyLM 跑）作为 bench 不可靠的证据保留：[`dspy-validation-report-real-llm.md`](./dspy-validation-report-real-llm.md)、[`dspy-validation-report-real-llm-gpt4o-mini.md`](./dspy-validation-report-real-llm-gpt4o-mini.md)、[`dspy-validation-report.md`](./dspy-validation-report.md)。
 

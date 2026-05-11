@@ -1112,6 +1112,22 @@ def create_server() -> FastMCP:
             dry_run: Forwarded to metadata. Output is identical regardless
                 of value; the flag is recorded so downstream auditors can
                 verify caller intent.
+
+        Wire-protocol note (2026-05-12 GEPA-only refactor): the previous
+        ``optimizer_choice`` kwarg was removed. FastMCP silently drops
+        unknown kwargs from incoming MCP requests (verified empirically),
+        so external consumers still passing ``optimizer_choice="mipro"``
+        get GEPA without an explicit error — the response's
+        ``optimizer_choice`` field always reports ``gepa``. The
+        ``test_optimize_tool_legacy_optimizer_choice_kwarg_is_ignored``
+        regression test locks this contract.
+
+        对外契约（2026-05-12 GEPA-only 重构）：原 ``optimizer_choice``
+        kwarg 已移除。FastMCP 静默丢弃未知 kwargs（实测验证），所以仍传
+        ``optimizer_choice="mipro"`` 的外部消费方会拿到 GEPA 但没显式错
+        误 —— 响应的 ``optimizer_choice`` 字段恒为 ``gepa``。
+        ``test_optimize_tool_legacy_optimizer_choice_kwarg_is_ignored``
+        回归测试锁定该契约。
         """
         return await optimize(
             trajectories=trajectories,

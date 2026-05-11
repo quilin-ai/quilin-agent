@@ -452,10 +452,26 @@ export async function loadUserConfig(
 	// Layer 4: defaults are applied by zod when fields are missing.
 	const result = userConfigSchema.safeParse(merged);
 	if (!result.success) {
+		const issues = result.error.issues;
+		const issueSummary = issues
+			.map((i) => `${i.path.join(".")}: ${i.message}`)
+			.join("; ");
+		// Detect 2026-05-12 GEPA-only refactor migration breakage and
+		// append a concrete migration hint so an upgrading user gets
+		// guidance inline instead of a raw Zod path.
+		const hasLegacySelfEvolution = issues.some((i) => {
+			const path = i.path.join(".");
+			if (!path.startsWith("self_evolution")) return false;
+			return (
+				path.includes("optimizer_choice") ||
+				(path.endsWith("optimizer") && i.message.includes("prompt_rewrite"))
+			);
+		});
+		const migrationHint = hasLegacySelfEvolution
+			? ` — MIGRATION (2026-05-12 GEPA-only refactor): the [self_evolution] section dropped the optimizer_choice field and the "prompt_rewrite" optimizer value. Change "optimizer = \\"prompt_rewrite\\"" to "optimizer = \\"dspy\\"" (default, real DSPy GEPA) or "optimizer = \\"noop\\"" (proposals disabled), and DELETE any optimizer_choice line. See docs/10-self-evolution/README.md §2.4 for the decision rationale.`
+			: "";
 		throw new UserConfigError(
-			`user config schema validation failed: ${result.error.issues
-				.map((i) => `${i.path.join(".")}: ${i.message}`)
-				.join("; ")}`,
+			`user config schema validation failed: ${issueSummary}${migrationHint}`,
 			"SCHEMA_VALIDATION",
 		);
 	}

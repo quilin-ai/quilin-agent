@@ -704,6 +704,54 @@ async def test_optimize_tool_round_trip_via_mcp_handler(
     assert payload["proposals"][0]["metadata"]["optimizer_choice"] == "gepa"
 
 
+@pytest.mark.asyncio
+async def test_optimize_tool_legacy_optimizer_choice_kwarg_is_ignored(
+    fake_dspy: types.ModuleType,  # noqa: ARG001
+    configured_judge_env: None,  # noqa: ARG001
+) -> None:
+    """External MCP consumers upgrading across the 2026-05-12 GEPA-only
+    refactor may still pass the deleted ``optimizer_choice`` kwarg.
+    FastMCP silently drops the unknown kwarg, GEPA runs implicitly, and
+    the response's ``optimizer_choice`` field always reports ``gepa``.
+    This locks the wire-protocol contract so a future FastMCP version
+    that flips to strict-validation will fail this test instead of
+    breaking external consumers without warning.
+    """
+    from quilin_optimizer.server import create_server
+
+    server = create_server()
+    handler = server._tool_manager.get_tool("optimize")
+    assert handler is not None
+
+    # Pass the DELETED optimizer_choice kwarg — must NOT raise.
+    raw = await handler.run(
+        {
+            "trajectories": [
+                {"trajectoryRef": f"trajectory:run-{i}", "runId": f"run-{i}"}
+                for i in range(MIN_TRAJECTORIES)
+            ],
+            "failure_categories": ["tool_error"],
+            "dry_run": False,
+            "optimizer_choice": "mipro",
+        }
+    )
+
+    text = raw if isinstance(raw, str) else "\n".join(
+        getattr(item, "text", "")
+        for item in getattr(raw, "content", [])
+        if getattr(item, "type", None) == "text"
+    )
+    payload = json.loads(text)
+    # Response still reports GEPA — the legacy kwarg is dropped, not
+    # honored. If FastMCP ever flips to strict validation, this test
+    # will fail at `handler.run(...)` and we'll know to handle the
+    # migration intentionally.
+    assert payload["optimizer_choice"] == "gepa", (
+        "response should report GEPA regardless of legacy optimizer_choice "
+        f"kwarg; got {payload.get('optimizer_choice')!r}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Dummy-LM judge mode (zero-cost real-DSPy code path benchmarking)
 # ---------------------------------------------------------------------------
