@@ -489,6 +489,53 @@ temperature = 0.2
 	});
 });
 
+describe("user-config 2026-05-12 GEPA-only refactor migration hint", () => {
+	// Locks the contract that `loadUserConfig` appends a concrete
+	// migration instruction to UserConfigError when the user's TOML
+	// still carries the deleted `optimizer_choice` field or
+	// `optimizer = "prompt_rewrite"` value. The detection inspects the
+	// parsed input directly (Zod's `invalid_enum_value` doesn't echo
+	// the rejected value and `unrecognized_keys` attaches the issue
+	// path to the parent object, so message-string-matching is unreliable).
+	const MIGRATION_MARKER =
+		"MIGRATION (2026-05-12 GEPA-only refactor)";
+
+	it("appends migration hint when optimizer = \"prompt_rewrite\"", async () => {
+		const file = await writeConfig(`
+[self_evolution]
+optimizer = "prompt_rewrite"
+`);
+		await expect(
+			loadUserConfig({ configPath: file, env: {} }),
+		).rejects.toThrow(MIGRATION_MARKER);
+	});
+
+	it("appends migration hint when optimizer_choice is present", async () => {
+		const file = await writeConfig(`
+[self_evolution]
+optimizer_choice = "mipro"
+`);
+		await expect(
+			loadUserConfig({ configPath: file, env: {} }),
+		).rejects.toThrow(MIGRATION_MARKER);
+	});
+
+	it("does NOT append migration hint for unrelated schema failures", async () => {
+		// A different schema failure (here: llm.temperature > 2) must
+		// not get the misleading self-evolution migration suffix.
+		const file = await writeConfig(`
+[llm]
+temperature = 9
+`);
+		await expect(
+			loadUserConfig({ configPath: file, env: {} }),
+		).rejects.toThrow(/schema validation/);
+		await expect(
+			loadUserConfig({ configPath: file, env: {} }),
+		).rejects.not.toThrow(MIGRATION_MARKER);
+	});
+});
+
 describe("user-config helpers", () => {
 	it("envKeyToDotPath handles longest-prefix match", () => {
 		expect(__testing.envKeyToDotPath("OMNI_")).toBeNull();

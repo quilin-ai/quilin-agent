@@ -458,15 +458,20 @@ export async function loadUserConfig(
 			.join("; ");
 		// Detect 2026-05-12 GEPA-only refactor migration breakage and
 		// append a concrete migration hint so an upgrading user gets
-		// guidance inline instead of a raw Zod path.
-		const hasLegacySelfEvolution = issues.some((i) => {
-			const path = i.path.join(".");
-			if (!path.startsWith("self_evolution")) return false;
-			return (
-				path.includes("optimizer_choice") ||
-				(path.endsWith("optimizer") && i.message.includes("prompt_rewrite"))
-			);
-		});
+		// guidance inline instead of a raw Zod path. Inspect the parsed
+		// `merged` config directly rather than the Zod error message —
+		// Zod's `invalid_enum_value` issue doesn't echo the rejected value
+		// (so `i.message.includes("prompt_rewrite")` is always false) and
+		// `unrecognized_keys` reports the path as the parent object
+		// (`["self_evolution"]`, not `["self_evolution","optimizer_choice"]`).
+		// Going via the input value is robust to Zod message-format drift.
+		const selfEvolution = (merged as Record<string, unknown>).self_evolution;
+		const hasLegacySelfEvolution =
+			selfEvolution != null &&
+			typeof selfEvolution === "object" &&
+			((selfEvolution as Record<string, unknown>).optimizer ===
+				"prompt_rewrite" ||
+				"optimizer_choice" in (selfEvolution as Record<string, unknown>));
 		const migrationHint = hasLegacySelfEvolution
 			? ` — MIGRATION (2026-05-12 GEPA-only refactor): the [self_evolution] section dropped the optimizer_choice field and the "prompt_rewrite" optimizer value. Change "optimizer = \\"prompt_rewrite\\"" to "optimizer = \\"dspy\\"" (default, real DSPy GEPA) or "optimizer = \\"noop\\"" (proposals disabled), and DELETE any optimizer_choice line. See docs/10-self-evolution/README.md §2.4 for the decision rationale.`
 			: "";
