@@ -232,6 +232,54 @@ describe("AgentService accessors", () => {
 	});
 });
 
+describe("AgentService.currentSeq", () => {
+	it("returns 1 for a fresh service (no events emitted yet)", () => {
+		const svc = makeService();
+		expect(svc.currentSeq()).toBe(1);
+	});
+
+	it("returns 2 after one event (the session.created from createSession)", () => {
+		const svc = makeService();
+		svc.createSession({ origin: "web" });
+		expect(svc.currentSeq()).toBe(2);
+	});
+
+	it("advances with each emit", () => {
+		const svc = makeService();
+		const s = svc.createSession({ origin: "web" });
+		expect(svc.currentSeq()).toBe(2);
+		svc.emitFromRunner(s.id, { type: "llm.text", turnIndex: 1, delta: "a" });
+		expect(svc.currentSeq()).toBe(3);
+		svc.emitFromRunner(s.id, { type: "llm.text", turnIndex: 1, delta: "b" });
+		expect(svc.currentSeq()).toBe(4);
+	});
+
+	it("is usable as a per-session 'from now on' cursor", async () => {
+		const svc = makeService();
+		const s = svc.createSession({ origin: "web", id: "scoped" });
+		// Emit a few events BEFORE capturing the cursor.
+		svc.emitFromRunner(s.id, { type: "llm.text", turnIndex: 1, delta: "before-1" });
+		svc.emitFromRunner(s.id, { type: "llm.text", turnIndex: 1, delta: "before-2" });
+		const cursor = svc.currentSeq();
+		svc.emitFromRunner(s.id, { type: "llm.text", turnIndex: 1, delta: "after-1" });
+		svc.emitFromRunner(s.id, { type: "llm.text", turnIndex: 1, delta: "after-2" });
+		const sub = svc.subscribe({ sessionId: s.id, afterSeq: cursor - 1 });
+		const events: AgentEvent[] = [];
+		// Pull from the queue until exhausted.
+		for (let i = 0; i < 2; i += 1) {
+			const r = await sub.next();
+			if (r.done) break;
+			events.push(r.value);
+		}
+		sub.close();
+		const deltas = events.map((e) => {
+			const p = e.payload;
+			return p.type === "llm.text" ? p.delta : null;
+		});
+		expect(deltas).toEqual(["after-1", "after-2"]);
+	});
+});
+
 describe("AgentService.currentEpoch", () => {
 	it("returns a stable non-empty epoch UUID for the instance lifetime", () => {
 		const svc = makeService();

@@ -150,6 +150,22 @@ export class AgentService {
 	}
 
 	/**
+	 * The seq value the next emitted event will receive. Useful for
+	 * callers that need to bracket "events from now on" — e.g., the
+	 * Web chat route captures `currentSeq()` before `createSession()`
+	 * and passes the result as `subscribe({ afterSeq: startSeq - 1 })`
+	 * so a sessionId that was just evicted-and-recreated doesn't
+	 * replay the prior session's events that are still in the history
+	 * ring buffer under the same sessionId filter.
+	 *
+	 * 下一条 event 将拿到的 seq。Web 路由用它在 evict+recreate 同 id session
+	 * 时画一道线,subscriber 只看新 session 的 events,不复读旧 events。
+	 */
+	currentSeq(): number {
+		return this.bus._peekNextSeq();
+	}
+
+	/**
 	 * Emit an event for a session from an external runner (e.g., the web
 	 * chat route's background streamText pump). Optionally touches the
 	 * session's `lastActiveAt` — pass `touchActivity: true` on

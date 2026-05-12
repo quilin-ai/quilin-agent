@@ -1,30 +1,58 @@
 /**
- * Quilin Agent · Chat endpoint backed by AI SDK v6 + agent-core builtin tools.
+ * Quilin Agent · Chat endpoint backed by AI SDK v6 + AgentService.
  *
- * Slice 2 of the unified TUI+Web backend rollout. The LLM call still uses
- * `streamText` (so the browser `useChat` UIMessage SSE protocol keeps
- * working), but the tool set is now drawn from `@quilin/agent-core`'s
- * `createBuiltinTools()` — file_read / file_write / file_list / shell_exec /
- * web_fetch / image_describe / etc. — instead of the four hard-coded inline
- * tools that previously shipped here.
+ * Task #22 Phase 3: session state lives in AgentService (shared with
+ * TUI / admin probes), not in a private `chat-session-store` ring
+ * buffer. The route translates AI SDK v6 `streamText().fullStream`
+ * chunks into structured `AgentEventPayload` events via
+ * `pumpFullStreamIntoAgentService`, and the subscriber stream
+ * translates AgentEvents back into the SSE wire format `useChat`
+ * expects via `agentEventToSseChunk`.
  *
- * 上游模型 (deepseek-chat default; reasoner mode skips tools) and the
- * subagent fire-and-forget runner are unchanged from the demo.
+ * Behavior preserved from the legacy chat-session-store path:
+ *   1. Client disconnect does NOT kill the runner — the `setImmediate`
+ *      detach keeps the background `streamText` alive, and Web subscriber
+ *      cancellation only closes the subscription.
+ *   2. Same `(sessionId, user-message hash)` reconnect → re-attach to
+ *      the live AgentService session and replay its event history.
+ *   3. Different hash on the same `sessionId` → abort the prior runner
+ *      via its `AbortController`, evict the AgentService session, then
+ *      start a fresh one.
+ *   4. Client `resumeStream()` lands on the same subscriber + replays
+ *      mid-stream events.
+ *   5. `MAX_WEB_SESSION_META=200` cap is enforced by `web-session-meta`'s
+ *      LRU eviction.
+ *
+ * Strict-epoch handshake: the response carries `X-Quilin-Epoch` so the
+ * client can persist it; on reconnect the client passes `clientEpoch`
+ * in the request body. A mismatch implies the agent-core process
+ * restarted while the client cached a stale epoch — we treat that the
+ * same as "no session found" and start fresh, so the user never sees
+ * silently mis-numbered events.
+ *
+ * Task #22 Phase 3:Web chat 路由切换到 AgentService。状态共享给 TUI / admin probe;
+ * 翻译层(sse-translator)做 AI SDK v6 SSE ⇄ AgentEvent 双向转换;严格 epoch
+ * 校验跨进程重启的 session 重连。
  */
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { convertToModelMessages, stepCountIs, streamText, tool, type UIMessage } from "ai";
 import { z } from "zod";
 import { agentRegistry, shortId } from "@/lib/agent-registry";
+import { type AgentServiceLike, getAgentService } from "@/lib/agent-service-client";
 import {
-	appendFrame,
-	type ChatSession,
-	getSession,
-	hashMessages,
-	markSessionComplete,
-	startSession,
-	subscribeSession,
-} from "@/lib/chat-session-store";
+	agentEventToSseChunk,
+	pumpFullStreamIntoAgentService,
+	SSE_DONE_FRAME,
+} from "@/lib/sse-translator";
 import { getToolsCatalog } from "@/lib/tools-loader";
+import {
+	evictSession,
+	getMeta,
+	hashMessages,
+	setMeta,
+	touchMeta,
+	type WebSessionMeta,
+} from "@/lib/web-session-meta";
 
 /**
  * Dynamically load agent-core's built tool factory at request time.
@@ -405,6 +433,25 @@ async function runSubagentInBackground(agentId: string, task: string): Promise<v
 	}
 }
 
+/**
+ * Pull the first `text`-typed part out of a UIMessage.parts array.
+ * Returns `null` when there's no text part (e.g., an attachment-only
+ * message) or the parts array is empty/undefined. Kept narrow so the
+ * route doesn't depend on the exact shape of AI SDK v6's
+ * `UIMessagePart` union.
+ *
+ * 取 UIMessage.parts 中第一个 type="text" 的 text 字段;无 → null。
+ */
+function extractFirstTextPart(parts: readonly unknown[] | undefined): string | null {
+	if (parts == null) return null;
+	for (const p of parts) {
+		if (typeof p !== "object" || p == null) continue;
+		const obj = p as { readonly type?: unknown; readonly text?: unknown };
+		if (obj.type === "text" && typeof obj.text === "string") return obj.text;
+	}
+	return null;
+}
+
 interface ChatRequestBody {
 	readonly messages: readonly UIMessage[];
 	/**
@@ -414,6 +461,14 @@ interface ChatRequestBody {
 	 * belonging to the current conversation.
 	 */
 	readonly id?: string;
+	/**
+	 * Last-seen AgentService epoch from the client's sessionStorage (set
+	 * by `ConversationView` after the first `/api/chat/status` probe).
+	 * When this doesn't match the server's `currentEpoch()` the client's
+	 * cursor is from a previous agent-core process and we force a fresh
+	 * restart instead of replaying a stale event log.
+	 */
+	readonly clientEpoch?: string;
 }
 
 export async function POST(req: Request): Promise<Response> {
@@ -441,7 +496,10 @@ export async function POST(req: Request): Promise<Response> {
 
 	const modelMessages = await convertToModelMessages(body.messages);
 
-	// Reasoner mode: no tools, but emits reasoning_content → reasoning UI part
+	// Reasoner mode: no tools, but emits reasoning_content → reasoning UI part.
+	// Reasoner runs straight through `toUIMessageStreamResponse` without
+	// AgentService plumbing — the reasoner flow is short-lived and not
+	// reconnect-resumable in the current product.
 	if (IS_REASONER) {
 		const result = streamText({
 			model: provider(DEEPSEEK_MODEL),
@@ -451,69 +509,155 @@ export async function POST(req: Request): Promise<Response> {
 		return result.toUIMessageStreamResponse({ sendReasoning: true });
 	}
 
-	// Build a session-scoped spawn tool so the subagents registered by this
-	// chat session are filterable in the AgentSwitcher (`?parent=<sessionId>`).
 	const sessionId = typeof body.id === "string" && body.id.length > 0 ? body.id : "main";
 	const messagesHash = hashMessages(body.messages);
+	const service = await getAgentService();
+	const serverEpoch = service.currentEpoch();
 
-	// Slice 3: decouple the LLM runner from the HTTP response so navigating
-	// away mid-stream doesn't kill the run. Strategy:
-	//   1. Look up the chat-session-store for an inflight session matching
-	//      (sessionId, messagesHash). If found, this POST is a reconnect —
-	//      attach a fresh subscriber that replays buffered frames + lives.
-	//   2. Otherwise it's a new question: spin up a background runner that
-	//      writes to the session store, then subscribe to it for this
-	//      response. The runner outlives the HTTP request.
-	let session = getSession(sessionId);
-	const isReconnect =
-		session != null &&
-		session.startedFromHash === messagesHash &&
-		(session.status === "running" || session.frames.length > 0);
-
-	if (!isReconnect) {
-		session = startSession(sessionId, messagesHash);
-		// Fire-and-forget background runner. Errors are caught + logged so a
-		// runner failure marks the session "failed" without crashing the
-		// Next.js worker. Use `setImmediate` to detach from the request's
-		// task scope — otherwise Next.js / Node may abort the runner when
-		// the request's underlying response stream cancels.
-		const sessionRef = session;
-		setImmediate(() => {
-			void runChatInBackground(sessionRef, modelMessages, sessionId).catch((e) => {
-				console.log(`[CHAT bg ${sessionId}] runner crashed: ${String(e)}`);
-				markSessionComplete(sessionRef, "failed");
-			});
-		});
-	} else {
-		console.log(
-			`[CHAT bg ${sessionId}] reconnect: replaying ${session?.frames.length ?? 0} frames`,
-		);
+	// Strict-epoch handshake: if the client's cached epoch is set but
+	// doesn't match the server's current epoch, the client's view of any
+	// in-flight session is stale (agent-core restarted). Evict whatever
+	// is there and force fresh; the X-Quilin-Epoch response header will
+	// re-sync the client.
+	const epochMismatch =
+		typeof body.clientEpoch === "string" &&
+		body.clientEpoch.length > 0 &&
+		body.clientEpoch !== serverEpoch;
+	if (epochMismatch) {
+		evictSession(sessionId, service, "client epoch mismatch (cross-process)");
 	}
 
-	return new Response(buildSubscriberStream(session as ChatSession), {
+	// Decide reconnect vs fresh start. Reconnect criteria (must satisfy
+	// ALL):
+	//   - Web meta exists with the same `hash` (same user input)
+	//   - AgentService still has a session for this id (not evicted by
+	//     either web meta cap or AgentService maxSessions cap)
+	//   - That session's status is "running" OR its event log is
+	//     non-empty (completed but still buffered → still replayable)
+	let meta = getMeta(sessionId);
+	const existingSession = service.getSession(sessionId);
+	const eventCount = existingSession == null ? 0 : service.getEventCount(sessionId);
+	const isReconnect =
+		!epochMismatch &&
+		meta != null &&
+		meta.hash === messagesHash &&
+		existingSession != null &&
+		(existingSession.status === "running" || eventCount > 0);
+
+	if (!isReconnect) {
+		// Either no existing session for this id, or the question
+		// changed. If something is here, evict it cleanly so the prior
+		// runner stops writing into a session we're about to recycle.
+		if (meta != null || existingSession != null) {
+			evictSession(sessionId, service, "user input changed");
+		}
+		// Derive a UX-friendly title from the first user message.
+		const firstUser = body.messages.find((m) => m.role === "user");
+		const titleSource = extractFirstTextPart(firstUser?.parts);
+		const title =
+			titleSource != null && titleSource.length > 0
+				? titleSource.slice(0, 80)
+				: "(new conversation)";
+		// Capture EventBus seq BEFORE createSession so the subscriber
+		// can filter out leftover events from a prior session that
+		// shared this sessionId. The events linger in the ring buffer
+		// after `deleteSession` (which only drops the registry entry,
+		// not the event log); subscribe(afterSeq: startSeq - 1) skips
+		// those legacy events.
+		const startSeq = service.currentSeq();
+		// Pass the user-supplied sessionId verbatim. AgentService's
+		// `createSession` accepts an explicit `id` since the Phase 3
+		// agent-core extension; collision-check still applies (we
+		// evicted above so the slot is free).
+		service.createSession({ origin: "web", title, id: sessionId });
+		meta = setMeta(sessionId, messagesHash, service, startSeq);
+		// Mark running and emit `turn.started` to bracket the new turn
+		// for SSE consumers.
+		service.setSessionStatus(sessionId, "running");
+		const firstUserText = titleSource != null && titleSource.length > 0 ? titleSource : "";
+		service.emitFromRunner(
+			sessionId,
+			{ type: "turn.started", turnIndex: 1, userText: firstUserText },
+			{ touchActivity: true },
+		);
+		// Fire-and-forget background runner. `setImmediate` detaches
+		// the runner from the request task scope so a client disconnect
+		// cannot abort it; the AbortController on `meta` is the only
+		// way to cancel.
+		const metaRef = meta;
+		setImmediate(() => {
+			void runChatInBackground(service, sessionId, modelMessages, metaRef.abort).catch((e) => {
+				console.log(`[CHAT ${sessionId}] runner crashed: ${String(e)}`);
+				try {
+					service.emitFromRunner(
+						sessionId,
+						{ type: "session.failed", error: String(e) },
+						{ touchActivity: true },
+					);
+					service.setSessionStatus(sessionId, "failed");
+				} catch {
+					/* session may already be evicted */
+				}
+			});
+		});
+	} else if (meta != null) {
+		touchMeta(sessionId);
+		console.log(`[CHAT ${sessionId}] reconnect: replaying ${eventCount} events from AgentService`);
+	}
+
+	// At this point we either reconnected (meta is set, session is in
+	// AgentService, runner is alive in background) or freshly started
+	// (meta + AgentService session created, runner kicked off).
+	// Pass `startSeq` so the subscriber only sees events emitted at or
+	// after the session was (re)created — eliminates the
+	// evict+recreate-same-id replay bug where the new subscriber would
+	// see the old session's history before the new runner's output.
+	const subscribeAfterSeq = (meta?.startSeq ?? 0) - 1;
+	return new Response(buildSubscriberStream(service, sessionId, serverEpoch, subscribeAfterSeq), {
 		headers: {
 			"Content-Type": "text/event-stream",
 			"Cache-Control": "no-cache, no-transform",
 			Connection: "keep-alive",
 			"x-vercel-ai-ui-message-stream": "v1",
+			// Strict-epoch handshake: server's current epoch is also
+			// surfaced as a response header so non-`useChat`
+			// consumers (TUI / admin probe / direct curl) can read
+			// it without having to call `/api/chat/status`
+			// separately. The browser `useChat` reads epoch via
+			// `/api/chat/status` because `DefaultChatTransport`
+			// doesn't expose response headers; the header here is
+			// belt-and-suspenders / debug aid.
+			"x-quilin-epoch": serverEpoch,
 		},
 	});
 }
 
 /**
- * Background LLM runner. Writes every UIMessage SSE chunk into the session
- * buffer so disconnected and reconnecting clients can replay. Marks the
- * session complete (or failed) when streamText drains.
+ * Background LLM runner. Drives `streamText` and translates its
+ * `fullStream` into structured `AgentEventPayload` events through
+ * `pumpFullStreamIntoAgentService`. The runner outlives the HTTP
+ * request via `setImmediate` detach; only `meta.abort.abort()` (via
+ * the chat route's reconnect-restart path or the LRU eviction) stops
+ * it.
  *
- * 后台 LLM runner:把 UIMessage SSE chunk 写进 session buffer,断线/重连客户端
- * 可以 replay。stream 结束后 markSessionComplete。
+ * On normal completion: emits `session.completed` + flips status to
+ * `completed`. On failure (caught exception) or user-driven cancel
+ * (AbortError from `meta.abort`): emits `session.failed` + flips
+ * status to `failed`. The chat route's POST `setImmediate` catch
+ * block is the last-resort safety net for synchronous throws inside
+ * this function before the try/catch establishes.
+ *
+ * 后台 LLM runner:fullStream → AgentEventPayload(经 sse-translator),
+ * 整个 turn 结束 emit session.completed + setSessionStatus completed。
+ * AbortController 触发会 fullStream throw,被 catch 后转 session.failed。
  */
 async function runChatInBackground(
-	session: ChatSession,
-	modelMessages: Awaited<ReturnType<typeof convertToModelMessages>>,
+	service: AgentServiceLike,
 	sessionId: string,
+	modelMessages: Awaited<ReturnType<typeof convertToModelMessages>>,
+	abort: AbortController,
 ): Promise<void> {
-	console.log(`[CHAT bg ${sessionId}] runner START`);
+	console.log(`[CHAT ${sessionId}] runner START`);
 	const provider = createOpenAICompatible({
 		name: "deepseek",
 		baseURL: DEEPSEEK_BASE,
@@ -532,75 +676,139 @@ async function runChatInBackground(
 			wait_for_subagents: waitForSubagentsTool,
 		},
 		stopWhen: stepCountIs(15),
+		abortSignal: abort.signal,
 	});
 
-	// Pump the UIMessage stream into our session buffer instead of straight
-	// to an HTTP response. The browser subscriber reads from the buffer.
-	const upstream = result.toUIMessageStreamResponse().body;
-	if (upstream == null) {
-		markSessionComplete(session, "complete");
-		return;
-	}
-	const reader = upstream.getReader();
-	const decoder = new TextDecoder();
-	let leftover = "";
 	try {
-		while (true) {
-			const { done, value } = await reader.read();
-			if (done) break;
-			leftover += decoder.decode(value, { stream: true });
-			// SSE frames are separated by blank lines; split on `\n\n`.
-			while (true) {
-				const idx = leftover.indexOf("\n\n");
-				if (idx < 0) break;
-				const frame = leftover.slice(0, idx);
-				leftover = leftover.slice(idx + 2);
-				for (const line of frame.split("\n")) {
-					const trimmed = line.trim();
-					if (trimmed.startsWith("data:")) {
-						const data = trimmed.slice(5).trim();
-						if (data.length > 0) appendFrame(session, data);
-					}
-				}
+		const summary = await pumpFullStreamIntoAgentService(result.fullStream, service, sessionId, 1);
+		console.log(
+			`[CHAT ${sessionId}] runner COMPLETE (text=${summary.textDeltaCount} tools=${summary.toolCallCount} steps=${summary.stepCount} reason=${summary.finishReason ?? "(none)"})`,
+		);
+		// Final session.completed (after turn.completed already emitted
+		// by the pump on `finish`).
+		service.emitFromRunner(sessionId, { type: "session.completed" }, { touchActivity: true });
+		service.setSessionStatus(sessionId, "completed");
+	} catch (e) {
+		// AbortError vs unexpected error: both flow through here. We
+		// emit session.failed either way so subscribers see a clean
+		// termination — the SSE writer follows up with SSE_DONE_FRAME.
+		const message = e instanceof Error ? e.message : String(e);
+		console.log(`[CHAT ${sessionId}] runner caught: ${message}`);
+		// Session may have been evicted concurrently (reconnect-restart
+		// path). Guard each AgentService call against that race.
+		if (service.getSession(sessionId) != null) {
+			try {
+				service.emitFromRunner(
+					sessionId,
+					{ type: "session.failed", error: message },
+					{ touchActivity: true },
+				);
+				service.setSessionStatus(sessionId, "failed");
+			} catch {
+				/* eviction race — best-effort */
 			}
 		}
-		console.log(`[CHAT bg ${sessionId}] runner COMPLETE (${session.frames.length} frames)`);
-		markSessionComplete(session, "complete");
-	} catch (e) {
-		console.log(`[CHAT bg ${sessionId}] stream error: ${String(e)}`);
-		markSessionComplete(session, "failed");
-	} finally {
-		reader.releaseLock();
 	}
 }
 
 /**
- * Build a ReadableStream that subscribes to the session's frame buffer
- * and emits each frame as a UIMessage SSE line. Client disconnect (e.g.,
- * `request.signal` aborts) cancels the subscriber but leaves the session
- * + runner alive in the store.
+ * Subscribe to the AgentService event stream for `sessionId` and
+ * translate each AgentEvent into the AI SDK v6 UIMessage SSE chunk
+ * format `useChat` expects. Client disconnect (ReadableStream
+ * cancellation) closes the subscription but leaves the runner alive
+ * — the next reconnect picks up from the same session via replay.
+ *
+ * `serverEpoch` is passed to `subscribe` as `expectedEpoch` so that
+ * if the AgentService instance somehow swapped out between the route
+ * handler computing `serverEpoch` and the subscribe call (impossible
+ * in practice; defensive), the subscription fails cleanly.
+ *
+ * 订阅 AgentService 事件流,翻译成 AI SDK v6 SSE chunk。client disconnect
+ * 只关订阅,runner 继续。expectedEpoch 防御性校验。
  */
-function buildSubscriberStream(session: ChatSession): ReadableStream<Uint8Array> {
+function buildSubscriberStream(
+	service: AgentServiceLike,
+	sessionId: string,
+	serverEpoch: string,
+	afterSeq: number,
+): ReadableStream<Uint8Array> {
 	const encoder = new TextEncoder();
 	return new ReadableStream<Uint8Array>({
 		async start(controller) {
-			const sub = subscribeSession(session, 0);
+			const sub = service.subscribe({
+				sessionId,
+				afterSeq,
+				expectedEpoch: serverEpoch,
+			});
+			if (sub.info.epochMismatch) {
+				// Should never happen because we just read serverEpoch
+				// from the same service instance — but if it does, send
+				// a minimal error frame and terminate.
+				try {
+					controller.enqueue(
+						encoder.encode(
+							`data: ${JSON.stringify({ type: "error", error: "agent-core epoch mismatch" })}\n\n`,
+						),
+					);
+					controller.enqueue(encoder.encode(SSE_DONE_FRAME));
+				} catch {
+					/* already closed */
+				}
+				sub.close();
+				controller.close();
+				return;
+			}
+			let terminated = false;
 			try {
-				for await (const frame of sub) {
-					try {
-						controller.enqueue(encoder.encode(`data: ${frame.data}\n\n`));
-					} catch {
-						// Controller closed (client disconnected) — stop reading.
+				for await (const event of sub) {
+					const chunk = agentEventToSseChunk(event);
+					if (chunk != null) {
+						try {
+							controller.enqueue(encoder.encode(chunk));
+						} catch {
+							// Controller closed (client disconnected) —
+							// stop the subscriber but keep the runner
+							// alive. The session stays in AgentService
+							// for the next reconnect.
+							sub.close();
+							terminated = true;
+							break;
+						}
+					}
+					// On terminal events we append `[DONE]` and exit. The
+					// AgentService subscription itself stays open until
+					// drained, but the SSE wire format demands `[DONE]`
+					// at the end of every response. `useChat` will close
+					// its EventSource on receiving it.
+					if (
+						event.payload.type === "session.completed" ||
+						event.payload.type === "session.failed"
+					) {
+						try {
+							controller.enqueue(encoder.encode(SSE_DONE_FRAME));
+						} catch {
+							/* already closed */
+						}
+						terminated = true;
 						sub.close();
 						break;
 					}
 				}
+				if (!terminated) {
+					// Subscription ended without a terminal event (e.g.,
+					// session was evicted out from under us). Send DONE
+					// anyway so the client doesn't hang.
+					try {
+						controller.enqueue(encoder.encode(SSE_DONE_FRAME));
+					} catch {
+						/* already closed */
+					}
+				}
 				try {
-					controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+					controller.close();
 				} catch {
 					/* already closed */
 				}
-				controller.close();
 			} catch (e) {
 				try {
 					controller.error(e);

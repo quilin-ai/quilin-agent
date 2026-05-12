@@ -161,7 +161,13 @@ export interface EmitFromRunnerOptions {
 // (was internal in slice 1).
 export class AgentService {
   constructor(options?: AgentServiceOptions);
-  createSession(input: { readonly origin: SessionOrigin; readonly title?: string }): AgentSession;
+  // `id` (optional) added in Task #22 Phase 3 so web chat can pin the
+  // AgentService session id to the browser-side useChat() id.
+  createSession(input: {
+    readonly origin: SessionOrigin;
+    readonly title?: string;
+    readonly id?: string;
+  }): AgentSession;
   getSession(id: string): AgentSession | null;
   listSessions(): readonly AgentSession[];
   subscribe(options?: SubscribeOptions): AgentSubscription;
@@ -169,6 +175,11 @@ export class AgentService {
   // Public mutators added in Task #22 Phase 1 so Web routes can drive
   // sessions without reaching for the `_`-prefixed helpers.
   currentEpoch(): string;
+  // Phase 3: returns the seq the next emit will receive. Web route
+  // captures this BEFORE createSession so a sessionId that was just
+  // evicted+recreated doesn't replay the prior session's events
+  // (sessionId-filtered subscribers would otherwise see the old log).
+  currentSeq(): number;
   emitFromRunner(sessionId: string, payload: AgentEventPayload,
                  options?: EmitFromRunnerOptions): void;
   setSessionStatus(id: string, status: SessionStatus): AgentSession;

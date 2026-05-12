@@ -143,6 +143,8 @@ export interface AgentSubscription extends AsyncIterableIterator<AgentEvent, und
 export interface CreateSessionInput {
 	readonly origin: SessionOrigin;
 	readonly title?: string;
+	/** Optional explicit session id; collides → throws. */
+	readonly id?: string;
 }
 
 export interface EmitFromRunnerOptions {
@@ -155,6 +157,8 @@ export interface AgentServiceLike {
 	listSessions(): readonly AgentSession[];
 	subscribe(options?: SubscribeOptions): AgentSubscription;
 	currentEpoch(): string;
+	/** Seq the next emitted event will receive. Caller-side "from now on" cursor. */
+	currentSeq(): number;
 	emitFromRunner(
 		sessionId: string,
 		payload: AgentEventPayload,

@@ -3,7 +3,7 @@
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Streamdown } from "streamdown";
 
 import { SubagentDetailView } from "@/components/chat/SubagentDetailView";
@@ -103,6 +103,36 @@ export function ConversationView({
 	);
 }
 
+/**
+ * sessionStorage key for the AgentService process-epoch UUID we
+ * received in `/api/chat/status` (and via the `X-Quilin-Epoch`
+ * response header on `/api/chat`). The client echoes this back as
+ * `clientEpoch` on every POST so the server can detect cross-process
+ * agent-core restarts and force a fresh session.
+ *
+ * sessionStorage 持久化 epoch,作为 strict-epoch handshake 的客户端侧。
+ */
+const EPOCH_STORAGE_KEY = "quilin:agent-service:epoch";
+
+function readPersistedEpoch(): string | null {
+	if (typeof window === "undefined") return null;
+	try {
+		return window.sessionStorage.getItem(EPOCH_STORAGE_KEY);
+	} catch {
+		return null;
+	}
+}
+
+function writePersistedEpoch(epoch: string | null): void {
+	if (typeof window === "undefined") return;
+	try {
+		if (epoch == null) window.sessionStorage.removeItem(EPOCH_STORAGE_KEY);
+		else window.sessionStorage.setItem(EPOCH_STORAGE_KEY, epoch);
+	} catch {
+		/* sessionStorage may be unavailable in private mode; non-fatal */
+	}
+}
+
 function ChatBody({
 	sessionId,
 	initialMessage,
@@ -113,19 +143,45 @@ function ChatBody({
 	readonly storedMessages?: readonly UIMessage[];
 }) {
 	const router = useRouter();
+	// Build the transport once. `prepareSendMessagesRequest` injects the
+	// cached epoch into every `/api/chat` body so the server can validate
+	// it against `AgentService.currentEpoch()`. Wrapping in `useMemo`
+	// guarantees the same transport across renders, which `useChat`
+	// expects (transport identity is part of its dep tracking).
+	const transport = useMemo(
+		() =>
+			new DefaultChatTransport({
+				api: "/api/chat",
+				prepareSendMessagesRequest: ({ id, messages, body }) => {
+					const clientEpoch = readPersistedEpoch();
+					return {
+						body: {
+							...(body ?? {}),
+							id,
+							messages,
+							...(clientEpoch == null ? {} : { clientEpoch }),
+						},
+					};
+				},
+			}),
+		[],
+	);
 	const { messages, sendMessage, status, resumeStream } = useChat({
 		id: sessionId,
 		messages: storedMessages ? [...storedMessages] : undefined,
-		transport: new DefaultChatTransport({ api: "/api/chat" }),
+		transport,
 	});
 
-	// Slice 3: when ChatBody mounts and the server has an inflight run for
-	// this session (because the user navigated away mid-stream and is now
-	// back), call `resumeStream()` to re-attach. The server's session-store
-	// hashes by user-message-only, so the new POST hits the same buffer
-	// and replays everything we missed. If the session is already complete
-	// or doesn't exist, do nothing — the stored messages are the source of
-	// truth.
+	// Mount hook:
+	//   1. Probe `/api/chat/status` to learn the server's current epoch
+	//      + whether there's an inflight run to resume.
+	//   2. Persist the epoch in sessionStorage so future POSTs round-trip
+	//      it back to the server.
+	//   3. If the server still has a running session for this id, call
+	//      `resumeStream()` to re-attach — the server-side
+	//      session-meta hashes by user-message-only, so the new POST
+	//      hits the same AgentService session and replays from event
+	//      seq=0 in the bus history.
 	const resumedRef = useRef(false);
 	useEffect(() => {
 		if (resumedRef.current) return;
@@ -138,9 +194,19 @@ function ChatBody({
 				if (!res.ok) return;
 				const body = (await res.json()) as {
 					readonly ok: boolean;
-					readonly data?: { readonly exists: boolean; readonly status: string | null };
+					readonly data?: {
+						readonly exists: boolean;
+						readonly status: string | null;
+						readonly epoch?: string;
+					};
 				};
-				if (body.ok && body.data?.exists && body.data.status === "running") {
+				if (!body.ok || body.data == null) return;
+				// Persist the latest epoch on every probe so a refresh
+				// after agent-core restart sees the new epoch on next POST.
+				if (typeof body.data.epoch === "string" && body.data.epoch.length > 0) {
+					writePersistedEpoch(body.data.epoch);
+				}
+				if (body.data.exists && body.data.status === "running") {
 					// Server still has an active run — re-attach.
 					await resumeStream();
 				}

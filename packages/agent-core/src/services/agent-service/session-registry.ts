@@ -52,7 +52,7 @@ export class SessionRegistry {
 	}
 
 	create(input: CreateSessionInput): AgentSession {
-		const id = this.idGen();
+		const id = input.id ?? this.idGen();
 		if (this.sessions.has(id)) {
 			throw new Error(`session id collision: ${id}`);
 		}

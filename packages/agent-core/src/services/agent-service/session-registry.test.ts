@@ -151,6 +151,35 @@ describe("SessionRegistry.update", () => {
 	});
 });
 
+describe("SessionRegistry.create with explicit id", () => {
+	it("uses the caller-supplied id verbatim when provided", () => {
+		const registry = new SessionRegistry({
+			idGen: () => "auto-generated",
+		});
+		const session = registry.create({ origin: "web", id: "client-supplied-id" });
+		expect(session.id).toBe("client-supplied-id");
+		expect(registry.get("client-supplied-id")).not.toBeNull();
+		expect(registry.get("auto-generated")).toBeNull();
+	});
+
+	it("throws when the explicit id collides with an existing session", () => {
+		const registry = new SessionRegistry();
+		registry.create({ origin: "web", id: "dup" });
+		expect(() => registry.create({ origin: "tui", id: "dup" })).toThrow(/collision/);
+	});
+
+	it("falls back to idGen when id is omitted (backward compat)", () => {
+		let counter = 0;
+		const registry = new SessionRegistry({
+			idGen: () => `auto-${++counter}`,
+		});
+		const a = registry.create({ origin: "web" });
+		const b = registry.create({ origin: "web" });
+		expect(a.id).toBe("auto-1");
+		expect(b.id).toBe("auto-2");
+	});
+});
+
 describe("SessionRegistry.delete", () => {
 	it("removes a known session and returns true", () => {
 		let counter = 0;

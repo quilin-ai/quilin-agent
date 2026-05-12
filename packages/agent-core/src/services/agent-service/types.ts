@@ -282,4 +282,19 @@ export interface AgentSubscription
 export interface CreateSessionInput {
 	readonly origin: SessionOrigin;
 	readonly title?: string;
+	/**
+	 * Optional explicit session id. When provided, the registry uses
+	 * this id verbatim (subject to the same uniqueness check as
+	 * auto-generated ids — colliding with an existing session id
+	 * throws). When omitted, the registry's `idGen` is invoked.
+	 *
+	 * Use case: web chat routes want the session id to match
+	 * `useChat({ id })` from the browser so cross-frontend lookups
+	 * (TUI / admin probe) reference the same human-meaningful id the
+	 * user sees in their URL bar.
+	 *
+	 * 显式 session id。提供时直接用(仍走唯一性校验,冲突抛错);省略时
+	 * 自动生成。Web chat 路由想让 session id 与浏览器 useChat id 对齐时用。
+	 */
+	readonly id?: string;
 }
