@@ -275,6 +275,18 @@ Each slice ships independently with passing tests and a green cross-review.
 - **Slice 4。** proxy 改写后 `apps/web` 现有 Playwright 测试照过。手测：起 agent-core、起 web、发消息，看 SSE delta 到浏览器。
 - **Slice 5。** TUI session list 显示 web 起的 session；Web `/sessions` 页显示 TUI 起的 session；任一侧切入都能看到完整历史。
 
+### Task #22 path realization / Task #22 实际落地路径
+
+The original Slice 3-5 design above sketched a separate `/api/v2/chat` + `/api/v2/events` control plane that Web's chat route would proxy through. Task #22 realized a slightly different shape — see commit history `c8cef9e → 0178131` for Phases 1-4 and the admin probe (Phase 5):
+
+| Original spec path | Actually shipped (Task #22 Phases 1-5) |
+|--------------------|----------------------------------------|
+| `/api/v2/chat` (control plane) | Web `/api/chat` keeps its endpoint; the route's internal state lives in AgentService (in-process, same Next.js worker). No separate HTTP control plane yet — that's deferred until a real cross-process consumer (out-of-process TUI / agent-mesh) needs it. |
+| `/api/v2/events` (SSE event stream) | `/api/admin/agent-service/events?session=…[&afterSeq=…][&epoch=…]`, gated by `QUILIN_ADMIN_PROBE=1`. Streams raw `AgentEvent` envelopes (not AI-SDK-translated SSE chunks). |
+| TUI as `AgentService` HTTP client | TUI is unchanged for now; the in-process Phase 5 admin probe is the cross-frontend surface. A future iteration ("candidate 1" in the post-Phase-5 roadmap) will rewrite `repl.ts` to consume AgentService directly. |
+
+`/api/v2/*` 控制面是原 spec 草稿，Task #22 五个 phase 实际落到 `/api/chat`(状态走 AgentService) + `/api/admin/agent-service/{sessions,events}`(管理探针,`QUILIN_ADMIN_PROBE=1` gate)。TUI 接入留给后续 iteration。
+
 ## Review history / 评审历史
 
 Slice 1 converged after four cross-review rounds (8 reviewer agents total, all `typescript-reviewer`). Per CLAUDE.md's cross-review hard rule, two consecutive fresh reviewers must both report 0 real issues before landing. Round 4 (reviewers G and H) reported 0/0; the loop is closed.
