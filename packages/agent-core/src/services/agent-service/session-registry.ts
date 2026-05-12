@@ -109,6 +109,53 @@ export class SessionRegistry {
 		return next;
 	}
 
+	/**
+	 * Remove a session by id. Returns `true` if it existed and was deleted,
+	 * `false` if it wasn't registered. Does not emit any event — callers
+	 * that need to notify subscribers of cancellation should emit a
+	 * `session.failed` / `session.completed` via the EventBus *before*
+	 * calling `delete`, otherwise subscribers may never see termination.
+	 *
+	 * 按 id 删除 session。返回是否真的删了。本方法不发事件,调用方需要通知
+	 * 订阅者时应在 delete 前先 emit `session.failed` / `session.completed`。
+	 */
+	delete(id: string): boolean {
+		return this.sessions.delete(id);
+	}
+
+	/**
+	 * Evict the oldest-by-`lastActiveAt` sessions until the registry size
+	 * is at or below `cap`. Returns the evicted ids in eviction order
+	 * (oldest first). Like `delete`, this does NOT emit anything — the
+	 * caller should arrange the appropriate `session.failed` / `session.completed`
+	 * events before invoking eviction when subscribers are still listening.
+	 *
+	 * Cap below 0 is treated as 0 (evict everything). Cap >= current size
+	 * is a no-op and returns `[]`.
+	 *
+	 * 按 lastActiveAt 升序驱逐,直到 size <= cap。返回被驱逐的 id 列表
+	 * (按驱逐顺序)。不发事件,调用方负责通知订阅者。
+	 */
+	evictLruIfOver(cap: number): readonly string[] {
+		const target = Math.max(0, cap);
+		if (this.sessions.size <= target) return [];
+		const ordered = [...this.sessions.entries()].sort(
+			([, a], [, b]) =>
+				new Date(a.lastActiveAt).getTime() - new Date(b.lastActiveAt).getTime(),
+		);
+		const toEvict = this.sessions.size - target;
+		const evicted: string[] = [];
+		for (let i = 0; i < toEvict && i < ordered.length; i += 1) {
+			const entry = ordered[i];
+			if (entry == null) continue;
+			const [id] = entry;
+			if (this.sessions.delete(id)) {
+				evicted.push(id);
+			}
+		}
+		return evicted;
+	}
+
 	private fallbackId(): string {
 		this.idCounter += 1;
 		const counter = this.idCounter.toString(36);

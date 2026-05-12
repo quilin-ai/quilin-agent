@@ -231,3 +231,228 @@ describe("AgentService accessors", () => {
 		expect(svc._getEventBus()._peekNextSeq()).toBe(2);
 	});
 });
+
+describe("AgentService.currentEpoch", () => {
+	it("returns a stable non-empty epoch UUID for the instance lifetime", () => {
+		const svc = makeService();
+		const e1 = svc.currentEpoch();
+		const e2 = svc.currentEpoch();
+		expect(e1).toBe(e2);
+		expect(e1.length).toBeGreaterThan(0);
+	});
+
+	it("two services have distinct epochs", () => {
+		const a = new AgentService();
+		const b = new AgentService();
+		expect(a.currentEpoch()).not.toBe(b.currentEpoch());
+	});
+
+	it("matches the epoch stamped on emitted events", () => {
+		const svc = makeService();
+		const session = svc.createSession({ origin: "web" });
+		svc.emitFromRunner(session.id, {
+			type: "llm.text",
+			turnIndex: 1,
+			delta: "hi",
+		});
+		const events = svc
+			._getEventBus()
+			.historySnapshot({ sessionId: session.id });
+		for (const event of events) {
+			expect(event.epoch).toBe(svc.currentEpoch());
+		}
+	});
+
+	it("honors a caller-supplied epoch via eventBus option", () => {
+		const svc = new AgentService({ eventBus: { epoch: "fixed-X" } });
+		expect(svc.currentEpoch()).toBe("fixed-X");
+	});
+});
+
+describe("AgentService.emitFromRunner", () => {
+	it("emits the payload without touching lastActiveAt by default", () => {
+		let registryNow = 1_700_000_000_000;
+		const registryClock = (): Date => {
+			const d = new Date(registryNow);
+			registryNow += 60_000;
+			return d;
+		};
+		const svc = new AgentService({
+			sessionRegistry: { idGen: () => "s1", clock: registryClock },
+			eventBus: { clock: () => new Date(1_700_000_000_000) },
+		});
+		const original = svc.createSession({ origin: "web" });
+		svc.emitFromRunner(original.id, {
+			type: "llm.text",
+			turnIndex: 1,
+			delta: "a",
+		});
+		svc.emitFromRunner(original.id, {
+			type: "llm.text",
+			turnIndex: 1,
+			delta: "b",
+		});
+		const after = svc.getSession(original.id);
+		expect(after?.lastActiveAt).toBe(original.lastActiveAt);
+	});
+
+	it("touches lastActiveAt and emits session.updated when touchActivity=true", async () => {
+		let registryNow = 1_700_000_000_000;
+		const registryClock = (): Date => {
+			const d = new Date(registryNow);
+			registryNow += 60_000;
+			return d;
+		};
+		const svc = new AgentService({
+			sessionRegistry: { idGen: () => "s2", clock: registryClock },
+			eventBus: { clock: () => new Date(1_700_000_000_000) },
+		});
+		const sub = svc.subscribe();
+		const original = svc.createSession({ origin: "web" });
+		// Drain session.created.
+		await sub.next();
+		svc.emitFromRunner(
+			original.id,
+			{ type: "assistant.message", turnIndex: 1, content: "done" },
+			{ touchActivity: true },
+		);
+		const seen: AgentEvent[] = [];
+		const first = await sub.next();
+		if (!first.done) seen.push(first.value);
+		const second = await sub.next();
+		if (!second.done) seen.push(second.value);
+		const types = seen.map((e) => e.payload.type);
+		expect(types).toEqual(["assistant.message", "session.updated"]);
+		expect(svc.getSession(original.id)?.lastActiveAt).not.toBe(
+			original.lastActiveAt,
+		);
+		sub.close();
+	});
+
+	it("throws on unknown session id", () => {
+		const svc = makeService();
+		expect(() =>
+			svc.emitFromRunner("missing", { type: "session.completed" }),
+		).toThrow(/unknown session/);
+	});
+});
+
+describe("AgentService.setSessionStatus", () => {
+	it("updates status, touches lastActiveAt, and emits session.updated", async () => {
+		let registryNow = 1_700_000_000_000;
+		const registryClock = (): Date => {
+			const d = new Date(registryNow);
+			registryNow += 60_000;
+			return d;
+		};
+		const svc = new AgentService({
+			sessionRegistry: { idGen: () => "ss1", clock: registryClock },
+			eventBus: { clock: () => new Date(1_700_000_000_000) },
+		});
+		const sub = svc.subscribe();
+		const session = svc.createSession({ origin: "web" });
+		await sub.next(); // drain session.created
+		const updated = svc.setSessionStatus(session.id, "running");
+		expect(updated.status).toBe("running");
+		expect(updated.lastActiveAt).not.toBe(session.lastActiveAt);
+		const next = await sub.next();
+		expect(next.done).toBe(false);
+		if (next.done) throw new Error("unreachable");
+		expect(next.value.payload).toEqual({
+			type: "session.updated",
+			session: updated,
+		});
+		sub.close();
+	});
+
+	it("throws on unknown session id", () => {
+		const svc = makeService();
+		expect(() => svc.setSessionStatus("missing", "completed")).toThrow(
+			/unknown session/,
+		);
+	});
+});
+
+describe("AgentService.deleteSession", () => {
+	it("returns true when the session existed and removes it", () => {
+		const svc = makeService();
+		const session = svc.createSession({ origin: "web" });
+		expect(svc.deleteSession(session.id)).toBe(true);
+		expect(svc.getSession(session.id)).toBeNull();
+	});
+
+	it("returns false for unknown session id", () => {
+		const svc = makeService();
+		expect(svc.deleteSession("nope")).toBe(false);
+	});
+});
+
+describe("AgentService.getEventCount", () => {
+	it("counts only events for the requested session", () => {
+		const svc = makeService();
+		const a = svc.createSession({ origin: "web" });
+		const b = svc.createSession({ origin: "web" });
+		svc.emitFromRunner(a.id, { type: "llm.text", turnIndex: 1, delta: "1" });
+		svc.emitFromRunner(a.id, { type: "llm.text", turnIndex: 1, delta: "2" });
+		svc.emitFromRunner(b.id, { type: "llm.text", turnIndex: 1, delta: "x" });
+		// session.created is also an event for each session, so a has 3 (created + 2 deltas).
+		expect(svc.getEventCount(a.id)).toBe(3);
+		expect(svc.getEventCount(b.id)).toBe(2);
+	});
+
+	it("returns 0 for unknown session id", () => {
+		const svc = makeService();
+		expect(svc.getEventCount("nobody")).toBe(0);
+	});
+});
+
+describe("AgentService.maxSessions", () => {
+	it("evicts the oldest-by-lastActiveAt session after createSession exceeds the cap", () => {
+		let counter = 0;
+		const svc = new AgentService({
+			maxSessions: 2,
+			sessionRegistry: {
+				idGen: () => `cap${++counter}`,
+				clock: fixedClock(1_700_000_000_000, 60_000),
+			},
+		});
+		const a = svc.createSession({ origin: "web" });
+		const b = svc.createSession({ origin: "web" });
+		expect(svc.listSessions()).toHaveLength(2);
+		const c = svc.createSession({ origin: "web" });
+		// `a` should be evicted: it's the oldest after `c` creates.
+		expect(
+			svc
+				.listSessions()
+				.map((s) => s.id)
+				.sort(),
+		).toEqual([b.id, c.id].sort());
+		expect(svc.getSession(a.id)).toBeNull();
+	});
+
+	it("does not evict when cap is not exceeded", () => {
+		let counter = 0;
+		const svc = new AgentService({
+			maxSessions: 5,
+			sessionRegistry: {
+				idGen: () => `cap${++counter}`,
+				clock: fixedClock(1_700_000_000_000, 60_000),
+			},
+		});
+		svc.createSession({ origin: "web" });
+		svc.createSession({ origin: "web" });
+		expect(svc.listSessions()).toHaveLength(2);
+	});
+
+	it("omitting maxSessions disables eviction entirely", () => {
+		let counter = 0;
+		const svc = new AgentService({
+			sessionRegistry: {
+				idGen: () => `nocap${++counter}`,
+				clock: fixedClock(1_700_000_000_000, 60_000),
+			},
+		});
+		for (let i = 0; i < 50; i += 1) svc.createSession({ origin: "web" });
+		expect(svc.listSessions()).toHaveLength(50);
+	});
+});

@@ -49,6 +49,15 @@ export const MIN_HISTORY_CAPACITY = 1;
 export interface EventBusOptions {
 	readonly historyCapacity?: number;
 	readonly clock?: () => Date;
+	/**
+	 * Process-epoch UUID stamped onto every emitted event. Lets clients
+	 * detect cross-process restarts that `seq` alone wouldn't catch.
+	 * Defaults to `crypto.randomUUID()` at construction.
+	 *
+	 * agent-core 进程级 epoch UUID,每个 event 都贴这个值。客户端可以
+	 * 用它检出跨进程重启的 gap。默认 `crypto.randomUUID()`。
+	 */
+	readonly epoch?: string;
 }
 
 type PendingResolver = (result: IteratorResult<AgentEvent, undefined>) => void;
@@ -159,6 +168,7 @@ export class EventBus {
 	private readonly historyCapacity: number;
 	private readonly clock: () => Date;
 	private nextSeq = 1;
+	private readonly _epoch: string;
 
 	constructor(options: EventBusOptions = {}) {
 		const requested = options.historyCapacity ?? DEFAULT_HISTORY_CAPACITY;
@@ -170,6 +180,12 @@ export class EventBus {
 		this.historyCapacity = requested;
 		this.historyBuffer = new Array<AgentEvent | undefined>(requested);
 		this.clock = options.clock ?? (() => new Date());
+		this._epoch = options.epoch ?? generateEpoch();
+	}
+
+	/** Process-epoch UUID stamped onto every event this bus emits. */
+	get epoch(): string {
+		return this._epoch;
 	}
 
 	/**
@@ -185,6 +201,7 @@ export class EventBus {
 			sessionId,
 			ts: this.clock().toISOString(),
 			payload,
+			epoch: this._epoch,
 		};
 		this.nextSeq += 1;
 		this.historyBuffer[this.historyHead] = event;
@@ -240,10 +257,30 @@ export class EventBus {
 	}
 
 	subscribe(options: SubscribeOptions = {}): AgentSubscription {
+		// Strict epoch check: when the caller passes an `expectedEpoch` that
+		// doesn't match our current `_epoch`, return a subscription that's
+		// already closed and flagged. The caller's cursor is from a previous
+		// agent-core process and must not be served live events from this
+		// bus (the sequence numbers would be misleading). Replay history is
+		// also skipped: the caller's cursor is meaningless against our log.
+		if (
+			options.expectedEpoch != null &&
+			options.expectedEpoch !== this._epoch
+		) {
+			const subscriber = new Subscriber(
+				options.sessionId,
+				{ replayTruncated: false, epochMismatch: true },
+				() => {
+					/* nothing to remove — never added to subscribers set */
+				},
+			);
+			subscriber.close();
+			return subscriber;
+		}
 		const replayTruncated = this.isReplayTruncated(options);
 		const subscriber = new Subscriber(
 			options.sessionId,
-			{ replayTruncated },
+			{ replayTruncated, epochMismatch: false },
 			(sub) => {
 				this.subscribers.delete(sub);
 			},
@@ -303,4 +340,22 @@ export class EventBus {
 		}
 		return oldest.seq > afterSeq + 1;
 	}
+}
+
+/**
+ * Generate a process-epoch UUID. Uses `crypto.randomUUID()` when
+ * available (Node 19+, all browsers we target) and falls back to a
+ * timestamp + Math.random combo on older runtimes so unit tests don't
+ * fail on environments that lack the Web Crypto global.
+ *
+ * `crypto.randomUUID()` 可用时直接用;否则用 ts + random fallback。
+ */
+function generateEpoch(): string {
+	const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+	if (c != null && typeof c.randomUUID === "function") {
+		return c.randomUUID();
+	}
+	const ts = Date.now().toString(36);
+	const rand = Math.random().toString(36).slice(2, 14).padEnd(12, "0");
+	return `epoch-${ts}-${rand}`;
 }

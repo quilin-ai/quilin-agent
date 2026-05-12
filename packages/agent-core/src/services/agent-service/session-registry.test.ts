@@ -150,3 +150,90 @@ describe("SessionRegistry.update", () => {
 		expect(registry.get("u4")?.title).toBe("Updated");
 	});
 });
+
+describe("SessionRegistry.delete", () => {
+	it("removes a known session and returns true", () => {
+		let counter = 0;
+		const registry = new SessionRegistry({ idGen: () => `d${++counter}` });
+		registry.create({ origin: "web" });
+		expect(registry.size()).toBe(1);
+		expect(registry.delete("d1")).toBe(true);
+		expect(registry.size()).toBe(0);
+		expect(registry.get("d1")).toBeNull();
+	});
+
+	it("returns false when the session id is unknown", () => {
+		const registry = new SessionRegistry();
+		expect(registry.delete("missing")).toBe(false);
+	});
+
+	it("does not emit anything (silent removal)", () => {
+		// SessionRegistry has no event bus; this test simply documents the
+		// contract that delete is silent — callers must emit termination
+		// events themselves before calling delete.
+		let counter = 0;
+		const registry = new SessionRegistry({ idGen: () => `s${++counter}` });
+		registry.create({ origin: "web" });
+		registry.delete("s1");
+		expect(registry.list()).toEqual([]);
+	});
+});
+
+describe("SessionRegistry.evictLruIfOver", () => {
+	it("returns [] and is a no-op when size is at or below the cap", () => {
+		let counter = 0;
+		const registry = new SessionRegistry({
+			idGen: () => `lru${++counter}`,
+			clock: fixedClock(1_700_000_000_000, 60_000),
+		});
+		registry.create({ origin: "web" });
+		registry.create({ origin: "web" });
+		expect(registry.evictLruIfOver(5)).toEqual([]);
+		expect(registry.evictLruIfOver(2)).toEqual([]);
+		expect(registry.size()).toBe(2);
+	});
+
+	it("evicts the oldest-by-lastActiveAt session when over cap", () => {
+		let counter = 0;
+		const registry = new SessionRegistry({
+			idGen: () => `lru${++counter}`,
+			clock: fixedClock(1_700_000_000_000, 60_000),
+		});
+		registry.create({ origin: "web" }); // lru1 → t0
+		registry.create({ origin: "web" }); // lru2 → t60
+		registry.create({ origin: "web" }); // lru3 → t120
+		// Touch lru1 so it's newest now.
+		registry.update("lru1", { touch: true });
+		const evicted = registry.evictLruIfOver(2);
+		expect(evicted).toEqual(["lru2"]);
+		expect(registry.size()).toBe(2);
+		expect(registry.get("lru1")).not.toBeNull();
+		expect(registry.get("lru3")).not.toBeNull();
+		expect(registry.get("lru2")).toBeNull();
+	});
+
+	it("evicts multiple sessions when far over cap", () => {
+		let counter = 0;
+		const registry = new SessionRegistry({
+			idGen: () => `lru${++counter}`,
+			clock: fixedClock(1_700_000_000_000, 60_000),
+		});
+		for (let i = 0; i < 5; i += 1) registry.create({ origin: "web" });
+		const evicted = registry.evictLruIfOver(2);
+		expect(evicted).toEqual(["lru1", "lru2", "lru3"]);
+		expect(registry.size()).toBe(2);
+	});
+
+	it("treats negative cap as 0 (evict everything)", () => {
+		let counter = 0;
+		const registry = new SessionRegistry({
+			idGen: () => `lru${++counter}`,
+			clock: fixedClock(1_700_000_000_000, 60_000),
+		});
+		registry.create({ origin: "web" });
+		registry.create({ origin: "web" });
+		const evicted = registry.evictLruIfOver(-1);
+		expect(evicted).toHaveLength(2);
+		expect(registry.size()).toBe(0);
+	});
+});

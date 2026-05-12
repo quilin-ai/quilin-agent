@@ -277,14 +277,38 @@ export * from "./repl.js";
 export * from "./safety/write-authority.js";
 export * from "./self-evolution/index.js";
 export {
+	AgentService,
+	type AgentServiceOptions,
+	DEFAULT_HISTORY_CAPACITY,
+	DEFAULT_SESSION_TITLE,
+	type EmitFromRunnerOptions,
+	EventBus,
+	type EventBusOptions,
+	MIN_HISTORY_CAPACITY,
+	type SessionPatch,
+	SessionRegistry,
+	type SessionRegistryOptions,
+} from "./services/agent-service/index.js";
+export type {
+	AgentEvent,
+	AgentEventPayload,
+	AgentSession,
+	AgentSubscription,
+	CreateSessionInput,
+	SessionOrigin,
+	SessionStatus,
+	SubscribeOptions,
+	SubscriptionInfo,
+} from "./services/agent-service/types.js";
+export {
 	type RunSkillTriggerEvalOptions,
 	runSkillTriggerEval,
 } from "./skills/eval-runner.js";
 export {
+	DEFAULT_POST_COMPACT_MAX_TOTAL_TOKENS,
+	type SkillsCatalogChange,
 	SkillsManager,
 	type SkillsManagerOptions,
-	type SkillsCatalogChange,
-	DEFAULT_POST_COMPACT_MAX_TOTAL_TOKENS,
 } from "./skills/manager.js";
 export {
 	type BuildSkillManifestOptions,

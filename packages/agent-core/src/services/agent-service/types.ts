@@ -91,16 +91,53 @@ export type AgentEventPayload =
 			readonly type: "turn.started";
 			readonly turnIndex: number;
 			readonly userText: string;
+			/** AI SDK v6 message id for the assistant turn (bracketed by start/finish). */
+			readonly messageId?: string;
+	  }
+	| {
+			readonly type: "turn.step_started";
+			readonly turnIndex: number;
+			readonly stepIndex: number;
+	  }
+	| {
+			readonly type: "turn.step_completed";
+			readonly turnIndex: number;
+			readonly stepIndex: number;
+			readonly finishReason?: string;
+	  }
+	| {
+			readonly type: "llm.text_start";
+			readonly turnIndex: number;
+			/** AI SDK v6 text part id; brackets the matching `llm.text` deltas. */
+			readonly textPartId: string;
 	  }
 	| {
 			readonly type: "llm.text";
 			readonly turnIndex: number;
 			readonly delta: string;
+			/** AI SDK v6 text part id; pairs with `llm.text_start` / `llm.text_end`. */
+			readonly textPartId?: string;
+	  }
+	| {
+			readonly type: "llm.text_end";
+			readonly turnIndex: number;
+			readonly textPartId: string;
+	  }
+	| {
+			readonly type: "llm.reasoning_start";
+			readonly turnIndex: number;
+			readonly reasoningPartId: string;
 	  }
 	| {
 			readonly type: "llm.reasoning";
 			readonly turnIndex: number;
 			readonly delta: string;
+			readonly reasoningPartId?: string;
+	  }
+	| {
+			readonly type: "llm.reasoning_end";
+			readonly turnIndex: number;
+			readonly reasoningPartId: string;
 	  }
 	| {
 			readonly type: "tool.call";
@@ -122,7 +159,11 @@ export type AgentEventPayload =
 			readonly turnIndex: number;
 			readonly content: string;
 	  }
-	| { readonly type: "turn.completed"; readonly turnIndex: number }
+	| {
+			readonly type: "turn.completed";
+			readonly turnIndex: number;
+			readonly finishReason?: string;
+	  }
 	| { readonly type: "session.completed" }
 	| { readonly type: "session.failed"; readonly error: string };
 
@@ -155,6 +196,16 @@ export interface AgentEvent {
 	readonly sessionId: string;
 	readonly ts: string;
 	readonly payload: AgentEventPayload;
+	/**
+	 * Process-epoch UUID stamped on every event. SSE / TUI clients holding a
+	 * `seq` cursor across an agent-core restart can compare the new event's
+	 * epoch against the cached one and detect the cross-process gap that
+	 * `seq` alone would mask.
+	 *
+	 * 进程级 epoch UUID,贴在每条 event 上。SSE / TUI 客户端跨 agent-core
+	 * 重启时,可以用 epoch 比对发现 `seq` 单独检不到的 gap。
+	 */
+	readonly epoch: string;
 }
 
 export interface SubscribeOptions {
@@ -171,11 +222,28 @@ export interface SubscribeOptions {
 	 * `info` 通道上置 `replayTruncated: true`。
 	 */
 	readonly afterSeq?: number;
+	/**
+	 * When set, the EventBus checks the value against its current `epoch` UUID.
+	 * A mismatch means the caller's cursor is from a previous agent-core
+	 * process: the subscription is created in a closed state and the first
+	 * `next()` resolves with `done: true` while `info.epochMismatch` is set
+	 * to `true`. The caller MUST then restart from a fresh session/cursor.
+	 *
+	 * 不传时跳过校验(保留旧行为)。传入会做严格匹配,mismatch 立即闭流并
+	 * 在 `info.epochMismatch` 标 true,调用方必须重启 fresh session。
+	 */
+	readonly expectedEpoch?: string;
 }
 
 /** Side-channel info exposed by a subscription (lightweight; readers may ignore). */
 export interface SubscriptionInfo {
 	readonly replayTruncated: boolean;
+	/**
+	 * `true` when the subscription was created with a `SubscribeOptions.expectedEpoch`
+	 * that didn't match the EventBus's current epoch. In that case the iterator
+	 * is born closed; the caller should treat its session/cursor as invalidated.
+	 */
+	readonly epochMismatch: boolean;
 }
 
 /**

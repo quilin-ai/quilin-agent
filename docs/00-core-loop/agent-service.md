@@ -75,11 +75,11 @@ Both the TUI and the Web are clients of the same `AgentService` instance. The TU
 
 TUI 和 Web 都是同一个 `AgentService` 实例的客户端。TUI 进程内直接消费，Web 通过现有的 `apps/web/app/api/proxy/[...path]/route.ts` SSE 代理消费。
 
-## API surface（slice 1） / API surface (slice 1)
+## API surface / API surface
 
-Slice 1 lands the in-memory plumbing only. It is fully testable without touching `runAgentLoop`. The `chat()` method is introduced as a type but its body comes in slice 2.
+Slice 1 landed the in-memory plumbing (AgentService class, EventBus ring buffer, SessionRegistry, judgment-fixed types). Task #22 Phase 1 extended the public surface so Web chat can adopt AgentService without reaching for `_emit` / `_patchSession`: process-epoch UUID on every event, four public mutator methods (`emitFromRunner`, `setSessionStatus`, `deleteSession`, `getEventCount`), a `maxSessions` option for LRU eviction, and AI-SDK-v6 boundary variants on `AgentEventPayload` so the Web SSE translator can rebuild the wire format chunk-for-chunk.
 
-Slice 1 只落 in-memory 管线，不动 `runAgentLoop` 也能完整测。`chat()` 方法在 slice 1 已经入类型，但 body 留给 slice 2。
+Slice 1 落了 in-memory 管线；Task #22 Phase 1 把公共 API 扩成 Web chat 可直接消费的形状:每个事件带 process-epoch UUID,四个公共写入方法(`emitFromRunner`/`setSessionStatus`/`deleteSession`/`getEventCount`),`maxSessions` LRU 驱逐,以及给 AI SDK v6 SSE 翻译层补齐边界 variant。
 
 ```typescript
 export type SessionStatus = "idle" | "running" | "completed" | "failed";
@@ -100,30 +100,43 @@ export interface AgentEvent {
   readonly sessionId: string;
   readonly ts: string;               // ISO
   readonly payload: AgentEventPayload;
+  readonly epoch: string;            // process-epoch UUID; detects cross-process gap
 }
 
 export type AgentEventPayload =
   | { readonly type: "session.created"; readonly session: AgentSession }
   | { readonly type: "session.updated"; readonly session: AgentSession }
-  | { readonly type: "turn.started"; readonly turnIndex: number; readonly userText: string }
-  | { readonly type: "llm.text"; readonly turnIndex: number; readonly delta: string }
-  | { readonly type: "llm.reasoning"; readonly turnIndex: number; readonly delta: string }
+  | { readonly type: "turn.started"; readonly turnIndex: number;
+      readonly userText: string; readonly messageId?: string }
+  | { readonly type: "turn.step_started"; readonly turnIndex: number; readonly stepIndex: number }
+  | { readonly type: "turn.step_completed"; readonly turnIndex: number;
+      readonly stepIndex: number; readonly finishReason?: string }
+  | { readonly type: "llm.text_start"; readonly turnIndex: number; readonly textPartId: string }
+  | { readonly type: "llm.text"; readonly turnIndex: number;
+      readonly delta: string; readonly textPartId?: string }
+  | { readonly type: "llm.text_end"; readonly turnIndex: number; readonly textPartId: string }
+  | { readonly type: "llm.reasoning_start"; readonly turnIndex: number; readonly reasoningPartId: string }
+  | { readonly type: "llm.reasoning"; readonly turnIndex: number;
+      readonly delta: string; readonly reasoningPartId?: string }
+  | { readonly type: "llm.reasoning_end"; readonly turnIndex: number; readonly reasoningPartId: string }
   | { readonly type: "tool.call"; readonly turnIndex: number; readonly toolCallId: string;
       readonly toolName: string; readonly input?: unknown }
   | { readonly type: "tool.result"; readonly turnIndex: number; readonly toolCallId: string;
       readonly toolName: string; readonly output: unknown; readonly isError?: boolean }
   | { readonly type: "assistant.message"; readonly turnIndex: number; readonly content: string }
-  | { readonly type: "turn.completed"; readonly turnIndex: number }
+  | { readonly type: "turn.completed"; readonly turnIndex: number; readonly finishReason?: string }
   | { readonly type: "session.completed" }
   | { readonly type: "session.failed"; readonly error: string };
 
 export interface SubscribeOptions {
   readonly sessionId?: string;       // omit = all sessions
   readonly afterSeq?: number;        // replay events from history with seq > afterSeq, then live
+  readonly expectedEpoch?: string;   // mismatch → subscription born closed + info.epochMismatch
 }
 
 export interface SubscriptionInfo {
   readonly replayTruncated: boolean; // true if afterSeq predates the oldest buffered event
+  readonly epochMismatch: boolean;   // true if expectedEpoch did not match the bus's epoch
 }
 
 export interface AgentSubscription
@@ -133,7 +146,19 @@ export interface AgentSubscription
   readonly info: SubscriptionInfo;   // side-channel captured at subscribe time
 }
 
+export interface AgentServiceOptions {
+  readonly eventBus?: EventBusOptions;          // includes optional `epoch` override
+  readonly sessionRegistry?: SessionRegistryOptions;
+  readonly maxSessions?: number;                // when set, LRU evict on createSession
+}
+
+export interface EmitFromRunnerOptions {
+  readonly touchActivity?: boolean;             // patch lastActiveAt + emit session.updated
+}
+
 // AgentService is a CLASS (not an interface) — single in-process singleton.
+// Re-exported from `@quilin/agent-core/index.ts` since Task #22 Phase 1
+// (was internal in slice 1).
 export class AgentService {
   constructor(options?: AgentServiceOptions);
   createSession(input: { readonly origin: SessionOrigin; readonly title?: string }): AgentSession;
@@ -141,21 +166,29 @@ export class AgentService {
   listSessions(): readonly AgentSession[];
   subscribe(options?: SubscribeOptions): AgentSubscription;
 
-  // Introduced as a typed stub in slice 1; full implementation in slice 2.
-  // chat(input: { sessionId: string; userText: string }): AsyncIterable<AgentEvent>;
+  // Public mutators added in Task #22 Phase 1 so Web routes can drive
+  // sessions without reaching for the `_`-prefixed helpers.
+  currentEpoch(): string;
+  emitFromRunner(sessionId: string, payload: AgentEventPayload,
+                 options?: EmitFromRunnerOptions): void;
+  setSessionStatus(id: string, status: SessionStatus): AgentSession;
+  deleteSession(id: string): boolean;
+  getEventCount(sessionId: string): number;
 
-  // @internal helpers (slice 2 / 3 consume; downstream packages must not).
+  // @internal helpers (intra-package use only — `_` prefix signals private).
   _patchSession(id: string, patch: SessionPatch): AgentSession;
   _emit(sessionId: string, payload: AgentEventPayload): void;
   _getEventBus(): EventBus;
   _getSessionRegistry(): SessionRegistry;
 }
-
-// EventBus is also a class. Its `historySnapshot(options?)` returns a frozen
-// view of the buffered events matching the filter — used by `subscribe`'s
-// replay phase and by tests. Not part of the consumer-facing surface but
-// exported so slice 2/3 / tests can read state.
 ```
+
+### Behavioral notes for the Web SSE adapter (Task #22 Phase 2+) / Web SSE 适配层注意事项
+
+- **`emitFromRunner` may emit two events per call.** When `options.touchActivity === true`, the method emits the payload plus a follow-up `session.updated` so subscribers see the new `lastActiveAt`. Consumers should not assume "one emit = one event"; filter on `payload.type !== "session.updated"` if you only want logical events. Token-delta callers should leave `touchActivity` off to avoid spamming session.updated.
+- **`maxSessions` LRU eviction is silent.** `evictLruIfOver` removes sessions from the registry without emitting `session.failed`. SSE subscribers attached to an evicted session id will wait forever (no termination event). Until that's resolved (deferred R1 from slice 1), callers driving cancellation should `emitFromRunner(sessionId, { type: "session.failed", error: "..." }, { touchActivity: true })` *before* relying on eviction.
+- **Process-epoch enforcement is opt-in.** Callers that persist a `seq` cursor across reconnects (TUI probe, future API consumers) must also persist `epoch` and pass it as `SubscribeOptions.expectedEpoch`; mismatched cursors get an immediately-closed subscription with `info.epochMismatch === true`. Browser `useChat` doesn't need this because its reconnect path detects "session lost" via `getSession(id) === null` and falls back to a fresh start naturally.
+- **Boundary variants pair with `_start` / `_end`.** `llm.text_start` / `llm.text` / `llm.text_end` share a `textPartId`; the adapter uses this to rebuild AI SDK v6's `text-start` / `text-delta` / `text-end` triple. Same shape for reasoning.
 
 ### Key invariants / 关键不变量
 

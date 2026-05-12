@@ -303,3 +303,73 @@ describe("EventBus.subscribe", () => {
 		expect(bus._subscriberCount()).toBe(0);
 	});
 });
+
+describe("EventBus.epoch", () => {
+	it("generates a non-empty default epoch when none is provided", () => {
+		const bus = new EventBus();
+		expect(typeof bus.epoch).toBe("string");
+		expect(bus.epoch.length).toBeGreaterThan(0);
+	});
+
+	it("two default-constructed buses have distinct epochs", () => {
+		const a = new EventBus();
+		const b = new EventBus();
+		expect(a.epoch).not.toBe(b.epoch);
+	});
+
+	it("honors a caller-supplied epoch verbatim", () => {
+		const bus = new EventBus({ epoch: "fixed-epoch-1" });
+		expect(bus.epoch).toBe("fixed-epoch-1");
+	});
+
+	it("stamps every emitted event with the configured epoch", () => {
+		const bus = new EventBus({ epoch: "ep-X" });
+		const a = bus.emit("s", payload(1, "a"));
+		const b = bus.emit("s", payload(1, "b"));
+		expect(a.epoch).toBe("ep-X");
+		expect(b.epoch).toBe("ep-X");
+	});
+
+	it("subscribe with matching expectedEpoch behaves normally", async () => {
+		const bus = new EventBus({ epoch: "ep-match" });
+		const sub = bus.subscribe({ expectedEpoch: "ep-match" });
+		expect(sub.info.epochMismatch).toBe(false);
+		bus.emit("s", payload(1, "x"));
+		const result = await sub.next();
+		expect(result.done).toBe(false);
+		if (result.done) throw new Error("unreachable");
+		expect(result.value.epoch).toBe("ep-match");
+		sub.close();
+	});
+
+	it("subscribe with mismatched expectedEpoch returns a closed iterator + epochMismatch flag", async () => {
+		const bus = new EventBus({ epoch: "current" });
+		// Pre-populate so we can verify replay is also skipped.
+		bus.emit("s", payload(1, "should-not-replay"));
+		const sub = bus.subscribe({ expectedEpoch: "stale" });
+		expect(sub.info.epochMismatch).toBe(true);
+		// Subscription is born closed; never appears in subscribers set.
+		expect(bus._subscriberCount()).toBe(0);
+		const r = await sub.next();
+		expect(r.done).toBe(true);
+	});
+
+	it("mismatched subscribe ignores history replay even when afterSeq is set", async () => {
+		const bus = new EventBus({ epoch: "current" });
+		bus.emit("s", payload(1, "a"));
+		bus.emit("s", payload(1, "b"));
+		const sub = bus.subscribe({ expectedEpoch: "stale", afterSeq: 0 });
+		expect(sub.info.epochMismatch).toBe(true);
+		// Mismatched subscriptions don't replay; first next() is done.
+		const r = await sub.next();
+		expect(r.done).toBe(true);
+	});
+
+	it("omitting expectedEpoch preserves the pre-epoch subscribe behavior", () => {
+		const bus = new EventBus();
+		const sub = bus.subscribe();
+		expect(sub.info.epochMismatch).toBe(false);
+		expect(bus._subscriberCount()).toBe(1);
+		sub.close();
+	});
+});
