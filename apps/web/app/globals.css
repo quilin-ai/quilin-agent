@@ -1197,7 +1197,13 @@ footer.q-composer:focus-within {
 	gap: 32px;
 }
 .q-intro-stage .q-wordmark-intro {
+	/* Override the base `.q-wordmark-wrap` `position: fixed; top: 18px; left: 28px`
+	   so the wordmark sits at the flex container's center instead of pinned top-left. */
+	position: static;
+	top: auto;
+	left: auto;
 	transform: scale(1.6);
+	transform-origin: center;
 	margin-bottom: 8vh;
 }
 .q-intro-recent {

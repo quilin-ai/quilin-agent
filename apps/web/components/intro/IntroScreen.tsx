@@ -1,4 +1,7 @@
+"use client";
+
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 import { Composer } from "@/components/shell/Composer";
 import { Wordmark } from "@/components/shell/Wordmark";
@@ -12,13 +15,20 @@ export interface IntroScreenProps {
 /**
  * Centered first-load layout (demo body class `intro`). Wordmark is scaled
  * 1.6×, the composer floats at vertical center, recent sessions list below.
- * The rail strip is offscreen via the demo's CSS rule (transform: translateX(-100%)).
+ *
+ * Submitting in intro mode navigates out of the intro stage to the regular
+ * workspace shell with a stub session id. Phase 1c will replace this with a
+ * real `POST /api/v2/sessions` flow once the V2Runtime adapter binds.
  */
 export function IntroScreen({ recentSessions = [] }: IntroScreenProps) {
+	const router = useRouter();
+	const handleSubmit = (_text: string): void => {
+		router.push(`/?session=draft-${Date.now().toString(36)}`);
+	};
 	return (
 		<div className="q-intro-stage" data-testid="intro-screen">
 			<Wordmark variant="intro" />
-			<Composer agents={[]} currentAgentId="main" intro />
+			<Composer agents={[]} currentAgentId="main" intro onSubmit={handleSubmit} />
 			{recentSessions.length > 0 ? (
 				<div className="q-intro-recent">
 					<div className="head">最近 · recent sessions</div>
