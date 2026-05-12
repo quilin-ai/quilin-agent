@@ -287,6 +287,26 @@ The original Slice 3-5 design above sketched a separate `/api/v2/chat` + `/api/v
 
 `/api/v2/*` 控制面是原 spec 草稿，Task #22 五个 phase 实际落到 `/api/chat`(状态走 AgentService) + `/api/admin/agent-service/{sessions,events}`(管理探针,`QUILIN_ADMIN_PROBE=1` gate)。TUI 接入留给后续 iteration。
 
+### Candidate 1: TUI integration progress / TUI 接入进度
+
+Task #22 follow-on(Linear Task #29)分 6 个 slice 把 TUI 接到同一个 `AgentService`:
+
+| Slice | 内容 | 状态 |
+|-------|------|------|
+| A | TUI read-side: `getOrCreateAgentService` singleton + `/sessions` command | ✅ landed |
+| B | TUI write-side: `createSession` / `setSessionStatus` on input | pending |
+| C | turn-level event pump: `runAgentLoop` hooks → `AgentEventPayload` | pending |
+| D | rendering: drive TUI render off `service.subscribe()` | pending |
+| E | cross-process IPC (decision deferred — currently single-process assumption) | pending |
+| F | E2E integration tests + this doc's final summary | pending |
+
+**Slice A (landed)**:
+- `packages/agent-core/src/repl/agent-service-bridge.ts` — `getOrCreateAgentService()` reuses the same `globalThis.__quilin_agent_service__` key as `apps/web/lib/agent-service-client.ts`, so any single process running both Web and TUI sees one `AgentService`. `listAgentServiceSessions()` + `findAgentServiceSession()` are thin pass-throughs for read-only consumers.
+- `packages/agent-core/src/repl.ts` — new `/sessions` slash command renders the in-process session table (id / origin / status / title / lastActiveAt). `/resume` (SQLite cold-store) and `/sessions` (in-memory AgentService) coexist; switching via `/sessions <id>` lands in Slice B.
+- 10 new tests in `agent-service-bridge.test.ts`; agent-core suite now 2328 passed / 1 skipped.
+
+Slice A:`/sessions` 是 in-memory 热存(AgentService)的 TUI 入口,与 `/resume` 冷存(SQLite checkpoint)并存。read-only,Slice B 才加 `<id>` 切换写侧。已落库(commit hash TBD,见 git history Task #29 Slice A)。
+
 ## Review history / 评审历史
 
 Slice 1 converged after four cross-review rounds (8 reviewer agents total, all `typescript-reviewer`). Per CLAUDE.md's cross-review hard rule, two consecutive fresh reviewers must both report 0 real issues before landing. Round 4 (reviewers G and H) reported 0/0; the loop is closed.

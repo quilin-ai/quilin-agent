@@ -39,6 +39,10 @@ import type {
 } from "./llm/types.js";
 import { logger } from "./logger.js";
 import { runAgentLoop } from "./loop.js";
+import {
+	getOrCreateAgentService,
+	listAgentServiceSessions,
+} from "./repl/agent-service-bridge.js";
 import { AgentLoopError } from "./loop-types.js";
 import {
 	createObserverBridgeIfEnabled,
@@ -148,6 +152,11 @@ const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
 		name: "resume",
 		signature: "/resume [<number>]",
 		description: "List or resume saved sessions",
+	},
+	{
+		name: "sessions",
+		signature: "/sessions",
+		description: "List in-process AgentService sessions (TUI + web + admin)",
 	},
 	{
 		name: "mcp",
@@ -443,6 +452,54 @@ function renderResumeSessionsTable(
 	}));
 
 	return `${renderTable(columns, rows)}\n输入 /resume <编号> 恢复会话`;
+}
+
+/**
+ * Render the in-process AgentService session list for the `/sessions`
+ * command (Candidate 1 Slice A). Columns intentionally mirror
+ * `renderResumeSessionsTable` for visual consistency, plus an
+ * `origin` column so the user can tell at a glance which sessions
+ * came from the web vs the TUI vs admin/API consumers.
+ *
+ * AgentService session 列表渲染。栏目对齐 /resume 表,加 origin 区分来源。
+ */
+interface AgentServiceSessionRow {
+	readonly id: string;
+	readonly origin: string;
+	readonly status: string;
+	readonly title: string;
+	readonly time: string;
+}
+
+function formatAgentServiceTime(iso: string): string {
+	try {
+		return new Date(iso).toLocaleString("zh-CN", { hour12: false });
+	} catch {
+		return iso;
+	}
+}
+
+function renderAgentServiceSessionsTable(
+	sessions: readonly { readonly id: string; readonly origin: string; readonly status: string; readonly title: string; readonly lastActiveAt: string }[],
+): string {
+	if (sessions.length === 0) {
+		return "(no in-process AgentService sessions yet)";
+	}
+	const columns: TableColumn<AgentServiceSessionRow>[] = [
+		{ header: " id", key: "id" },
+		{ header: " origin", key: "origin" },
+		{ header: " status", key: "status" },
+		{ header: " title", key: "title" },
+		{ header: " last active", key: "time" },
+	];
+	const rows: AgentServiceSessionRow[] = sessions.map((s) => ({
+		id: s.id.length > 16 ? `${s.id.slice(0, 13)}…` : s.id,
+		origin: s.origin,
+		status: s.status,
+		title: s.title.length > 32 ? `${s.title.slice(0, 29)}…` : s.title,
+		time: formatAgentServiceTime(s.lastActiveAt),
+	}));
+	return renderTable(columns, rows);
 }
 
 function formatCapabilitiesMcpStatus(
@@ -2303,6 +2360,13 @@ function installSlashCommandHelp(options: {
 }
 
 export async function startRepl(options: ReplOptions): Promise<void> {
+	// Candidate 1 Slice A: get/create the in-process AgentService
+	// singleton up front. The `/sessions` command (and Slice B+ write
+	// paths) all read through this binding.
+	//
+	// Candidate 1 Slice A:取/构造进程级 AgentService 单例,`/sessions` 命令 +
+	// 后续 slice 写侧都通过它访问。
+	const agentService = getOrCreateAgentService();
 	const {
 		provider,
 		providerId = "deepseek",
@@ -3327,6 +3391,22 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 					stderr.write(`${renderResumeSessionsTable(sessions)}\n`);
 					stderr.write("输入 /resume <编号> 恢复, 或 /resume latest\n");
 				}
+				continue;
+			}
+
+			if (trimmed === "/sessions") {
+				// Candidate 1 Slice A: list every AgentService session currently
+				// in-process — covers TUI's own + web's + any future agent-mesh
+				// consumer's. This is the heat-store complement to /resume
+				// (which is the SQLite cold-store).
+				//
+				// 进程内 AgentService session 列表(TUI/web/agent-mesh)。是 /resume
+				// 冷存的热存补集。Slice B+ 会加 `/sessions <id>` 切入。
+				const svcSessions = listAgentServiceSessions(agentService);
+				stderr.write(`${renderAgentServiceSessionsTable(svcSessions)}\n`);
+				stderr.write(
+					"(read-only in Slice A; switching via `/sessions <id>` lands in Slice B)\n",
+				);
 				continue;
 			}
 
