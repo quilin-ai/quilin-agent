@@ -24,12 +24,26 @@ import {
 	type BuildControlPlaneSnapshotOptions,
 	buildControlPlaneSnapshot,
 } from "./snapshot.js";
+import { handleV2 } from "./v2/router.js";
+import type { SseHandleOptions } from "./v2/routes/events-sse.js";
+import type { V2Runtime } from "./v2/runtime.js";
 
 export interface ControlPlaneHandlerOptions
 	extends BuildControlPlaneSnapshotOptions {
 	readonly onChat?: (message: string) => Promise<string>;
 	readonly dataProviders?: DashboardDataProviders;
 	readonly observability?: Omit<ObservabilityDashboardOptions, "dataProviders">;
+	/**
+	 * Phase 1 v2 control-plane API runtime adapter. When provided, requests
+	 * under `/api/v2/*` are delegated to the typed v2 router; when absent,
+	 * those requests return 503 so the legacy dashboard surface keeps
+	 * working unchanged.
+	 *
+	 * Phase 1 v2 控制面 API 运行时适配器：提供则把 /api/v2/* 委派给 v2
+	 * 路由；未提供则该路径返回 503，旧 dashboard 表面继续保持原行为。
+	 */
+	readonly v2Runtime?: V2Runtime;
+	readonly v2SseOptions?: SseHandleOptions;
 }
 
 const OBSERVABILITY_PATH_PREFIXES = [
@@ -119,6 +133,86 @@ function routeMatches(pathname: string): boolean {
 	);
 }
 
+async function pipeFetchResponseToNode(
+	fetchResponse: Response,
+	nodeResponse: ServerResponse,
+	bodyless: boolean,
+): Promise<void> {
+	const headers: Record<string, string> = {};
+	fetchResponse.headers.forEach((value, key) => {
+		headers[key] = value;
+	});
+	nodeResponse.writeHead(fetchResponse.status, headers);
+	if (bodyless) {
+		nodeResponse.end();
+		return;
+	}
+
+	const body = fetchResponse.body;
+	if (body == null) {
+		nodeResponse.end();
+		return;
+	}
+
+	const reader = body.getReader();
+	const onClose = () => {
+		void reader.cancel().catch(() => undefined);
+	};
+	nodeResponse.on("close", onClose);
+
+	try {
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			if (value != null && value.byteLength > 0) {
+				const ok = nodeResponse.write(Buffer.from(value));
+				if (!ok) {
+					await new Promise<void>((resolve) =>
+						nodeResponse.once("drain", () => resolve()),
+					);
+				}
+			}
+		}
+	} finally {
+		nodeResponse.off("close", onClose);
+		nodeResponse.end();
+	}
+}
+
+function toFetchRequest(
+	request: IncomingMessage,
+	url: URL,
+	bodyText: string | null,
+): { readonly request: Request; readonly abort: () => void } {
+	const headers = new Headers();
+	for (const [key, value] of Object.entries(request.headers)) {
+		if (value == null) continue;
+		if (Array.isArray(value)) {
+			for (const item of value) headers.append(key, item);
+		} else {
+			headers.set(key, value);
+		}
+	}
+	const controller = new AbortController();
+	const method = request.method ?? "GET";
+	const init: RequestInit = {
+		method,
+		headers,
+		signal: controller.signal,
+	};
+	if (bodyText != null && method !== "GET" && method !== "HEAD") {
+		(init as RequestInit & { body: string }).body = bodyText;
+	}
+	const fetchRequest = new Request(url.toString(), init);
+	const abort = () => controller.abort();
+	// Abort the fetch-style signal when the underlying Node IncomingMessage
+	// closes, regardless of whether all body bytes were received — this
+	// matches the SSE handler's expectation that `request.signal` fires on
+	// any client disconnect.
+	request.on("close", abort);
+	return { request: fetchRequest, abort };
+}
+
 export function createControlPlaneHandler(
 	options: ControlPlaneHandlerOptions = {},
 ): (request: IncomingMessage, response: ServerResponse) => void {
@@ -132,6 +226,53 @@ export function createControlPlaneHandler(
 	return (request, response) => {
 		void (async () => {
 			const url = new URL(request.url ?? "/", "http://127.0.0.1");
+
+			// Delegate /api/v2/* to the typed v2 router (QUI-154 Phase 1).
+			// We intentionally check this BEFORE the observability route check
+			// so the v2 surface stays isolated from the legacy /api/dashboard
+			// path. Callers omitting `v2Runtime` get a 503 so the rest of the
+			// server keeps serving unchanged.
+			if (url.pathname === "/api/v2" || url.pathname.startsWith("/api/v2/")) {
+				if (options.v2Runtime == null) {
+					sendJson(response, 503, {
+						ok: false,
+						error: {
+							code: "v2_runtime_not_configured",
+							message:
+								"v2 API runtime adapter is not wired (pass `v2Runtime` to createControlPlaneHandler)",
+						},
+					});
+					return;
+				}
+				const bodyText =
+					request.method === "GET" || request.method === "HEAD"
+						? null
+						: await readRequestBody(request);
+				const { request: fetchRequest } = toFetchRequest(
+					request,
+					url,
+					bodyText,
+				);
+				const v2Response = await handleV2(fetchRequest, {
+					runtime: options.v2Runtime,
+					...(options.v2SseOptions == null
+						? {}
+						: { sseOptions: options.v2SseOptions }),
+				});
+				if (v2Response == null) {
+					sendJson(response, 404, {
+						ok: false,
+						error: { code: "not_found", message: "v2 route not found" },
+					});
+					return;
+				}
+				await pipeFetchResponseToNode(
+					v2Response,
+					response,
+					request.method === "HEAD",
+				);
+				return;
+			}
 
 			// Delegate observability dashboard / API / static asset routes to the
 			// observability handler so /ui/, /api/dashboard/*, /metrics, /traces

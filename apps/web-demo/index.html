@@ -1,0 +1,2485 @@
+<!DOCTYPE html>
+<html lang="zh-Hans" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Quilin · 麒麟</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Noto+Serif+SC:wght@300;400;500;600&family=Noto+Sans+SC:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --col-width: 720px;
+    --rail-strip: 56px;
+    --agent-picker-w: 320px;
+    --head-h: 76px;
+    --composer-h: 88px;
+  }
+  :root[data-theme="light"] {
+    --bg: #FAF8F3;
+    --bg-raised: #FFFFFF;
+    --bg-floating: rgba(250, 248, 243, 0.88);
+    --fg: #1A1A1A;
+    --fg-muted: #5C5752;
+    --fg-subtle: #9B948C;
+    --border: #E8E2D7;
+    --border-strong: #1A1A1A;
+    --accent-vermillion: #C2410C;
+    --accent-jade: #5E7B5C;
+    --accent-tea: #8B6F47;
+    --destructive: #991B1B;
+    --shadow-soft: 0 8px 32px -12px rgba(26, 26, 26, 0.08);
+    --shadow-rail: 8px 0 32px -16px rgba(26, 26, 26, 0.10);
+  }
+  :root[data-theme="dark"] {
+    --bg: #0D0C0A;
+    --bg-raised: #161412;
+    --bg-floating: rgba(13, 12, 10, 0.86);
+    --fg: #F5F1E8;
+    --fg-muted: #8A847A;
+    --fg-subtle: #5C5752;
+    --border: #2A2724;
+    --border-strong: #F5F1E8;
+    --accent-vermillion: #D4501C;
+    --accent-jade: #7B9A77;
+    --accent-tea: #A88B5F;
+    --destructive: #B91C1C;
+    --shadow-soft: 0 8px 32px -12px rgba(0, 0, 0, 0.6);
+    --shadow-rail: 8px 0 32px -16px rgba(0, 0, 0, 0.6);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html {
+    height: 100%;
+    scrollbar-gutter: stable;        /* reserve scrollbar lane even when no overflow */
+    overflow-y: scroll;              /* fallback for browsers without scrollbar-gutter */
+  }
+  body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: "Noto Serif SC", "Cormorant Garamond", Georgia, serif;
+    font-weight: 400;
+    line-height: 1.75;
+    font-size: 16px;
+    -webkit-font-smoothing: antialiased;
+    transition: background 250ms cubic-bezier(.4,0,.2,1), color 250ms cubic-bezier(.4,0,.2,1);
+  }
+
+  /* header */
+  header.app-head {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    height: var(--head-h);
+    padding: 14px 28px;
+    display: flex; align-items: center; justify-content: flex-end;
+    background: var(--bg-floating);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--border);
+    z-index: 40;
+    transition: background 400ms ease-out, border-color 400ms ease-out, backdrop-filter 400ms ease-out;
+  }
+  header.app-head .head-meta {
+    transition: opacity 360ms ease-out 240ms;
+  }
+  .wordmark-wrap {
+    position: fixed;
+    top: 18px; left: 28px;
+    z-index: 50;
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    cursor: pointer; user-select: none;
+    transform-origin: top left;
+    transition:
+      top 720ms cubic-bezier(0.32, 0.72, 0, 1),
+      left 720ms cubic-bezier(0.32, 0.72, 0, 1),
+      transform 720ms cubic-bezier(0.32, 0.72, 0, 1),
+      opacity 180ms linear;
+  }
+  .wordmark-wrap:hover { opacity: 0.75; }
+  .wordmark {
+    font-family: "Cormorant Garamond", serif;
+    font-weight: 500; font-size: 28px; letter-spacing: -0.01em; line-height: 1;
+    display: flex; align-items: baseline; gap: 10px;
+  }
+  .wordmark .cjk { font-family: "Noto Serif SC", serif; font-weight: 400; color: var(--fg-muted); font-size: 22px; }
+  .wordmark-sub {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px; letter-spacing: 0.1em; color: var(--fg-subtle);
+    display: flex; align-items: baseline; gap: 6px;
+  }
+  .wordmark-sub .plus { color: var(--accent-vermillion); }
+  .head-meta {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--fg-subtle);
+    display: flex; gap: 18px; align-items: baseline;
+  }
+  .theme-toggle {
+    background: none; border: none; padding: 0; cursor: pointer;
+    font: inherit; color: inherit; letter-spacing: inherit; text-transform: inherit;
+    transition: color 120ms linear;
+  }
+  .theme-toggle:hover { color: var(--fg); }
+
+  /* strip — always visible at 56px showing labels; hover expands to wider preview panel */
+  aside.rail-strip {
+    position: fixed;
+    top: var(--head-h); bottom: 0; left: 0;
+    width: var(--rail-strip);
+    background: var(--bg);
+    border-right: 1px solid var(--border);
+    z-index: 30;
+    display: flex; flex-direction: column;
+    padding: 14px 0;
+    overflow-y: auto;
+    transition:
+      width 220ms cubic-bezier(.4,0,.2,1),
+      box-shadow 220ms ease-out,
+      transform 720ms cubic-bezier(0.32, 0.72, 0, 1),
+      opacity 360ms ease-out 200ms;
+  }
+  aside.rail-strip:hover,
+  aside.rail-strip[data-pinned="true"] {
+    width: 280px;
+    box-shadow: var(--shadow-rail);
+  }
+  .strip-item {
+    flex: 0 0 auto;
+    padding: 14px 12px 14px 16px;
+    display: flex; align-items: center; gap: 12px;
+    cursor: pointer;
+    color: var(--fg-muted);
+    border-left: 2px solid transparent;
+    user-select: none;
+    transition: color 120ms linear, background 120ms linear;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  .strip-item:hover { color: var(--fg); background: var(--border); }
+  .strip-item.active { color: var(--fg); border-left-color: var(--accent-vermillion); }
+
+  /* collapsed: vertical glyph centered */
+  .strip-item .glyph {
+    font-family: "Noto Serif SC", serif;
+    font-size: 15px; writing-mode: vertical-rl;
+    letter-spacing: 0.12em; line-height: 1.05;
+    flex: 0 0 24px;
+    text-align: center;
+    transition: writing-mode 0s, font-size 180ms;
+  }
+  .strip-item .count {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 9px; letter-spacing: 0.08em; color: var(--fg-subtle);
+    flex: 0 0 auto;
+    margin-left: auto;
+  }
+
+  /* expanded preview: glyph becomes horizontal + show full name + description */
+  .strip-item .name-full {
+    font-family: "Noto Sans SC", sans-serif;
+    font-size: 13px; color: var(--fg);
+    display: none;
+    flex: 1;
+  }
+  .strip-item .name-full .desc {
+    display: block;
+    font-family: "Cormorant Garamond", "Noto Serif SC", serif;
+    font-style: italic;
+    font-size: 11px;
+    color: var(--fg-subtle);
+    margin-top: 2px;
+    line-height: 1.4;
+    white-space: normal;
+  }
+  aside.rail-strip:hover .strip-item,
+  aside.rail-strip[data-pinned="true"] .strip-item {
+    padding: 14px 16px;
+  }
+  aside.rail-strip:hover .strip-item .glyph,
+  aside.rail-strip[data-pinned="true"] .strip-item .glyph {
+    writing-mode: horizontal-tb;
+    font-size: 15px;
+    flex: 0 0 auto;
+  }
+  aside.rail-strip:hover .strip-item .name-full,
+  aside.rail-strip[data-pinned="true"] .strip-item .name-full {
+    display: block;
+  }
+  aside.rail-strip:hover .strip-item .glyph,
+  aside.rail-strip[data-pinned="true"] .strip-item .glyph { display: none; }
+
+  /* agent switcher (popover above composer badge) */
+  .agent-switcher { position: relative; flex-shrink: 0; padding-bottom: 4px; }
+  .agent-popover {
+    position: absolute;
+    bottom: calc(100% + 14px); left: -2px;
+    width: 340px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow-soft);
+    padding: 14px 0 6px;
+    z-index: 30;
+    opacity: 0; visibility: hidden;
+    transform: translateY(6px);
+    transition: opacity 160ms ease-out, transform 200ms cubic-bezier(.4,0,.2,1), visibility 0s linear 200ms;
+  }
+  .agent-popover[data-open="true"] {
+    opacity: 1; visibility: visible;
+    transform: translateY(0);
+    transition: opacity 180ms ease-out, transform 220ms cubic-bezier(.4,0,.2,1), visibility 0s;
+  }
+  /* arrow */
+  .agent-popover::after {
+    content: "";
+    position: absolute;
+    bottom: -7px; left: 18px;
+    width: 12px; height: 12px;
+    background: var(--bg);
+    border-right: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    transform: rotate(45deg);
+  }
+  .popover-head {
+    display: flex; align-items: baseline; justify-content: space-between;
+    padding: 0 16px 12px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 6px;
+  }
+  .popover-title {
+    font-family: "Noto Sans SC", sans-serif;
+    font-size: 12px; color: var(--fg);
+    letter-spacing: 0.02em;
+  }
+  .popover-meta {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px; letter-spacing: 0.06em; color: var(--fg-subtle);
+  }
+  .popover-foot {
+    margin-top: 6px;
+    padding: 10px 16px 4px;
+    border-top: 1px solid var(--border);
+  }
+  .popover-spawn {
+    background: none; border: none; cursor: pointer; padding: 0;
+    font-family: "Noto Sans SC", sans-serif;
+    font-size: 12px;
+    color: var(--accent-vermillion);
+    letter-spacing: 0.02em;
+    transition: opacity 120ms linear;
+  }
+  .popover-spawn:hover { opacity: 0.7; }
+
+  .agent-row {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 10px; align-items: baseline;
+    padding: 12px 12px;
+    border-left: 2px solid transparent;
+    cursor: pointer;
+    transition: background 120ms linear, border-color 120ms;
+    margin: 0 -12px;
+  }
+  .agent-row + .agent-row { border-top: 1px solid var(--border); }
+  .agent-row:hover { background: var(--border); }
+  .agent-row.active { border-left-color: var(--accent-vermillion); }
+  .agent-row .agent-status { font-family: "JetBrains Mono", monospace; font-size: 11px; }
+  .agent-row.s-running .agent-status { color: var(--accent-tea); }
+  .agent-row.s-done .agent-status    { color: var(--accent-jade); }
+  .agent-row.s-blocked .agent-status { color: var(--destructive); }
+  .agent-row.s-main .agent-status    { color: var(--accent-vermillion); }
+  .agent-row .agent-name {
+    font-family: "Noto Sans SC", sans-serif;
+    font-size: 13px; color: var(--fg); line-height: 1.35;
+  }
+  .agent-row .agent-task {
+    display: block; color: var(--fg-subtle); font-size: 11px;
+    font-family: "Cormorant Garamond", "Noto Serif SC", serif;
+    font-style: italic; margin-top: 3px; line-height: 1.45;
+  }
+  .agent-row .agent-time {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px; color: var(--fg-subtle); letter-spacing: 0.04em; white-space: nowrap;
+  }
+
+  /* main workspace */
+  main.workspace {
+    min-height: 100vh;
+    padding: calc(var(--head-h) + 24px) 0 calc(var(--composer-h) + 64px);
+    display: flex; justify-content: center;
+    transition: opacity 420ms ease-out 220ms;
+  }
+  main.workspace.no-composer { padding-bottom: 64px; }
+  .view {
+    width: 100%;
+    max-width: var(--col-width);
+    padding: 0 24px;
+  }
+
+  /* back banners */
+  .back-banner {
+    margin-bottom: 28px;
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    display: flex; align-items: baseline; justify-content: space-between;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px; letter-spacing: 0.06em;
+    color: var(--fg-muted);
+  }
+  .back-banner.agent {
+    border-color: var(--accent-vermillion);
+    color: var(--accent-vermillion);
+  }
+  .back-banner .ctx {
+    font-family: "Noto Sans SC", sans-serif;
+    color: var(--fg); letter-spacing: 0; font-size: 12px;
+  }
+  .back-banner .ctx em {
+    font-style: normal; color: var(--fg-muted); font-family: "Cormorant Garamond", serif;
+    font-size: 13px; margin-left: 6px;
+  }
+  .back-btn {
+    background: none; border: none; padding: 0; cursor: pointer;
+    font: inherit; color: inherit;
+    text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px;
+    transition: opacity 120ms linear;
+  }
+  .back-btn:hover { opacity: 0.7; }
+
+  /* page header for resource pages */
+  .page-head {
+    margin-bottom: 28px;
+    padding-bottom: 18px;
+    border-bottom: 1px solid var(--border);
+  }
+  .page-title {
+    font-family: "Cormorant Garamond", serif;
+    font-weight: 500; font-size: 44px;
+    letter-spacing: -0.015em; line-height: 1;
+    margin-bottom: 8px;
+  }
+  .page-title .cjk { font-family: "Noto Serif SC", serif; margin-left: 14px; color: var(--fg-muted); font-size: 28px; }
+  .page-subtitle {
+    font-family: "Cormorant Garamond", serif;
+    font-style: italic;
+    font-size: 17px;
+    color: var(--fg-muted);
+    line-height: 1.5;
+  }
+  .page-stats {
+    margin-top: 12px;
+    display: flex; gap: 22px;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px; letter-spacing: 0.06em;
+    color: var(--fg-subtle);
+  }
+  .page-stats strong {
+    color: var(--fg); font-weight: 500; margin-right: 4px; font-variant-numeric: tabular-nums;
+  }
+  .page-stats .page-action {
+    margin-left: auto;
+    background: none; border: 1px solid var(--accent-vermillion);
+    padding: 5px 10px;
+    font-family: "Noto Sans SC", sans-serif;
+    font-size: 11px; color: var(--accent-vermillion);
+    cursor: pointer; letter-spacing: 0.02em;
+    transition: background 120ms, color 120ms;
+  }
+  .page-stats .page-action:hover { background: var(--accent-vermillion); color: var(--bg); }
+
+  .section-title {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--fg-subtle);
+    margin: 36px 0 14px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: baseline; justify-content: space-between;
+  }
+  .section-title:first-child { margin-top: 0; }
+  .section-title .cn { font-family: "Noto Sans SC", sans-serif; letter-spacing: 0.02em; text-transform: none; }
+  .section-title .right { color: var(--fg-muted); }
+
+  /* memory tier */
+  .memory-tier-full {
+    display: grid;
+    grid-template-columns: 120px 60px 1fr;
+    gap: 18px; align-items: baseline;
+    padding: 16px 0;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    transition: background 120ms linear;
+  }
+  .memory-tier-full:hover { background: var(--border); }
+  .memory-tier-full .tn {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--fg);
+  }
+  .memory-tier-full .tn .desc {
+    display: block; font-family: "Cormorant Garamond", serif;
+    font-style: italic; text-transform: none; letter-spacing: 0;
+    color: var(--fg-subtle); font-size: 12px; margin-top: 4px;
+  }
+  .memory-tier-full .tc {
+    font-family: "JetBrains Mono", monospace;
+    color: var(--fg); font-size: 18px; font-variant-numeric: tabular-nums;
+  }
+  .memory-tier-full .tp {
+    color: var(--fg-muted); font-size: 13px; line-height: 1.6;
+  }
+  .memory-tier-full .tp .latest {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px; color: var(--fg-subtle); letter-spacing: 0.04em;
+    display: block; margin-top: 4px;
+  }
+
+  /* generic resource rows */
+  .resource-row {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    gap: 16px; align-items: baseline;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    transition: background 120ms linear;
+  }
+  .resource-row:hover { background: var(--border); }
+  .resource-row .rn {
+    font-family: "Noto Sans SC", sans-serif;
+    font-size: 14px; color: var(--fg);
+  }
+  .resource-row .rn .desc {
+    display: block; font-family: "Cormorant Garamond", "Noto Serif SC", serif;
+    font-style: italic; color: var(--fg-subtle); font-size: 12px;
+    margin-top: 3px; line-height: 1.5;
+  }
+  .resource-row .rm {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px; color: var(--fg-subtle); letter-spacing: 0.04em;
+    white-space: nowrap;
+  }
+  .resource-row .rs {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px; letter-spacing: 0.06em; white-space: nowrap;
+  }
+  .resource-row .rs.on { color: var(--accent-jade); }
+  .resource-row .rs.off { color: var(--fg-subtle); }
+  .resource-row .rs.err { color: var(--destructive); }
+
+  /* config editor */
+  .config-field {
+    display: grid;
+    grid-template-columns: 220px 1fr auto;
+    gap: 24px; align-items: baseline;
+    padding: 16px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .config-field .cf-label {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 12px; letter-spacing: 0.04em; color: var(--fg);
+  }
+  .config-field .cf-label .cf-desc {
+    display: block; font-family: "Cormorant Garamond", serif;
+    font-style: italic; color: var(--fg-subtle); font-size: 12px;
+    margin-top: 4px; line-height: 1.5; letter-spacing: 0;
+  }
+  .config-field .cf-input {
+    background: transparent; border: none; outline: none;
+    border-bottom: 1px solid var(--border);
+    color: var(--fg);
+    font: 400 14px/1.5 "JetBrains Mono", monospace;
+    padding: 4px 0;
+    transition: border-color 180ms ease-out;
+    width: 100%;
+  }
+  .config-field .cf-input:focus { border-bottom-color: var(--fg); }
+  .config-field .cf-toggle {
+    background: none; border: 1px solid var(--border);
+    padding: 6px 12px;
+    font-family: "Noto Sans SC", sans-serif;
+    font-size: 11px; color: var(--fg);
+    cursor: pointer; user-select: none;
+    transition: border-color 120ms, color 120ms;
+  }
+  .config-field .cf-toggle:hover { border-color: var(--fg); }
+  .config-field .cf-toggle.on { border-color: var(--accent-jade); color: var(--accent-jade); }
+  .config-field .cf-toggle.off { color: var(--fg-subtle); }
+  .config-field .cf-revert {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px; letter-spacing: 0.06em; color: var(--fg-subtle);
+    background: none; border: none; cursor: pointer; padding: 0;
+    text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--border);
+    transition: color 120ms;
+  }
+  .config-field .cf-revert:hover { color: var(--fg); }
+  .config-save-bar {
+    position: sticky; bottom: 24px;
+    margin: 32px -24px 0;
+    padding: 14px 24px;
+    background: var(--bg-floating);
+    backdrop-filter: blur(12px);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow-soft);
+    display: flex; align-items: center; justify-content: space-between;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px; letter-spacing: 0.06em;
+    color: var(--fg-muted);
+  }
+  .config-save-bar .pending { color: var(--accent-vermillion); }
+  .config-save-bar .save-btn {
+    background: none; border: none; cursor: pointer; padding: 0;
+    font: inherit; color: var(--accent-vermillion);
+    text-decoration: underline; text-underline-offset: 4px;
+    letter-spacing: 0.12em; text-transform: uppercase;
+  }
+
+  /* conversation */
+  .turn { padding: 28px 0; border-bottom: 1px solid var(--border); }
+  .turn:first-of-type { padding-top: 8px; }
+  .turn:last-child { border-bottom: none; }
+
+  .turn-label {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--fg-subtle);
+    display: inline-flex; align-items: center; gap: 8px;
+    margin-bottom: 10px;
+  }
+  .turn-label .cjk-tag { font-family: "Noto Sans SC", sans-serif; font-size: 11px; letter-spacing: 0; text-transform: none; }
+  .turn-label .cjk-mark { font-family: "Noto Serif SC", serif; font-size: 13px; letter-spacing: 0; text-transform: none; color: var(--fg); font-weight: 400; }
+  .turn-label .dot { color: var(--fg-subtle); }
+
+  .turn-body { font-size: 19px; line-height: 1.78; color: var(--fg); }
+  .turn-body p + p { margin-top: 12px; }
+
+  /* process — top-level wrapper for reasoning + tool calls + reflection */
+  .process {
+    margin: 18px 0 24px;
+    padding-left: 0;
+  }
+  .process-head {
+    display: flex; align-items: center; gap: 10px;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--fg-subtle);
+    cursor: pointer; user-select: none;
+    margin-bottom: 14px;
+    transition: color 120ms linear;
+  }
+  .process-head:hover { color: var(--fg); }
+  .process-head .caret { display: inline-block; transition: transform 180ms ease-out; }
+  /* status row at the bottom of process-body */
+  .process-status {
+    display: flex; align-items: center;
+    padding: 10px 0 4px 0;
+    margin-top: 6px;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase;
+  }
+  .ps-pulse {
+    color: var(--accent-vermillion);
+    font-weight: normal;
+    animation: psPulse 1.3s ease-in-out infinite;
+    display: inline-flex; align-items: baseline; gap: 6px;
+  }
+  .ps-pulse::before { content: "●"; font-size: 9px; }
+  .ps-done {
+    color: var(--accent-jade);
+    font-weight: normal;
+    display: inline-flex; align-items: baseline; gap: 6px;
+  }
+  .ps-done::before { content: "▢"; font-size: 10px; }
+  .ps-waiting {
+    color: var(--accent-tea);
+    font-weight: normal;
+    animation: psPulse 1.3s ease-in-out infinite;
+    display: inline-flex; align-items: baseline; gap: 6px;
+  }
+  .ps-waiting::before { content: "▪"; font-size: 10px; }
+  @keyframes psPulse {
+    0%, 100% { opacity: 0.5; }
+    50% { opacity: 1; }
+  }
+  .process[data-open="false"] .caret { transform: rotate(-90deg); }
+  .process[data-open="false"] { margin-bottom: 18px; }
+  .process-body {
+    display: flex; flex-direction: column; gap: 12px;
+    max-height: 4000px; opacity: 1;
+    overflow: hidden;
+    transition:
+      max-height 420ms cubic-bezier(0.32, 0.72, 0, 1),
+      opacity 280ms ease-out,
+      margin-top 360ms cubic-bezier(0.32, 0.72, 0, 1);
+  }
+  .process[data-open="false"] .process-body {
+    max-height: 0;
+    opacity: 0;
+    margin-top: -8px;
+    pointer-events: none;
+  }
+  .process-body .reasoning,
+  .process-body .tool-call,
+  .process-body .reflection-block { margin: 0; }
+
+  /* event-line — lightweight events (no body, just status) */
+  .event-line {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 16px; align-items: baseline;
+    padding: 6px 0 6px 18px;
+    border-left: 1px solid var(--border);
+    font-size: 12px; color: var(--fg-muted);
+  }
+  .event-line .ev-main {
+    display: flex; align-items: baseline; gap: 12px;
+    min-width: 0;
+  }
+  .event-line .ev-kw {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--fg-subtle);
+    flex-shrink: 0;
+    min-width: 38px;
+  }
+  .event-line .ev-name {
+    font-family: "Noto Sans SC", sans-serif;
+    font-size: 12px; color: var(--fg);
+    flex-shrink: 0;
+  }
+  .event-line .ev-desc {
+    font-family: "Cormorant Garamond", "Noto Serif SC", serif;
+    font-style: italic;
+    color: var(--fg-subtle);
+    font-size: 12px;
+    line-height: 1.5;
+    min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  }
+  .event-line .ev-meta {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px; color: var(--fg-subtle); letter-spacing: 0.06em;
+    white-space: nowrap;
+  }
+  .event-line[data-kind="critical"] { border-left-color: var(--accent-vermillion); }
+  .event-line[data-kind="critical"] .ev-kw { color: var(--accent-vermillion); }
+  .event-line[data-kind="memory"] .ev-kw { color: var(--accent-jade); }
+  .event-line[data-kind="skill"] .ev-kw { color: var(--accent-tea); }
+
+  /* tool-call variants by kind */
+  .tool-call[data-kind="mcp"] { border-left-color: var(--accent-tea); }
+  .tool-call[data-kind="mcp"] .tool-call-head .kw { color: var(--accent-tea); }
+  .tool-call[data-kind="subagent"] { border-left-color: var(--accent-vermillion); }
+  .tool-call[data-kind="subagent"] .tool-call-head .kw { color: var(--accent-vermillion); }
+  .tool-call[data-kind="memory"] { border-left-color: var(--accent-jade); }
+  .tool-call[data-kind="memory"] .tool-call-head .kw { color: var(--accent-jade); }
+
+  .reasoning { margin: 24px 0; padding-left: 18px; border-left: 1px solid var(--border); }
+  .reasoning-head {
+    display: flex; align-items: center; gap: 10px;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--fg-subtle);
+    cursor: pointer; user-select: none; margin-bottom: 12px;
+  }
+  .reasoning-head .caret { display: inline-block; transition: transform 180ms ease-out; }
+  .reasoning[data-open="false"] .caret { transform: rotate(-90deg); }
+  .reasoning-body {
+    font-family: "Cormorant Garamond", "Noto Serif SC", serif;
+    font-style: italic; font-size: 17px; line-height: 1.72; color: var(--fg-muted);
+  }
+  .reasoning-body p + p { margin-top: 10px; }
+  .reasoning[data-open="false"] .reasoning-body { display: none; }
+
+  .tool-call { margin: 24px 0; padding-left: 16px; border-left: 2px solid var(--border-strong); }
+  .tool-call.blocked { border-left-color: var(--destructive); }
+  .tool-call-head {
+    display: flex; align-items: center; gap: 12px; margin-bottom: 8px;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 13px; color: var(--fg);
+    cursor: pointer; user-select: none;
+    transition: color 120ms linear;
+  }
+  .tool-call-head:hover { color: var(--fg); }
+  .tool-call-head .caret {
+    display: inline-block;
+    font-size: 11px; color: var(--fg-subtle);
+    transition: transform 180ms ease-out;
+  }
+  .tool-call[data-open="false"] .caret { transform: rotate(-90deg); }
+  .tool-call[data-open="false"] .tool-call-body { display: none; }
+  .tool-call .tool-call-body { padding-top: 4px; }
+  .tool-call-head .kw {
+    font-family: "Noto Sans SC", sans-serif;
+    font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--fg-subtle);
+  }
+  .tool-call-head .name { font-weight: 500; }
+  .tool-call-head .status {
+    margin-left: auto; font-size: 11px; color: var(--fg-subtle); letter-spacing: 0.08em;
+  }
+  .tool-call-head .status.done    { color: var(--accent-jade); }
+  .tool-call-head .status.pending { color: var(--accent-tea); }
+  .tool-call-head .status.error   { color: var(--destructive); }
+  .tool-row {
+    display: grid; grid-template-columns: 80px 1fr; gap: 14px;
+    padding: 6px 0; font-size: 13px;
+  }
+  .tool-row .row-label {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--fg-subtle); padding-top: 2px;
+  }
+  .tool-row .row-value {
+    font-family: "JetBrains Mono", monospace;
+    color: var(--fg-muted); line-height: 1.6; overflow: hidden;
+  }
+  .tool-row .row-value.collapsed { max-height: 1.6em; }
+  .tool-row .row-value pre { font: inherit; white-space: pre-wrap; word-break: break-word; }
+  .tool-row .row-toggle {
+    background: none; border: none; padding: 0; cursor: pointer;
+    font: inherit; color: var(--fg-subtle);
+    text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--border);
+    margin-left: 6px; transition: color 120ms;
+  }
+  .tool-row .row-toggle:hover { color: var(--fg); text-decoration-color: var(--fg); }
+
+  /* authorize / deny inline buttons */
+  .authority-bar {
+    margin-top: 14px;
+    padding: 14px 0 4px;
+    border-top: 1px dashed var(--destructive);
+    display: flex; align-items: center; gap: 14px;
+  }
+  .authority-bar .label {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--fg-subtle);
+    flex: 1;
+  }
+  .authority-bar button {
+    background: none; border: 1px solid currentColor;
+    padding: 7px 16px;
+    font-family: "Noto Sans SC", sans-serif;
+    font-size: 12px; cursor: pointer;
+    transition: background 120ms, color 120ms;
+  }
+  .authority-bar .authorize { color: var(--accent-jade); }
+  .authority-bar .authorize:hover { background: var(--accent-jade); color: var(--bg); }
+  .authority-bar .deny { color: var(--destructive); }
+  .authority-bar .deny:hover { background: var(--destructive); color: var(--bg); }
+
+  /* reflection — collapsible, second-level inside process */
+  .reflection-block {
+    padding-left: 16px;
+    border-left: 1px dashed var(--border);
+  }
+  .reflection-head {
+    display: flex; align-items: center; gap: 10px;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--fg-subtle);
+    cursor: pointer; user-select: none;
+    margin-bottom: 10px;
+    transition: color 120ms linear;
+  }
+  .reflection-head:hover { color: var(--fg); }
+  .reflection-head .caret { display: inline-block; transition: transform 180ms ease-out; }
+  .reflection-block[data-open="false"] .caret { transform: rotate(-90deg); }
+  .reflection-block[data-open="false"] .reflection-body { display: none; }
+  .reflection-body {
+    font-family: "Cormorant Garamond", "Noto Serif SC", serif;
+    font-style: italic; font-size: 15px; line-height: 1.7; color: var(--fg-subtle);
+  }
+  .reflection-body p + p { margin-top: 10px; }
+
+  .stream-cursor {
+    display: inline-block;
+    width: 2px; height: 1.05em;
+    background: var(--fg);
+    vertical-align: text-bottom;
+    margin-left: 2px;
+    animation: cursorPulse 1.2s ease-in-out infinite;
+  }
+  @keyframes cursorPulse { 0%, 100% { opacity: 0.3; } 50% { opacity: 0.85; } }
+
+  /* composer */
+  footer.composer {
+    position: fixed;
+    bottom: 24px; left: 50%;
+    transform: translateX(-50%);
+    width: calc(100% - 48px);
+    max-width: var(--col-width);
+    background: var(--bg-floating);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow-soft);
+    padding: 12px 18px;
+    display: flex; flex-direction: column; align-items: stretch; gap: 8px;
+    z-index: 20;
+    transition:
+      transform 720ms cubic-bezier(0.32, 0.72, 0, 1),
+      width 720ms cubic-bezier(0.32, 0.72, 0, 1),
+      max-width 720ms cubic-bezier(0.32, 0.72, 0, 1),
+      border-color 180ms ease-out,
+      opacity 180ms ease-out,
+      visibility 0s;
+  }
+  .composer-row {
+    display: flex; align-items: flex-end; gap: 10px;
+  }
+  .composer-attach {
+    background: none; border: none; cursor: pointer; padding: 0 4px 6px;
+    align-self: flex-end;
+    font-family: "Noto Sans SC", sans-serif;
+    font-size: 12px;
+    color: var(--fg-subtle);
+    letter-spacing: 0.02em;
+    transition: color 120ms linear;
+    white-space: nowrap;
+    display: inline-flex; align-items: baseline; gap: 6px;
+  }
+  .composer-attach:hover { color: var(--fg); }
+  .composer-attach .arrow {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 13px;
+  }
+
+  .composer-attachments {
+    display: none;
+    flex-wrap: wrap; gap: 6px;
+    padding: 4px 0 2px;
+  }
+  .composer-attachments.has-files { display: flex; }
+  .attachment-chip {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 5px 8px 5px 10px;
+    border: 1px solid var(--border);
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px;
+    color: var(--fg-muted);
+    max-width: 280px;
+  }
+  .attachment-chip .file-name {
+    max-width: 180px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    color: var(--fg);
+  }
+  .attachment-chip .file-size {
+    color: var(--fg-subtle); font-size: 10px; letter-spacing: 0.04em;
+  }
+  .attachment-chip .file-remove {
+    background: none; border: none; cursor: pointer; padding: 0 0 0 2px;
+    color: var(--fg-subtle); font-size: 12px;
+    transition: color 120ms linear;
+  }
+  .attachment-chip .file-remove:hover { color: var(--destructive); }
+  footer.composer:focus-within { border-color: var(--fg); }
+  footer.composer.hidden { opacity: 0; visibility: hidden; transition: opacity 160ms ease-in, visibility 0s linear 160ms; }
+  .composer-hint {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px; letter-spacing: 0.08em; color: var(--fg-subtle); flex-shrink: 0;
+  }
+  .composer-context {
+    background: none; border: none;
+    padding: 5px 9px 5px 8px;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px; letter-spacing: 0.06em;
+    color: var(--accent-vermillion);
+    flex-shrink: 0;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: border-color 120ms linear, background 120ms linear;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .composer-context::before { content: "●"; font-size: 9px; }
+  .composer-context::after { content: "⌃"; font-size: 10px; opacity: 0.6; }
+  .composer-context:hover {
+    border-color: var(--accent-vermillion);
+  }
+  .agent-popover[data-open="true"] ~ * .composer-context,
+  .agent-switcher .composer-context[data-active="true"] {
+    border-color: var(--accent-vermillion);
+    background: rgba(194, 65, 12, 0.04);
+  }
+  .agent-popover .agent-row {
+    margin: 0;
+    padding: 12px 16px;
+  }
+  .agent-popover .agent-row .agent-name { font-size: 13px; }
+  .agent-popover .agent-row .agent-task { font-size: 11px; }
+  .composer-input {
+    flex: 1;
+    background: transparent; border: none; outline: none;
+    color: var(--fg);
+    font: 400 16px/1.6 "Noto Serif SC", serif;
+    padding: 4px 0;
+    resize: none;
+    overflow-y: auto;
+    max-height: 200px;
+    min-height: 26px;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    scrollbar-width: thin;
+  }
+  .composer-input::placeholder { color: var(--fg-subtle); }
+  .composer-input::-webkit-scrollbar { width: 4px; }
+  .composer-input::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  .composer-send {
+    background: none; border: none; cursor: pointer; padding: 0;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--accent-vermillion);
+    text-decoration: underline; text-underline-offset: 4px; text-decoration-thickness: 1px;
+    transition: opacity 120ms linear;
+  }
+  .composer-send:hover { opacity: 0.7; }
+
+  /* ===== intro state — first-load centered layout ===== */
+  body.intro .wordmark-wrap {
+    top: 32vh; left: 50%;
+    transform: translate(-50%, -50%) scale(1.6);
+  }
+  body.intro .wordmark-wrap .wordmark-sub { letter-spacing: 0.14em; }
+
+  body.intro header.app-head {
+    background: transparent;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    border-bottom-color: transparent;
+    pointer-events: none;
+  }
+  body.intro header.app-head .head-meta {
+    opacity: 0;
+    transition: opacity 180ms ease-out;
+  }
+
+  body.intro aside.rail-strip {
+    transform: translateX(-100%);
+    opacity: 0;
+    pointer-events: none;
+    transition:
+      transform 600ms cubic-bezier(0.32, 0.72, 0, 1),
+      opacity 320ms ease-out;
+  }
+
+  body.intro main.workspace {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 240ms ease-out;
+  }
+
+  body.intro footer.composer {
+    width: min(calc(100% - 64px), 640px);
+    max-width: 640px;
+    transform: translateX(-50%) translateY(calc(-50vh + 50% + 24px));
+    background: var(--bg);
+    box-shadow: 0 24px 64px -24px rgba(26, 26, 26, 0.12);
+  }
+  body.intro .composer-context,
+  body.intro .agent-switcher { display: none; }
+
+  /* recent sessions card under composer in intro */
+  .intro-recent {
+    position: fixed;
+    top: calc(50vh + 80px);
+    left: 50%;
+    transform: translateX(-50%);
+    width: min(calc(100% - 64px), 640px);
+    padding: 28px 6px 0;
+    opacity: 1;
+    z-index: 25;
+    transition: opacity 240ms ease-out, transform 360ms ease-out;
+    pointer-events: auto;
+  }
+  body:not(.intro) .intro-recent {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateX(-50%) translateY(-12px);
+    transition: opacity 220ms ease-in, transform 320ms ease-in;
+  }
+  .intro-recent-head {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--fg-subtle);
+    margin-bottom: 14px;
+    padding: 0 4px 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  .recent-row {
+    display: flex; align-items: baseline; justify-content: space-between;
+    padding: 14px 4px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--border);
+    transition: padding-left 200ms cubic-bezier(0.32, 0.72, 0, 1), color 120ms linear;
+    color: var(--fg-muted);
+  }
+  .recent-row:hover { padding-left: 14px; color: var(--fg); }
+  .recent-row:last-child { border-bottom: none; }
+  .recent-title {
+    font-family: "Cormorant Garamond", "Noto Serif SC", serif;
+    font-size: 18px;
+    color: var(--fg);
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .recent-meta {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px; color: var(--fg-subtle); letter-spacing: 0.04em;
+    white-space: nowrap;
+    margin-left: 16px;
+  }
+
+  @media (max-width: 720px) {
+    :root { --agent-picker-w: calc(100vw - var(--rail-strip)); }
+    main.workspace { padding-left: var(--rail-strip); padding-right: 0; }
+    .view { padding: 0 20px; }
+    footer.composer { left: var(--rail-strip); transform: none; width: calc(100vw - var(--rail-strip) - 16px); }
+    .config-field { grid-template-columns: 1fr; gap: 12px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body class="intro">
+
+  <div class="wordmark-wrap" id="wordmark" onclick="goHome()" title="回到对话">
+    <div class="wordmark">Quilin <span class="cjk">麒麟</span></div>
+    <div class="wordmark-sub"><span>quilt · 拼布</span><span class="plus">+</span><span>qilin · 麒麟</span></div>
+  </div>
+
+  <header class="app-head">
+    <div class="head-meta">
+      <span>v0.1.0-iter-f</span>
+      <span>session · a3f2</span>
+      <button class="theme-toggle" id="themeToggle">light · 切换</button>
+    </div>
+  </header>
+
+  <div class="intro-recent" id="introRecent">
+    <div class="intro-recent-head">最近 · recent sessions</div>
+    <div class="recent-row" onclick="restoreSession('s1')">
+      <div class="recent-title">self-evolution Stage D 状态查询</div>
+      <div class="recent-meta">12 分钟前 · 3 轮 · main</div>
+    </div>
+    <div class="recent-row" onclick="restoreSession('s2')">
+      <div class="recent-title">dashboard.ts cross-review round 1</div>
+      <div class="recent-meta">36 分钟前 · 8 轮 · review-loop-r1</div>
+    </div>
+    <div class="recent-row" onclick="restoreSession('s3')">
+      <div class="recent-title">重做 web UI · 设计与实现</div>
+      <div class="recent-meta">1 小时前 · 24 轮 · main</div>
+    </div>
+  </div>
+
+  <aside class="rail-strip" id="railStrip" data-pinned="false">
+    <div class="strip-item" data-target="sessions" onclick="onStripClick('sessions', this)">
+      <span class="glyph">会话</span>
+      <span class="name-full">会话 · Sessions<span class="desc">所有历史对话记录</span></span>
+      <span class="count">47</span>
+    </div>
+    <div class="strip-item" data-target="memory" onclick="onStripClick('memory', this)">
+      <span class="glyph">记忆</span>
+      <span class="name-full">记忆 · Memory<span class="desc">四层记忆 · 70 条</span></span>
+      <span class="count">70</span>
+    </div>
+    <div class="strip-item" data-target="skills" onclick="onStripClick('skills', this)">
+      <span class="glyph">技能</span>
+      <span class="name-full">技能 · Skills<span class="desc">12 个 · 3 熟练</span></span>
+      <span class="count">12</span>
+    </div>
+    <div class="strip-item" data-target="mcp" onclick="onStripClick('mcp', this)">
+      <span class="glyph">服务</span>
+      <span class="name-full">MCP · 服务<span class="desc">3 个 stdio / http</span></span>
+      <span class="count">3</span>
+    </div>
+    <div class="strip-item" data-target="tools" onclick="onStripClick('tools', this)">
+      <span class="glyph">工具</span>
+      <span class="name-full">工具 · Tools<span class="desc">28 个内置工具</span></span>
+      <span class="count">28</span>
+    </div>
+    <div class="strip-item" data-target="config" onclick="onStripClick('config', this)">
+      <span class="glyph">配置</span>
+      <span class="name-full">配置 · Config<span class="desc">trust · budget · model</span></span>
+      <span class="count">12</span>
+    </div>
+  </aside>
+
+
+  <main class="workspace" id="workspace">
+    <section class="view" id="view"></section>
+  </main>
+
+  <footer class="composer" id="composer">
+    <div class="agent-switcher" id="agentSwitcher">
+      <button class="composer-context" id="composerContext" onclick="toggleAgentPopover(event)">主代理</button>
+      <div class="agent-popover" id="agentPopover" data-open="false">
+        <div class="popover-head">
+          <span class="popover-title">代理切换 · subagents</span>
+          <span class="popover-meta">4 active</span>
+        </div>
+        <div class="agent-row active s-main" data-agent="main" onclick="selectAgent(this)">
+          <span class="agent-status">●</span>
+          <span class="agent-name">main
+            <span class="agent-task">当前主代理上下文 · self-evolution Stage D</span>
+          </span>
+          <span class="agent-time">12m 04s</span>
+        </div>
+        <div class="agent-row s-running" data-agent="review-loop-r1" onclick="selectAgent(this)">
+          <span class="agent-status">▪</span>
+          <span class="agent-name">review-loop-r1
+            <span class="agent-task">cross-review · 审 dashboard.ts 812 LOC</span>
+          </span>
+          <span class="agent-time">2m 14s</span>
+        </div>
+        <div class="agent-row s-done" data-agent="dspy-validator" onclick="selectAgent(this)">
+          <span class="agent-status">▢</span>
+          <span class="agent-name">dspy-validator
+            <span class="agent-task">MIPROv2 完成 · lift 14.6%</span>
+          </span>
+          <span class="agent-time">8m 42s</span>
+        </div>
+        <div class="agent-row s-blocked" data-agent="lint-fixer" onclick="selectAgent(this)">
+          <span class="agent-status">✕</span>
+          <span class="agent-name">lint-fixer
+            <span class="agent-task">等待授权 · biome --write</span>
+          </span>
+          <span class="agent-time">0m 38s</span>
+        </div>
+        <div class="popover-foot">
+          <button class="popover-spawn" onclick="event.stopPropagation()">＋ 派遣新子代理</button>
+        </div>
+      </div>
+    </div>
+    <div class="composer-attachments" id="composerAttachments"></div>
+    <div class="composer-row">
+      <button class="composer-attach" onclick="openFilePicker()" title="上传文件">
+        <span class="arrow">↑</span><span>附件</span>
+      </button>
+      <textarea class="composer-input" id="composerInput" rows="1" placeholder="继续提问,或 / 开启命令…  (Shift+↵ 换行)"></textarea>
+      <button class="composer-send" onclick="sendMessage()">发送 · send</button>
+    </div>
+    <input type="file" id="filePicker" multiple style="display:none" onchange="onFileSelected(this)" />
+  </footer>
+
+<script>
+  // ===== state =====
+  let currentView = "conversation";   // 'conversation' | 'memory' | 'skills' | 'mcp' | 'tools' | 'config'
+  let currentAgent = "main";
+
+  // ===== conversation content =====
+  const conversations = {
+    main: `
+      <article class="turn user-turn">
+        <div class="turn-label"><span>you</span><span class="dot">·</span><span class="cjk-tag">你</span></div>
+        <div class="turn-body"><p>帮我看看 self-evolution 这块跑得怎么样,Stage D 的 MIPROv2 lift 落地了没?</p></div>
+      </article>
+      <article class="turn">
+        <div class="turn-label"><span class="cjk-mark">麒麟</span><span class="dot">·</span><span>assistant</span></div>
+        <div class="turn-body">
+
+          <div class="process" data-open="true">
+            <div class="process-head" onclick="toggleReasoning(this)">
+              <span class="caret">▾</span>
+              <span>过程 · process · 14.2s · 4 调用 · 7.3k tokens · 14 事件</span>
+            </div>
+            <div class="process-body">
+
+              <!-- context · 1. memory recall working -->
+              <div class="event-line" data-kind="memory">
+                <div class="ev-main">
+                  <span class="ev-kw">召回</span>
+                  <span class="ev-name">working tier</span>
+                  <span class="ev-desc">3 个条目 · 当前 self-evolution 议题上下文</span>
+                </div>
+                <span class="ev-meta">12ms · 3 hits</span>
+              </div>
+
+              <!-- 2. memory recall semantic -->
+              <div class="event-line" data-kind="memory">
+                <div class="ev-main">
+                  <span class="ev-kw">召回</span>
+                  <span class="ev-name">semantic tier</span>
+                  <span class="ev-desc">用户偏好 · 中英双语 docs · 95% 测试覆盖硬门槛</span>
+                </div>
+                <span class="ev-meta">8ms · 2 hits</span>
+              </div>
+
+              <!-- 3. temporal awareness -->
+              <div class="event-line">
+                <div class="ev-main">
+                  <span class="ev-kw">时序</span>
+                  <span class="ev-name">temporal-awareness</span>
+                  <span class="ev-desc">距上次对话 14 小时 38 分 · 未跨周</span>
+                </div>
+                <span class="ev-meta">-</span>
+              </div>
+
+              <!-- 4. user profile load -->
+              <div class="event-line">
+                <div class="ev-main">
+                  <span class="ev-kw">画像</span>
+                  <span class="ev-name">user-profile-load</span>
+                  <span class="ev-desc">soul.md · 严谨技术语言 · 厌恶蓝紫 AI 风</span>
+                </div>
+                <span class="ev-meta">4ms</span>
+              </div>
+
+              <!-- 5. skill match -->
+              <div class="event-line" data-kind="skill">
+                <div class="ev-main">
+                  <span class="ev-kw">匹配</span>
+                  <span class="ev-name">git-evidence</span>
+                  <span class="ev-desc">M1 · 触发短语 "落地了没"</span>
+                </div>
+                <span class="ev-meta">-</span>
+              </div>
+
+              <!-- 6. skill load -->
+              <div class="event-line" data-kind="skill">
+                <div class="ev-main">
+                  <span class="ev-kw">加载</span>
+                  <span class="ev-name">git-evidence SKILL.md</span>
+                  <span class="ev-desc">832 tokens 进入 context</span>
+                </div>
+                <span class="ev-meta">6ms</span>
+              </div>
+
+              <!-- 7. planning -->
+              <div class="reasoning" data-open="false">
+                <div class="reasoning-head" onclick="toggleReasoning(this)">
+                  <span class="caret">▾</span><span>规划 · planning · 3 子任务</span>
+                </div>
+                <div class="reasoning-body">
+                  <p>1. 读 commit <em>baeac41</em> body 确认 lift 数据是 real-LLM judge 模式,不是 mocked</p>
+                  <p>2. 抓 <em>docs/10-self-evolution/dspy-validation-report-real-llm-gpt4o-mini.md</em> 看实验细节 + 置信区间</p>
+                  <p>3. 查 Linear <em>QUI-152</em> 当前状态,决定是否能 close</p>
+                </div>
+              </div>
+
+              <!-- 8. reasoning -->
+              <div class="reasoning" data-open="false">
+                <div class="reasoning-head" onclick="toggleReasoning(this)">
+                  <span class="caret">▾</span><span>思考 · reasoning · 1.4s</span>
+                </div>
+                <div class="reasoning-body">
+                  <p>从规划倒推证据:用户的"落地了没"暗示要 commit hash + report 数字 + Linear 状态三向交叉,任一缺失都不算真落地。</p>
+                  <p>git log 里 <em>baeac41</em> 已经在 master,标题写 14.6% lift,但需要 real-LLM judge 实证,否则可能是 mocked judge 跑出的数字。</p>
+                </div>
+              </div>
+
+              <!-- 9. mcp call · quilin-mem -->
+              <div class="tool-call" data-kind="mcp" data-open="false">
+                <div class="tool-call-head" onclick="toggleReasoning(this)">
+                  <span class="caret">▾</span>
+                  <span class="kw">MCP</span><span class="name">quilin-mem · recall</span>
+                  <span class="status done">▢ done · 18ms</span>
+                </div>
+                <div class="tool-call-body">
+                  <div class="tool-row">
+                    <span class="row-label">query</span>
+                    <div class="row-value"><pre>{"text":"Stage D MIPROv2 validation real-LLM judge","limit":5}</pre></div>
+                  </div>
+                  <div class="tool-row">
+                    <span class="row-label">result</span>
+                    <div class="row-value"><pre>2 episodic hits:
+  · 2026-05-11 16:12 · "Stage D 跑通 14.6% lift · gpt-4o judge"
+  · 2026-05-12 09:42 · "QUI-152 E-1 子任务待 close"</pre></div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 10. tool call · read_file -->
+              <div class="tool-call" data-open="false">
+                <div class="tool-call-head" onclick="toggleReasoning(this)">
+                  <span class="caret">▾</span>
+                  <span class="kw">调用</span><span class="name">read_file</span>
+                  <span class="status done">▢ done · 84ms</span>
+                </div>
+                <div class="tool-call-body">
+                  <div class="tool-row">
+                    <span class="row-label">args</span>
+                    <div class="row-value"><pre>{"path":"docs/10-self-evolution/dspy-validation-report-real-llm-gpt4o-mini.md","range":"1-60"}</pre></div>
+                  </div>
+                  <div class="tool-row">
+                    <span class="row-label">result</span>
+                    <div class="row-value"><pre># Stage D · MIPROv2 Validation Report (Real LLM judge)
+
+Model: gpt-4o-mini · Judge: gpt-4o · Seed: 42 · 2026-05-12
+
+Baseline pass@1:       0.412
+MIPROv2 candidates:     7 (3 demos · 4 prompts)
+Best candidate:        cand_005 (instruction-only)
+Best candidate pass@1: 0.473
+
+Absolute lift:         +6.1 pp
+Relative lift:         +14.6 %
+Statistical sig (p):    0.024  (welch's t, n=200)</pre></div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 11. mcp call · code-review-graph -->
+              <div class="tool-call" data-kind="mcp" data-open="false">
+                <div class="tool-call-head" onclick="toggleReasoning(this)">
+                  <span class="caret">▾</span>
+                  <span class="kw">MCP</span><span class="name">code-review-graph · query_graph</span>
+                  <span class="status done">▢ done · 92ms</span>
+                </div>
+                <div class="tool-call-body">
+                  <div class="tool-row">
+                    <span class="row-label">args</span>
+                    <div class="row-value"><pre>{"pattern":"callers_of","target":"runMIPROv2","kind":"function"}</pre></div>
+                  </div>
+                  <div class="tool-row">
+                    <span class="row-label">result</span>
+                    <div class="row-value"><pre>3 callers found:
+  · packages/agent-core/src/self-evolution/optimizer.ts:124
+  · benchmarks/scripts/dspy_stage_d.py:42
+  · providers/memory/benchmarks/dspy_stage_d.py:67 (entry)</pre></div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 12. cli-anything · gh (Linear-like lookup mocked via gh) -->
+              <div class="tool-call" data-kind="mcp" data-open="false">
+                <div class="tool-call-head" onclick="toggleReasoning(this)">
+                  <span class="caret">▾</span>
+                  <span class="kw">CLI</span><span class="name">cli-anything · gh issue view QUI-152</span>
+                  <span class="status done">▢ done · 312ms</span>
+                </div>
+                <div class="tool-call-body">
+                  <div class="tool-row">
+                    <span class="row-label">cmd</span>
+                    <div class="row-value"><pre>gh-anything wrap "Linear app" → query Linear "QUI-152" → JSON</pre></div>
+                  </div>
+                  <div class="tool-row">
+                    <span class="row-label">result</span>
+                    <div class="row-value"><pre>QUI-152 "Stage D MIPROv2 validation"
+  · status: In Progress  (E-1 子任务 done, E-2 pending)
+  · assignee: main
+  · labels: self-evolution, benchmark, iter-E</pre></div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 13. redaction -->
+              <div class="event-line">
+                <div class="ev-main">
+                  <span class="ev-kw">脱敏</span>
+                  <span class="ev-name">redaction</span>
+                  <span class="ev-desc">标准策略 · 0 字段被脱敏</span>
+                </div>
+                <span class="ev-meta">2ms</span>
+              </div>
+
+              <!-- 14. trajectory log + memory write (auto-reflect) -->
+              <div class="event-line">
+                <div class="ev-main">
+                  <span class="ev-kw">轨迹</span>
+                  <span class="ev-name">trajectory-log</span>
+                  <span class="ev-desc">写入 .quilin/trajectory/2026-05-12.jsonl · turn #14</span>
+                </div>
+                <span class="ev-meta">3ms</span>
+              </div>
+              <div class="event-line" data-kind="memory">
+                <div class="ev-main">
+                  <span class="ev-kw">写入</span>
+                  <span class="ev-name">auto-reflect → episodic</span>
+                  <span class="ev-desc">1 条新条目 · "QUI-152 E-1 已 done, E-2 仍待"</span>
+                </div>
+                <span class="ev-meta">7ms</span>
+              </div>
+
+              <div class="process-status"><strong class="ps-pulse">正在输出</strong></div>
+
+            </div>
+          </div>
+
+          <p>Stage D 的 MIPROv2 实验<strong>已经落地</strong>,real-LLM judge 模式跑通:baseline pass@1 是 0.412,优化后到 0.473,绝对提升 6.1 个百分点,相对 <strong>14.6%</strong>,p 值 0.024 显著。</p>
+          <p>Commit <em>baeac41</em> 已合并 master。但 Linear QUI-152 当前**仍是 In Progress**(E-1 done, E-2 pending),不能直接 close——E-2 是 Stage E (BFCL tool-call) 的同套 pipeline 迁移。建议把 E-2 作为下一步,跑完再统一 close QUI-152<span class="stream-cursor"></span></p>
+
+          <div class="reflection-block" data-open="true">
+            <div class="reflection-head" onclick="toggleReasoning(this)">
+              <span class="caret">▾</span><span>旁白 · reflection</span>
+            </div>
+            <div class="reflection-body">
+              <p>这一轮总共消耗 7.3k tokens,用时 14.2 秒。第一次回答的时候我差点直接说"QUI-152 可以 close"——但 git-evidence skill 强提示"任何状态声明必须 git 实证",所以我去查了 Linear 实际状态,发现 E-2 还没做。这条规则救我一命。已经把"QUI-152 E-1 done / E-2 pending"写入 episodic,下次问到 Stage E 时能直接接上。</p>
+            </div>
+          </div>
+
+        </div>
+      </article>`,
+    "review-loop-r1": `
+      <article class="turn">
+        <div class="turn-label"><span>system</span><span class="dot">·</span><span class="cjk-tag">派遣</span></div>
+        <div class="turn-body">
+          <p style="color: var(--fg-muted); font-size: 17px;">由 <em style="font-style: normal; color: var(--fg);">main</em> 派遣 · 任务:对 <em>dashboard.ts</em> (812 LOC) 做 round 1 cross-review,角度 = 类型/逻辑/算法/测试覆盖。</p>
+        </div>
+      </article>
+      <article class="turn">
+        <div class="turn-label"><span class="cjk-mark">麒麟</span><span class="dot">·</span><span>subagent · review-loop-r1</span></div>
+        <div class="turn-body">
+
+          <div class="process" data-open="true">
+            <div class="process-head" onclick="toggleReasoning(this)">
+              <span class="caret">▾</span>
+              <span>过程 · process · 2.0s · 3 工具 · 4.8k tokens · 9 事件</span>
+            </div>
+            <div class="process-body">
+
+              <div class="event-line">
+                <div class="ev-main">
+                  <span class="ev-kw">继承</span>
+                  <span class="ev-name">subagent context</span>
+                  <span class="ev-desc">从 main 继承任务描述 + WriteAuthority 策略 + soul.md</span>
+                </div>
+                <span class="ev-meta">spawn 2m 14s 前</span>
+              </div>
+
+              <div class="event-line" data-kind="memory">
+                <div class="ev-main">
+                  <span class="ev-kw">召回</span>
+                  <span class="ev-name">semantic tier</span>
+                  <span class="ev-desc">"path traversal · normalize+resolve 不防 symlink escape"</span>
+                </div>
+                <span class="ev-meta">9ms · 1 hit</span>
+              </div>
+
+              <div class="event-line" data-kind="skill">
+                <div class="ev-main">
+                  <span class="ev-kw">加载</span>
+                  <span class="ev-name">cross-review-loop SKILL.md</span>
+                  <span class="ev-desc">M2 · 主审 reviewer A 视角(类型/逻辑/算法/测试)</span>
+                </div>
+                <span class="ev-meta">5ms</span>
+              </div>
+
+              <div class="reasoning" data-open="false">
+                <div class="reasoning-head" onclick="toggleReasoning(this)">
+                  <span class="caret">▾</span><span>思考 · reasoning · 0.8s</span>
+                </div>
+                <div class="reasoning-body">
+                  <p>主代理交给我审 dashboard.ts。先扫一遍 export 表面 + path 边界 + redact 逻辑。重点找:类型不严、static-file path traversal、aggregation 空集行为、未覆盖的 query 形状。</p>
+                </div>
+              </div>
+
+              <div class="tool-call" data-kind="mcp" data-open="false">
+                <div class="tool-call-head" onclick="toggleReasoning(this)">
+                  <span class="caret">▾</span>
+                  <span class="kw">MCP</span><span class="name">code-review-graph · get_review_context</span>
+                  <span class="status done">▢ done · 71ms</span>
+                </div>
+                <div class="tool-call-body">
+                  <div class="tool-row">
+                    <span class="row-label">args</span>
+                    <div class="row-value"><pre>{"file":"packages/agent-core/src/observability/dashboard.ts"}</pre></div>
+                  </div>
+                  <div class="tool-row">
+                    <span class="row-label">result</span>
+                    <div class="row-value"><pre>812 LOC · 21 exports · 7 testCallers · risk_score 6.4
+top risky regions: lines 360-420 (path resolve), lines 600-680 (aggregate)</pre></div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="tool-call" data-open="false">
+                <div class="tool-call-head" onclick="toggleReasoning(this)">
+                  <span class="caret">▾</span>
+                  <span class="kw">调用</span><span class="name">read_file</span>
+                  <span class="status done">▢ done · 92ms</span>
+                </div>
+                <div class="tool-call-body">
+                  <div class="tool-row">
+                    <span class="row-label">args</span>
+                    <div class="row-value"><pre>{"path":"packages/agent-core/src/observability/dashboard.ts","range":"360-420"}</pre></div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="tool-call" data-open="false">
+                <div class="tool-call-head" onclick="toggleReasoning(this)">
+                  <span class="caret">▾</span>
+                  <span class="kw">调用</span><span class="name">grep</span>
+                  <span class="status pending">▪ running · 1.2s</span>
+                </div>
+                <div class="tool-call-body">
+                  <div class="tool-row">
+                    <span class="row-label">args</span>
+                    <div class="row-value"><pre>{"pattern":"normalize|resolve|join","path":"packages/agent-core/src/observability/dashboard.ts"}</pre></div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="event-line">
+                <div class="ev-main">
+                  <span class="ev-kw">心跳</span>
+                  <span class="ev-name">subagent-heartbeat → main</span>
+                  <span class="ev-desc">汇报进度 · 3 candidate issues 已记下</span>
+                </div>
+                <span class="ev-meta">每 60s</span>
+              </div>
+
+              <div class="process-status"><strong class="ps-pulse">正在输出</strong></div>
+
+            </div>
+          </div>
+
+          <p>已发现 3 个候选 issue,先记下来:</p>
+          <p>· <strong>HIGH</strong> · path traversal 检查依赖 <em>normalize+resolve</em>,但没防 symlink escape;<br>· <strong>MED</strong> · <em>aggregateSpanMetrics</em> 空数组返回 0 而不是 null,dashboard 会误显示成"已收集";<br>· <strong>LOW</strong> · <em>TraceQuery</em> ts 上是 partial,但 runtime validator 缺失<span class="stream-cursor"></span></p>
+        </div>
+      </article>`,
+    "dspy-validator": `
+      <article class="turn">
+        <div class="turn-label"><span>system</span><span class="dot">·</span><span class="cjk-tag">派遣</span></div>
+        <div class="turn-body">
+          <p style="color: var(--fg-muted); font-size: 17px;">由 <em style="font-style: normal; color: var(--fg);">main</em> 派遣 · 任务:对 self-evolution Stage D 跑 MIPROv2,real-LLM judge,gpt-4o-mini + gpt-4o,n=200。</p>
+        </div>
+      </article>
+      <article class="turn">
+        <div class="turn-label"><span class="cjk-mark">麒麟</span><span class="dot">·</span><span>subagent · dspy-validator</span></div>
+        <div class="turn-body">
+
+          <div class="process" data-open="false">
+            <div class="process-head" onclick="toggleReasoning(this)">
+              <span class="caret">▾</span>
+              <span>过程 · process · 8m 41s · 1 工具 · 47k tokens · 11 事件</span>
+            </div>
+            <div class="process-body">
+
+              <div class="event-line">
+                <div class="ev-main">
+                  <span class="ev-kw">继承</span>
+                  <span class="ev-name">subagent context</span>
+                  <span class="ev-desc">从 main 继承 · seed=42, n=200, real-LLM judge mode</span>
+                </div>
+                <span class="ev-meta">-</span>
+              </div>
+
+              <div class="event-line" data-kind="memory">
+                <div class="ev-main">
+                  <span class="ev-kw">召回</span>
+                  <span class="ev-name">skill tier</span>
+                  <span class="ev-desc">prompt-optimization · MIPROv2 经验 (3 历史轨迹)</span>
+                </div>
+                <span class="ev-meta">12ms</span>
+              </div>
+
+              <div class="event-line" data-kind="critical">
+                <div class="ev-main">
+                  <span class="ev-kw">分类</span>
+                  <span class="ev-name">risk-classify</span>
+                  <span class="ev-desc">shell_exec uv run · LOW · 沙盒内 + 已知 script</span>
+                </div>
+                <span class="ev-meta">2-stage</span>
+              </div>
+
+              <div class="reasoning" data-open="false">
+                <div class="reasoning-head" onclick="toggleReasoning(this)">
+                  <span class="caret">▾</span><span>规划 · planning · 2 子任务</span>
+                </div>
+                <div class="reasoning-body">
+                  <p>1. 跑 baseline (pass@1 on 200 samples)</p>
+                  <p>2. MIPROv2 生成 7 candidates → 选最优,与 baseline 做 welch's t-test</p>
+                </div>
+              </div>
+
+              <div class="tool-call" data-open="false">
+                <div class="tool-call-head" onclick="toggleReasoning(this)">
+                  <span class="caret">▾</span>
+                  <span class="kw">调用</span><span class="name">shell_exec</span>
+                  <span class="status done">▢ done · 8m 41s</span>
+                </div>
+                <div class="tool-call-body">
+                  <div class="tool-row">
+                    <span class="row-label">args</span>
+                    <div class="row-value"><pre>{"cmd":"uv run python providers/memory/benchmarks/dspy_stage_d.py --judge gpt-4o --model gpt-4o-mini --n 200 --seed 42"}</pre></div>
+                  </div>
+                  <div class="tool-row">
+                    <span class="row-label">result</span>
+                    <div class="row-value"><pre>[stage-d] loading dataset (n=200)
+[stage-d] baseline pass@1: 0.412
+[stage-d] MIPROv2 generating candidates...
+[stage-d] candidate 5/7 evaluated, pass@1: 0.473 (best)
+[stage-d] best: cand_005 (instruction-only)
+[stage-d] absolute lift: +6.1pp · relative lift: +14.6%
+[stage-d] statistical sig (welch's t): p=0.024</pre></div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="event-line">
+                <div class="ev-main">
+                  <span class="ev-kw">指标</span>
+                  <span class="ev-name">metric-emit</span>
+                  <span class="ev-desc">stage_d_lift_relative=14.6 · OTel + 本地 JSON</span>
+                </div>
+                <span class="ev-meta">1ms</span>
+              </div>
+
+              <div class="event-line">
+                <div class="ev-main">
+                  <span class="ev-kw">轨迹</span>
+                  <span class="ev-name">trajectory-log</span>
+                  <span class="ev-desc">写入 .quilin/trajectory/2026-05-12.jsonl · 18 step</span>
+                </div>
+                <span class="ev-meta">4ms</span>
+              </div>
+
+              <div class="event-line">
+                <div class="ev-main">
+                  <span class="ev-kw">提案</span>
+                  <span class="ev-name">proposal-generate</span>
+                  <span class="ev-desc">cand_005 prompt 写到 .patches/2026-05-12-prompt-stage-d.patch</span>
+                </div>
+                <span class="ev-meta">human-review pending</span>
+              </div>
+
+              <div class="event-line" data-kind="memory">
+                <div class="ev-main">
+                  <span class="ev-kw">写入</span>
+                  <span class="ev-name">auto-reflect → episodic</span>
+                  <span class="ev-desc">"Stage D 14.6% lift, judge gpt-4o, 47k tokens"</span>
+                </div>
+                <span class="ev-meta">6ms</span>
+              </div>
+
+              <div class="event-line">
+                <div class="ev-main">
+                  <span class="ev-kw">汇合</span>
+                  <span class="ev-name">subagent-join → main</span>
+                  <span class="ev-desc">返回 result + report path · main 接管 cherry-pick</span>
+                </div>
+                <span class="ev-meta">2ms</span>
+              </div>
+
+            </div>
+          </div>
+
+          <p>验证完成。<strong>cand_005</strong> 是最优候选,绝对 +6.1pp · 相对 +14.6% · p=0.024 显著。已写报告到 <em>docs/10-self-evolution/dspy-validation-report-real-llm-gpt4o-mini.md</em>,等主代理 cherry-pick。</p>
+
+          <div class="reflection-block" data-open="true">
+            <div class="reflection-head" onclick="toggleReasoning(this)">
+              <span class="caret">▾</span><span>旁白 · reflection</span>
+            </div>
+            <div class="reflection-body">
+              <p>本次跑总耗 8m 41s,gpt-4o judge 消耗约 47k tokens(~\$0.31)。所有 candidates 通过 sanity check,未出现 reward hacking。注意到 cand_005 是 instruction-only 优化(没动 demos),说明本任务 prompt 指令清晰度比 few-shot 例子更重要。</p>
+            </div>
+          </div>
+
+        </div>
+      </article>`,
+    "lint-fixer": `
+      <article class="turn">
+        <div class="turn-label"><span>system</span><span class="dot">·</span><span class="cjk-tag">派遣</span></div>
+        <div class="turn-body">
+          <p style="color: var(--fg-muted); font-size: 17px;">由 <em style="font-style: normal; color: var(--fg);">main</em> 派遣 · 任务:对 packages/agent-core 全量跑 biome format + lint --write,修复所有可自动修复的 issue。</p>
+        </div>
+      </article>
+      <article class="turn">
+        <div class="turn-label"><span class="cjk-mark">麒麟</span><span class="dot">·</span><span>subagent · lint-fixer</span></div>
+        <div class="turn-body">
+
+          <div class="process" data-open="true">
+            <div class="process-head" onclick="toggleReasoning(this)">
+              <span class="caret">▾</span>
+              <span>过程 · process · 0.4s · 1 调用 · 0.3k tokens · 6 事件</span>
+            </div>
+            <div class="process-body">
+
+              <div class="event-line">
+                <div class="ev-main">
+                  <span class="ev-kw">继承</span>
+                  <span class="ev-name">subagent context</span>
+                  <span class="ev-desc">从 main 继承 · trust_mode=auto, 任务:lint --write</span>
+                </div>
+                <span class="ev-meta">-</span>
+              </div>
+
+              <div class="event-line" data-kind="critical">
+                <div class="ev-main">
+                  <span class="ev-kw">分类</span>
+                  <span class="ev-name">risk-classify</span>
+                  <span class="ev-desc">shell_exec --write · CRITICAL · 影响 258 文件</span>
+                </div>
+                <span class="ev-meta">2-stage</span>
+              </div>
+
+              <div class="event-line" data-kind="critical">
+                <div class="ev-main">
+                  <span class="ev-kw">网关</span>
+                  <span class="ev-name">write-authority-gate</span>
+                  <span class="ev-desc">trust=auto 下 CRITICAL 仍需用户授权 · 阻塞</span>
+                </div>
+                <span class="ev-meta">-</span>
+              </div>
+
+              <div class="event-line" data-kind="critical">
+                <div class="ev-main">
+                  <span class="ev-kw">请求</span>
+                  <span class="ev-name">auth-request → user</span>
+                  <span class="ev-desc">UI 弹出授权 / 拒绝 · 阻塞所有后续步骤</span>
+                </div>
+                <span class="ev-meta">pending</span>
+              </div>
+
+              <div class="event-line">
+                <div class="ev-main">
+                  <span class="ev-kw">心跳</span>
+                  <span class="ev-name">subagent-heartbeat → main</span>
+                  <span class="ev-desc">报告状态:blocked-pending-auth · main 已感知</span>
+                </div>
+                <span class="ev-meta">每 30s</span>
+              </div>
+
+              <div class="tool-call blocked" data-kind="subagent" data-open="true">
+                <div class="tool-call-head" onclick="toggleReasoning(this)">
+                  <span class="caret">▾</span>
+                  <span class="kw">调用</span><span class="name">shell_exec</span>
+                  <span class="status error">✕ blocked · awaiting authorization</span>
+                </div>
+                <div class="tool-call-body">
+                  <div class="tool-row">
+                    <span class="row-label">args</span>
+                    <div class="row-value"><pre>{"cmd":"pnpm --dir packages/agent-core exec biome check --write src/"}</pre></div>
+                  </div>
+                  <div class="tool-row">
+                    <span class="row-label">原因</span>
+                    <div class="row-value"><pre>WriteAuthority gate: --write 落在 trust_mode=auto 下仍需用户确认。
+预计修改 258 个文件(biome check --write 全量格式化)。</pre></div>
+                  </div>
+                  <div class="authority-bar">
+                    <span class="label">需要您的授权 · pending authorization</span>
+                    <button class="authorize" onclick="resolveAuth(true, this)">授权 · authorize</button>
+                    <button class="deny" onclick="resolveAuth(false, this)">拒绝 · deny</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="process-status"><strong class="ps-waiting">等待授权</strong></div>
+
+            </div>
+          </div>
+
+          <p style="color: var(--fg-muted);">此任务已暂停,等待用户在上方<strong style="color: var(--fg);">授权 / 拒绝</strong>。授权后会立即继续执行;拒绝会终止此 subagent 并向 main 报告失败。</p>
+
+        </div>
+      </article>`,
+  };
+
+  // ===== full pages content =====
+  const pages = {
+    sessions: `
+      <div class="page-head">
+        <div class="page-title">Sessions<span class="cjk">会话</span></div>
+        <div class="page-subtitle">所有历史对话 · 按日期分组 · 点击任意会话可恢复上下文继续</div>
+        <div class="page-stats">
+          <span><strong>47</strong>总会话</span>
+          <span><strong>3</strong>今天</span>
+          <span><strong>3</strong>active</span>
+          <span><strong>318k</strong>累计 tokens</span>
+          <button class="page-action" onclick="loadSession('main', true)">＋ 新建会话</button>
+        </div>
+      </div>
+
+      <div class="section-title"><span class="cn">今天 · today</span><span class="right">3 sessions</span></div>
+      <div class="resource-row" onclick="loadSession('main')">
+        <span class="rn">self-evolution Stage D 状态查询<span class="desc">main · 3 轮 · 3.2k tokens · 跑通 14.6% lift</span></span>
+        <span class="rm">12 分钟前</span><span class="rs on">▪ active</span>
+      </div>
+      <div class="resource-row" onclick="loadSession('review-loop-r1')">
+        <span class="rn">dashboard.ts cross-review round 1<span class="desc">review-loop-r1 · 8 轮 · 11.4k tokens · 3 候选 issue</span></span>
+        <span class="rm">36 分钟前</span><span class="rs on">▪ active</span>
+      </div>
+      <div class="resource-row" onclick="loadSession('main')">
+        <span class="rn">重做 web UI · 设计与实现<span class="desc">main · 24 轮 · 87.2k tokens · 当前对话</span></span>
+        <span class="rm">1 小时前</span><span class="rs on">▪ active</span>
+      </div>
+
+      <div class="section-title"><span class="cn">昨天 · yesterday</span><span class="right">2026-05-11</span></div>
+      <div class="resource-row" onclick="loadSession('lint-fixer')">
+        <span class="rn">lint-fixer biome --write 授权流程<span class="desc">lint-fixer · 4 轮 · 1.8k tokens · 用户拒绝</span></span>
+        <span class="rm">昨天 18:42</span><span class="rs err">✕ denied</span>
+      </div>
+      <div class="resource-row" onclick="loadSession('dspy-validator')">
+        <span class="rn">MIPROv2 Stage D 验证实验<span class="desc">dspy-validator · 18 轮 · 47.0k tokens · gpt-4o judge</span></span>
+        <span class="rm">昨天 16:12</span><span class="rs on">▢ closed</span>
+      </div>
+      <div class="resource-row" onclick="loadSession('main')">
+        <span class="rn">修复 dashboard.ts path traversal<span class="desc">main · 7 轮 · 5.6k tokens · HIGH severity 已修</span></span>
+        <span class="rm">昨天 11:08</span><span class="rs on">▢ closed</span>
+      </div>
+
+      <div class="section-title"><span class="cn">本周 · this week</span><span class="right">2026-05-07 → 09</span></div>
+      <div class="resource-row" onclick="loadSession('main')">
+        <span class="rn">Iter F 规划讨论<span class="desc">main · 32 轮 · 28.4k tokens · Supervisor + Mesh 拆解</span></span>
+        <span class="rm">5/09 14:32</span><span class="rs">▢ closed</span>
+      </div>
+      <div class="resource-row" onclick="loadSession('main')">
+        <span class="rn">quilin-web Crawl4AI provider 实现<span class="desc">main · 47 轮 · 62.1k tokens · QUI-131 落地</span></span>
+        <span class="rm">5/08 09:15</span><span class="rs">▢ closed</span>
+      </div>
+      <div class="resource-row" onclick="loadSession('main')">
+        <span class="rn">subagent_spawn DoS 加固<span class="desc">main · 12 轮 · 8.3k tokens · task cap + registry cap</span></span>
+        <span class="rm">5/07 21:48</span><span class="rs">▢ closed</span>
+      </div>
+
+      <div class="section-title"><span class="cn">更早 · earlier</span><span class="right">archived</span></div>
+      <div class="resource-row" onclick="loadSession('main')">
+        <span class="rn">Iter A Grounded Context 落地<span class="desc">main · 89 轮 · 184.2k tokens · context assembly + temporal awareness</span></span>
+        <span class="rm">4/22</span><span class="rs off">▫ archived</span>
+      </div>
+      <div class="resource-row" onclick="loadSession('main')">
+        <span class="rn">Phase 0 PoC · Agent Loop 雏形<span class="desc">main · 156 轮 · 412.7k tokens · v0.0.3 出生</span></span>
+        <span class="rm">4/15</span><span class="rs off">▫ archived</span>
+      </div>`,
+
+    memory: `
+      <div class="page-head">
+        <div class="page-title">Memory<span class="cjk">记忆</span></div>
+        <div class="page-subtitle">四层分级 · 工作记忆与长期演化的中枢 · 每次对话后自动反思写入</div>
+        <div class="page-stats">
+          <span><strong>70</strong>items total</span>
+          <span><strong>3</strong>working</span>
+          <span><strong>47</strong>episodic</span>
+          <span><strong>12</strong>semantic</span>
+          <span><strong>8</strong>skill</span>
+        </div>
+      </div>
+
+      <div class="section-title"><span class="cn">四层 · tiers</span><span class="right">click to expand</span></div>
+      <div class="memory-tier-full">
+        <div class="tn">working<span class="desc">当前任务上下文,session 关闭即清</span></div>
+        <div class="tc">3</div>
+        <div class="tp">
+          self-evolution Stage D 查询的工具调用链 · MIPROv2 报告路径 · QUI-152 链接
+          <span class="latest">latest · 4 分钟前 · main</span>
+        </div>
+      </div>
+      <div class="memory-tier-full">
+        <div class="tn">episodic<span class="desc">具体事件,带时间戳 · 30 天 TTL</span></div>
+        <div class="tc">47</div>
+        <div class="tp">
+          5/8 QUI-147 polish 落地 · 5/7 设计 brief 第一稿被用户调整为左浮层 · 5/12 用户禁用蓝紫 AI 风
+          <span class="latest">latest · 14:02 · main</span>
+        </div>
+      </div>
+      <div class="memory-tier-full">
+        <div class="tn">semantic<span class="desc">抽象偏好与事实 · 永久保留</span></div>
+        <div class="tc">12</div>
+        <div class="tp">
+          用户偏好中英双语 docs · 95% 测试覆盖硬门槛 · Linear 是任务源 · 不修改 go/python 版本
+          <span class="latest">added · 5/08 · main</span>
+        </div>
+      </div>
+      <div class="memory-tier-full">
+        <div class="tn">skill<span class="desc">可复用的程序性技能</span></div>
+        <div class="tc">8</div>
+        <div class="tp">
+          cross-review-loop · write-bilingual-docs · linear-discipline · git-evidence
+          <span class="latest">updated · 5/10 · dspy-validator</span>
+        </div>
+      </div>
+
+      <div class="section-title"><span class="cn">最近写入 · recent writes</span><span class="right">last 12</span></div>
+      <div class="resource-row">
+        <span class="rn">用户讨厌蓝紫 AI 风,要朱砂为主<span class="desc">semantic · added during web-ui rewrite</span></span>
+        <span class="rm">5/12 14:42</span><span class="rs on">semantic</span>
+      </div>
+      <div class="resource-row">
+        <span class="rn">design-consultation skill 已激活到 M1<span class="desc">skill · used 1×</span></span>
+        <span class="rm">5/12 14:30</span><span class="rs on">skill</span>
+      </div>
+      <div class="resource-row">
+        <span class="rn">QUI-152 Stage D lift 14.6% 已落地<span class="desc">episodic · commit baeac41</span></span>
+        <span class="rm">5/12 10:22</span><span class="rs on">episodic</span>
+      </div>
+      <div class="resource-row">
+        <span class="rn">web UI 重做,弃用旧 dashboard-ui<span class="desc">working · 当前任务</span></span>
+        <span class="rm">5/12 13:55</span><span class="rs on">working</span>
+      </div>`,
+
+    skills: `
+      <div class="page-head">
+        <div class="page-title">Skills<span class="cjk">技能</span></div>
+        <div class="page-subtitle">SKILL.md + frontmatter · catalog + on-demand load · M0 已注册 / M1 已激活 / M2 已熟练</div>
+        <div class="page-stats">
+          <span><strong>12</strong>总技能</span>
+          <span><strong>3</strong>M2 熟练</span>
+          <span><strong>4</strong>M1 激活</span>
+          <span><strong>5</strong>M0 注册</span>
+          <span><strong>147</strong>本月调用</span>
+        </div>
+      </div>
+
+      <div class="section-title"><span class="cn">M2 · 已熟练 mastered</span><span class="right">used 10+ times</span></div>
+      <div class="resource-row">
+        <span class="rn">cross-review-loop<span class="desc">写完代码必须 2 个新 subagent 交叉审,循环到 0 真实 issue 才能 commit</span></span>
+        <span class="rm">used 47×</span><span class="rs on">▢ active</span>
+      </div>
+      <div class="resource-row">
+        <span class="rn">linear-discipline<span class="desc">任何非琐碎任务必须先有 Linear issue/comment,免费版 250 issue 红线</span></span>
+        <span class="rm">used 23×</span><span class="rs on">▢ active</span>
+      </div>
+      <div class="resource-row">
+        <span class="rn">write-bilingual-docs<span class="desc">所有新增 docs 中英按段对照,标题中文优先</span></span>
+        <span class="rm">used 31×</span><span class="rs on">▢ active</span>
+      </div>
+
+      <div class="section-title"><span class="cn">M1 · 已激活 activated</span><span class="right">used 1-10 times</span></div>
+      <div class="resource-row">
+        <span class="rn">git-evidence<span class="desc">任何 LOC/进度声明必须附 git 实证(wc -l, grep, commit hash)</span></span>
+        <span class="rm">used 18×</span><span class="rs on">▢ active</span>
+      </div>
+      <div class="resource-row">
+        <span class="rn">ui-ux-pro-max<span class="desc">UI/UX 设计 · 50+ styles · 161 palettes · 57 font pairings</span></span>
+        <span class="rm">used 1×</span><span class="rs on">▢ active</span>
+      </div>
+      <div class="resource-row">
+        <span class="rn">design-consultation<span class="desc">产 DESIGN.md · 项目设计源真相</span></span>
+        <span class="rm">new</span><span class="rs on">▢ active</span>
+      </div>
+      <div class="resource-row">
+        <span class="rn">frontend-design<span class="desc">Anthropic · 避免 AI slop · BOLD aesthetic direction</span></span>
+        <span class="rm">used 1×</span><span class="rs on">▢ active</span>
+      </div>
+
+      <div class="section-title"><span class="cn">M0 · 已注册 registered</span><span class="right">indexed, not yet loaded</span></div>
+      <div class="resource-row"><span class="rn">redaction-policy</span><span class="rm">—</span><span class="rs off">▪ idle</span></div>
+      <div class="resource-row"><span class="rn">claude-api</span><span class="rm">—</span><span class="rs off">▪ idle</span></div>
+      <div class="resource-row"><span class="rn">verification-loop</span><span class="rm">—</span><span class="rs off">▪ idle</span></div>
+      <div class="resource-row"><span class="rn">tdd-workflow</span><span class="rm">—</span><span class="rs off">▪ idle</span></div>
+      <div class="resource-row"><span class="rn">prompt-optimizer</span><span class="rm">—</span><span class="rs off">▪ idle</span></div>`,
+
+    mcp: `
+      <div class="page-head">
+        <div class="page-title">MCP<span class="cjk">服务</span></div>
+        <div class="page-subtitle">Model Context Protocol servers · stdio + http · 工具与资源的提供方</div>
+        <div class="page-stats">
+          <span><strong>3 / 3</strong>online</span>
+          <span><strong>36</strong>tools exposed</span>
+          <span><strong>184</strong>calls today</span>
+          <span><strong>12ms</strong>avg latency</span>
+        </div>
+      </div>
+
+      <div class="section-title"><span class="cn">已连接 · connected</span><span class="right">click to inspect</span></div>
+      <div class="resource-row">
+        <span class="rn">quilin-mem<span class="desc">本地 Python · 四层记忆 + 向量检索 + auto-reflect</span></span>
+        <span class="rm">stdio · 4 tools · 89 calls</span><span class="rs on">▢ healthy</span>
+      </div>
+      <div class="resource-row">
+        <span class="rn">quilin-web<span class="desc">本地 Python · Crawl4AI · URL → markdown for RAG</span></span>
+        <span class="rm">stdio · 2 tools · 12 calls</span><span class="rs on">▢ healthy</span>
+      </div>
+      <div class="resource-row">
+        <span class="rn">code-review-graph<span class="desc">Tree-sitter 知识图谱 · 30 个查询工具 · 本仓库 4641 nodes</span></span>
+        <span class="rm">http · 30 tools · 83 calls</span><span class="rs on">▢ healthy</span>
+      </div>
+
+      <div class="section-title"><span class="cn">最近调用 · recent calls</span><span class="right">last 10</span></div>
+      <div class="resource-row">
+        <span class="rn">quilin-mem · recall<span class="desc">查询 self-evolution 相关的 episodic 记忆</span></span>
+        <span class="rm">12ms · main</span><span class="rs on">▢ 4 results</span>
+      </div>
+      <div class="resource-row">
+        <span class="rn">code-review-graph · query_graph<span class="desc">pattern: callers_of dashboard-page.ts</span></span>
+        <span class="rm">84ms · review-loop-r1</span><span class="rs on">▢ 7 callers</span>
+      </div>
+      <div class="resource-row">
+        <span class="rn">quilin-mem · auto_reflect<span class="desc">主代理任务结束自动反思 · 写入 episodic</span></span>
+        <span class="rm">214ms · main</span><span class="rs on">▢ 1 entry added</span>
+      </div>
+      <div class="resource-row">
+        <span class="rn">quilin-web · web_extract<span class="desc">https://anthropic.com/claude/skills · Crawl4AI</span></span>
+        <span class="rm">1.2s · main</span><span class="rs on">▢ 12KB markdown</span>
+      </div>`,
+
+    tools: `
+      <div class="page-head">
+        <div class="page-title">Tools<span class="cjk">工具</span></div>
+        <div class="page-subtitle">28 内置工具 · 分四类 · 经 tool_search 按需暴露,避免 prompt 膨胀</div>
+        <div class="page-stats">
+          <span><strong>28</strong>总工具</span>
+          <span><strong>10</strong>core</span>
+          <span><strong>6</strong>orchestration</span>
+          <span><strong>5</strong>network</span>
+          <span><strong>7</strong>discovery</span>
+        </div>
+      </div>
+
+      <div class="section-title"><span class="cn">core · 核心</span><span class="right">file + shell</span></div>
+      <div class="resource-row">
+        <span class="rn">read_file<span class="desc">读取文件内容,支持范围、行号、PDF/图像</span></span>
+        <span class="rm">used 132×</span><span class="rs on">▢ ready</span>
+      </div>
+      <div class="resource-row">
+        <span class="rn">edit_file<span class="desc">字符串替换式编辑 · 受 WriteAuthority gate 守护</span></span>
+        <span class="rm">used 89×</span><span class="rs on">▢ ready</span>
+      </div>
+      <div class="resource-row">
+        <span class="rn">shell_exec<span class="desc">沙盒 shell 执行 · 危险命令需授权</span></span>
+        <span class="rm">used 47×</span><span class="rs on">▢ ready</span>
+      </div>
+      <div class="resource-row">
+        <span class="rn">write_file<span class="desc">新文件写入 · 不在 project root 内需授权</span></span>
+        <span class="rm">used 28×</span><span class="rs on">▢ ready</span>
+      </div>
+
+      <div class="section-title"><span class="cn">orchestration · 编排</span><span class="right">subagents</span></div>
+      <div class="resource-row">
+        <span class="rn">subagent_spawn<span class="desc">派生子代理 · worktree 模式 + 任务上限</span></span>
+        <span class="rm">used 12×</span><span class="rs on">▢ ready</span>
+      </div>
+      <div class="resource-row">
+        <span class="rn">subagent_status<span class="desc">查询子代理状态、消息、进度</span></span>
+        <span class="rm">used 28×</span><span class="rs on">▢ ready</span>
+      </div>
+      <div class="resource-row">
+        <span class="rn">subagent_message<span class="desc">向子代理发追加消息或 stop 信号</span></span>
+        <span class="rm">used 6×</span><span class="rs on">▢ ready</span>
+      </div>
+
+      <div class="section-title"><span class="cn">network · 网络</span><span class="right">web access</span></div>
+      <div class="resource-row">
+        <span class="rn">web_fetch<span class="desc">静态页 → markdown + 子 LLM 抽取</span></span>
+        <span class="rm">used 8×</span><span class="rs on">▢ ready</span>
+      </div>
+      <div class="resource-row">
+        <span class="rn">web_browse<span class="desc">Stagehand + Patchright · headless SPA 浏览</span></span>
+        <span class="rm">used 3×</span><span class="rs on">▢ ready</span>
+      </div>
+
+      <div class="section-title"><span class="cn">discovery · 发现</span><span class="right">prompt-saving gateway</span></div>
+      <div class="resource-row">
+        <span class="rn">tool_search<span class="desc">按 query 搜出可用工具 schema,系统提示词只暴露这一个</span></span>
+        <span class="rm">used 56×</span><span class="rs on">▢ ready</span>
+      </div>
+      <div class="resource-row">
+        <span class="rn">skill_search<span class="desc">按 query 搜出技能定义</span></span>
+        <span class="rm">used 14×</span><span class="rs on">▢ ready</span>
+      </div>
+      <div class="resource-row">
+        <span class="rn">mcp_search<span class="desc">按 query 搜出已注册 MCP 服务的工具</span></span>
+        <span class="rm">used 9×</span><span class="rs on">▢ ready</span>
+      </div>`,
+
+    config: `
+      <div class="page-head">
+        <div class="page-title">Config<span class="cjk">配置</span></div>
+        <div class="page-subtitle">用户配置 · 改动会触发 hot-reload · 敏感字段标记为 *,保存前会确认</div>
+        <div class="page-stats">
+          <span><strong>12</strong>keys</span>
+          <span><strong>4</strong>chapters</span>
+          <span class="pending">no pending changes</span>
+        </div>
+      </div>
+
+      <div class="section-title"><span class="cn">安全 · safety</span><span class="right">CRITICAL gate</span></div>
+      <div class="config-field">
+        <div class="cf-label">trust_mode<span class="cf-desc">auto = 非 CRITICAL 自动放行;ask = 全部询问</span></div>
+        <input class="cf-input" value="auto" />
+        <button class="cf-revert">— 默认 · ask</button>
+      </div>
+      <div class="config-field">
+        <div class="cf-label">redaction.policy<span class="cf-desc">敏感字段脱敏级别 · minimal / standard / strict</span></div>
+        <input class="cf-input" value="standard" />
+        <button class="cf-revert">— 默认</button>
+      </div>
+
+      <div class="section-title"><span class="cn">演化 · evolution</span><span class="right">idle-time loops</span></div>
+      <div class="config-field">
+        <div class="cf-label">idle_evolution<span class="cf-desc">空闲时自动跑反思/优化 · 默认 OFF</span></div>
+        <button class="cf-toggle off" onclick="toggleFlag(this)">已停用 · disabled</button>
+        <button class="cf-revert">— 默认</button>
+      </div>
+      <div class="config-field">
+        <div class="cf-label">auto_reflect<span class="cf-desc">每轮对话后自动反思写入 episodic memory</span></div>
+        <button class="cf-toggle on" onclick="toggleFlag(this)">已启用 · enabled</button>
+        <button class="cf-revert">— 默认</button>
+      </div>
+
+      <div class="section-title"><span class="cn">预算 · budget</span><span class="right">token guardrail</span></div>
+      <div class="config-field">
+        <div class="cf-label">token_budget.daily<span class="cf-desc">单日 token 上限 · 接近时会拒绝新任务</span></div>
+        <input class="cf-input" value="120000" />
+        <button class="cf-revert">— 默认 · 80000</button>
+      </div>
+      <div class="config-field">
+        <div class="cf-label">token_budget.warn_at<span class="cf-desc">用尽 N% 时弹提示</span></div>
+        <input class="cf-input" value="80%" />
+        <button class="cf-revert">— 默认</button>
+      </div>
+
+      <div class="section-title"><span class="cn">模型 · model</span><span class="right">two-tier routing</span></div>
+      <div class="config-field">
+        <div class="cf-label">model.default<span class="cf-desc">主对话模型 · 高质量</span></div>
+        <input class="cf-input" value="claude-opus-4-7" />
+        <button class="cf-revert">— 默认</button>
+      </div>
+      <div class="config-field">
+        <div class="cf-label">model.cheap<span class="cf-desc">子代理、内部分类等便宜任务用</span></div>
+        <input class="cf-input" value="claude-haiku-4-5" />
+        <button class="cf-revert">— 默认</button>
+      </div>
+
+      <div class="config-save-bar">
+        <span class="pending">待保存 0 项 · 改动后 ⌘S 保存</span>
+        <button class="save-btn">保存 · save</button>
+      </div>`,
+  };
+
+  // ===== simulate stream completion =====
+  let _streamTimeout = null;
+  function maybeCompleteStream(agent) {
+    if (_streamTimeout) { clearTimeout(_streamTimeout); _streamTimeout = null; }
+    // skip while intro overlay is up — timer would fire invisibly
+    if (document.body.classList.contains("intro")) return;
+    if (!conversations[agent] || !conversations[agent].includes("stream-cursor")) return;
+    _streamTimeout = setTimeout(() => {
+      // animate cursor fade + process status change + collapse, in sequence
+      if (currentAgent === agent && currentView === "conversation") {
+        // step 1 · fade cursor
+        const cursor = document.querySelector("#view .stream-cursor");
+        if (cursor) {
+          cursor.style.transition = "opacity 600ms ease-out";
+          cursor.style.opacity = "0";
+          setTimeout(() => cursor.remove(), 650);
+        }
+        // step 2 · swap pulse chip → done chip (visible color + icon change)
+        document.querySelectorAll('#view .process .ps-pulse').forEach(chip => {
+          chip.classList.remove("ps-pulse");
+          chip.classList.add("ps-done");
+          chip.textContent = "已完成";
+        });
+        // step 3 · hold visible done state, then collapse process
+        setTimeout(() => {
+          document.querySelectorAll('#view .process[data-open="true"]').forEach(proc => {
+            proc.setAttribute("data-open", "false");
+          });
+        }, 900);
+      }
+      // mutate source so subsequent renders show the completed state
+      let html = conversations[agent];
+      html = html.replace(/<span class="stream-cursor"><\/span>/g, "");
+      html = html.replace(/<strong class="ps-pulse">正在输出<\/strong>/g, '<strong class="ps-done">已完成</strong>');
+      html = html.replace(/class="process" data-open="true"/g, 'class="process" data-open="false"');
+      conversations[agent] = html;
+      _streamTimeout = null;
+    }, 2500);
+  }
+
+  // ===== render =====
+  function render() {
+    const view = document.getElementById("view");
+    const composer = document.getElementById("composer");
+    const workspace = document.getElementById("workspace");
+
+    if (currentView === "conversation") {
+      let banner = "";
+      if (currentAgent !== "main") {
+        const tasks = {
+          "review-loop-r1": "cross-review round 1 dashboard.ts",
+          "dspy-validator": "MIPROv2 验证 Stage D",
+          "lint-fixer":     "biome format --write packages/",
+        };
+        banner = `<div class="back-banner agent">
+          <span class="ctx">当前 · subagent · ${currentAgent} <em>${tasks[currentAgent] || ""}</em></span>
+          <button class="back-btn" onclick="goMain()">← 返回主代理</button>
+        </div>`;
+      }
+      view.innerHTML = banner + (conversations[currentAgent] || conversations.main);
+      composer.classList.remove("hidden");
+      workspace.classList.remove("no-composer");
+      document.getElementById("composerContext").textContent =
+        currentAgent === "main" ? "主代理" : ("子代理 · " + currentAgent);
+    } else {
+      // resource page
+      const labels = {
+        sessions: ["会话 · Sessions"],
+        memory:   ["记忆 · Memory"],
+        skills:   ["技能 · Skills"],
+        mcp:      ["MCP · 服务"],
+        tools:    ["工具 · Tools"],
+        config:   ["配置 · Config"],
+      };
+      const banner = `<div class="back-banner">
+        <span class="ctx">${labels[currentView][0]}</span>
+        <button class="back-btn" onclick="goHome()">← 返回对话</button>
+      </div>`;
+      view.innerHTML = banner + (pages[currentView] || "");
+      composer.classList.add("hidden");
+      workspace.classList.add("no-composer");
+    }
+
+    // update strip active state
+    document.querySelectorAll(".strip-item").forEach(s => {
+      s.classList.toggle("active", s.getAttribute("data-target") === currentView);
+    });
+
+    window.scrollTo({ top: 0, behavior: "smooth" });
+
+    // if showing a streaming conversation, schedule auto-completion
+    if (currentView === "conversation") maybeCompleteStream(currentAgent);
+  }
+
+  // ===== strip pin / unpin =====
+  function pinStrip()   { document.getElementById("railStrip").setAttribute("data-pinned", "true"); }
+  function unpinStrip() { document.getElementById("railStrip").setAttribute("data-pinned", "false"); }
+
+  // ===== strip click (resource pages only) =====
+  function onStripClick(target, el) {
+    closeAgentPopover();
+    currentView = target;
+    pinStrip();
+    render();
+  }
+
+  // ===== agent popover =====
+  function toggleAgentPopover(e) {
+    if (e) e.stopPropagation();
+    const pop = document.getElementById("agentPopover");
+    const btn = document.getElementById("composerContext");
+    const isOpen = pop.getAttribute("data-open") === "true";
+    pop.setAttribute("data-open", isOpen ? "false" : "true");
+    btn.setAttribute("data-active", isOpen ? "false" : "true");
+  }
+  function closeAgentPopover() {
+    const pop = document.getElementById("agentPopover");
+    const btn = document.getElementById("composerContext");
+    if (pop) pop.setAttribute("data-open", "false");
+    if (btn) btn.setAttribute("data-active", "false");
+  }
+
+  // ===== agent select =====
+  function selectAgent(row) {
+    document.querySelectorAll(".agent-row").forEach(r => r.classList.remove("active"));
+    row.classList.add("active");
+    currentAgent = row.getAttribute("data-agent");
+    currentView = "conversation";
+    closeAgentPopover();
+    unpinStrip();
+    render();
+  }
+
+  function goMain() {
+    currentAgent = "main";
+    currentView = "conversation";
+    document.querySelectorAll(".agent-row").forEach(r => r.classList.remove("active"));
+    const mainRow = document.querySelector('.agent-row[data-agent="main"]');
+    if (mainRow) mainRow.classList.add("active");
+    unpinStrip();
+    render();
+  }
+
+  function goHome() {
+    currentView = "conversation";
+    closeAgentPopover();
+    unpinStrip();
+    render();
+  }
+
+  // load a historical session (from sessions page)
+  function loadSession(agent, isNew) {
+    if (isNew) {
+      // demo: clear out conversation by going to intro
+      document.body.classList.add("intro");
+      composerInput.placeholder = "开始一次对话…";
+      closeAgentPopover();
+      unpinStrip();
+      currentAgent = "main";
+      currentView = "conversation";
+      render();
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      return;
+    }
+    currentAgent = agent;
+    currentView = "conversation";
+    closeAgentPopover();
+    unpinStrip();
+    // sync popover row .active state
+    document.querySelectorAll(".agent-row").forEach(r => {
+      r.classList.toggle("active", r.getAttribute("data-agent") === agent);
+    });
+    render();
+  }
+
+  // click outside closes popover + unpins strip
+  document.addEventListener("click", e => {
+    // popover close
+    const pop = document.getElementById("agentPopover");
+    if (pop && pop.getAttribute("data-open") === "true") {
+      const switcher = document.getElementById("agentSwitcher");
+      if (switcher && !switcher.contains(e.target)) closeAgentPopover();
+    }
+    // strip unpin · only if currently pinned and click outside strip
+    const strip = document.getElementById("railStrip");
+    if (strip && strip.getAttribute("data-pinned") === "true") {
+      if (!strip.contains(e.target)) {
+        // don't auto-collapse when clicking inside a full-page view that's owned by strip nav
+        // (the page itself was opened by the strip; clicking content there should NOT collapse the strip
+        // unless it's clearly outside the strip itself)
+        unpinStrip();
+      }
+    }
+  });
+
+  // ===== toggles =====
+  function toggleReasoning(el) {
+    const block = el.parentElement;
+    const open = block.dataset.open === "true";
+    block.dataset.open = open ? "false" : "true";
+  }
+  function toggleRow(id, btn) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (el.classList.contains("collapsed")) {
+      el.classList.remove("collapsed");
+      el.style.maxHeight = "none";
+      btn.textContent = "收起 ↑";
+    } else {
+      el.classList.add("collapsed");
+      el.style.maxHeight = "";  // clear inline override so .collapsed rule applies
+      btn.textContent = "展开 ↓";
+    }
+  }
+  function toggleFlag(btn) {
+    const on = btn.classList.contains("on");
+    btn.classList.toggle("on", !on);
+    btn.classList.toggle("off", on);
+    btn.textContent = on ? "已停用 · disabled" : "已启用 · enabled";
+  }
+
+  // ===== authorize =====
+  function resolveAuth(approve, btn) {
+    const bar = btn.parentElement;
+    const status = bar.closest(".tool-call").querySelector(".status");
+    if (approve) {
+      status.textContent = "▪ running · authorized";
+      status.classList.remove("error");
+      status.classList.add("pending");
+      bar.innerHTML = '<span class="label" style="color: var(--accent-jade);">已授权 · running</span>';
+    } else {
+      status.textContent = "✕ denied by user";
+      bar.innerHTML = '<span class="label" style="color: var(--destructive);">已拒绝 · subagent terminated</span>';
+    }
+  }
+
+  // ===== theme =====
+  const themeBtn = document.getElementById("themeToggle");
+  themeBtn.addEventListener("click", () => {
+    const root = document.documentElement;
+    const cur = root.getAttribute("data-theme");
+    const next = cur === "light" ? "dark" : "light";
+    root.setAttribute("data-theme", next);
+    themeBtn.textContent = next + " · 切换";
+  });
+
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape") {
+      closeAgentPopover();
+      unpinStrip();
+      if (currentView !== "conversation") goHome();
+    }
+  });
+
+  // ===== composer textarea auto-grow =====
+  const composerInput = document.getElementById("composerInput");
+  function autoResize(el) {
+    el.style.height = "auto";
+    const next = Math.min(el.scrollHeight, 200);
+    el.style.height = next + "px";
+  }
+  composerInput.addEventListener("input", () => autoResize(composerInput));
+  composerInput.addEventListener("keydown", e => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  });
+
+  function sendMessage() {
+    const text = composerInput.value.trim();
+    if (document.body.classList.contains("intro")) {
+      // first send leaves intro state · empty text is fine, treated as "start session"
+      exitIntro("main");
+      composerInput.value = "";
+      autoResize(composerInput);
+      return;
+    }
+    if (!text) return;
+    composerInput.value = "";
+    autoResize(composerInput);
+  }
+
+  function exitIntro(agent) {
+    if (!document.body.classList.contains("intro")) return;
+    document.body.classList.remove("intro");
+    if (agent) currentAgent = agent;
+    composerInput.placeholder = "继续提问,或 / 开启命令…  (Shift+↵ 换行)";
+    render();
+    // focus the input after the transition begins
+    setTimeout(() => composerInput.focus(), 400);
+  }
+
+  function restoreSession(sid) {
+    const map = {
+      s1: "main",
+      s2: "review-loop-r1",
+      s3: "main",
+    };
+    exitIntro(map[sid] || "main");
+  }
+
+  // intro state initial placeholder
+  if (document.body.classList.contains("intro")) {
+    composerInput.placeholder = "开始一次对话…";
+  }
+  autoResize(composerInput);
+
+  // ===== file upload (attachments) =====
+  function openFilePicker() {
+    document.getElementById("filePicker").click();
+  }
+  function onFileSelected(input) {
+    for (const file of input.files) addAttachmentChip(file.name, file.size);
+    input.value = "";
+    updateAttachmentVisibility();
+  }
+  function addAttachmentChip(name, size) {
+    const container = document.getElementById("composerAttachments");
+    const chip = document.createElement("div");
+    chip.className = "attachment-chip";
+    chip.innerHTML =
+      '<span class="file-name" title="' + escapeAttr(name) + '">' + escapeText(name) + '</span>' +
+      '<span class="file-size">' + formatBytes(size) + '</span>' +
+      '<button class="file-remove" onclick="removeAttachment(this)" title="移除">✕</button>';
+    container.appendChild(chip);
+  }
+  function removeAttachment(btn) {
+    btn.closest(".attachment-chip").remove();
+    updateAttachmentVisibility();
+  }
+  function updateAttachmentVisibility() {
+    const container = document.getElementById("composerAttachments");
+    container.classList.toggle("has-files", container.children.length > 0);
+  }
+  function formatBytes(bytes) {
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+    return (bytes / 1024 / 1024).toFixed(1) + " MB";
+  }
+  function escapeText(s) {
+    const div = document.createElement("div");
+    div.textContent = s;
+    return div.innerHTML;
+  }
+  function escapeAttr(s) { return escapeText(s).replace(/"/g, "&quot;"); }
+
+  render();
+</script>
+</body>
+</html>

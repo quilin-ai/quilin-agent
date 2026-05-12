@@ -31,7 +31,7 @@ stop:
 restart: stop start
 
 # 一键测试全部
-test-all: test test-py test-rs
+test-all: test web-test test-py test-rs
 
 # 一键质量检查
 check: lint fmt lint-docs-process
@@ -110,6 +110,36 @@ lint-docs-process:
 build:
     cd packages/agent-core && bun build src/index.ts --outdir dist --target node
 
+# ============ Web UI (apps/web — Next.js 15) ============
+
+# 前端开发服务器（默认端口由 Next.js 决定）
+web-dev:
+    pnpm --filter @quilin/web dev
+
+# 生产构建
+web-build:
+    pnpm --filter @quilin/web build
+
+# 单元测试（vitest）
+web-test:
+    pnpm --filter @quilin/web test
+
+# 单元测试 + 覆盖率（≥95% gate）
+web-test-coverage:
+    pnpm --filter @quilin/web exec vitest run --coverage
+
+# 端到端测试（playwright）
+web-e2e:
+    pnpm --filter @quilin/web exec playwright test
+
+# 类型检查
+web-typecheck:
+    pnpm --filter @quilin/web exec tsc --noEmit
+
+# Lint（biome）
+web-lint:
+    pnpm --filter @quilin/web exec biome check
+
 # ============ Python (providers/) ============
 
 dev-memory:
@@ -144,6 +174,21 @@ lint-rs:
     cargo clippy --workspace --all-targets -- -D warnings
 fmt-rs:
     cargo fmt --all
+
+# ============ 发布 / 分发 ============
+
+# Build the public core tarball + sha256 (excludes upstreams/, build artifacts).
+# 构建对外发布的 core tarball 与 sha256（排除 upstreams/ 与构建产物）。
+release-tarball:
+    bash scripts/release.sh --core
+
+# Dry-run the installer against an ephemeral prefix to sanity-check the flow.
+# `mktemp -d` already creates the dir, so we pass `--upgrade --yes` to let the
+# dry-run pass the "dir exists" guard without prompting.
+# 用临时目录干跑安装脚本，验证流程不出错。`mktemp -d` 已经创建了目录，
+# 需要 `--upgrade --yes` 让 dry-run 越过"目录已存在"的安全检查。
+install-local:
+    bash scripts/install.sh --prefix=$(mktemp -d) --no-deps --dry-run --upgrade --yes
 
 # ============ 生产 ============
 
