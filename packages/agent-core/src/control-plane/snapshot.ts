@@ -548,15 +548,28 @@ function summarizeMcpServer(
 	entry: MCPServerEntry,
 	reconnect: McpDynamicReconnectStatus | null,
 ): ControlPlaneMcpServerView {
+	// After the MCP HTTP transport landed (slice 2), `entry.config` is a
+	// discriminated union: stdio (command/args/cwd) | http (url/headers).
+	// `ControlPlaneMcpServerView` still uses the stdio-shaped fields, so
+	// HTTP entries are surfaced with synthetic `command = "(http)"` and
+	// `args = [url]` so the snapshot stays compatible without expanding
+	// the public view shape mid-iteration.
+	const config = entry.config as
+		| { readonly command: string; readonly args: readonly string[]; readonly cwd?: string }
+		| { readonly type: "http"; readonly url: string };
+	const isHttp = "type" in config && config.type === "http";
+	const command = isHttp ? "(http)" : (config as { readonly command: string }).command;
+	const args = isHttp
+		? [(config as { readonly url: string }).url]
+		: (config as { readonly args: readonly string[] }).args;
+	const cwd = isHttp ? undefined : (config as { readonly cwd?: string }).cwd;
 	return {
 		id: redactString(entry.id),
 		namespace: redactString(entry.namespace),
 		status: serverStatus(entry.id, reconnect),
-		command: redactString(entry.config.command),
-		args: entry.config.args.map(redactString),
-		...(entry.config.cwd == null
-			? {}
-			: { cwd: redactString(entry.config.cwd) }),
+		command: redactString(command),
+		args: args.map(redactString),
+		...(cwd == null ? {} : { cwd: redactString(cwd) }),
 		...(entry.defaultRiskLevel == null
 			? {}
 			: { defaultRiskLevel: entry.defaultRiskLevel }),

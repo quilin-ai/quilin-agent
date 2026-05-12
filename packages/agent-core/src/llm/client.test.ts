@@ -72,6 +72,7 @@ describe("VercelLLMClient", () => {
 				{ role: "user", content: "hi" },
 				{ role: "assistant", content: "hello" },
 			],
+			allowSystemInMessages: true,
 			tools: {
 				memory_recall: {
 					description: "Recall memory",
@@ -207,6 +208,7 @@ describe("VercelLLMClient", () => {
 				},
 				{ role: "user", content: "hi" },
 			],
+			allowSystemInMessages: true,
 			maxOutputTokens: 128,
 			temperature: 0.1,
 			topP: undefined,
@@ -823,6 +825,8 @@ describe("VercelLLMClient", () => {
 					],
 				},
 			],
+			allowSystemInMessages: true,
+			tools: undefined,
 			maxOutputTokens: 128,
 			temperature: 0.7,
 			topP: undefined,
@@ -1882,6 +1886,8 @@ describe("StreamingLLMClient", () => {
 		expect(streamText).toHaveBeenCalledWith({
 			model: streamingModel,
 			messages: [{ role: "user", content: "hi" }],
+			allowSystemInMessages: true,
+			tools: undefined,
 			maxOutputTokens: 64,
 			temperature: 0.2,
 			topP: undefined,

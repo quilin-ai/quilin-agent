@@ -19,11 +19,13 @@
 	"dependencies": {
 		"@ai-sdk/openai-compatible": "^2.0.41",
 		"@ai-sdk/react": "^2.0.0",
+		"@quilin/agent-core": "workspace:*",
 		"ai": "^6.0.160",
 		"next": "^15.0.0",
 		"react": "^19.0.0",
 		"react-dom": "^19.0.0",
 		"streamdown": "^1.4.0",
+		"undici": "^8.2.0",
 		"zod": "^4.3.6"
 	},
 	"devDependencies": {

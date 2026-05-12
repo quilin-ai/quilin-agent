@@ -281,6 +281,12 @@ export {
 	runSkillTriggerEval,
 } from "./skills/eval-runner.js";
 export {
+	SkillsManager,
+	type SkillsManagerOptions,
+	type SkillsCatalogChange,
+	DEFAULT_POST_COMPACT_MAX_TOTAL_TOKENS,
+} from "./skills/manager.js";
+export {
 	type BuildSkillManifestOptions,
 	buildSkillManifest,
 	type SkillManifestCatalogHealthInput,

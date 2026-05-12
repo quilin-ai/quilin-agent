@@ -1188,6 +1188,7 @@ export class VercelLLMClient implements LLMClient {
 		const result = await generateText({
 			model: prepared.model,
 			messages: prepared.messages,
+			allowSystemInMessages: true,
 			tools: toSdkTools(tools, prepared.toolNameMapping),
 			maxOutputTokens: config.maxTokens,
 			temperature: config.temperature,
@@ -1249,6 +1250,7 @@ export class StreamingLLMClient implements LLMClient {
 		const result = streamText({
 			model: prepared.model,
 			messages: prepared.messages,
+			allowSystemInMessages: true,
 			tools: toSdkTools(tools, prepared.toolNameMapping),
 			maxOutputTokens: config.maxTokens,
 			temperature: config.temperature,

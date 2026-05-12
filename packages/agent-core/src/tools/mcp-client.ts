@@ -5,6 +5,8 @@ import {
 	StdioClientTransport,
 	type StdioServerParameters,
 } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import {
 	getLoggerRuntimeMode,
@@ -113,10 +115,39 @@ interface MCPToolCallResult {
 
 type MCPConnectionState = "idle" | "connecting" | "connected" | "disconnecting";
 
-export interface MCPServerConfig {
+/**
+ * MCP server connection config — discriminated union so the same registry
+ * can drive both local stdio servers (spawned subprocess) and remote
+ * Streamable HTTP servers (managed endpoint, e.g. exa/tavily/plane).
+ *
+ * Backward compat: omitting `type` defaults to "stdio" so existing callers
+ * that pass `{ command, args, cwd }` keep working without changes.
+ *
+ * MCP 服务端配置 —— 判别联合,同一 registry 可同时驱动本地 stdio 子进程
+ * 和远端 Streamable HTTP 服务(exa/tavily/plane 这类托管)。省略 `type` 默认
+ * 走 stdio,旧调用方无需改动。
+ */
+export type MCPServerConfig =
+	| MCPStdioServerConfig
+	| MCPHttpServerConfig;
+
+export interface MCPStdioServerConfig {
+	readonly type?: "stdio";
 	readonly command: string;
 	readonly args: readonly string[];
 	readonly cwd?: string;
+}
+
+export interface MCPHttpServerConfig {
+	readonly type: "http";
+	readonly url: string;
+	readonly headers?: Readonly<Record<string, string>>;
+	/** Optional sessionId to attach to the Streamable HTTP transport. */
+	readonly sessionId?: string;
+}
+
+function isHttpConfig(config: MCPServerConfig): config is MCPHttpServerConfig {
+	return config.type === "http";
 }
 
 function isAllowedAbsoluteCommand(command: string): boolean {
@@ -128,6 +159,22 @@ function isAllowedAbsoluteCommand(command: string): boolean {
 }
 
 export function validateMCPServerConfig(config: MCPServerConfig): void {
+	if (isHttpConfig(config)) {
+		const trimmed = config.url.trim();
+		if (trimmed === "") {
+			throw new Error("MCP url must not be empty");
+		}
+		try {
+			const url = new URL(trimmed);
+			if (url.protocol !== "http:" && url.protocol !== "https:") {
+				throw new Error(`MCP url protocol must be http(s): ${config.url}`);
+			}
+		} catch {
+			throw new Error(`MCP url is not a valid URL: ${config.url}`);
+		}
+		return;
+	}
+
 	const normalizedCommand = config.command.trim();
 	if (normalizedCommand === "") {
 		throw new Error("MCP command must not be empty");
@@ -285,7 +332,7 @@ function formatCallToolResult(result: CallToolResult): MCPToolCallResult {
 
 export class MCPClientManager {
 	private client?: Client;
-	private transport?: StdioClientTransport;
+	private transport?: Transport;
 	private _connected = false;
 	private connectionState: MCPConnectionState = "idle";
 	private connectInProgress?: Promise<Tool[]>;
@@ -308,16 +355,36 @@ export class MCPClientManager {
 			await this.disconnectInternal();
 			validateMCPServerConfig(config);
 
-			const transportConfig: StdioServerParameters = {
-				command: config.command,
-				args: [...config.args],
-				cwd: config.cwd ? resolve(config.cwd) : undefined,
-				stderr: "pipe",
-				env: createMCPSpawnEnv(),
-			};
-
 			const client = new Client(CLIENT_INFO);
-			const transport = new StdioClientTransport(transportConfig);
+			let transport: Transport;
+			if (isHttpConfig(config)) {
+				const url = new URL(config.url);
+				transport = new StreamableHTTPClientTransport(url, {
+					...(config.headers == null
+						? {}
+						: { requestInit: { headers: config.headers } }),
+					...(config.sessionId == null ? {} : { sessionId: config.sessionId }),
+				});
+			} else {
+				const transportConfig: StdioServerParameters = {
+					command: config.command,
+					args: [...config.args],
+					cwd: config.cwd ? resolve(config.cwd) : undefined,
+					stderr: "pipe",
+					env: createMCPSpawnEnv(),
+				};
+				const stdio = new StdioClientTransport(transportConfig);
+				// stdio-specific: pipe child process stderr to our logger so
+				// failures from the spawned server are diagnosable.
+				stdio.stderr?.on("data", (chunk) => {
+					const message = chunk.toString().trim();
+					if (message !== "") {
+						writeReplLogSeparatorIfNeeded();
+						logger.warn({ stderr: message }, "MCP server stderr");
+					}
+				});
+				transport = stdio;
+			}
 
 			transport.onerror = (error) => {
 				writeReplLogSeparatorIfNeeded();
@@ -330,14 +397,6 @@ export class MCPClientManager {
 				writeReplLogSeparatorIfNeeded();
 				logger.warn("MCP transport closed");
 			};
-
-			transport.stderr?.on("data", (chunk) => {
-				const message = chunk.toString().trim();
-				if (message !== "") {
-					writeReplLogSeparatorIfNeeded();
-					logger.warn({ stderr: message }, "MCP server stderr");
-				}
-			});
 
 			client.onerror = (error) => {
 				writeReplLogSeparatorIfNeeded();

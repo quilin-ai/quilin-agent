@@ -54,6 +54,12 @@ function parseToolOutput(content: string) {
 	}
 }
 
+// DeepSeek V4 thinking mode rejects requests whose assistant turns carry an
+// empty reasoning_content. When a turn captured no reasoning (model went
+// straight to tool calls, or stream omitted reasoning chunks), we still have
+// to send a non-empty placeholder so the API replays the conversation.
+const DEEPSEEK_REASONING_PLACEHOLDER = "(no reasoning captured)";
+
 function getDeepSeekReasoningParts(
 	message: Message,
 ): AssistantReasoningContentPart[] {
@@ -67,6 +73,13 @@ function getDeepSeekReasoningParts(
 		}
 	}
 
+	if (parts.length === 0) {
+		parts.push({
+			type: "reasoning",
+			text: DEEPSEEK_REASONING_PLACEHOLDER,
+		});
+	}
+
 	return parts;
 }
 
@@ -78,8 +91,7 @@ function shouldSerializeDeepSeekReasoning(
 	return (
 		normalizeProvider(provider) === "deepseek" &&
 		thinkingMode !== "disabled" &&
-		message.role === "assistant" &&
-		(message.toolCalls?.length ?? 0) > 0
+		message.role === "assistant"
 	);
 }
 
@@ -96,18 +108,24 @@ function toSdkMessage(
 			return [{ role: "user", content: message.content }];
 
 		case "assistant": {
-			if (message.toolCalls == null || message.toolCalls.length === 0) {
+			const hasToolCalls =
+				message.toolCalls != null && message.toolCalls.length > 0;
+			const serializeReasoning = shouldSerializeDeepSeekReasoning(
+				provider,
+				thinkingMode,
+				message,
+			);
+
+			if (!hasToolCalls && !serializeReasoning) {
 				return [{ role: "assistant", content: message.content }];
 			}
 
 			const content: AssistantContent = [
-				...(shouldSerializeDeepSeekReasoning(provider, thinkingMode, message)
-					? getDeepSeekReasoningParts(message)
-					: []),
+				...(serializeReasoning ? getDeepSeekReasoningParts(message) : []),
 				...(message.content === ""
 					? []
 					: [{ type: "text" as const, text: message.content }]),
-				...message.toolCalls.map((toolCall) => ({
+				...(message.toolCalls ?? []).map((toolCall) => ({
 					type: "tool-call" as const,
 					toolCallId: toolCall.id,
 					toolName: toolCall.name,

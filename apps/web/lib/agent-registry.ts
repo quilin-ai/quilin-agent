@@ -6,13 +6,23 @@
  */
 
 export type AgentKind = "main" | "subagent";
-export type AgentStatus =
-	| "pending"
-	| "running"
-	| "blocked"
-	| "completed"
-	| "failed"
-	| "cancelled";
+export type AgentStatus = "pending" | "running" | "blocked" | "completed" | "failed" | "cancelled";
+
+export interface AgentToolEvent {
+	readonly kind: "call" | "result" | "error";
+	readonly toolCallId: string;
+	readonly toolName: string;
+	readonly input?: unknown;
+	readonly output?: unknown;
+	readonly error?: string;
+	readonly at: string;
+}
+
+export interface AgentUsage {
+	readonly inputTokens: number;
+	readonly outputTokens: number;
+	readonly totalTokens: number;
+}
 
 export interface AgentRecord {
 	readonly id: string;
@@ -23,6 +33,8 @@ export interface AgentRecord {
 	readonly startedAt: string;
 	lastHeartbeatAt: string | null;
 	streamedText: string;
+	toolEvents: AgentToolEvent[];
+	usage: AgentUsage | null;
 }
 
 export interface AgentSummary {
@@ -34,6 +46,7 @@ export interface AgentSummary {
 	readonly startedAt: string;
 	readonly elapsedMs: number;
 	readonly lastHeartbeatAt: string | null;
+	readonly usage: AgentUsage | null;
 }
 
 function nowIso(): string {
@@ -53,6 +66,8 @@ class InMemoryAgentRegistry {
 			startedAt: nowIso(),
 			lastHeartbeatAt: nowIso(),
 			streamedText: "",
+			toolEvents: [],
+			usage: null,
 		});
 	}
 
@@ -61,7 +76,10 @@ class InMemoryAgentRegistry {
 	}
 
 	register(
-		input: Omit<AgentRecord, "startedAt" | "lastHeartbeatAt" | "streamedText">,
+		input: Omit<
+			AgentRecord,
+			"startedAt" | "lastHeartbeatAt" | "streamedText" | "toolEvents" | "usage"
+		>,
 	): AgentRecord {
 		const started = nowIso();
 		const record: AgentRecord = {
@@ -69,9 +87,18 @@ class InMemoryAgentRegistry {
 			startedAt: started,
 			lastHeartbeatAt: started,
 			streamedText: "",
+			toolEvents: [],
+			usage: null,
 		};
 		this.records.set(record.id, record);
 		return record;
+	}
+
+	recordUsage(id: string, usage: AgentUsage): void {
+		const r = this.records.get(id);
+		if (!r) return;
+		r.usage = usage;
+		r.lastHeartbeatAt = nowIso();
 	}
 
 	updateStatus(id: string, status: AgentStatus): void {
@@ -88,6 +115,13 @@ class InMemoryAgentRegistry {
 		r.lastHeartbeatAt = nowIso();
 	}
 
+	recordToolEvent(id: string, event: Omit<AgentToolEvent, "at">): void {
+		const r = this.records.get(id);
+		if (!r) return;
+		r.toolEvents.push({ ...event, at: nowIso() });
+		r.lastHeartbeatAt = nowIso();
+	}
+
 	toSummaries(): readonly AgentSummary[] {
 		const now = Date.now();
 		return this.list().map((r) => ({
@@ -99,6 +133,7 @@ class InMemoryAgentRegistry {
 			startedAt: r.startedAt,
 			elapsedMs: Math.max(0, now - new Date(r.startedAt).getTime()),
 			lastHeartbeatAt: r.lastHeartbeatAt,
+			usage: r.usage,
 		}));
 	}
 }
@@ -106,7 +141,6 @@ class InMemoryAgentRegistry {
 // Module-level singleton — survives across requests within one Next.js worker.
 // In dev with Turbopack HMR this resets on file edit; that's acceptable for demo.
 declare global {
-	// biome-ignore lint/style/noVar: needed for module-level singleton in Next.js
 	var __quilin_agent_registry__: InMemoryAgentRegistry | undefined;
 }
 
@@ -117,5 +151,7 @@ if (!globalThis.__quilin_agent_registry__) {
 }
 
 export function shortId(): string {
-	return Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, "0");
+	return Math.floor(Math.random() * 0xffffffff)
+		.toString(16)
+		.padStart(8, "0");
 }
