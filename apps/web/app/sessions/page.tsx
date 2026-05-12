@@ -22,7 +22,7 @@ export default function SessionsPage() {
 		<>
 			<Wordmark />
 			<AppHeader />
-			<RailStrip pinned />
+			<RailStrip />
 			<main className="q-workspace no-composer">
 				<section className="q-view" data-testid="sessions-view">
 					<div className="q-page-head">
@@ -37,11 +37,27 @@ export default function SessionsPage() {
 								<strong>{sessions.length}</strong>总会话
 							</span>
 							<span>
-								<strong>
-									{sessions.reduce((sum, s) => sum + s.messageCount, 0)}
-								</strong>
+								<strong>{sessions.reduce((sum, s) => sum + s.messageCount, 0)}</strong>
 								累计消息
 							</span>
+							<Link
+								href="/"
+								className="q-page-action"
+								data-testid="new-session-link"
+								style={{
+									marginLeft: "auto",
+									padding: "5px 10px",
+									border: "1px solid var(--accent-vermillion)",
+									color: "var(--accent-vermillion)",
+									fontFamily: '"Noto Sans SC", sans-serif',
+									fontSize: 11,
+									letterSpacing: "0.02em",
+									textDecoration: "none",
+									cursor: "pointer",
+								}}
+							>
+								＋ 新建会话
+							</Link>
 						</div>
 					</div>
 
@@ -75,9 +91,7 @@ export default function SessionsPage() {
 										<span className="desc">{session.preview}</span>
 									</span>
 									<span className="rm">{formatRelativeTime(session.updatedAt)}</span>
-									<span className="rs on">
-										{session.messageCount} 条
-									</span>
+									<span className="rs on">{session.messageCount} 条</span>
 								</Link>
 							))}
 						</div>

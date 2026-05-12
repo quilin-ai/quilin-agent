@@ -2,6 +2,9 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useRef } from "react";
+
+import { useRailPin } from "@/lib/use-rail-pin";
 
 export interface RailStripItem {
 	readonly target: string;
@@ -72,18 +75,55 @@ export const DEFAULT_RAIL_ITEMS: readonly RailStripItem[] = [
 
 export interface RailStripProps {
 	readonly items?: readonly RailStripItem[];
+	/**
+	 * Optional override of the shared `useRailPin` state. When omitted, the
+	 * rail follows the global pin signal: any rail-item click pins it; any
+	 * pointerdown outside the rail unpins it. Pass `true` to force-pin
+	 * regardless of clicks (legacy callers).
+	 */
 	readonly pinned?: boolean;
 }
 
 /**
- * Left strip rail. Collapsed it shows vertical CJK glyphs; on hover or
- * `pinned`, expands to show the bilingual name + italic description (per
- * demo lines 126–211).
+ * Left navigation rail. CSS `:hover` expands transiently; the pinned signal
+ * (from `useRailPin`) keeps it expanded across navigation.
+ *
+ * Pin lifecycle:
+ *   1. User clicks a rail item Link → `setPinned(true)` fires BEFORE Next.js
+ *      navigation, so the next page mount reads `pinned=true` from session
+ *      storage and renders expanded immediately.
+ *   2. While pinned, a `pointerdown` listener on `document` unpins as soon as
+ *      the user clicks anywhere outside the rail aside.
+ *   3. After unpin, hover still works (CSS-driven), so the user can peek the
+ *      rail without committing to a pin.
+ *
+ * 钉住状态由共享 hook 管理,跨页面持续。点 rail 任意 item → 钉住;点 rail
+ * 以外 → 自动收起。
  */
-export function RailStrip({ items = DEFAULT_RAIL_ITEMS, pinned = false }: RailStripProps) {
+export function RailStrip({ items = DEFAULT_RAIL_ITEMS, pinned: pinnedOverride }: RailStripProps) {
 	const pathname = usePathname();
+	const [pinnedFromHook, setPinned] = useRailPin();
+	const pinned = pinnedOverride ?? pinnedFromHook;
+	const railRef = useRef<HTMLElement | null>(null);
+
+	useEffect(() => {
+		if (!pinned) return;
+		if (pinnedOverride === true) return; // legacy force-pin: skip outside-click
+		const onPointerDown = (event: PointerEvent): void => {
+			const target = event.target as Element | null;
+			if (target == null) return;
+			const rail = railRef.current;
+			if (rail != null && !rail.contains(target)) {
+				setPinned(false);
+			}
+		};
+		document.addEventListener("pointerdown", onPointerDown);
+		return () => document.removeEventListener("pointerdown", onPointerDown);
+	}, [pinned, pinnedOverride, setPinned]);
+
 	return (
 		<aside
+			ref={railRef}
 			className="q-rail-strip"
 			data-pinned={pinned ? "true" : "false"}
 			aria-label="Quilin navigation rail"
@@ -97,6 +137,7 @@ export function RailStrip({ items = DEFAULT_RAIL_ITEMS, pinned = false }: RailSt
 						className={`q-strip-item${active ? " active" : ""}`}
 						data-target={item.target}
 						data-testid={`rail-${item.target}`}
+						onClick={() => setPinned(true)}
 					>
 						<span className="glyph">{item.glyph}</span>
 						<span className="name-full">

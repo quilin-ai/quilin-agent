@@ -1,148 +1,329 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useState } from "react";
+
 import { AppHeader } from "@/components/shell/AppHeader";
 import { RailStrip } from "@/components/shell/RailStrip";
 import { Wordmark } from "@/components/shell/Wordmark";
-import { ApiEnvelopeError, ApiHttpError, api } from "@/lib/api";
-import { formatBytes, formatRelativeTime } from "@/lib/format";
-import type { MemoryEntry, MemoryTier } from "@/lib/schemas";
 
-export const dynamic = "force-dynamic";
-
-interface MemoryLoadResult {
-	readonly tiers: readonly MemoryTier[];
-	readonly recent: readonly MemoryEntry[];
-	readonly error: string | null;
+interface MemoryRecord {
+	readonly id: string;
+	readonly content: string;
+	readonly tier: string;
+	readonly layer: string | null;
+	readonly createdAt: string | null;
+	readonly metadata: Record<string, unknown> | null;
 }
 
-async function loadMemory(): Promise<MemoryLoadResult> {
+interface MemoryResponse {
+	readonly ok: true;
+	readonly data: {
+		readonly available: boolean;
+		readonly reason?: string;
+		readonly records: readonly MemoryRecord[];
+		readonly byTier: Record<string, readonly MemoryRecord[]>;
+		readonly counts: Record<string, number>;
+		readonly rawSamplePreview?: string;
+	};
+}
+
+interface MemoryError {
+	readonly ok: false;
+	readonly error: { readonly code: string; readonly message: string };
+}
+
+const TIER_ORDER: readonly string[] = ["working", "episodic", "semantic", "skill"];
+
+const TIER_LABELS: Record<string, { readonly cn: string; readonly en: string }> = {
+	working: { cn: "工作", en: "working" },
+	episodic: { cn: "情景", en: "episodic" },
+	semantic: { cn: "语义", en: "semantic" },
+	skill: { cn: "技能", en: "skill" },
+};
+
+function formatTimestamp(iso: string | null): string {
+	if (iso == null) return "—";
 	try {
-		const [tiers, recent] = await Promise.all([api.memoryTiers(), api.memoryRecent()]);
-		return { tiers, recent: recent.items, error: null };
-	} catch (error) {
-		if (error instanceof ApiHttpError) {
-			return {
-				tiers: [],
-				recent: [],
-				error: `控制面返回 HTTP ${error.status}`,
-			};
-		}
-		if (error instanceof ApiEnvelopeError) {
-			return {
-				tiers: [],
-				recent: [],
-				error: `[${error.code}] ${error.message}`,
-			};
-		}
-		return {
-			tiers: [],
-			recent: [],
-			error: `无法加载记忆 · ${error instanceof Error ? error.message : String(error)}`,
-		};
+		const d = new Date(iso);
+		return d.toLocaleString("zh-CN", { hour12: false });
+	} catch {
+		return iso;
 	}
 }
 
-const TIER_DESC: Record<MemoryTier["tier"], string> = {
-	working: "当前任务上下文,session 关闭即清",
-	episodic: "具体事件,带时间戳 · 30 天 TTL",
-	semantic: "抽象偏好与事实 · 永久保留",
-	skill: "可复用的程序性技能",
-};
+export default function MemoryPage() {
+	const [memory, setMemory] = useState<MemoryResponse["data"] | null>(null);
+	const [error, setError] = useState<string | null>(null);
+	const [loading, setLoading] = useState(true);
+	const [filter, setFilter] = useState("");
+	const [tierFilter, setTierFilter] = useState<string>("all");
+	const [expandedId, setExpandedId] = useState<string | null>(null);
 
-export default async function MemoryPage() {
-	const { tiers, recent, error } = await loadMemory();
-	const totalCount = tiers.reduce((sum, tier) => sum + tier.count, 0);
+	const loadMemory = useCallback(async () => {
+		setLoading(true);
+		setError(null);
+		try {
+			const res = await fetch("/api/memory", { cache: "no-store" });
+			const json = (await res.json()) as MemoryResponse | MemoryError;
+			if (!json.ok) {
+				setError(json.error.message);
+				setMemory(null);
+			} else {
+				setMemory(json.data);
+			}
+		} catch (e) {
+			setError(e instanceof Error ? e.message : String(e));
+		} finally {
+			setLoading(false);
+		}
+	}, []);
+
+	useEffect(() => {
+		void loadMemory();
+	}, [loadMemory]);
+
+	const visibleTiers = useMemo(() => {
+		if (memory == null) return [];
+		const keys = Object.keys(memory.byTier);
+		return keys.sort((a, b) => {
+			const ia = TIER_ORDER.indexOf(a);
+			const ib = TIER_ORDER.indexOf(b);
+			if (ia === -1 && ib === -1) return a.localeCompare(b);
+			if (ia === -1) return 1;
+			if (ib === -1) return -1;
+			return ia - ib;
+		});
+	}, [memory]);
+
+	const visibleRecords = useMemo(() => {
+		if (memory == null) return new Map<string, MemoryRecord[]>();
+		const needle = filter.trim().toLowerCase();
+		const out = new Map<string, MemoryRecord[]>();
+		for (const tier of visibleTiers) {
+			if (tierFilter !== "all" && tier !== tierFilter) continue;
+			const all = memory.byTier[tier] ?? [];
+			const filtered =
+				needle.length === 0
+					? [...all]
+					: all.filter((r) => r.content.toLowerCase().includes(needle));
+			if (filtered.length > 0) out.set(tier, filtered);
+		}
+		return out;
+	}, [memory, visibleTiers, filter, tierFilter]);
+
 	return (
 		<>
 			<Wordmark />
 			<AppHeader />
-			<RailStrip pinned />
+			<RailStrip />
 			<main className="q-workspace no-composer">
-				<section className="q-view">
+				<section className="q-view" data-testid="memory-view">
 					<div className="q-page-head">
 						<h1 className="q-page-title">
 							Memory<span className="cjk">记忆</span>
 						</h1>
 						<p className="q-page-subtitle">
-							四层分级 · 工作记忆与长期演化的中枢 · 每次对话后自动反思写入
+							通过 quilin-mem MCP 拉取的全部记忆 · 按层级分组(工作 / 情景 / 语义 / 技能)
 						</p>
 						<div className="q-page-stats">
-							<span>
-								<strong>{totalCount}</strong>items total
-							</span>
-							{tiers.map((tier) => (
-								<span key={tier.tier}>
-									<strong>{tier.count}</strong>
-									{tier.tier}
-								</span>
-							))}
-						</div>
-					</div>
-
-					{error ? (
-						<div
-							style={{
-								padding: 16,
-								border: "1px solid var(--destructive)",
-								color: "var(--destructive)",
-								fontFamily: '"JetBrains Mono", monospace',
-								fontSize: 12,
-								marginBottom: 24,
-							}}
-						>
-							{error}
-						</div>
-					) : null}
-
-					<div className="q-section-title">
-						<span className="cn">四层 · tiers</span>
-						<span className="right">{formatBytes(tiers.reduce((sum, t) => sum + t.bytes, 0))}</span>
-					</div>
-					{tiers.map((tier) => (
-						<div className="q-memory-tier-full" key={tier.tier}>
-							<div className="tn">
-								{tier.tier}
-								<span className="desc">{TIER_DESC[tier.tier]}</span>
-							</div>
-							<div className="tc">{tier.count}</div>
-							<div className="tp">
-								{tier.latestPreview ?? "—"}
-								{tier.latestAt ? (
-									<span
-										style={{
-											display: "block",
-											fontFamily: '"JetBrains Mono", monospace',
-											fontSize: 10,
-											color: "var(--fg-subtle)",
-											letterSpacing: "0.04em",
-											marginTop: 4,
-										}}
-									>
-										latest · {formatRelativeTime(tier.latestAt)}
+							{memory == null ? null : memory.available ? (
+								<>
+									<span>
+										<strong>{memory.counts.total ?? 0}</strong>条记忆
 									</span>
-								) : null}
-							</div>
-						</div>
-					))}
-
-					{recent.length > 0 ? (
-						<>
-							<div className="q-section-title">
-								<span className="cn">最近写入 · recent writes</span>
-								<span className="right">last {recent.length}</span>
-							</div>
-							{recent.map((entry) => (
-								<div className="q-resource-row" key={entry.id}>
-									<span className="rn">
-										{entry.content.slice(0, 80)}
-										<span className="desc">
-											{entry.tier} · {entry.source} · {entry.agentId}
+									{visibleTiers.map((tier) => (
+										<span key={tier}>
+											<strong>{memory.counts[tier] ?? 0}</strong>
+											{TIER_LABELS[tier]?.cn ?? tier}
 										</span>
-									</span>
-									<span className="rm">{formatRelativeTime(entry.createdAt)}</span>
-									<span className="rs on">{entry.tier}</span>
-								</div>
-							))}
+									))}
+								</>
+							) : (
+								<span style={{ color: "var(--fg-muted)" }}>quilin-mem 未连接</span>
+							)}
+							<button
+								type="button"
+								onClick={() => void loadMemory()}
+								style={{
+									marginLeft: "auto",
+									padding: "5px 10px",
+									border: "1px solid var(--accent-vermillion)",
+									color: "var(--accent-vermillion)",
+									fontFamily: '"Noto Sans SC", sans-serif',
+									fontSize: 11,
+									letterSpacing: "0.02em",
+									background: "transparent",
+									cursor: "pointer",
+								}}
+							>
+								↻ 刷新
+							</button>
+						</div>
+					</div>
+
+					{loading && memory == null ? (
+						<p style={{ color: "var(--fg-muted)", marginTop: 24 }}>加载中 · loading…</p>
+					) : error != null ? (
+						<p style={{ color: "var(--accent-vermillion)", marginTop: 24 }}>加载失败 · {error}</p>
+					) : memory == null ? null : !memory.available ? (
+						<p style={{ color: "var(--fg-muted)", marginTop: 24 }}>{memory.reason}</p>
+					) : memory.records.length === 0 ? (
+						<p style={{ color: "var(--fg-muted)", marginTop: 24 }}>
+							还没有任何记忆条目 · agent 写入后会显示在这里
+						</p>
+					) : (
+						<>
+							<div
+								style={{
+									display: "flex",
+									gap: 8,
+									alignItems: "center",
+									marginTop: 20,
+									marginBottom: 12,
+									flexWrap: "wrap",
+								}}
+							>
+								<input
+									type="text"
+									placeholder="筛选 · filter by content…"
+									value={filter}
+									onChange={(e) => setFilter(e.target.value)}
+									data-testid="memory-filter"
+									style={{
+										flex: 1,
+										minWidth: 240,
+										padding: "6px 10px",
+										border: "1px solid var(--border)",
+										background: "transparent",
+										color: "var(--fg)",
+										fontFamily: '"JetBrains Mono", monospace',
+										fontSize: 12,
+									}}
+								/>
+								<button
+									type="button"
+									onClick={() => setTierFilter("all")}
+									style={{
+										padding: "5px 10px",
+										border: `1px solid ${tierFilter === "all" ? "var(--accent-vermillion)" : "var(--border)"}`,
+										color: tierFilter === "all" ? "var(--accent-vermillion)" : "var(--fg-muted)",
+										background: "transparent",
+										fontFamily: '"JetBrains Mono", monospace',
+										fontSize: 11,
+										cursor: "pointer",
+									}}
+								>
+									全部
+									<span style={{ marginLeft: 6, opacity: 0.6 }}>{memory.counts.total ?? 0}</span>
+								</button>
+								{visibleTiers.map((tier) => {
+									const active = tierFilter === tier;
+									return (
+										<button
+											key={tier}
+											type="button"
+											onClick={() => setTierFilter(tier)}
+											style={{
+												padding: "5px 10px",
+												border: `1px solid ${active ? "var(--accent-vermillion)" : "var(--border)"}`,
+												color: active ? "var(--accent-vermillion)" : "var(--fg-muted)",
+												background: "transparent",
+												fontFamily: '"JetBrains Mono", monospace',
+												fontSize: 11,
+												cursor: "pointer",
+											}}
+										>
+											{TIER_LABELS[tier]?.cn ?? tier}
+											<span style={{ marginLeft: 6, opacity: 0.6 }}>
+												{memory.counts[tier] ?? 0}
+											</span>
+										</button>
+									);
+								})}
+							</div>
+
+							{visibleRecords.size === 0 ? (
+								<p style={{ color: "var(--fg-muted)", marginTop: 16 }}>
+									没有匹配的记忆 · no matches
+								</p>
+							) : (
+								Array.from(visibleRecords.entries()).map(([tier, records]) => (
+									<div key={tier} style={{ marginBottom: 18 }}>
+										<div className="q-section-title">
+											<span className="cn">
+												{TIER_LABELS[tier]?.cn ?? tier} · {TIER_LABELS[tier]?.en ?? tier}
+											</span>
+											<span className="right">{records.length} 条</span>
+										</div>
+										{records.map((record) => {
+											const expanded = expandedId === record.id;
+											const contentToShow =
+												!expanded && record.content.length > 220
+													? `${record.content.slice(0, 220)}…`
+													: record.content;
+											return (
+												<button
+													key={record.id}
+													type="button"
+													onClick={() => setExpandedId(expanded ? null : record.id)}
+													className="q-resource-row"
+													data-testid={`memory-${record.id}`}
+													style={{
+														textAlign: "left",
+														width: "100%",
+														background: expanded ? "var(--bg-elev)" : "transparent",
+														border: "none",
+														borderBottom: "1px solid var(--border)",
+														cursor: "pointer",
+														padding: "10px 12px",
+														display: "block",
+													}}
+												>
+													<div
+														style={{
+															whiteSpace: "pre-wrap",
+															color: "var(--fg)",
+															fontSize: 12,
+															lineHeight: 1.6,
+														}}
+													>
+														{contentToShow}
+													</div>
+													<div
+														style={{
+															marginTop: 6,
+															fontFamily: '"JetBrains Mono", monospace',
+															fontSize: 10,
+															color: "var(--fg-muted)",
+														}}
+													>
+														{formatTimestamp(record.createdAt)} · id={record.id.slice(0, 8)}
+													</div>
+													{expanded && record.metadata != null ? (
+														<pre
+															style={{
+																marginTop: 8,
+																padding: "6px 8px",
+																border: "1px solid var(--border)",
+																fontFamily: '"JetBrains Mono", monospace',
+																fontSize: 10,
+																color: "var(--fg-muted)",
+																lineHeight: 1.5,
+																whiteSpace: "pre-wrap",
+																wordBreak: "break-word",
+															}}
+														>
+															{JSON.stringify(record.metadata, null, 2)}
+														</pre>
+													) : null}
+												</button>
+											);
+										})}
+									</div>
+								))
+							)}
 						</>
-					) : null}
+					)}
 				</section>
 			</main>
 		</>

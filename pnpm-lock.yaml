@@ -30,6 +30,9 @@ importers:
       '@ai-sdk/react':
         specifier: ^2.0.0
         version: 2.0.188(react@19.2.6)(zod@4.3.6)
+      '@quilin/agent-core':
+        specifier: workspace:*
+        version: link:../../packages/agent-core
       ai:
         specifier: ^6.0.160
         version: 6.0.177(zod@4.3.6)
@@ -45,6 +48,9 @@ importers:
       streamdown:
         specifier: ^1.4.0
         version: 1.6.11(@types/mdast@4.0.4)(micromark-util-types@2.0.2)(micromark@4.0.2)(react@19.2.6)
+      undici:
+        specifier: ^8.2.0
+        version: 8.2.0
       zod:
         specifier: 4.3.6
         version: 4.3.6
@@ -3455,6 +3461,10 @@ packages:
 
   undici-types@7.21.0:
     resolution: {integrity: sha512-w9IMgQrz4O0YN1LtB7K5P63vhlIOvC7opSmouCJ+ZywlPAlO9gIkJ+otk6LvGpAs2wg4econaCz3TvQ9xPoyuQ==}
+
+  undici@8.2.0:
+    resolution: {integrity: sha512-Z+4Hx9GE26Lh9Upwfnc8C7SsrpBPGaM/Gm6kMFtiG7c+5IvQKlXi/t+9x9DrrCh29cww5TSP9YdVaBcnLDs5fQ==}
+    engines: {node: '>=22.19.0'}
 
   unified@11.0.5:
     resolution: {integrity: sha512-xKvGhPWw3k84Qjh8bI3ZeJjqnyadK+GEFtazSfZv/rKeTkTjOJho6mFqh2SM96iIcZokxiOpg78GazTSg8+KHA==}
@@ -7338,6 +7348,8 @@ snapshots:
   typescript@6.0.3: {}
 
   undici-types@7.21.0: {}
+
+  undici@8.2.0: {}
 
   unified@11.0.5:
     dependencies:

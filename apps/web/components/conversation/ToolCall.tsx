@@ -12,6 +12,11 @@ export interface ToolCallProps {
 	readonly statusLabel?: string;
 	readonly defaultOpen?: boolean;
 	readonly blocked?: boolean;
+	/**
+	 * When true, this tool call is part of a consecutive run of same-name
+	 * calls and should render with reduced top spacing (visually grouped).
+	 */
+	readonly grouped?: boolean;
 	readonly children?: ReactNode;
 }
 
@@ -51,6 +56,7 @@ export function ToolCall({
 	statusLabel,
 	defaultOpen = false,
 	blocked = false,
+	grouped = false,
 	children,
 }: ToolCallProps) {
 	const [open, setOpen] = useState(defaultOpen);
@@ -58,6 +64,8 @@ export function ToolCall({
 		<section
 			className={`q-tool-call${blocked ? " blocked" : ""}`}
 			data-kind={kind}
+			data-tool={name}
+			data-grouped={grouped ? "true" : "false"}
 			data-open={open ? "true" : "false"}
 		>
 			<button

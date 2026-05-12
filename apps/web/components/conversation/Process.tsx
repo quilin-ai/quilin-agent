@@ -1,6 +1,6 @@
 "use client";
 
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 
 export type ProcessStatus = "running" | "waiting" | "done";
 
@@ -15,9 +15,20 @@ export interface ProcessProps {
  * Top-level "过程 · process" container — wraps reasoning + tool calls +
  * reflection. Status chip changes color + glyph based on `status` (per
  * demo lines 580–603).
+ *
+ * Auto-collapses on the running → done transition so finished turns don't
+ * leave the verbose process panel expanded. The user can still re-open it
+ * manually after that.
  */
 export function Process({ title, defaultOpen = true, status = "running", children }: ProcessProps) {
 	const [open, setOpen] = useState(defaultOpen);
+	const prevStatusRef = useRef<ProcessStatus>(status);
+	useEffect(() => {
+		if (prevStatusRef.current === "running" && status === "done") {
+			setOpen(false);
+		}
+		prevStatusRef.current = status;
+	}, [status]);
 	return (
 		<section className="q-process" data-open={open ? "true" : "false"}>
 			<button

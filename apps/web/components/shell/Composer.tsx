@@ -1,6 +1,7 @@
 "use client";
 
 import {
+	type ChangeEvent,
 	type FormEvent,
 	type KeyboardEvent,
 	useCallback,
@@ -20,6 +21,8 @@ const PLACEHOLDER_INTRO = "开始一次对话…";
 export interface ComposerProps {
 	readonly agents: readonly AgentSummary[];
 	readonly currentAgentId: string | null;
+	/** Scopes the AgentSwitcher popover to subagents belonging to this chat session. */
+	readonly sessionId?: string;
 	readonly hidden?: boolean;
 	readonly intro?: boolean;
 	readonly onSubmit?: (text: string) => void;
@@ -34,13 +37,29 @@ export interface ComposerProps {
 export function Composer({
 	agents,
 	currentAgentId,
+	sessionId,
 	hidden = false,
 	intro = false,
 	onSubmit,
 	onSelectAgent,
 }: ComposerProps) {
 	const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+	const fileInputRef = useRef<HTMLInputElement | null>(null);
 	const [value, setValue] = useState("");
+	const [attachments, setAttachments] = useState<readonly File[]>([]);
+
+	const onAttachClick = useCallback(() => {
+		fileInputRef.current?.click();
+	}, []);
+	const onFileChange = useCallback((event: ChangeEvent<HTMLInputElement>) => {
+		const files = event.target.files;
+		if (!files) return;
+		setAttachments((prev) => [...prev, ...Array.from(files)]);
+		event.target.value = "";
+	}, []);
+	const removeAttachment = useCallback((idx: number) => {
+		setAttachments((prev) => prev.filter((_, i) => i !== idx));
+	}, []);
 
 	const autosize = useCallback(() => {
 		const el = textareaRef.current;
@@ -100,12 +119,83 @@ export function Composer({
 			data-testid="composer"
 		>
 			{!intro ? (
-				<AgentSwitcher agents={agents} currentAgentId={currentAgentId} onSelect={onSelectAgent} />
+				<AgentSwitcher
+					agents={agents}
+					currentAgentId={currentAgentId}
+					sessionId={sessionId}
+					onSelect={onSelectAgent}
+				/>
+			) : null}
+			{attachments.length > 0 ? (
+				<div
+					data-testid="composer-attachments"
+					style={{
+						display: "flex",
+						flexWrap: "wrap",
+						gap: 6,
+						padding: "0 16px 8px",
+					}}
+				>
+					{attachments.map((file, idx) => (
+						<span
+							// biome-ignore lint/suspicious/noArrayIndexKey: filenames can collide on multi-attach; idx disambiguates duplicates
+							key={`${file.name}-${idx}`}
+							data-testid={`attachment-chip-${idx}`}
+							style={{
+								display: "inline-flex",
+								alignItems: "center",
+								gap: 6,
+								padding: "3px 8px",
+								border: "1px solid var(--border)",
+								borderRadius: 12,
+								fontFamily: '"JetBrains Mono", monospace',
+								fontSize: 11,
+								color: "var(--fg-muted)",
+								background: "var(--bg-elev)",
+							}}
+						>
+							<span>{file.name}</span>
+							<button
+								type="button"
+								aria-label={`移除附件 ${file.name}`}
+								onClick={() => removeAttachment(idx)}
+								style={{
+									background: "none",
+									border: "none",
+									cursor: "pointer",
+									padding: 0,
+									color: "var(--fg-muted)",
+									fontFamily: '"JetBrains Mono", monospace',
+									fontSize: 11,
+									lineHeight: 1,
+								}}
+							>
+								×
+							</button>
+						</span>
+					))}
+				</div>
 			) : null}
 			<form className="q-composer-row" onSubmit={onFormSubmit}>
-				<button type="button" className="q-composer-attach" aria-label="上传附件 · attach file">
+				<input
+					ref={fileInputRef}
+					type="file"
+					multiple
+					onChange={onFileChange}
+					style={{ display: "none" }}
+					aria-hidden="true"
+					tabIndex={-1}
+					data-testid="composer-file-input"
+				/>
+				<button
+					type="button"
+					className="q-composer-attach"
+					aria-label="上传附件 · attach file"
+					onClick={onAttachClick}
+					data-testid="composer-attach"
+				>
 					<span className="arrow">↑</span>
-					<span>附件</span>
+					<span>附件{attachments.length > 0 ? ` · ${attachments.length}` : ""}</span>
 				</button>
 				<textarea
 					ref={textareaRef}
