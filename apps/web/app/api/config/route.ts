@@ -15,7 +15,7 @@
  * 等,**绝不**返回任何疑似 API key / token / secret 的环境变量原值。
  */
 
-import { getSession } from "@/lib/chat-session-store";
+import { getAgentService } from "@/lib/agent-service-client";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -62,34 +62,29 @@ function redactEnv(env: NodeJS.ProcessEnv): readonly RedactedEnvEntry[] {
 	return out.sort((a, b) => a.name.localeCompare(b.name));
 }
 
-function getSessionStoreSnapshot(): {
+async function getSessionStoreSnapshot(): Promise<{
 	readonly activeSessions: number;
 	readonly totalFrames: number;
 	readonly byStatus: Record<string, number>;
-} {
-	// chat-session-store uses globalThis to hold the map; we read it
-	// directly here rather than adding a getter to the store, since the
-	// shape is already a stable contract within this app.
-	const g = globalThis as unknown as {
-		__quilin_chat_sessions__?: Map<string, { status: string; frames: unknown[] }>;
-	};
-	const map = g.__quilin_chat_sessions__;
-	if (map == null) {
-		return { activeSessions: 0, totalFrames: 0, byStatus: {} };
-	}
-	let totalFrames = 0;
+}> {
+	// Phase 4 of Task #22: read from AgentService instead of the legacy
+	// `chat-session-store` globalThis map. The `frames` count now
+	// reports buffered AgentEvents per session (not raw SSE frames),
+	// summed across all sessions. byStatus reflects AgentService's
+	// 4-status state machine (idle / running / completed / failed)
+	// instead of chat-session-store's 3 (running / complete / failed).
+	const service = await getAgentService();
+	const sessions = service.listSessions();
 	const byStatus: Record<string, number> = {};
-	for (const session of map.values()) {
-		totalFrames += session.frames.length;
+	let totalFrames = 0;
+	for (const session of sessions) {
 		byStatus[session.status] = (byStatus[session.status] ?? 0) + 1;
+		totalFrames += service.getEventCount(session.id);
 	}
-	return { activeSessions: map.size, totalFrames, byStatus };
+	return { activeSessions: sessions.length, totalFrames, byStatus };
 }
 
 export async function GET(): Promise<Response> {
-	// Force a typecheck by importing `getSession` (otherwise tree-shaking
-	// could drop it). We don't actually call it here.
-	void getSession;
 	try {
 		const workspaceRoot = process.cwd().replace(/\/apps\/web\/?$/, "");
 		const home = process.env.HOME ?? null;
@@ -109,7 +104,7 @@ export async function GET(): Promise<Response> {
 			isReasoner: (process.env.DEEPSEEK_MODEL ?? "deepseek-chat").includes("reasoner"),
 		};
 
-		const sessionStore = getSessionStoreSnapshot();
+		const sessionStore = await getSessionStoreSnapshot();
 
 		return Response.json(
 			{
