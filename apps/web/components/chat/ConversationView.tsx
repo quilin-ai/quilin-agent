@@ -2,9 +2,10 @@
 
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 
 import { Composer } from "@/components/shell/Composer";
+import { loadSession, saveSession } from "@/lib/session-store";
 
 export interface ConversationViewProps {
 	readonly sessionId: string;
@@ -13,13 +14,16 @@ export interface ConversationViewProps {
 
 /**
  * Client-side conversation view backed by AI SDK v6 `useChat`.
- * - First mount auto-submits `initialMessage` (passed via URL from IntroScreen)
+ * - On mount: if the session id matches a stored conversation, replay its messages
+ * - Otherwise: auto-submits `initialMessage` (passed via URL from IntroScreen)
  * - Streams assistant tokens directly into the view
- * - Auto-scroll to bottom on new content
+ * - Persists every change back to localStorage so /sessions can list it
  */
 export function ConversationView({ sessionId, initialMessage }: ConversationViewProps) {
+	const stored = useMemo(() => loadSession(sessionId), [sessionId]);
 	const { messages, sendMessage, status } = useChat({
 		id: sessionId,
+		messages: stored?.messages ? [...stored.messages] : undefined,
 		transport: new DefaultChatTransport({ api: "/api/chat" }),
 	});
 
@@ -27,10 +31,15 @@ export function ConversationView({ sessionId, initialMessage }: ConversationView
 	const sentInitial = useRef(false);
 	useEffect(() => {
 		if (sentInitial.current) return;
+		// Don't auto-submit the initial if we already restored a stored conversation.
+		if (stored != null && stored.messages.length > 0) {
+			sentInitial.current = true;
+			return;
+		}
 		if (!initialMessage) return;
 		sentInitial.current = true;
 		void sendMessage({ text: initialMessage });
-	}, [initialMessage, sendMessage]);
+	}, [initialMessage, sendMessage, stored]);
 
 	const scrollerRef = useRef<HTMLDivElement | null>(null);
 	useEffect(() => {
@@ -38,6 +47,13 @@ export function ConversationView({ sessionId, initialMessage }: ConversationView
 		if (!el) return;
 		el.scrollTop = el.scrollHeight;
 	}, [messages]);
+
+	// Persist conversation to localStorage so the /sessions page can list it.
+	// 把会话写入 localStorage,让 /sessions 页能列出历史会话。
+	useEffect(() => {
+		if (messages.length === 0) return;
+		saveSession({ id: sessionId, messages });
+	}, [sessionId, messages]);
 
 	const onSubmit = useCallback(
 		(text: string) => {

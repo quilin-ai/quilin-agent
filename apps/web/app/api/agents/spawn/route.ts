@@ -1,0 +1,130 @@
+/**
+ * POST /api/agents/spawn — demo subagent spawn endpoint.
+ *
+ * Registers a new `subagent-<hex>` record in the in-memory registry and starts an
+ * AI SDK v6 streamText call with DeepSeek. Returns the UI message stream directly
+ * for the AgentSwitcher to render live. Mock fallback when no API key.
+ */
+import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+import { streamText } from "ai";
+import { z } from "zod";
+
+import { agentRegistry, shortId } from "@/lib/agent-registry";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const maxDuration = 120;
+
+const DEEPSEEK_BASE = process.env.DEEPSEEK_BASE_URL ?? "https://api.deepseek.com/v1";
+const DEEPSEEK_MODEL = process.env.DEEPSEEK_MODEL ?? "deepseek-chat";
+
+const BodySchema = z.object({
+	task: z.string().min(1).max(2000),
+	parentId: z.string().min(1).max(64).optional(),
+});
+
+export async function POST(req: Request): Promise<Response> {
+	let parsed: z.infer<typeof BodySchema>;
+	try {
+		const json = (await req.json()) as unknown;
+		const result = BodySchema.safeParse(json);
+		if (!result.success) {
+			return Response.json(
+				{ ok: false, error: { code: "validation_error", issues: result.error.issues } },
+				{ status: 400 },
+			);
+		}
+		parsed = result.data;
+	} catch (e) {
+		return Response.json(
+			{ ok: false, error: { code: "invalid_json", message: String(e) } },
+			{ status: 400 },
+		);
+	}
+
+	const agentId = `subagent-${shortId()}`;
+	agentRegistry.register({
+		id: agentId,
+		kind: "subagent",
+		parentId: parsed.parentId ?? "main",
+		task: parsed.task,
+		status: "running",
+	});
+
+	const apiKey = process.env.DEEPSEEK_API_KEY ?? "";
+	if (apiKey.length === 0) {
+		return mockStream(agentId, parsed.task);
+	}
+
+	try {
+		const provider = createOpenAICompatible({
+			name: "deepseek",
+			baseURL: DEEPSEEK_BASE,
+			apiKey,
+		});
+		const result = streamText({
+			model: provider(DEEPSEEK_MODEL),
+			system: `你是 Quilin 派遣的子代理(subagent ${agentId})。任务: ${parsed.task}。完成后简要汇报结果给主代理,语气专业精炼。`,
+			messages: [{ role: "user", content: parsed.task }],
+			maxRetries: 0,
+		});
+		// Mirror textStream into registry (background, doesn't block response)
+		void (async () => {
+			try {
+				for await (const delta of result.textStream) {
+					agentRegistry.appendStream(agentId, delta);
+				}
+				agentRegistry.updateStatus(agentId, "completed");
+			} catch {
+				agentRegistry.updateStatus(agentId, "failed");
+			}
+		})();
+		const response = result.toUIMessageStreamResponse();
+		response.headers.set("x-agent-id", agentId);
+		response.headers.set("x-stream-mode", "deepseek");
+		return response;
+	} catch (error) {
+		agentRegistry.updateStatus(agentId, "failed");
+		return Response.json(
+			{ ok: false, error: { code: "spawn_failed", message: String(error) } },
+			{ status: 500 },
+		);
+	}
+}
+
+function mockStream(agentId: string, task: string): Response {
+	const text = `[mock subagent ${agentId}] 已完成任务: ${task}`;
+	const encoder = new TextEncoder();
+	const messageId = `msg-${shortId()}`;
+	const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+	const stream = new ReadableStream<Uint8Array>({
+		async start(controller) {
+			const emit = (obj: unknown) => {
+				controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
+			};
+			emit({ type: "start" });
+			emit({ type: "start-step" });
+			emit({ type: "text-start", id: messageId });
+			for (const ch of text) {
+				agentRegistry.appendStream(agentId, ch);
+				emit({ type: "text-delta", id: messageId, delta: ch });
+				await sleep(50);
+			}
+			emit({ type: "text-end", id: messageId });
+			emit({ type: "finish-step" });
+			emit({ type: "finish" });
+			controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+			agentRegistry.updateStatus(agentId, "completed");
+			controller.close();
+		},
+	});
+	return new Response(stream, {
+		headers: {
+			"content-type": "text/event-stream; charset=utf-8",
+			"cache-control": "no-store, no-transform",
+			"x-agent-id": agentId,
+			"x-stream-mode": "mock",
+			"x-vercel-ai-ui-message-stream": "v1",
+		},
+	});
+}

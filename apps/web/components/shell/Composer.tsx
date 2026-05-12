@@ -68,6 +68,15 @@ export function Composer({
 
 	const onKey = useCallback(
 		(event: KeyboardEvent<HTMLTextAreaElement>) => {
+			// IME guard: when CJK input methods are composing (e.g. picking a
+			// candidate from a Chinese/Japanese IME), Enter should commit the
+			// composition — NOT submit the form. The composition state is
+			// signaled via `nativeEvent.isComposing` or keyCode 229 (legacy).
+			// IME 防误发:中日输入法选词按 Enter 应该是确认候选词,不是提交。
+			const ne = event.nativeEvent as KeyboardEvent["nativeEvent"] & {
+				readonly isComposing?: boolean;
+			};
+			if (ne.isComposing === true || event.keyCode === 229) return;
 			if (event.key === "Enter" && !event.shiftKey) {
 				event.preventDefault();
 				submit();
