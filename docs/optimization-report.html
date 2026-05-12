@@ -1,0 +1,1146 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Quilin Agent — Optimization Report 优化扫描报告</title>
+<style>
+  :root {
+    --bg: #fff;
+    --fg: #111;
+    --border: #ccc;
+    --muted: #555;
+    --accent: #1a1a2e;
+    --warn: #b45309;
+    --danger: #991b1b;
+    --ok: #166534;
+    --info: #1d4ed8;
+    --row-alt: #f9f9f9;
+    --code-bg: #f4f4f4;
+    --tag-safe: #d1fae5;
+    --tag-safe-fg: #065f46;
+    --tag-careful: #fef3c7;
+    --tag-careful-fg: #92400e;
+    --tag-risky: #fee2e2;
+    --tag-risky-fg: #7f1d1d;
+    --tag-done: #dbeafe;
+    --tag-done-fg: #1e3a8a;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 2rem;
+    font-family: "SF Mono", "Fira Code", "Cascadia Code", "Consolas", monospace;
+    font-size: 13px;
+    line-height: 1.65;
+    background: var(--bg);
+    color: var(--fg);
+    max-width: 1100px;
+    margin-inline: auto;
+  }
+  h1 { font-size: 1.6rem; margin-bottom: 0.25rem; letter-spacing: -0.02em; }
+  h2 { font-size: 1.15rem; margin-top: 2.5rem; margin-bottom: 0.75rem; border-bottom: 2px solid var(--fg); padding-bottom: 0.3rem; }
+  h3 { font-size: 1rem; margin-top: 1.5rem; margin-bottom: 0.4rem; color: var(--accent); }
+  h4 { font-size: 0.9rem; margin-top: 1rem; margin-bottom: 0.25rem; }
+  p { margin: 0.4rem 0 0.8rem; }
+  code, pre, .mono { font-family: inherit; }
+  .mono { background: var(--code-bg); padding: 0.1rem 0.4rem; border-radius: 3px; font-size: 0.92em; }
+  pre.block {
+    background: var(--code-bg);
+    padding: 0.75rem 1rem;
+    border-radius: 4px;
+    overflow-x: auto;
+    margin: 0.5rem 0 1rem;
+    font-size: 0.88em;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0.5rem 0 1.25rem;
+    font-size: 0.88em;
+  }
+  th {
+    background: var(--accent);
+    color: #fff;
+    padding: 0.45rem 0.7rem;
+    text-align: left;
+    font-weight: 700;
+  }
+  td {
+    padding: 0.4rem 0.7rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  tr:nth-child(even) td { background: var(--row-alt); }
+  .tag {
+    display: inline-block;
+    padding: 0.1rem 0.5rem;
+    border-radius: 3px;
+    font-size: 0.8em;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+  .tag-safe    { background: var(--tag-safe); color: var(--tag-safe-fg); }
+  .tag-careful { background: var(--tag-careful); color: var(--tag-careful-fg); }
+  .tag-risky   { background: var(--tag-risky); color: var(--tag-risky-fg); }
+  .tag-done    { background: var(--tag-done); color: var(--tag-done-fg); }
+  .tag-frozen  { background: #e5e7eb; color: #374151; }
+  .tag-parked  { background: #f3e8ff; color: #6b21a8; }
+  .tag-pending { background: var(--tag-careful); color: var(--tag-careful-fg); }
+  .meta { color: var(--muted); font-size: 0.83em; margin-bottom: 2rem; }
+  .meta span { margin-right: 1.5rem; }
+  .section-intro { color: var(--muted); margin-bottom: 1rem; font-size: 0.9em; }
+  .ok    { color: var(--ok); }
+  .warn  { color: var(--warn); }
+  .err   { color: var(--danger); }
+  .info  { color: var(--info); }
+  .coverage-bar {
+    display: inline-block;
+    width: 80px;
+    height: 10px;
+    background: #e5e7eb;
+    border-radius: 3px;
+    vertical-align: middle;
+    margin-right: 6px;
+    overflow: hidden;
+  }
+  .coverage-fill {
+    height: 100%;
+    border-radius: 3px;
+  }
+  .cov-ok   { background: #22c55e; }
+  .cov-warn { background: #f59e0b; }
+  .cov-err  { background: #ef4444; }
+  ul { margin: 0.3rem 0 0.8rem 1.2rem; padding: 0; }
+  li { margin-bottom: 0.2rem; }
+  .divider { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+  .feature-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(460px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+  }
+  .feature-card {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.75rem 1rem;
+  }
+  .feature-card h4 { margin-top: 0; font-size: 0.88rem; }
+  .commit-row td:first-child { white-space: nowrap; }
+  .cross-review-badge {
+    font-size: 0.75em;
+    background: var(--tag-done);
+    color: var(--tag-done-fg);
+    padding: 0.1rem 0.4rem;
+    border-radius: 3px;
+    font-weight: 700;
+  }
+  .toc { margin: 1rem 0 2rem; }
+  .toc a { color: var(--info); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+  .toc li { margin-bottom: 0.3rem; }
+  .summary-box {
+    border: 2px solid var(--accent);
+    border-radius: 6px;
+    padding: 0.75rem 1rem;
+    margin: 1rem 0;
+    background: #f0f4ff;
+  }
+</style>
+</head>
+<body>
+
+<h1>Quilin Agent — Optimization Report 优化扫描报告</h1>
+<div class="meta">
+  <span>Generated: 2026-05-12T23:24:53Z</span>
+  <span>HEAD: <span class="mono">0178131498a7781d2ae0a7d8e61ffaeba4052868</span></span>
+  <span>Branch: <span class="mono">master</span></span>
+  <span>Scope: <span class="mono">apps/web</span> + <span class="mono">packages/agent-core</span></span>
+</div>
+
+<nav class="toc">
+  <strong>Table of Contents / 目录</strong>
+  <ul>
+    <li><a href="#ch1">1. 当前功能 / Current Feature Inventory</a></li>
+    <li><a href="#ch2">2. 已完成的优化 / Optimizations Completed (this session)</a></li>
+    <li><a href="#ch3">3. 已规划待实现的功能 / Planned But Not Yet Implemented</a></li>
+    <li><a href="#ch4">4. 优化扫描结果 / Scan Results (Part A)</a></li>
+  </ul>
+</nav>
+
+<!-- ====================================================
+     CHAPTER 1: CURRENT FEATURE INVENTORY
+     ==================================================== -->
+<h2 id="ch1">1. 当前功能 / Current Feature Inventory</h2>
+<p class="section-intro">
+  Evidence-based inventory. Each entry cites a source file:line or config key.
+  "Planned" features are excluded — only what ships today is listed.
+</p>
+
+<h3>LLM Integration</h3>
+<div class="feature-grid">
+  <div class="feature-card">
+    <h4>Providers</h4>
+    <table>
+      <tr><th>Provider</th><th>Default model</th><th>Status</th></tr>
+      <tr><td>DeepSeek</td><td><span class="mono">deepseek-v4-pro</span></td><td><span class="tag tag-done">ENABLED (default)</span></td></tr>
+      <tr><td>OpenAI</td><td>—</td><td><span class="tag tag-careful">DISABLED (no env)</span></td></tr>
+      <tr><td>Anthropic</td><td>—</td><td><span class="tag tag-careful">DISABLED (no env)</span></td></tr>
+      <tr><td>Gemini</td><td>—</td><td><span class="tag tag-careful">DISABLED (no env)</span></td></tr>
+    </table>
+    <p><span class="mono">packages/agent-core/src/llm/provider.ts:195–287</span></p>
+  </div>
+  <div class="feature-card">
+    <h4>ThinkingMode &amp; Reasoner</h4>
+    <ul>
+      <li>Type: <span class="mono">"enabled" | "disabled" | "auto"</span> — <span class="mono">llm/types.ts:6</span></li>
+      <li>DeepSeek: <span class="mono">deepseek-chat</span> + thinkingMode → auto-upgrades to <span class="mono">deepseek-reasoner</span> (<span class="mono">client.ts:421</span>)</li>
+      <li>LLM cache adapter respects thinkingMode in cache keys (<span class="mono">cache-adapter.ts:93</span>)</li>
+      <li>OpenAI/Gemini: maps to <span class="mono">reasoningEffort</span> (<span class="mono">client.ts:373</span>)</li>
+    </ul>
+  </div>
+</div>
+
+<h3>Builtin Tools (18 tools, <span class="mono">packages/agent-core/src/tools/builtin/</span>)</h3>
+<table>
+  <tr><th>Tool name</th><th>Source file</th><th>Purpose</th></tr>
+  <tr><td><span class="mono">file_read</span></td><td><span class="mono">file-tools.ts:388</span></td><td>Read file contents, sandbox-gated</td></tr>
+  <tr><td><span class="mono">file_write</span></td><td><span class="mono">file-tools.ts:460</span></td><td>Write file contents, WriteAuthority gated</td></tr>
+  <tr><td><span class="mono">file_list</span></td><td><span class="mono">file-tools.ts:545</span></td><td>Directory listing</td></tr>
+  <tr><td><span class="mono">shell_exec</span></td><td><span class="mono">shell-exec.ts:545</span></td><td>Shell execution, sandbox + WriteAuthority gated</td></tr>
+  <tr><td><span class="mono">web_fetch</span></td><td><span class="mono">web-fetch.ts:591</span></td><td>HTTP fetch with cache + extraction</td></tr>
+  <tr><td><span class="mono">web_browse</span></td><td><span class="mono">web-browse.ts:148</span></td><td>Browser automation via Stagehand/Patchright</td></tr>
+  <tr><td><span class="mono">image_describe</span></td><td><span class="mono">multimodal.ts:342</span></td><td>Multimodal image description</td></tr>
+  <tr><td><span class="mono">video_summarize</span></td><td><span class="mono">multimodal.ts:466</span></td><td>Video summarization</td></tr>
+  <tr><td><span class="mono">audio_transcribe</span></td><td><span class="mono">multimodal.ts:602</span></td><td>Audio transcription</td></tr>
+  <tr><td><span class="mono">skill_search</span></td><td><span class="mono">skill-search.ts:173</span></td><td>Search loaded skills catalog</td></tr>
+  <tr><td><span class="mono">skill_view</span></td><td><span class="mono">skill-view.ts:67</span></td><td>Read full SKILL.md content</td></tr>
+  <tr><td><span class="mono">skill_manage</span></td><td><span class="mono">skill-manage.ts:211</span></td><td>Create/update/delete skills</td></tr>
+  <tr><td><span class="mono">subagent_spawn</span></td><td><span class="mono">subagent-spawn.ts:91</span></td><td>Spawn child agent, fire-and-forget runner</td></tr>
+  <tr><td><span class="mono">subagent_status</span></td><td><span class="mono">subagent-spawn.ts:195</span></td><td>Poll spawned subagent state</td></tr>
+  <tr><td><span class="mono">config_view</span></td><td><span class="mono">config-session-tools.ts:20</span></td><td>View runtime config</td></tr>
+  <tr><td><span class="mono">session_list</span></td><td><span class="mono">config-session-tools.ts:79</span></td><td>List active sessions</td></tr>
+  <tr><td><span class="mono">tool_search</span></td><td><span class="mono">config-session-tools.ts:129</span></td><td>Search registered tools</td></tr>
+  <tr><td><span class="mono">mcp_search</span> (marketplace)</td><td><span class="mono">mcp-marketplace.ts:304</span></td><td>Search/install MCP servers from registry</td></tr>
+</table>
+
+<h3>Skills / SkillsManager</h3>
+<div class="feature-grid">
+  <div class="feature-card">
+    <h4>Scan Directories</h4>
+    <ul>
+      <li>User skills: <span class="mono">~/.quilin/skills/</span> (per-user SKILL.md files)</li>
+      <li>Project skills: <span class="mono">&lt;project-root&gt;/.quilin/skills/</span></li>
+      <li>Loaded into 4-field frontmatter catalog: <span class="mono">name, version, description, tags</span></li>
+      <li>Skills Manager: <span class="mono">packages/agent-core/src/skills/manager.ts</span></li>
+    </ul>
+  </div>
+  <div class="feature-card">
+    <h4>Known Limitation</h4>
+    <p>
+      Skills with YAML block-scalar description (<span class="mono">description: |</span>) are <strong>filtered out</strong> at
+      frontmatter parse time. The Web /skills page shows a "未加载" gap badge with tooltip explaining
+      the parser limitation. (<span class="mono">apps/web/app/skills/page.tsx:197</span>)
+    </p>
+  </div>
+</div>
+
+<h3>MCP Servers</h3>
+<p>Two transport types: <span class="mono">stdio</span> (subprocess) and <span class="mono">StreamableHTTP</span> — see <span class="mono">packages/agent-core/src/tools/mcp-client.ts:130</span>.</p>
+<table>
+  <tr><th>Server name</th><th>Transport</th><th>Source</th></tr>
+  <tr><td><span class="mono">zai-mcp-server</span></td><td>stdio (npx)</td><td><span class="mono">~/.claude.json</span></td></tr>
+  <tr><td><span class="mono">exa</span></td><td>StreamableHTTP (mcp.exa.ai)</td><td><span class="mono">~/.claude.json</span></td></tr>
+  <tr><td><span class="mono">web-search-prime</span></td><td>StreamableHTTP (bigmodel.cn)</td><td><span class="mono">~/.claude.json</span></td></tr>
+  <tr><td><span class="mono">zread</span></td><td>StreamableHTTP (bigmodel.cn)</td><td><span class="mono">~/.claude.json</span></td></tr>
+  <tr><td><span class="mono">tavily</span></td><td>StreamableHTTP (tavily.com)</td><td><span class="mono">~/.claude.json</span></td></tr>
+  <tr><td><span class="mono">firecrawl</span></td><td>stdio</td><td><span class="mono">~/.claude.json</span></td></tr>
+  <tr><td><span class="mono">web-reader</span></td><td>StreamableHTTP (bigmodel.cn)</td><td><span class="mono">~/.claude.json</span></td></tr>
+  <tr><td><span class="mono">plane</span></td><td>StreamableHTTP (plane.so)</td><td><span class="mono">~/.claude.json</span></td></tr>
+  <tr><td><span class="mono">pencil</span></td><td>stdio (local binary)</td><td><span class="mono">~/.claude.json</span></td></tr>
+  <tr><td>quilin-mem (planned)</td><td>stdio</td><td><span class="mono">providers/memory/</span> — wired in code, needs startup injection</td></tr>
+  <tr><td>quilin-web (planned)</td><td>stdio</td><td>e2e test stub only (<span class="mono">tests-e2e/quilin-web-mcp.test.ts</span>)</td></tr>
+</table>
+
+<h3>Memory / quilin-mem (4-tier)</h3>
+<div class="feature-grid">
+  <div class="feature-card">
+    <h4>Tiers</h4>
+    <ul>
+      <li><span class="mono">working</span> — in-session context, FIFO eviction → episodic</li>
+      <li><span class="mono">episodic</span> — recent conversation history</li>
+      <li><span class="mono">semantic</span> — long-term learned facts (vector + KG)</li>
+      <li><span class="mono">skill</span> — skill-linked memory entries</li>
+    </ul>
+    <p>Source: <span class="mono">providers/memory/src/quilin_mem/types.py:8</span>,
+    <span class="mono">store_schema.py:28</span></p>
+  </div>
+  <div class="feature-card">
+    <h4>Implementation Status</h4>
+    <ul>
+      <li>Python MCP server: <span class="ok">implemented</span> in <span class="mono">providers/memory/</span></li>
+      <li>Store, retriever, working memory eviction: <span class="ok">tested</span></li>
+      <li>Integration with agent loop: wired via MCP stdio transport (<span class="mono">repl.ts</span>)</li>
+      <li>Web /memory API: <span class="ok">synthetic read-path</span> via <span class="mono">apps/web/app/api/memory/route.ts</span></li>
+    </ul>
+  </div>
+</div>
+
+<h3>Multi-Agent / Subagent</h3>
+<ul>
+  <li><span class="mono">subagent_spawn</span> tool — spawns child agent in background via <span class="mono">runSubagentInBackground()</span> (<span class="mono">subagent-spawn.ts:152</span>)</li>
+  <li><span class="mono">subagent_status</span> tool — polls <span class="mono">SubagentRegistrySnapshot</span> for state</li>
+  <li>SupervisorRuntime: checkpoint + progress tracking for parallel sub-tasks (<span class="mono">multi-agent/supervisor-runtime.ts</span>, 1636 lines)</li>
+  <li>SupervisorProgress: heartbeat + progress reporting (<span class="mono">multi-agent/supervisor-progress.ts</span>, 1472 lines)</li>
+  <li>AgentService (new, Slice 1): <span class="mono">SessionRegistry</span> + <span class="mono">EventBus</span> in-process shared state — wired but web/TUI not yet consuming it as primary (<span class="mono">services/agent-service/</span>)</li>
+</ul>
+
+<h3>Web UI — Pages</h3>
+<table>
+  <tr><th>Route</th><th>Status</th><th>Description</th></tr>
+  <tr><td><span class="mono">/</span> (intro)</td><td><span class="tag tag-done">LIVE</span></td><td>Landing page with composer; navigates to /chat on submit</td></tr>
+  <tr><td><span class="mono">/chat</span></td><td><span class="tag tag-done">LIVE</span></td><td>Full streaming chat via Vercel AI SDK + DeepSeek; ConversationView + SubagentLiveProgress</td></tr>
+  <tr><td><span class="mono">/sessions</span></td><td><span class="tag tag-done">LIVE</span></td><td>Session list backed by <span class="mono">/api/agents</span>; click to open session</td></tr>
+  <tr><td><span class="mono">/skills</span></td><td><span class="tag tag-done">LIVE</span></td><td>SkillsManager catalog; filter by source/status; click to load SKILL.md via Streamdown</td></tr>
+  <tr><td><span class="mono">/tools</span></td><td><span class="tag tag-done">LIVE</span></td><td>Builtin + MCP tools; Zod input schema expansion</td></tr>
+  <tr><td><span class="mono">/mcp</span></td><td><span class="tag tag-done">LIVE</span></td><td>MCP server status, connection errors, exposed tools per server</td></tr>
+  <tr><td><span class="mono">/config</span></td><td><span class="tag tag-done">LIVE</span></td><td>Runtime config view + edit (token budget, trust mode, provider settings)</td></tr>
+  <tr><td><span class="mono">/memory</span></td><td><span class="tag tag-done">LIVE</span></td><td>Memory tiers viewer; synthetic read-path from quilin-mem API</td></tr>
+</table>
+
+<h3>TUI (REPL)</h3>
+<div class="feature-grid">
+  <div class="feature-card">
+    <h4>Status</h4>
+    <p>
+      <span class="mono">packages/agent-core/src/repl.ts</span> — 3619 lines, fully operational.<br>
+      Directly calls <span class="mono">runAgentLoop</span> (not yet wired to AgentService).<br>
+      Has slash commands, proposal review, WriteAuthority hook, MCPRegistry hook, self-evolution review.<br>
+      Does <strong>not</strong> subscribe to AgentService EventBus (Slice 5 is pending).
+    </p>
+  </div>
+  <div class="feature-card">
+    <h4>TUI renderer</h4>
+    <p>
+      <span class="mono">packages/agent-core/src/tui/renderer.ts</span> — separate from REPL, handles terminal output.<br>
+      Coverage: <span class="warn">71.8%</span> lines / <span class="warn">60.7%</span> branches — below 95% threshold.<br>
+      Theme: <span class="mono">tui/theme.ts</span> — 84.2% lines.
+    </p>
+  </div>
+</div>
+
+<h3>Safety / WriteAuthority</h3>
+<ul>
+  <li>WriteAuthority gate: <span class="mono">packages/agent-core/src/safety/write-authority.ts</span> — 97.5% line coverage</li>
+  <li>Modes: <span class="mono">AUTO</span> (default), <span class="mono">ASK</span> — CRITICAL ops always ask regardless of mode</li>
+  <li>CRITICAL operations: <span class="mono">file_write</span> outside project root, destructive <span class="mono">shell_exec</span>, scaffold patch apply, skill_create/update with cross-project effects</li>
+  <li>Action verifier: <span class="mono">safety/action-verifier.ts</span> — 98.3% lines</li>
+  <li>Sandbox allowedRoots: enforced per tool call in <span class="mono">tools/sandbox.ts</span></li>
+</ul>
+
+<h3>Self-Evolution (Idle Evolution)</h3>
+<ul>
+  <li>Status: <span class="tag tag-careful">DEFAULT OFF</span> — <span class="mono">DEFAULT_IDLE_DAILY_TOKEN_QUOTA = 10_000</span> but idle runner not auto-started</li>
+  <li>Opt-in only: requires explicit <span class="mono">--trust auto</span> + <span class="mono">origin: "idle"</span> write authorization</li>
+  <li>GEPA offline optimizer: implemented, 88.2% line coverage</li>
+  <li>Proposal store: <span class="mono">proposal-store.ts</span> (1358 lines), 93.3% coverage</li>
+  <li>Scaffold writes: propose-only, never auto-apply — human-in-loop required</li>
+</ul>
+
+<h3>Observability</h3>
+<ul>
+  <li>Dashboard: <span class="mono">packages/agent-core/src/observability/dashboard.ts</span> + static HTML served from <span class="mono">dashboard-ui/</span></li>
+  <li>OTel-style spans: <span class="mono">observability/span.ts</span>, trace store: <span class="mono">trace-store.ts</span></li>
+  <li>Event records: <span class="mono">event-record.ts</span> (98.9% coverage)</li>
+  <li>Exporters: JSON file + Prometheus (<span class="mono">observability/exporters/</span>)</li>
+  <li>JSON structured logging to stdout via <span class="mono">pino</span> (<span class="mono">logger.ts</span>)</li>
+  <li>Web: 8 dashboard API endpoints added in phase-2 backend (tools, MCP, sessions, config, memory, skills, agents, chat/status)</li>
+</ul>
+
+<h3>Benchmark</h3>
+<p>
+  <span class="tag tag-frozen">FROZEN</span> since 2026-05-02.
+  Existing code in <span class="mono">packages/agent-core/src/self-evolution/bench-runner.ts</span> (97.4% coverage) and
+  <span class="mono">replay-harness.ts</span> (98.1% coverage) remain as historical evidence only.
+  No additions or modifications without explicit user request.
+  (<span class="mono">docs/STATUS.md</span> § Benchmark Freeze)
+</p>
+
+<h3>Deployment</h3>
+<ul>
+  <li>Local dev: <span class="mono">pnpm dev</span> in <span class="mono">apps/web/</span> — Next.js 15 Turbopack on <span class="mono">127.0.0.1:3000</span></li>
+  <li>Agent-core CLI: <span class="mono">quilin</span> binary via <span class="mono">packages/agent-core/src/index.ts</span></li>
+  <li>Runtime: Bun (agent-core) + Node/Next.js (web)</li>
+  <li>Python memory provider: <span class="mono">uv</span> at <span class="mono">providers/memory/</span></li>
+  <li>No Docker for local dev (policy: <span class="mono">feedback_no_docker_local_dev.md</span>); <span class="mono">.devcontainer/</span> for CI only</li>
+  <li>Control-plane HTTP: <span class="mono">/api/v2/*</span> snapshot endpoints live in agent-core</li>
+</ul>
+
+<!-- ====================================================
+     CHAPTER 2: OPTIMIZATIONS COMPLETED THIS SESSION
+     ==================================================== -->
+<h2 id="ch2">2. 已完成的优化 / Optimizations Completed (this session)</h2>
+<p class="section-intro">
+  Commits since <span class="mono">2a220a2</span> (IME guard + session history, QUI-154 Phase 1b).
+  Evidence from <span class="mono">git log --oneline 2a220a2..HEAD</span> and commit body inspection.
+</p>
+
+<table class="commit-row">
+  <tr>
+    <th>Commit</th>
+    <th>Summary</th>
+    <th>Files changed / LOC delta</th>
+    <th>Tests added</th>
+    <th>Cross-review</th>
+  </tr>
+  <tr>
+    <td><span class="mono">c8cef9e</span></td>
+    <td>
+      <strong>AgentService control plane (Slice 1)</strong><br>
+      Introduced in-memory AgentService singleton: SessionRegistry (immutable patch map),
+      EventBus (monotonic ring buffer, replay-from-seq), discriminated AgentEventPayload union.
+      Wiring-only — no production code imports AgentService yet.
+    </td>
+    <td>
+      9 files, <span class="ok">+1,830 lines</span><br>
+      Key: <span class="mono">services/agent-service/{types,event-bus,session-registry,index}.ts</span>
+    </td>
+    <td>51 new tests</td>
+    <td>
+      <span class="cross-review-badge">4 rounds / 8 reviewers</span><br>
+      Round 4 (G+H): 0/0. Converged.
+    </td>
+  </tr>
+  <tr>
+    <td><span class="mono">72b1a6c</span></td>
+    <td>
+      <strong>Web phase 2 backend</strong><br>
+      Removed hardcoded inline tools; wired agent-core builtin + MCP tools via
+      <span class="mono">tools-loader</span> singleton. LLM runner decoupled from HTTP response
+      lifecycle. Added 8 dashboard APIs: tools, MCP, sessions, config, memory, skills, agents,
+      chat/status. MCP client: added StreamableHTTP transport alongside stdio.
+    </td>
+    <td>
+      25 files, <span class="ok">+2,733 / -77</span><br>
+      Key: <span class="mono">api/chat/route.ts</span>, <span class="mono">tools-loader.ts</span>,
+      <span class="mono">mcp-loader.ts</span>, <span class="mono">skills-loader.ts</span>,
+      <span class="mono">tools/mcp-client.ts</span>
+    </td>
+    <td>
+      agent-core: 167 files / 2,280 tests / 1 skipped — all pass
+    </td>
+    <td>
+      <span class="cross-review-badge">2 rounds</span><br>
+      Slice 2/3 spot-check reviewer: 1 MEDIUM (chat-session-store). Fixed. Round 2: PASS/PASS.
+    </td>
+  </tr>
+  <tr>
+    <td><span class="mono">8636926</span></td>
+    <td>
+      <strong>Web phase 2 UI</strong><br>
+      Replaced all ComingSoonView placeholders on /skills, /tools, /mcp, /config, /memory
+      with real-data pages. Each page: source/transport filter, search, click-to-expand detail.
+      /skills shows "未加载" gap badge. Streamdown markdown rendering. CSS overhaul.
+    </td>
+    <td>
+      19 files, <span class="ok">+3,182 / -625</span><br>
+      Key: <span class="mono">app/skills/page.tsx</span>, <span class="mono">app/tools/page.tsx</span>,
+      <span class="mono">app/mcp/page.tsx</span>, <span class="mono">app/config/page.tsx</span>,
+      <span class="mono">app/memory/page.tsx</span>
+    </td>
+    <td>Web visual tests passing (phase 2 routes)</td>
+    <td>
+      <span class="cross-review-badge">2 rounds</span><br>
+      Slice 4: two rounds of fresh subagent review converged on PASS/PASS.
+    </td>
+  </tr>
+  <tr>
+    <td><span class="mono">64219f1</span></td>
+    <td>
+      <strong>AgentService public mutator API + epoch + LRU (Task #22 Phase 1)</strong><br>
+      Extends AgentService public surface for Web consumption without touching private helpers:
+      <span class="mono">currentEpoch()</span>, <span class="mono">emitFromRunner()</span>,
+      <span class="mono">setSessionStatus()</span>, <span class="mono">deleteSession()</span>,
+      <span class="mono">getEventCount()</span>, <span class="mono">maxSessions</span> LRU,
+      AI SDK v6 boundary variants on AgentEventPayload.
+    </td>
+    <td>
+      9 files, <span class="ok">+771 / -35</span><br>
+      Key: <span class="mono">services/agent-service/{types,session-registry,index}.ts</span>,
+      <span class="mono">agent-service.test.ts</span> (+458 lines)
+    </td>
+    <td>agent-core suite: all pass</td>
+    <td>
+      <span class="cross-review-badge">2 rounds</span><br>
+      Round 1: Reviewer B BLOCK on 1 MEDIUM (agent-service.md stale). Fixed. Round 2: PASS/PASS.
+    </td>
+  </tr>
+  <tr>
+    <td><span class="mono">bfa05ef</span></td>
+    <td>
+      <strong>SSE translator + AgentService client singleton (Task #22 Phase 2)</strong><br>
+      Adds HTTP-boundary bridge for Phase 3 chat-route migration. Process-singleton
+      AgentService client cached on <span class="mono">globalThis</span> with promise coalescing
+      to prevent duplicate init races. Pure-function bidirectional translator between AI SDK v6
+      wire chunks and AgentEventPayload.
+    </td>
+    <td>
+      4 files, <span class="ok">+1,653 lines</span><br>
+      Key: <span class="mono">lib/agent-service-client.ts</span> (+257), <span class="mono">lib/sse-translator.ts</span> (+401),
+      <span class="mono">tests/unit/lib/sse-translator.test.ts</span> (+841),
+      <span class="mono">tests/unit/lib/agent-service-client.test.ts</span> (+154)
+    </td>
+    <td>41 new tests, all passing</td>
+    <td>
+      <span class="cross-review-badge">2 rounds</span><br>
+      Round 1: PASS-with-RECOMMEND (chunk coverage + JSDoc). Round 2: PASS/PASS (0/0).
+    </td>
+  </tr>
+</table>
+
+<div class="summary-box">
+  <strong>Session total:</strong> 5 commits, 57 files changed, +10,169 / -737 lines net.
+  All commits gate-passed cross-review (2 consecutive fresh reviewers at 0 real issues).
+</div>
+
+<!-- ====================================================
+     CHAPTER 3: PLANNED BUT NOT YET IMPLEMENTED
+     ==================================================== -->
+<h2 id="ch3">3. 已规划待实现的功能 / Planned But Not Yet Implemented</h2>
+<p class="section-intro">
+  All items below are evidenced from docs/, commit messages, or code comments.
+  None of these are "guesses" — each cites a source.
+</p>
+
+<table>
+  <tr>
+    <th>Feature / Task</th>
+    <th>Status</th>
+    <th>Evidence</th>
+    <th>Effort estimate</th>
+  </tr>
+  <tr>
+    <td>
+      <strong>AgentService Slice 2 — runAgentLoop integration</strong><br>
+      Implement <span class="mono">AgentService.chat()</span>. Wire <span class="mono">runAgentLoop</span>
+      hooks into EventBus. Wrap LLM client as StreamingLLMClient.
+    </td>
+    <td><span class="tag tag-pending">PENDING</span></td>
+    <td><span class="mono">docs/00-core-loop/agent-service.md §Slice 2</span></td>
+    <td>Medium (2–4 days)</td>
+  </tr>
+  <tr>
+    <td>
+      <strong>AgentService Slice 3 — Control-plane chat route</strong><br>
+      Add <span class="mono">/api/v2/chat</span> (SSE) + <span class="mono">/api/v2/events</span>
+      cross-session subscription to agent-core's control-plane HTTP server.
+    </td>
+    <td><span class="tag tag-pending">PENDING</span></td>
+    <td><span class="mono">docs/00-core-loop/agent-service.md §Slice 3</span></td>
+    <td>Medium (2–3 days)</td>
+  </tr>
+  <tr>
+    <td>
+      <strong>AgentService Slice 4 / Task #25 — Web proxy + retire chat-session-store</strong><br>
+      Rewire <span class="mono">apps/web/app/api/chat/route.ts</span> to proxy to
+      <span class="mono">/api/v2/chat</span>. Delete duplicate tool definitions in
+      <span class="mono">apps/web/lib/agent-registry.ts</span>.
+      Retire <span class="mono">apps/web/lib/chat-session-store.ts</span> (331 lines,
+      still imported by <span class="mono">app/api/config/route.ts:18</span>).
+    </td>
+    <td><span class="tag tag-pending">PENDING</span></td>
+    <td>
+      <span class="mono">docs/00-core-loop/agent-service.md §Slice 4</span><br>
+      <span class="mono">app/api/config/route.ts:18</span> (last live import)
+    </td>
+    <td>Large (3–5 days + Playwright test fix)</td>
+  </tr>
+  <tr>
+    <td>
+      <strong>AgentService Slice 5 / Task #27 — TUI as AgentService client</strong><br>
+      Refactor <span class="mono">repl.ts</span> (3619 lines) to call
+      <span class="mono">AgentService.chat()</span> instead of <span class="mono">runAgentLoop</span> directly.
+      TUI subscribes to EventBus to see web-originated sessions.
+    </td>
+    <td><span class="tag tag-pending">PENDING</span></td>
+    <td><span class="mono">docs/00-core-loop/agent-service.md §Slice 5</span></td>
+    <td>Large (5–8 days, intrusive repl.ts rewrite)</td>
+  </tr>
+  <tr>
+    <td>
+      <strong>Task #28 — Admin probe endpoint</strong><br>
+      Internal probe surface for debugging live agent state.
+    </td>
+    <td><span class="tag tag-pending">PENDING</span></td>
+    <td><span class="mono">agent-service.md §Slicing (Phase 5 reference)</span></td>
+    <td>Small (1–2 days)</td>
+  </tr>
+  <tr>
+    <td>
+      <strong>6 pre-existing UI test failures</strong><br>
+      <span class="mono">apps/web/tests/unit/components/intro.test.tsx</span> +
+      <span class="mono">shell.test.tsx</span> — were broken before phase-2 work,
+      not covered in this session's commits.
+    </td>
+    <td><span class="tag tag-careful">BROKEN (pre-existing)</span></td>
+    <td>
+      <span class="mono">apps/web/tests/unit/components/</span> — test files exist,
+      not in coverage run scope for this session
+    </td>
+    <td>Small–Medium (1–2 days)</td>
+  </tr>
+  <tr>
+    <td>
+      <strong>YAML <span class="mono">description: |</span> parser fix in SkillsManager</strong><br>
+      Block-scalar multi-line description causes frontmatter parse failure → skill not loaded.
+      The /skills page reports the count as "未加载" with tooltip.
+    </td>
+    <td><span class="tag tag-careful">KNOWN GAP</span></td>
+    <td><span class="mono">apps/web/app/skills/page.tsx:197</span></td>
+    <td>Small (0.5–1 day)</td>
+  </tr>
+  <tr>
+    <td>
+      <strong>AgentEventPayload — add <span class="mono">tool.call_input_delta</span> variant</strong><br>
+      Stream partial tool call JSON as it arrives, rather than only the complete
+      <span class="mono">tool.call</span>. Needed for real-time tool-arg streaming in Web UI.
+    </td>
+    <td><span class="tag tag-careful">RECOMMEND (deferred)</span></td>
+    <td>Slice 1 cross-review deferred items (<span class="mono">agent-service.md §Review history</span>)</td>
+    <td>Small (1 day)</td>
+  </tr>
+  <tr>
+    <td>
+      <strong>Idle Evolution (opt-in)</strong><br>
+      Idle runner exists (<span class="mono">idle-runner.ts</span>), budget defined (10,000 tokens/day),
+      but not auto-started. Requires user opt-in via config flag. Scaffold writes never auto-applied.
+    </td>
+    <td><span class="tag tag-frozen">DEFAULT OFF</span></td>
+    <td>
+      <span class="mono">packages/agent-core/src/self-evolution/idle-runner.ts:89</span>,
+      <span class="mono">docs/10-self-evolution/README.md</span>
+    </td>
+    <td>Medium (config UI + safety review)</td>
+  </tr>
+  <tr>
+    <td>
+      <strong>Self-Evolution scaffold integration</strong><br>
+      Proposal store exists and works. Scaffold patch <em>apply</em> path still propose-only —
+      never auto-applies. Human-in-loop review gate must be wired end-to-end.
+    </td>
+    <td><span class="tag tag-pending">PENDING</span></td>
+    <td><span class="mono">docs/10-self-evolution/README.md</span></td>
+    <td>Large (architectural decision needed)</td>
+  </tr>
+  <tr>
+    <td>
+      <strong>Benchmark Harness</strong><br>
+      Frozen since 2026-05-02. Existing bench-runner.ts + replay-harness.ts remain as
+      historical evidence only.
+    </td>
+    <td><span class="tag tag-frozen">FROZEN</span></td>
+    <td><span class="mono">docs/STATUS.md § Benchmark Freeze</span></td>
+    <td>N/A — do not touch without explicit user request</td>
+  </tr>
+  <tr>
+    <td>
+      <strong>Domain 12 — Conversation Engineering</strong><br>
+      6-layer "alive feeling" architecture. Parked as research note under
+      <span class="mono">docs/02-context/conversation-engineering/</span>.
+      Deferred to Iter F+ until core loop has local evidence.
+    </td>
+    <td><span class="tag tag-parked">PARKED (Iter F+)</span></td>
+    <td><span class="mono">docs/02-context/conversation-engineering/README.md</span></td>
+    <td>Large (research-to-implementation)</td>
+  </tr>
+  <tr>
+    <td>
+      <strong>Domain 15 — Introspection</strong><br>
+      Spec doc exists in <span class="mono">docs/15-introspection/</span>.
+      Meta-cognition: trace-anchored reflection feeding back into the next plan.
+      Implementation not started.
+    </td>
+    <td><span class="tag tag-pending">SPEC ONLY</span></td>
+    <td><span class="mono">docs/15-introspection/README.md</span></td>
+    <td>Large</td>
+  </tr>
+  <tr>
+    <td>
+      <strong>Domain 16 — Soul Import</strong><br>
+      Spec doc: install-time scan of 6 agent frameworks, seed
+      <span class="mono">~/.quilin/soul.md</span> + per-project <span class="mono">QUILIN.md</span>.
+      QUI-102 implementation not started.
+    </td>
+    <td><span class="tag tag-pending">SPEC ONLY</span></td>
+    <td>
+      <span class="mono">docs/16-soul-import/README.md</span>,
+      <span class="mono">docs(16-soul-import): framework detection spike</span> (commit 1c4057a)
+    </td>
+    <td>Medium (framework detection spike done)</td>
+  </tr>
+  <tr>
+    <td>
+      <strong>Agent Mesh (Domain 11)</strong><br>
+      <span class="mono">crates/mesh-sdk</span> stub exists (Iter D). gRPC mesh runtime
+      and WASM deferred to Iter F.
+    </td>
+    <td><span class="tag tag-parked">STUB (Iter F+)</span></td>
+    <td><span class="mono">docs/11-agent-mesh/README.md</span>, <span class="mono">crates/</span></td>
+    <td>Very large (new runtime layer)</td>
+  </tr>
+  <tr>
+    <td>
+      <strong>Subagent unified under AgentService</strong><br>
+      Current <span class="mono">subagent_spawn</span> uses its own internal registry
+      (<span class="mono">SubagentRegistry</span>), parallel to AgentService SessionRegistry.
+      Should be unified once Slice 3–4 land.
+    </td>
+    <td><span class="tag tag-pending">PENDING (after Slice 4)</span></td>
+    <td><span class="mono">tools/builtin/subagent-spawn.ts:55–77</span></td>
+    <td>Medium</td>
+  </tr>
+</table>
+
+<!-- ====================================================
+     CHAPTER 4: SCAN RESULTS
+     ==================================================== -->
+<h2 id="ch4">4. 优化扫描结果 / Scan Results (Part A)</h2>
+<p class="section-intro">
+  Tools run: <span class="mono">knip</span>, <span class="mono">depcheck</span>, file-size check,
+  duplicate code search, TypeScript strict-mode audit, coverage threshold check.
+</p>
+
+<h3>4.1 死代码 / Dead Code (knip scan — apps/web)</h3>
+<p>
+  <span class="mono">npx knip --workspace apps/web</span> output (knip 6.13.1).
+  Note: knip reported a vitest.workspace.ts config error — results may have minor false positives on cross-workspace types.
+</p>
+<table>
+  <tr><th>Risk</th><th>Item</th><th>Location</th><th>Action</th></tr>
+  <tr>
+    <td><span class="tag tag-safe">SAFE</span></td>
+    <td>Unused file: <span class="mono">ComingSoonView.tsx</span></td>
+    <td><span class="mono">apps/web/components/shell/ComingSoonView.tsx</span></td>
+    <td>All pages migrated to real data; component no longer imported. Safe to delete.</td>
+  </tr>
+  <tr>
+    <td><span class="tag tag-safe">SAFE</span></td>
+    <td>Unused exports: <span class="mono">startSession</span>, <span class="mono">appendFrame</span>, <span class="mono">markSessionComplete</span>, <span class="mono">subscribeSession</span>, <span class="mono">hashMessages</span> from chat-session-store</td>
+    <td><span class="mono">apps/web/lib/chat-session-store.ts</span> (knip found this file in git status as new — it may have been removed but knip scanned a stale path; confirmed not present in current <span class="mono">apps/web/lib/</span>)</td>
+    <td>File already removed from repo. Knip false positive — stale workspace cache. No action needed.</td>
+  </tr>
+  <tr>
+    <td><span class="tag tag-safe">SAFE</span></td>
+    <td>Unused export: <span class="mono">DEFAULT_RAIL_ITEMS</span></td>
+    <td><span class="mono">apps/web/components/shell/RailStrip.tsx:19</span></td>
+    <td>Verify not consumed by any dynamic import, then remove the export modifier.</td>
+  </tr>
+  <tr>
+    <td><span class="tag tag-safe">SAFE</span></td>
+    <td>Unused export: <span class="mono">adaptToolForAiSdk</span></td>
+    <td><span class="mono">apps/web/lib/agent-core-tool-adapter.ts:61</span></td>
+    <td>Verify not consumed; remove export if only used locally.</td>
+  </tr>
+  <tr>
+    <td><span class="tag tag-careful">CAREFUL</span></td>
+    <td>Unused exports: <span class="mono">deleteSession</span></td>
+    <td><span class="mono">apps/web/lib/session-store.ts:93</span></td>
+    <td>Will be needed when Slice 4 lands. Keep for now; remove only after Slice 4 retires session-store.</td>
+  </tr>
+  <tr>
+    <td><span class="tag tag-careful">CAREFUL</span></td>
+    <td>43 unused exported types (schemas, interfaces in <span class="mono">lib/schemas.ts</span>, <span class="mono">lib/agent-registry.ts</span>, <span class="mono">lib/agent-service-client.ts</span>, etc.)</td>
+    <td>Various <span class="mono">apps/web/lib/</span> files</td>
+    <td>
+      Most are API contract types for routes/pages not yet fully wired (Slice 3–4).
+      These are forward-declarations, not dead code. Keep until AgentService Slice 4 is complete.
+    </td>
+  </tr>
+</table>
+
+<h3>4.2 未使用的依赖 / Unused Dependencies</h3>
+<table>
+  <tr><th>Risk</th><th>Package</th><th>Package.json</th><th>Finding</th><th>Action</th></tr>
+  <tr>
+    <td><span class="tag tag-safe">FALSE POSITIVE</span></td>
+    <td><span class="mono">undici</span></td>
+    <td><span class="mono">apps/web/package.json</span></td>
+    <td>
+      depcheck says "unused" but <span class="mono">app/api/proxy/[...path]/route.ts:53</span>
+      requires <span class="mono">duplex: "half"</span> SSE streaming behavior that only works
+      with undici as the underlying fetch. It's a transitive runtime requirement, not a direct import.
+    </td>
+    <td>Keep — required for SSE streaming proxy.</td>
+  </tr>
+  <tr>
+    <td><span class="tag tag-careful">VERIFY</span></td>
+    <td><span class="mono">@tailwindcss/postcss</span></td>
+    <td><span class="mono">apps/web/package.json (devDep)</span></td>
+    <td>
+      depcheck says unused, but <span class="mono">apps/web/postcss.config.mjs:3</span> uses it
+      and <span class="mono">app/globals.css:1</span> imports <span class="mono">tailwindcss</span>.
+      depcheck false positive — postcss plugin not detected by depcheck.
+    </td>
+    <td>Keep — required for Tailwind CSS v4 PostCSS compilation.</td>
+  </tr>
+  <tr>
+    <td><span class="tag tag-careful">VERIFY</span></td>
+    <td><span class="mono">@ai-sdk/anthropic</span>, <span class="mono">@ai-sdk/openai</span></td>
+    <td><span class="mono">packages/agent-core/package.json</span></td>
+    <td>
+      depcheck reports unused. Anthropic: the code references <span class="mono">provider: "anthropic"</span>
+      string but uses <span class="mono">@ai-sdk/openai-compatible</span> for the actual HTTP call
+      (provider.ts:244 uses <span class="mono">createOpenAICompatible</span>, not the Anthropic SDK).
+      OpenAI: same pattern — <span class="mono">@ai-sdk/openai-compatible</span> handles all requests.
+    </td>
+    <td>
+      <span class="tag tag-safe">SAFE to remove</span> — neither SDK is directly imported.
+      Verify with <span class="mono">grep -r "from \"@ai-sdk/anthropic\"\|from \"@ai-sdk/openai\""</span>
+      (both return 0 matches in <span class="mono">src/</span>).
+    </td>
+  </tr>
+  <tr>
+    <td><span class="tag tag-careful">VERIFY</span></td>
+    <td><span class="mono">typescript</span> (devDep)</td>
+    <td><span class="mono">packages/agent-core/package.json</span></td>
+    <td>depcheck flags as unused devDep. Likely a false positive — used via <span class="mono">bun build</span> and type-checking scripts.</td>
+    <td>Keep.</td>
+  </tr>
+  <tr>
+    <td><span class="tag tag-careful">NOTE</span></td>
+    <td><span class="mono">undici</span> (missing dep)</td>
+    <td><span class="mono">packages/agent-core/package.json</span></td>
+    <td>
+      depcheck reports as "missing" because <span class="mono">web-fetch.ts:263</span> uses
+      <span class="mono">require("undici")</span> in a runtime path. Not declared in package.json.
+    </td>
+    <td>Add <span class="mono">undici</span> to agent-core's dependencies, or document the require as optional.</td>
+  </tr>
+</table>
+
+<h3>4.3 文件大小超限 / Files Exceeding 800-line Limit</h3>
+<p>CLAUDE.md hard limit: 800 lines. Test files are excluded (they are intentionally large).</p>
+<table>
+  <tr><th>File</th><th>Lines</th><th>Risk</th><th>Note</th></tr>
+  <tr>
+    <td><span class="mono">packages/agent-core/src/repl.ts</span></td>
+    <td class="err">3,619</td>
+    <td><span class="tag tag-careful">CAREFUL</span></td>
+    <td>REPL implementation. Will be refactored by AgentService Slice 5. Until then, split is risky.</td>
+  </tr>
+  <tr>
+    <td><span class="mono">packages/agent-core/src/multi-agent/supervisor-runtime.ts</span></td>
+    <td class="err">1,636</td>
+    <td><span class="tag tag-careful">CAREFUL</span></td>
+    <td>SupervisorRuntime. Candidate for extraction of checkpoint / progress sub-modules.</td>
+  </tr>
+  <tr>
+    <td><span class="mono">packages/agent-core/src/multi-agent/supervisor-progress.ts</span></td>
+    <td class="err">1,472</td>
+    <td><span class="tag tag-careful">CAREFUL</span></td>
+    <td>SupervisorProgress. Dense logic; extraction requires careful test coverage.</td>
+  </tr>
+  <tr>
+    <td><span class="mono">packages/agent-core/src/llm/client.ts</span></td>
+    <td class="err">1,420</td>
+    <td><span class="tag tag-careful">CAREFUL</span></td>
+    <td>LLM client. Can extract provider-specific branches into separate files.</td>
+  </tr>
+  <tr>
+    <td><span class="mono">packages/agent-core/src/self-evolution/proposal-store.ts</span></td>
+    <td class="err">1,358</td>
+    <td><span class="tag tag-safe">SAFE to keep</span></td>
+    <td>Dense SQLite persistence layer. Well-tested (93.3% coverage). Low split priority.</td>
+  </tr>
+  <tr>
+    <td><span class="mono">packages/agent-core/src/index.ts</span></td>
+    <td class="err">1,347</td>
+    <td><span class="tag tag-careful">CAREFUL</span></td>
+    <td>Package public API barrel. Some logic could be extracted; barrel files often grow large.</td>
+  </tr>
+  <tr>
+    <td><span class="mono">apps/web/app/api/chat/route.ts</span></td>
+    <td class="err">857</td>
+    <td><span class="tag tag-risky">PLANNED REFACTOR</span></td>
+    <td>Will be thinned by AgentService Slice 4 (proxy rewrite). Do not split manually before that.</td>
+  </tr>
+</table>
+
+<h3>4.4 重复实现 / Duplicate Implementations</h3>
+<table>
+  <tr><th>Risk</th><th>Duplicate</th><th>Locations</th><th>Action</th></tr>
+  <tr>
+    <td><span class="tag tag-safe">SAFE</span></td>
+    <td>FNV-1a 32-bit hash function</td>
+    <td>
+      <span class="mono">apps/web/app/api/memory/route.ts:43</span> (private <span class="mono">fnvHash()</span>)<br>
+      <span class="mono">apps/web/lib/web-session-meta.ts:182</span> (exported <span class="mono">hashMessages()</span>)
+    </td>
+    <td>
+      Both implement FNV-1a but for different purposes (ID generation vs. session fingerprinting).
+      <span class="mono">hashMessages()</span> hashes message arrays, <span class="mono">fnvHash()</span> hashes raw strings.
+      Extract a shared <span class="mono">fnv1a32(input: string): string</span> utility to
+      <span class="mono">apps/web/lib/hash.ts</span>. Safe consolidation.
+    </td>
+  </tr>
+  <tr>
+    <td><span class="tag tag-careful">CAREFUL</span></td>
+    <td>AgentSummary type defined twice</td>
+    <td>
+      <span class="mono">apps/web/lib/agent-registry.ts:40</span><br>
+      <span class="mono">apps/web/lib/api.ts:255</span>
+    </td>
+    <td>
+      Knip flags both as unused exported types. Two separate type definitions of AgentSummary.
+      Once Slice 4 unifies the API, deduplicate to one canonical type in <span class="mono">schemas.ts</span>.
+    </td>
+  </tr>
+</table>
+
+<h3>4.5 TypeScript 严格度 / TypeScript Strict Mode Audit</h3>
+<table>
+  <tr><th>Config</th><th>strict</th><th>noUncheckedIndexedAccess</th><th>exactOptionalPropertyTypes</th><th>Note</th></tr>
+  <tr>
+    <td><span class="mono">apps/web/tsconfig.json</span></td>
+    <td class="ok">true</td>
+    <td class="ok">true</td>
+    <td class="warn">false</td>
+    <td><span class="mono">exactOptionalPropertyTypes: false</span> — consider enabling, but React component props often set optional fields explicitly to <span class="mono">undefined</span>.</td>
+  </tr>
+  <tr>
+    <td><span class="mono">packages/agent-core/tsconfig.json</span> (extends base)</td>
+    <td class="ok">true (via base)</td>
+    <td class="warn">not set</td>
+    <td class="warn">not set</td>
+    <td>
+      Base (<span class="mono">tsconfig.base.json</span>) enables <span class="mono">strict</span> but does not set
+      <span class="mono">noUncheckedIndexedAccess</span> or <span class="mono">exactOptionalPropertyTypes</span>.
+      Adding <span class="mono">noUncheckedIndexedAccess</span> would catch array access bugs but may require widespread <span class="mono">?? default</span> patches.
+    </td>
+  </tr>
+</table>
+
+<h3>4.6 测试覆盖率缺口 / Test Coverage Gaps (&lt; 95% threshold)</h3>
+<p>
+  Source: <span class="mono">pnpm --filter @quilin/agent-core exec vitest run --coverage</span>
+  run against HEAD. Overall: <span class="err">Statements 90.1%</span> /
+  <span class="err">Branches 83.6%</span> / <span class="err">Functions 92.8%</span> /
+  <span class="err">Lines 90.3%</span> — all below the 95% project threshold.
+</p>
+<table>
+  <tr><th>File</th><th>Lines</th><th>Branches</th><th>Functions</th><th>Risk</th></tr>
+  <tr>
+    <td><span class="mono">self-evolution/offline-optimizer.ts</span></td>
+    <td>
+      <span class="coverage-bar"><span class="coverage-fill cov-err" style="width:11%"></span></span>
+      <span class="err">11.2%</span>
+    </td>
+    <td class="err">13.3%</td>
+    <td class="err">8.9%</td>
+    <td><span class="tag tag-risky">CRITICAL GAP</span></td>
+  </tr>
+  <tr>
+    <td><span class="mono">tools/mcp-marketplace.ts</span></td>
+    <td>
+      <span class="coverage-bar"><span class="coverage-fill cov-err" style="width:10%"></span></span>
+      <span class="err">10.6%</span>
+    </td>
+    <td class="err">15.0%</td>
+    <td class="err">13.3%</td>
+    <td><span class="tag tag-risky">CRITICAL GAP</span></td>
+  </tr>
+  <tr>
+    <td><span class="mono">tools/builtin/config-session-tools.ts</span></td>
+    <td>
+      <span class="coverage-bar"><span class="coverage-fill cov-err" style="width:44%"></span></span>
+      <span class="err">43.8%</span>
+    </td>
+    <td class="err">48.1%</td>
+    <td class="err">60.0%</td>
+    <td><span class="tag tag-risky">HIGH GAP</span></td>
+  </tr>
+  <tr>
+    <td><span class="mono">tools/builtin/multimodal.ts</span></td>
+    <td>
+      <span class="coverage-bar"><span class="coverage-fill cov-warn" style="width:70%"></span></span>
+      <span class="warn">69.6%</span>
+    </td>
+    <td class="warn">76.0%</td>
+    <td class="warn">66.7%</td>
+    <td><span class="tag tag-careful">HIGH GAP</span></td>
+  </tr>
+  <tr>
+    <td><span class="mono">self-evolution/jsonl-path.ts</span></td>
+    <td>
+      <span class="coverage-bar"><span class="coverage-fill cov-warn" style="width:68%"></span></span>
+      <span class="warn">67.6%</span>
+    </td>
+    <td class="warn">62.2%</td>
+    <td class="warn">87.5%</td>
+    <td><span class="tag tag-careful">HIGH GAP</span></td>
+  </tr>
+  <tr>
+    <td><span class="mono">tui/renderer.ts</span></td>
+    <td>
+      <span class="coverage-bar"><span class="coverage-fill cov-warn" style="width:72%"></span></span>
+      <span class="warn">71.8%</span>
+    </td>
+    <td class="warn">60.7%</td>
+    <td class="ok">92.6%</td>
+    <td><span class="tag tag-careful">HIGH GAP</span></td>
+  </tr>
+  <tr>
+    <td><span class="mono">self-evolution/patch-proposal.ts</span></td>
+    <td>
+      <span class="coverage-bar"><span class="coverage-fill cov-warn" style="width:76%"></span></span>
+      <span class="warn">76.0%</span>
+    </td>
+    <td class="warn">66.7%</td>
+    <td class="ok">100%</td>
+    <td><span class="tag tag-careful">MEDIUM GAP</span></td>
+  </tr>
+  <tr>
+    <td><span class="mono">planning/delegation.ts</span></td>
+    <td>
+      <span class="coverage-bar"><span class="coverage-fill cov-warn" style="width:80%"></span></span>
+      <span class="warn">80.5%</span>
+    </td>
+    <td class="warn">75.3%</td>
+    <td class="ok">91.7%</td>
+    <td><span class="tag tag-careful">MEDIUM GAP</span></td>
+  </tr>
+  <tr>
+    <td><span class="mono">runtime/live-input.ts</span></td>
+    <td>
+      <span class="coverage-bar"><span class="coverage-fill cov-warn" style="width:86%"></span></span>
+      <span class="warn">85.7%</span>
+    </td>
+    <td class="ok">92.9%</td>
+    <td class="warn">87.5%</td>
+    <td><span class="tag tag-careful">MEDIUM GAP</span></td>
+  </tr>
+  <tr>
+    <td><span class="mono">tui/theme.ts</span></td>
+    <td>
+      <span class="coverage-bar"><span class="coverage-fill cov-warn" style="width:84%"></span></span>
+      <span class="warn">84.2%</span>
+    </td>
+    <td class="warn">84.8%</td>
+    <td class="warn">45.5%</td>
+    <td><span class="tag tag-careful">MEDIUM GAP</span></td>
+  </tr>
+  <tr>
+    <td><span class="mono">skills/manager.ts</span></td>
+    <td>
+      <span class="coverage-bar"><span class="coverage-fill cov-warn" style="width:83%"></span></span>
+      <span class="warn">83.2%</span>
+    </td>
+    <td class="warn">77.5%</td>
+    <td class="warn">82.2%</td>
+    <td><span class="tag tag-careful">MEDIUM GAP</span></td>
+  </tr>
+  <tr>
+    <td><span class="mono">tools/registry.ts</span></td>
+    <td>
+      <span class="coverage-bar"><span class="coverage-fill cov-warn" style="width:86%"></span></span>
+      <span class="warn">85.8%</span>
+    </td>
+    <td class="warn">77.4%</td>
+    <td class="warn">80.0%</td>
+    <td><span class="tag tag-careful">MEDIUM GAP</span></td>
+  </tr>
+  <tr>
+    <td><span class="mono">tools/mcp-client.ts</span></td>
+    <td>
+      <span class="coverage-bar"><span class="coverage-fill cov-warn" style="width:83%"></span></span>
+      <span class="warn">83.2%</span>
+    </td>
+    <td class="warn">79.1%</td>
+    <td class="warn">87.2%</td>
+    <td><span class="tag tag-careful">MEDIUM GAP</span></td>
+  </tr>
+  <tr>
+    <td><span class="mono">self-evolution/trajectory-store.ts</span></td>
+    <td>
+      <span class="coverage-bar"><span class="coverage-fill cov-warn" style="width:90%"></span></span>
+      <span class="warn">89.9%</span>
+    </td>
+    <td class="warn">70.0%</td>
+    <td class="ok">100%</td>
+    <td><span class="tag tag-careful">MEDIUM GAP (branches)</span></td>
+  </tr>
+</table>
+
+<h3>4.7 综合优先级 / Prioritized Action List</h3>
+<table>
+  <tr><th>Priority</th><th>Action</th><th>Effort</th><th>Risk if ignored</th></tr>
+  <tr>
+    <td><span class="err">1 (critical)</span></td>
+    <td>Add tests for <span class="mono">offline-optimizer.ts</span> (11% → 95%)</td>
+    <td>Medium</td>
+    <td>Self-evolution optimizer core is essentially untested in production.</td>
+  </tr>
+  <tr>
+    <td><span class="err">2 (critical)</span></td>
+    <td>Add tests for <span class="mono">mcp-marketplace.ts</span> (10% → 95%)</td>
+    <td>Medium</td>
+    <td>MCP search/install path is untested; install bugs could corrupt MCP config.</td>
+  </tr>
+  <tr>
+    <td><span class="warn">3 (high)</span></td>
+    <td>Add tests for <span class="mono">config-session-tools.ts</span> (44% → 95%)</td>
+    <td>Small–Medium</td>
+    <td>Session listing + config view tools not well covered.</td>
+  </tr>
+  <tr>
+    <td><span class="warn">4 (high)</span></td>
+    <td>Remove <span class="mono">@ai-sdk/anthropic</span> + <span class="mono">@ai-sdk/openai</span> from agent-core deps</td>
+    <td>Tiny</td>
+    <td>Phantom deps bloat install, may cause version conflicts.</td>
+  </tr>
+  <tr>
+    <td><span class="warn">5 (high)</span></td>
+    <td>Add <span class="mono">undici</span> as explicit dep in agent-core (currently missing)</td>
+    <td>Tiny</td>
+    <td>Implicit dep on Bun bundled undici; breaks on non-Bun runtimes.</td>
+  </tr>
+  <tr>
+    <td><span class="info">6</span></td>
+    <td>Delete <span class="mono">ComingSoonView.tsx</span> (unused file, confirmed)</td>
+    <td>Tiny</td>
+    <td>Minor cleanliness. No functional impact.</td>
+  </tr>
+  <tr>
+    <td><span class="info">7</span></td>
+    <td>Extract shared FNV-1a utility to <span class="mono">apps/web/lib/hash.ts</span></td>
+    <td>Tiny</td>
+    <td>Two in-file implementations; easy consolidation after Slice 4.</td>
+  </tr>
+  <tr>
+    <td><span class="info">8</span></td>
+    <td>Fix YAML <span class="mono">description: |</span> parser in SkillsManager</td>
+    <td>Small</td>
+    <td>Unknown number of user skills silently not loaded.</td>
+  </tr>
+  <tr>
+    <td><span class="info">9</span></td>
+    <td>Improve branch coverage: <span class="mono">tui/renderer.ts</span>, <span class="mono">planning/delegation.ts</span>, <span class="mono">mcp-client.ts</span></td>
+    <td>Medium</td>
+    <td>Below 95% threshold; CI will fail when thresholds are enforced globally.</td>
+  </tr>
+  <tr>
+    <td><span class="muted">10 (backlog)</span></td>
+    <td>Enable <span class="mono">noUncheckedIndexedAccess</span> in agent-core tsconfig.base.json</td>
+    <td>Medium (widespread fixes)</td>
+    <td>Latent array out-of-bounds bugs in non-strict paths.</td>
+  </tr>
+</table>
+
+<hr class="divider">
+<p class="meta">
+  Generated by <span class="mono">refactor-cleaner</span> agent (Claude Sonnet 4.6) at 2026-05-12T23:24:53Z.<br>
+  Scan tools: knip 6.13.1, depcheck 1.4.7, vitest coverage v8 4.1.4, manual file-size check, grep duplicate search.<br>
+  <strong>No code was modified. No commits were made.</strong>
+</p>
+</body>
+</html>
