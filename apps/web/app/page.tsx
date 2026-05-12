@@ -1,3 +1,4 @@
+import { ConversationView } from "@/components/chat/ConversationView";
 import { IntroScreen } from "@/components/intro/IntroScreen";
 import { AppHeader } from "@/components/shell/AppHeader";
 import { RailStrip } from "@/components/shell/RailStrip";
@@ -30,7 +31,9 @@ async function loadRecentSessions(): Promise<readonly SessionSummary[]> {
 export default async function HomePage({ searchParams }: HomePageProps) {
 	const params = await searchParams;
 	const sessionParam = params.session;
+	const initialParam = params.initial;
 	const activeSessionId = Array.isArray(sessionParam) ? sessionParam[0] : sessionParam;
+	const initialMessage = Array.isArray(initialParam) ? initialParam[0] : initialParam;
 
 	const recent = await loadRecentSessions();
 	const intro = !activeSessionId;
@@ -49,16 +52,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
 			<Wordmark />
 			<AppHeader sessionId={activeSessionId ?? null} />
 			<RailStrip />
-			<main className="q-workspace">
-				<section className="q-view">
-					<div className="q-back-banner">
-						<span>会话 · session {activeSessionId}</span>
-					</div>
-					<p style={{ color: "var(--fg-muted)" }}>
-						实时事件流将在 Phase 1b 接入 SSE · 当前 session id = <code>{activeSessionId}</code>。
-					</p>
-				</section>
-			</main>
+			<ConversationView sessionId={activeSessionId} initialMessage={initialMessage} />
 		</>
 	);
 }

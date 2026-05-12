@@ -22,8 +22,10 @@ export interface IntroScreenProps {
  */
 export function IntroScreen({ recentSessions = [] }: IntroScreenProps) {
 	const router = useRouter();
-	const handleSubmit = (_text: string): void => {
-		router.push(`/?session=draft-${Date.now().toString(36)}`);
+	const handleSubmit = (text: string): void => {
+		const sessionId = `draft-${Date.now().toString(36)}`;
+		const initial = encodeURIComponent(text);
+		router.push(`/?session=${sessionId}&initial=${initial}`);
 	};
 	return (
 		<div className="q-intro-stage" data-testid="intro-screen">
