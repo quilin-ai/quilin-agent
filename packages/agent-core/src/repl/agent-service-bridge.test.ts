@@ -15,8 +15,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { AgentService } from "../services/agent-service/index.js";
+import type { AgentEvent } from "../services/agent-service/types.js";
 import {
 	createTuiSession,
+	createTurnEventPump,
 	findAgentServiceSession,
 	getOrCreateAgentService,
 	listAgentServiceSessions,
@@ -226,5 +228,369 @@ describe("Slice A + Slice B integration", () => {
 		markSessionStatus(svc, "ab-1", "running");
 		const after = listAgentServiceSessions(svc).find((s) => s.id === "ab-1");
 		expect(after?.status).toBe("running");
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// Slice C — createTurnEventPump
+// ─────────────────────────────────────────────────────────────────────
+
+function captureEvents(
+	svc: ReturnType<typeof getOrCreateAgentService>,
+	sessionId: string,
+): readonly AgentEvent[] {
+	return svc._getEventBus().historySnapshot({ sessionId });
+}
+
+function payloadTypes(events: readonly AgentEvent[]): readonly string[] {
+	return events.map((e) => e.payload.type);
+}
+
+describe("createTurnEventPump (Slice C event pump)", () => {
+	it("text-only stream produces start/delta/end + assistant.message", () => {
+		const svc = getOrCreateAgentService();
+		createTuiSession(svc, "cp-text");
+		const pump = createTurnEventPump({
+			service: svc,
+			sessionId: "cp-text",
+			turnIndex: 1,
+		});
+		pump.onLLMStreamEvent({ type: "text", delta: "Hello" });
+		pump.onLLMStreamEvent({ type: "text", delta: " world" });
+		pump.onAssistantMessage({ role: "assistant", content: "Hello world" });
+		const events = captureEvents(svc, "cp-text");
+		// session.created + text_start + text(×2) + text_end + assistant.message
+		// session.updated for assistant.message touchActivity:true
+		const types = payloadTypes(events);
+		// Drop session.created prefix to compare turn-level payload sequence.
+		const turnSeq = types.filter(
+			(t) => t !== "session.created" && t !== "session.updated",
+		);
+		expect(turnSeq).toEqual([
+			"llm.text_start",
+			"llm.text",
+			"llm.text",
+			"llm.text_end",
+			"assistant.message",
+		]);
+	});
+
+	it("reasoning stream emits reasoning_start/delta/end before assistant.message", () => {
+		const svc = getOrCreateAgentService();
+		createTuiSession(svc, "cp-rsn");
+		const pump = createTurnEventPump({
+			service: svc,
+			sessionId: "cp-rsn",
+			turnIndex: 1,
+		});
+		pump.onLLMStreamEvent({ type: "reasoning", delta: "let me think" });
+		pump.onLLMStreamEvent({ type: "reasoning", delta: " about it" });
+		pump.onAssistantMessage({ role: "assistant", content: "done" });
+		const turnSeq = payloadTypes(captureEvents(svc, "cp-rsn")).filter(
+			(t) => t !== "session.created" && t !== "session.updated",
+		);
+		expect(turnSeq).toEqual([
+			"llm.reasoning_start",
+			"llm.reasoning",
+			"llm.reasoning",
+			"llm.reasoning_end",
+			"assistant.message",
+		]);
+	});
+
+	it("tool-call-start / tool-call-args-delta are dropped (per spec)", () => {
+		const svc = getOrCreateAgentService();
+		createTuiSession(svc, "cp-tool-buffered");
+		const pump = createTurnEventPump({
+			service: svc,
+			sessionId: "cp-tool-buffered",
+			turnIndex: 1,
+		});
+		pump.onLLMStreamEvent({
+			type: "tool-call-start",
+			toolCallId: "tc-1",
+			toolName: "file_read",
+		});
+		pump.onLLMStreamEvent({
+			type: "tool-call-args-delta",
+			toolCallId: "tc-1",
+			toolName: "file_read",
+			delta: '{"path":',
+		});
+		pump.onLLMStreamEvent({
+			type: "tool-call-args-delta",
+			toolCallId: "tc-1",
+			toolName: "file_read",
+			delta: ' "/etc/hosts"}',
+		});
+		const turnSeq = payloadTypes(captureEvents(svc, "cp-tool-buffered")).filter(
+			(t) => t !== "session.created" && t !== "session.updated",
+		);
+		expect(turnSeq).toEqual([]);
+	});
+
+	it("tool-call-end emits tool.call with assembled input", () => {
+		const svc = getOrCreateAgentService();
+		createTuiSession(svc, "cp-tool-call");
+		const pump = createTurnEventPump({
+			service: svc,
+			sessionId: "cp-tool-call",
+			turnIndex: 1,
+		});
+		pump.onLLMStreamEvent({
+			type: "tool-call-end",
+			toolCallId: "tc-1",
+			toolName: "file_read",
+			inputText: '{"path":"/etc/hosts"}',
+			input: { path: "/etc/hosts" },
+		});
+		const events = captureEvents(svc, "cp-tool-call");
+		const tc = events.find((e) => e.payload.type === "tool.call");
+		expect(tc).toBeDefined();
+		if (tc != null && tc.payload.type === "tool.call") {
+			expect(tc.payload.toolCallId).toBe("tc-1");
+			expect(tc.payload.toolName).toBe("file_read");
+			expect(tc.payload.input).toEqual({ path: "/etc/hosts" });
+		}
+	});
+
+	it("tool-result emits tool.result and propagates isError", () => {
+		const svc = getOrCreateAgentService();
+		createTuiSession(svc, "cp-tool-result");
+		const pump = createTurnEventPump({
+			service: svc,
+			sessionId: "cp-tool-result",
+			turnIndex: 1,
+		});
+		pump.onLLMStreamEvent({
+			type: "tool-result",
+			toolCallId: "tc-1",
+			toolName: "file_read",
+			output: "content",
+		});
+		pump.onLLMStreamEvent({
+			type: "tool-result",
+			toolCallId: "tc-2",
+			toolName: "file_read",
+			output: "perm denied",
+			isError: true,
+		});
+		const results = captureEvents(svc, "cp-tool-result").filter(
+			(e) => e.payload.type === "tool.result",
+		);
+		expect(results).toHaveLength(2);
+		const r1 = results[0];
+		const r2 = results[1];
+		if (r1?.payload.type === "tool.result") {
+			expect(r1.payload.output).toBe("content");
+			expect(r1.payload.isError).toBeUndefined();
+		}
+		if (r2?.payload.type === "tool.result") {
+			expect(r2.payload.isError).toBe(true);
+		}
+	});
+
+	it("tool-call-end auto-closes any open text/reasoning part", () => {
+		const svc = getOrCreateAgentService();
+		createTuiSession(svc, "cp-mixed");
+		const pump = createTurnEventPump({
+			service: svc,
+			sessionId: "cp-mixed",
+			turnIndex: 1,
+		});
+		pump.onLLMStreamEvent({ type: "text", delta: "partial" });
+		// No explicit text_end — pump must auto-close on tool-call.
+		pump.onLLMStreamEvent({
+			type: "tool-call-end",
+			toolCallId: "tc-x",
+			toolName: "x",
+			inputText: "{}",
+			input: {},
+		});
+		const turnSeq = payloadTypes(captureEvents(svc, "cp-mixed")).filter(
+			(t) => t !== "session.created" && t !== "session.updated",
+		);
+		expect(turnSeq).toEqual([
+			"llm.text_start",
+			"llm.text",
+			"llm.text_end",
+			"tool.call",
+		]);
+	});
+
+	it("onAssistantMessage auto-closes any open text/reasoning part", () => {
+		const svc = getOrCreateAgentService();
+		createTuiSession(svc, "cp-assistant-close");
+		const pump = createTurnEventPump({
+			service: svc,
+			sessionId: "cp-assistant-close",
+			turnIndex: 1,
+		});
+		pump.onLLMStreamEvent({ type: "reasoning", delta: "thinking..." });
+		// No explicit reasoning_end — pump must auto-close.
+		pump.onAssistantMessage({ role: "assistant", content: "hello" });
+		const turnSeq = payloadTypes(
+			captureEvents(svc, "cp-assistant-close"),
+		).filter((t) => t !== "session.created" && t !== "session.updated");
+		expect(turnSeq).toEqual([
+			"llm.reasoning_start",
+			"llm.reasoning",
+			"llm.reasoning_end",
+			"assistant.message",
+		]);
+	});
+
+	it("closePendingParts (called from turn finally) closes both text + reasoning idempotently", () => {
+		const svc = getOrCreateAgentService();
+		createTuiSession(svc, "cp-close");
+		const pump = createTurnEventPump({
+			service: svc,
+			sessionId: "cp-close",
+			turnIndex: 1,
+		});
+		pump.onLLMStreamEvent({ type: "text", delta: "x" });
+		pump.onLLMStreamEvent({ type: "reasoning", delta: "y" });
+		// No assistant.message — partial turn (e.g., user interrupt).
+		pump.closePendingParts();
+		// Second call must be a no-op.
+		pump.closePendingParts();
+		const turnSeq = payloadTypes(captureEvents(svc, "cp-close")).filter(
+			(t) => t !== "session.created" && t !== "session.updated",
+		);
+		// One start/end for each kind; no duplicates from the second close.
+		expect(turnSeq).toEqual([
+			"llm.text_start",
+			"llm.text",
+			"llm.reasoning_start",
+			"llm.reasoning",
+			"llm.text_end",
+			"llm.reasoning_end",
+		]);
+	});
+
+	it("uses unique part ids per turn (textPartId scoped by turnIndex + segment)", () => {
+		const svc = getOrCreateAgentService();
+		createTuiSession(svc, "cp-ids");
+		const pump1 = createTurnEventPump({
+			service: svc,
+			sessionId: "cp-ids",
+			turnIndex: 1,
+		});
+		const pump2 = createTurnEventPump({
+			service: svc,
+			sessionId: "cp-ids",
+			turnIndex: 2,
+		});
+		pump1.onLLMStreamEvent({ type: "text", delta: "turn1" });
+		pump1.closePendingParts();
+		pump2.onLLMStreamEvent({ type: "text", delta: "turn2" });
+		pump2.closePendingParts();
+		const events = captureEvents(svc, "cp-ids");
+		const textPartIds = events
+			.map((e) => e.payload)
+			.filter(
+				(p): p is Extract<typeof p, { type: "llm.text" }> =>
+					p.type === "llm.text",
+			)
+			.map((p) => p.textPartId);
+		// Segment 0 for the first (and only) part within each turn.
+		expect(textPartIds).toEqual(["text-1-0", "text-2-0"]);
+	});
+
+	it("re-opening text within one turn (after tool-call) uses a FRESH part id", () => {
+		// Regression test for the close-reopen part-id collision
+		// flagged by Slice C Reviewer B: when a text part is closed
+		// by tool-call-end and a subsequent LLM step emits more text
+		// in the same turn, the pump must allocate a new textPartId
+		// so consumers rebuilding AI SDK SSE see distinct
+		// text-start/text-end brackets per segment.
+		const svc = getOrCreateAgentService();
+		createTuiSession(svc, "cp-reopen");
+		const pump = createTurnEventPump({
+			service: svc,
+			sessionId: "cp-reopen",
+			turnIndex: 1,
+		});
+		pump.onLLMStreamEvent({ type: "text", delta: "first" });
+		pump.onLLMStreamEvent({
+			type: "tool-call-end",
+			toolCallId: "tc-1",
+			toolName: "x",
+			inputText: "{}",
+			input: {},
+		});
+		pump.onLLMStreamEvent({ type: "text", delta: "second" });
+		pump.closePendingParts();
+		const events = captureEvents(svc, "cp-reopen");
+		const startIds = events
+			.map((e) => e.payload)
+			.filter(
+				(p): p is Extract<typeof p, { type: "llm.text_start" }> =>
+					p.type === "llm.text_start",
+			)
+			.map((p) => p.textPartId);
+		expect(startIds).toEqual(["text-1-0", "text-1-1"]);
+		// Deltas line up with their respective segment ids.
+		const deltaIds = events
+			.map((e) => e.payload)
+			.filter(
+				(p): p is Extract<typeof p, { type: "llm.text" }> =>
+					p.type === "llm.text",
+			)
+			.map((p) => p.textPartId);
+		expect(deltaIds).toEqual(["text-1-0", "text-1-1"]);
+	});
+
+	it("re-opening reasoning within one turn also uses a FRESH part id", () => {
+		const svc = getOrCreateAgentService();
+		createTuiSession(svc, "cp-rsn-reopen");
+		const pump = createTurnEventPump({
+			service: svc,
+			sessionId: "cp-rsn-reopen",
+			turnIndex: 1,
+		});
+		pump.onLLMStreamEvent({ type: "reasoning", delta: "first" });
+		pump.onLLMStreamEvent({
+			type: "tool-call-end",
+			toolCallId: "tc-r",
+			toolName: "x",
+			inputText: "{}",
+			input: {},
+		});
+		pump.onLLMStreamEvent({ type: "reasoning", delta: "second" });
+		pump.closePendingParts();
+		const events = captureEvents(svc, "cp-rsn-reopen");
+		const startIds = events
+			.map((e) => e.payload)
+			.filter(
+				(p): p is Extract<typeof p, { type: "llm.reasoning_start" }> =>
+					p.type === "llm.reasoning_start",
+			)
+			.map((p) => p.reasoningPartId);
+		expect(startIds).toEqual(["reasoning-1-0", "reasoning-1-1"]);
+	});
+
+	it("swallows LRU-evicted session errors silently (does not throw)", () => {
+		const svc = getOrCreateAgentService();
+		createTuiSession(svc, "cp-evict");
+		const pump = createTurnEventPump({
+			service: svc,
+			sessionId: "cp-evict",
+			turnIndex: 1,
+		});
+		// Evict before the pump emits anything.
+		svc.deleteSession("cp-evict");
+		expect(() => {
+			pump.onLLMStreamEvent({ type: "text", delta: "x" });
+			pump.onLLMStreamEvent({
+				type: "tool-call-end",
+				toolCallId: "tc",
+				toolName: "x",
+				inputText: "{}",
+				input: {},
+			});
+			pump.onAssistantMessage({ role: "assistant", content: "y" });
+			pump.closePendingParts();
+		}).not.toThrow();
 	});
 });

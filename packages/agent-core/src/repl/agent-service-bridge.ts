@@ -18,10 +18,12 @@
  * 进程内任何来源(TUI/web/agent-mesh)起的 session。写侧留给 Slice B+。
  */
 
+import type { LLMStreamEvent } from "../llm/types.js";
 import {
 	AgentService,
 	type AgentSession,
 } from "../services/agent-service/index.js";
+import type { Message } from "../state/types.js";
 
 /**
  * In-process AgentService singleton. Kept on `globalThis` so the
@@ -163,4 +165,201 @@ export function markSessionStatus(
 	} catch {
 		return null;
 	}
+}
+
+/**
+ * Result of `createTurnEventPump`. The TUI plugs these into the
+ * existing call sites:
+ *   - `onLLMStreamEvent` wraps the `StreamingLLMClient` callback.
+ *   - `onAssistantMessage` wraps the `runAgentLoop` hook.
+ *   - `closePendingParts` is called at turn end (after `runAgentLoop`
+ *     returns, before turn.completed) so any open text/reasoning
+ *     parts are properly bracketed with their `_end` event even when
+ *     `onAssistantMessage` didn't fire (e.g., tool-only turn).
+ *
+ * `createTurnEventPump` 的返回值。TUI 把这几个函数插进 StreamingLLMClient
+ * callback / runAgentLoop hooks / 收尾。
+ */
+export interface TurnEventPumpHandle {
+	readonly onLLMStreamEvent: (event: LLMStreamEvent) => void;
+	readonly onAssistantMessage: (message: Message) => void;
+	readonly closePendingParts: () => void;
+}
+
+/**
+ * Create a per-turn event pump that translates the TUI's
+ * `LLMStreamEvent` callbacks + `runAgentLoop` `onAssistantMessage`
+ * hook into structured `AgentEventPayload` events on the in-process
+ * AgentService event bus.
+ *
+ * Translation table (mirrors `docs/00-core-loop/agent-service.md`
+ * §"Slice 2 mapping" + Web's `pumpFullStreamIntoAgentService`):
+ *
+ * | Source                          | Emitted AgentEventPayload    |
+ * |---------------------------------|------------------------------|
+ * | `text` (first in turn)          | `llm.text_start` then `llm.text` |
+ * | `text` (subsequent)             | `llm.text`                   |
+ * | `reasoning` (first in turn)     | `llm.reasoning_start` then `llm.reasoning` |
+ * | `reasoning` (subsequent)        | `llm.reasoning`              |
+ * | `tool-call-start`               | (dropped — buffered)         |
+ * | `tool-call-args-delta`          | (dropped — buffered)         |
+ * | `tool-call-end`                 | `tool.call` (with assembled input) |
+ * | `tool-result`                   | `tool.result`                |
+ * | `onAssistantMessage(message)`   | closes pending text/reasoning + emits `assistant.message` |
+ *
+ * Text/reasoning part ids are derived from `turnIndex` + a stable
+ * suffix so multiple turns in the same session don't collide. The
+ * Web side picks ids dynamically from the AI SDK's `text-start`
+ * chunks; the TUI's `LLMStreamEvent` doesn't carry part ids, so we
+ * synthesize them.
+ *
+ * **Eviction safety**: every `service.emitFromRunner` call is
+ * guarded — `emitFromRunner` throws on unknown sessionId (LRU
+ * eviction race). The pump swallows that silently so a mid-turn
+ * eviction doesn't crash the REPL.
+ *
+ * 每个 turn 一个 pump。把 LLMStreamEvent + onAssistantMessage 翻译成
+ * AgentEventPayload。textPartId / reasoningPartId 用 turnIndex 派生,
+ * 多 turn 不冲突。emit 失败(LRU evict)静默吞掉。
+ */
+export function createTurnEventPump(opts: {
+	readonly service: AgentService;
+	readonly sessionId: string;
+	readonly turnIndex: number;
+}): TurnEventPumpHandle {
+	const { service, sessionId, turnIndex } = opts;
+	// Part-id segment counters. Each time a text/reasoning part is
+	// CLOSED within the same turn (e.g. interrupted by a tool-call),
+	// the counter advances so the next text/reasoning that opens uses
+	// a FRESH id like `text-1-2`. This keeps the spec contract
+	// "textPartId uniquely identifies one *_start..._end bracket"
+	// (docs/00-core-loop/agent-service.md line 202) intact, and
+	// matches Web's `pumpFullStreamIntoAgentService` step-scoped id
+	// pattern so a future cross-frontend rebuild back to AI SDK SSE
+	// chunks doesn't see colliding text-start ids in the same turn.
+	//
+	// 同 turn 内 text/reasoning part 关闭后再开 → counter 递增 → 拿新 id,
+	// 不复用 → 满足 textPartId 唯一性契约,与 web pump 步级 id 模式一致。
+	let textSegment = 0;
+	let reasoningSegment = 0;
+	let textPartId = `text-${turnIndex}-${textSegment}`;
+	let reasoningPartId = `reasoning-${turnIndex}-${reasoningSegment}`;
+	let textOpen = false;
+	let reasoningOpen = false;
+
+	function safeEmit(
+		payload: Parameters<AgentService["emitFromRunner"]>[1],
+		touchActivity = false,
+	): void {
+		try {
+			service.emitFromRunner(sessionId, payload, { touchActivity });
+		} catch {
+			/* LRU evicted; session is gone — TUI continues with checkpoint */
+		}
+	}
+
+	function closeText(): void {
+		if (!textOpen) return;
+		safeEmit({ type: "llm.text_end", turnIndex, textPartId });
+		textOpen = false;
+		// Advance the segment counter so the next text part within the
+		// same turn (after a tool-call interrupt) opens with a fresh
+		// id. Recompute textPartId eagerly so a subsequent `text` delta
+		// uses the new value.
+		textSegment += 1;
+		textPartId = `text-${turnIndex}-${textSegment}`;
+	}
+
+	function closeReasoning(): void {
+		if (!reasoningOpen) return;
+		safeEmit({
+			type: "llm.reasoning_end",
+			turnIndex,
+			reasoningPartId,
+		});
+		reasoningOpen = false;
+		reasoningSegment += 1;
+		reasoningPartId = `reasoning-${turnIndex}-${reasoningSegment}`;
+	}
+
+	return {
+		onLLMStreamEvent(event: LLMStreamEvent): void {
+			switch (event.type) {
+				case "text": {
+					if (!textOpen) {
+						safeEmit({ type: "llm.text_start", turnIndex, textPartId });
+						textOpen = true;
+					}
+					safeEmit({
+						type: "llm.text",
+						turnIndex,
+						delta: event.delta,
+						textPartId,
+					});
+					break;
+				}
+				case "reasoning": {
+					if (!reasoningOpen) {
+						safeEmit({
+							type: "llm.reasoning_start",
+							turnIndex,
+							reasoningPartId,
+						});
+						reasoningOpen = true;
+					}
+					safeEmit({
+						type: "llm.reasoning",
+						turnIndex,
+						delta: event.delta,
+						reasoningPartId,
+					});
+					break;
+				}
+				case "tool-call-end": {
+					// Close any open text/reasoning so the wire stays
+					// well-formed: `*_start ... *_end` always bracket.
+					closeText();
+					closeReasoning();
+					const payload: Parameters<AgentService["emitFromRunner"]>[1] = {
+						type: "tool.call",
+						turnIndex,
+						toolCallId: event.toolCallId,
+						toolName: event.toolName,
+						...(event.input === undefined ? {} : { input: event.input }),
+					};
+					safeEmit(payload, true);
+					break;
+				}
+				case "tool-result": {
+					const payload: Parameters<AgentService["emitFromRunner"]>[1] = {
+						type: "tool.result",
+						turnIndex,
+						toolCallId: event.toolCallId,
+						toolName: event.toolName,
+						output: event.output,
+						...(event.isError === true ? { isError: true } : {}),
+					};
+					safeEmit(payload, true);
+					break;
+				}
+				// tool-call-start / tool-call-args-delta: dropped per spec
+				// (`docs/00-core-loop/agent-service.md` slice 2 mapping
+				// notes: buffered, only the assembled `tool-call-end`
+				// becomes a `tool.call` event).
+				default:
+					break;
+			}
+		},
+		onAssistantMessage(message: Message): void {
+			closeText();
+			closeReasoning();
+			const content =
+				typeof message.content === "string" ? message.content : "";
+			safeEmit({ type: "assistant.message", turnIndex, content }, true);
+		},
+		closePendingParts(): void {
+			closeText();
+			closeReasoning();
+		},
+	};
 }

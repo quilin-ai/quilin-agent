@@ -41,9 +41,11 @@ import { logger } from "./logger.js";
 import { runAgentLoop } from "./loop.js";
 import {
 	createTuiSession,
+	createTurnEventPump,
 	getOrCreateAgentService,
 	listAgentServiceSessions,
 	markSessionStatus,
+	type TurnEventPumpHandle,
 } from "./repl/agent-service-bridge.js";
 import { AgentLoopError } from "./loop-types.js";
 import {
@@ -2935,6 +2937,12 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 		const baseModel = provider(modelId);
 		let reasoningDisplay: ReasoningDisplayMode = "collapsed";
 		let streamRenderState = createStreamRenderState();
+		// Candidate 1 Slice C: per-turn event pump that translates the
+		// StreamingLLMClient's LLMStreamEvent into AgentEventPayload
+		// (and the runAgentLoop hook's onAssistantMessage into
+		// assistant.message). Reset to a fresh pump at every turn
+		// start so part ids are scoped per turn.
+		let currentTurnPump: TurnEventPumpHandle | null = null;
 		const streamingLlm = new StreamingLLMClient(
 			{
 				model: baseModel,
@@ -2942,6 +2950,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 			},
 			(event) => {
 				renderStreamEvent(event, reasoningDisplay, streamRenderState);
+				currentTurnPump?.onLLMStreamEvent(event);
 			},
 		);
 		let lastProviderRunRecord: ProviderRunRecord | undefined;
@@ -3582,6 +3591,33 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 				// running. Silent failure on eviction race — the
 				// turn proceeds with checkpoint as source of truth.
 				markSessionStatus(agentService, resolvedSessionId, "running");
+				// Candidate 1 Slice C: start a per-turn event pump.
+				// `turnIndex` is `state.turnCount + 1` because turnCount
+				// reflects completed turns; the in-flight turn is one
+				// past that.
+				const turnIndex = state.turnCount + 1;
+				currentTurnPump = createTurnEventPump({
+					service: agentService,
+					sessionId: resolvedSessionId,
+					turnIndex,
+				});
+				// Emit turn.started so admin probes / future TUI client
+				// consumers see the new turn brackets. Touch activity so
+				// the session's lastActiveAt advances.
+				try {
+					agentService.emitFromRunner(
+						resolvedSessionId,
+						{
+							type: "turn.started",
+							turnIndex,
+							userText: extractLastUserMessageText(messages) ?? "",
+						},
+						{ touchActivity: true },
+					);
+				} catch {
+					/* LRU evict between status mark and turn.started — bail
+					 * out gracefully; the turn still runs against checkpoint */
+				}
 				streamRenderState = createStreamRenderState();
 				runtimeSurface = await syncRuntimeSurface();
 				let latestAssistantMessage: Message | undefined;
@@ -3626,6 +3662,10 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 								// output (e.g. provider run record) writes to
 								// stderr in between.
 								finalizeStreamRender(streamRenderState);
+								// Slice C: push assistant.message to AgentService
+								// so cross-frontend consumers see the assembled
+								// text without re-stitching deltas.
+								currentTurnPump?.onAssistantMessage(message);
 							},
 							onMessagesUpdated: (loopMessages) => {
 								latestLoopMessages = [...loopMessages];
@@ -3676,6 +3716,20 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 					isTerminal: false,
 					lastActiveAt: new Date().toISOString(),
 				});
+				// Slice C: bracket the successful turn with turn.completed so
+				// cross-frontend consumers see clean turn boundaries. Failed
+				// turns get session.failed via the catch branch below; we
+				// intentionally don't emit turn.completed there because
+				// turn.completed implies success.
+				try {
+					agentService.emitFromRunner(
+						resolvedSessionId,
+						{ type: "turn.completed", turnIndex },
+						{ touchActivity: true },
+					);
+				} catch {
+					/* LRU evict — turn data is still safe in messages + checkpoint */
+				}
 				if (trajectoryStore != null) {
 					try {
 						const turnInput: TrajectoryRecordInput = {
@@ -3719,6 +3773,14 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 				// the next user input transitions back to "running".
 				markSessionStatus(agentService, resolvedSessionId, "failed");
 			} finally {
+				// Slice C: close any text/reasoning parts the pump
+				// opened but didn't auto-close (e.g., catch-branch
+				// path where onAssistantMessage never fired). No-op
+				// if already closed. Reset pump reference so the
+				// StreamingLLMClient callback stops routing into a
+				// stale handle outside the turn.
+				currentTurnPump?.closePendingParts();
+				currentTurnPump = null;
 				// Candidate 1 Slice B: after a successful turn (no catch
 				// branch entered), transition the session back to idle
 				// so consumers see "waiting for next input" rather than
