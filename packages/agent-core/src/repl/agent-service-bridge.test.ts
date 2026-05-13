@@ -16,9 +16,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { AgentService } from "../services/agent-service/index.js";
 import {
+	createTuiSession,
 	findAgentServiceSession,
 	getOrCreateAgentService,
 	listAgentServiceSessions,
+	markSessionStatus,
 } from "./agent-service-bridge.js";
 
 interface GlobalShape {
@@ -128,5 +130,101 @@ describe("findAgentServiceSession", () => {
 		svc.createSession({ origin: "tui", id: "e-200" });
 		expect(findAgentServiceSession(svc, "e-0")).toBeNull();
 		expect(findAgentServiceSession(svc, "e-200")).not.toBeNull();
+	});
+});
+
+describe("createTuiSession (Slice B write-side)", () => {
+	it("creates a new session with origin=tui when id is unused", () => {
+		const svc = getOrCreateAgentService();
+		const sess = createTuiSession(svc, "tui-1", "First chat");
+		expect(sess.id).toBe("tui-1");
+		expect(sess.origin).toBe("tui");
+		expect(sess.title).toBe("First chat");
+	});
+
+	it("is idempotent — reuses an existing session with the same id", () => {
+		const svc = getOrCreateAgentService();
+		const first = createTuiSession(svc, "tui-dup", "First");
+		const second = createTuiSession(svc, "tui-dup", "Second-ignored");
+		expect(second).toBe(first);
+		// Title stays as the first (existing) — we don't patch on reuse.
+		expect(second.title).toBe("First");
+	});
+
+	it("reuses a session created by another origin (e.g. web)", () => {
+		const svc = getOrCreateAgentService();
+		const webSession = svc.createSession({ origin: "web", id: "shared" });
+		const tuiSession = createTuiSession(svc, "shared", "(ignored)");
+		expect(tuiSession).toBe(webSession);
+		expect(tuiSession.origin).toBe("web"); // unchanged
+	});
+
+	it("truncates titles longer than 80 characters", () => {
+		const svc = getOrCreateAgentService();
+		const long = "x".repeat(200);
+		const sess = createTuiSession(svc, "tui-trim", long);
+		expect(sess.title.length).toBeLessThanOrEqual(80);
+		expect(sess.title).toBe(long.slice(0, 80));
+	});
+
+	it("falls back to the registry default title when title is omitted", () => {
+		const svc = getOrCreateAgentService();
+		const sess = createTuiSession(svc, "tui-default");
+		expect(sess.title).toBe("(new session)");
+	});
+
+	it("treats empty-string title as omitted (uses default)", () => {
+		const svc = getOrCreateAgentService();
+		const sess = createTuiSession(svc, "tui-empty", "");
+		expect(sess.title).toBe("(new session)");
+	});
+});
+
+describe("markSessionStatus (Slice B write-side)", () => {
+	it("transitions a known session to the requested status", () => {
+		const svc = getOrCreateAgentService();
+		createTuiSession(svc, "ms-1");
+		const updated = markSessionStatus(svc, "ms-1", "running");
+		expect(updated).not.toBeNull();
+		expect(updated?.status).toBe("running");
+	});
+
+	it("returns null without throwing for unknown session id (eviction race)", () => {
+		const svc = getOrCreateAgentService();
+		const got = markSessionStatus(svc, "ms-ghost", "running");
+		expect(got).toBeNull();
+	});
+
+	it("supports the full status set: idle / running / completed / failed", () => {
+		const svc = getOrCreateAgentService();
+		createTuiSession(svc, "ms-fsm");
+		for (const status of ["running", "completed", "failed", "idle"] as const) {
+			const got = markSessionStatus(svc, "ms-fsm", status);
+			expect(got?.status).toBe(status);
+		}
+	});
+
+	it("updates lastActiveAt as part of the status transition", async () => {
+		const svc = getOrCreateAgentService();
+		const original = createTuiSession(svc, "ms-time");
+		// Force a small wall-clock gap so lastActiveAt actually changes.
+		await new Promise((r) => setTimeout(r, 5));
+		const updated = markSessionStatus(svc, "ms-time", "running");
+		expect(updated?.lastActiveAt).not.toBe(original.lastActiveAt);
+	});
+});
+
+describe("Slice A + Slice B integration", () => {
+	it("createTuiSession-registered sessions are visible via listAgentServiceSessions", () => {
+		const svc = getOrCreateAgentService();
+		createTuiSession(svc, "ab-1", "first");
+		createTuiSession(svc, "ab-2", "second");
+		const listed = listAgentServiceSessions(svc);
+		const ids = listed.map((s) => s.id).sort();
+		expect(ids).toEqual(["ab-1", "ab-2"]);
+		// Status reflects markSessionStatus transitions, also visible.
+		markSessionStatus(svc, "ab-1", "running");
+		const after = listAgentServiceSessions(svc).find((s) => s.id === "ab-1");
+		expect(after?.status).toBe("running");
 	});
 });

@@ -107,3 +107,60 @@ export function findAgentServiceSession(
 ): AgentSession | null {
 	return service.getSession(id);
 }
+
+/**
+ * Register the TUI's resolved session id with the AgentService
+ * (Candidate 1 Slice B — write-side wiring). Idempotent: if a
+ * session with this id already exists in the registry — say because
+ * the same id was used by an earlier `/resume` load, or because the
+ * Web side already created it — we reuse the existing entry rather
+ * than throwing on the registry's collision check.
+ *
+ * Returns the AgentSession (newly-created or pre-existing).
+ *
+ * Slice B:把 TUI 的 resolvedSessionId 写进 AgentService。idempotent —
+ * 如果 web 先建过同 id session 或 /resume 已加载,直接复用。
+ */
+export function createTuiSession(
+	service: AgentService,
+	id: string,
+	title?: string,
+): AgentSession {
+	const existing = service.getSession(id);
+	if (existing != null) return existing;
+	const safeTitle =
+		title != null && title.length > 0 ? title.slice(0, 80) : undefined;
+	return service.createSession({
+		origin: "tui",
+		id,
+		...(safeTitle == null ? {} : { title: safeTitle }),
+	});
+}
+
+/**
+ * Patch a session's status with a defensive guard against the LRU
+ * eviction race: `AgentService.setSessionStatus` throws if the
+ * session is unknown (registry-side `update` throws on missing id),
+ * which can happen when a high-volume process has evicted the
+ * session out from under the TUI between turn boundaries. We catch
+ * + log silently because the TUI doesn't have a sensible recovery
+ * — the session is gone and the user is mid-turn; we don't want to
+ * abort the in-flight LLM step on a metadata transition.
+ *
+ * Returns the updated `AgentSession` on success, or `null` when the
+ * session is unknown (caller can decide whether to recreate).
+ *
+ * 安全 setSessionStatus:LRU 驱逐过期 session 时不抛,返 null 让调用方
+ * 决定是否重建。
+ */
+export function markSessionStatus(
+	service: AgentService,
+	id: string,
+	status: "idle" | "running" | "completed" | "failed",
+): AgentSession | null {
+	try {
+		return service.setSessionStatus(id, status);
+	} catch {
+		return null;
+	}
+}

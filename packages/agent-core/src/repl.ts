@@ -40,8 +40,10 @@ import type {
 import { logger } from "./logger.js";
 import { runAgentLoop } from "./loop.js";
 import {
+	createTuiSession,
 	getOrCreateAgentService,
 	listAgentServiceSessions,
+	markSessionStatus,
 } from "./repl/agent-service-bridge.js";
 import { AgentLoopError } from "./loop-types.js";
 import {
@@ -477,6 +479,25 @@ function formatAgentServiceTime(iso: string): string {
 	} catch {
 		return iso;
 	}
+}
+
+/**
+ * Pluck the last user message's text content for use as an
+ * AgentSession title hint. Returns `undefined` when there's no
+ * user message (e.g., fresh session, system-only history).
+ *
+ * 取最后一条 user message 的文本作为 AgentSession 标题(无则 undefined)。
+ */
+function extractLastUserMessageText(
+	messages: readonly Message[],
+): string | undefined {
+	for (let i = messages.length - 1; i >= 0; i -= 1) {
+		const m = messages[i];
+		if (m == null || m.role !== "user") continue;
+		const content = m.content;
+		if (typeof content === "string" && content.length > 0) return content;
+	}
+	return undefined;
 }
 
 function renderAgentServiceSessionsTable(
@@ -2620,6 +2641,19 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 				? restoredState.messages.slice(1)
 				: (restoredState?.messages ?? []);
 
+		// Candidate 1 Slice B: register this TUI session with the
+		// in-process AgentService so cross-frontend consumers (Web
+		// /api/admin/agent-service/sessions, future agent-mesh
+		// listeners) can see it. Idempotent — if Web or `/resume`
+		// already created the same id, this reuses the existing entry.
+		// Title derives from the restored last user message when
+		// resuming, otherwise the default "(new session)" placeholder.
+		const tuiSessionTitle =
+			restoredState != null
+				? extractLastUserMessageText(restoredMessages)
+				: undefined;
+		createTuiSession(agentService, resolvedSessionId, tuiSessionTitle);
+
 		stderr.write("\n🐉 Quilin Agent v0.0.3 (DeepSeek)\n");
 		stderr.write(
 			`Session: ${resolvedSessionId} (${restoredState == null ? "new" : "restored"})\n`,
@@ -3544,6 +3578,10 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 			stdout.write("\n");
 
 			try {
+				// Candidate 1 Slice B: tell AgentService the session is
+				// running. Silent failure on eviction race — the
+				// turn proceeds with checkpoint as source of truth.
+				markSessionStatus(agentService, resolvedSessionId, "running");
 				streamRenderState = createStreamRenderState();
 				runtimeSurface = await syncRuntimeSurface();
 				let latestAssistantMessage: Message | undefined;
@@ -3675,7 +3713,23 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 					isTerminal: false,
 					lastActiveAt: new Date().toISOString(),
 				});
+				// Candidate 1 Slice B: mark the session as failed so
+				// the cross-frontend admin probe reflects the error
+				// state. The session itself stays in the registry —
+				// the next user input transitions back to "running".
+				markSessionStatus(agentService, resolvedSessionId, "failed");
 			} finally {
+				// Candidate 1 Slice B: after a successful turn (no catch
+				// branch entered), transition the session back to idle
+				// so consumers see "waiting for next input" rather than
+				// a stuck "running". The catch branch above sets
+				// "failed"; finally runs after both — re-reading the
+				// current status here lets us promote "running" → "idle"
+				// without clobbering a freshly-set "failed".
+				const current = agentService.getSession(resolvedSessionId);
+				if (current?.status === "running") {
+					markSessionStatus(agentService, resolvedSessionId, "idle");
+				}
 				await flushObservabilitySpans(
 					options.observability,
 					options.spanExporter,
