@@ -39,14 +39,6 @@ import type {
 } from "./llm/types.js";
 import { logger } from "./logger.js";
 import { runAgentLoop } from "./loop.js";
-import {
-	createTuiSession,
-	createTurnEventPump,
-	getOrCreateAgentService,
-	listAgentServiceSessions,
-	markSessionStatus,
-	type TurnEventPumpHandle,
-} from "./repl/agent-service-bridge.js";
 import { AgentLoopError } from "./loop-types.js";
 import {
 	createObserverBridgeIfEnabled,
@@ -68,6 +60,25 @@ import {
 } from "./observability/agent-run-log.js";
 import type { SpanExporter } from "./observability/exporters/composite.js";
 import type { AgentLoopObservability } from "./observability/loop.js";
+import {
+	createTuiSession,
+	createTurnEventPump,
+	findAgentServiceSession,
+	getOrCreateAgentService,
+	listAgentServiceSessions,
+	markSessionStatus,
+	renderAgentEvent,
+	type TurnEventPumpHandle,
+} from "./repl/agent-service-bridge.js";
+import {
+	createStreamRenderState,
+	isRecord,
+	type ReasoningDisplayMode,
+	type ReplStreamRenderState,
+	stringifyJson,
+	summarizeInlineText,
+	summarizeToolOutput,
+} from "./repl/render-shared.js";
 import { LiveInputQueue, type QueuedLiveInput } from "./runtime/live-input.js";
 import {
 	type AuthorityMode,
@@ -503,7 +514,13 @@ function extractLastUserMessageText(
 }
 
 function renderAgentServiceSessionsTable(
-	sessions: readonly { readonly id: string; readonly origin: string; readonly status: string; readonly title: string; readonly lastActiveAt: string }[],
+	sessions: readonly {
+		readonly id: string;
+		readonly origin: string;
+		readonly status: string;
+		readonly title: string;
+		readonly lastActiveAt: string;
+	}[],
 ): string {
 	if (sessions.length === 0) {
 		return "(no in-process AgentService sessions yet)";
@@ -1789,21 +1806,6 @@ async function flushAgentRunLogger(
 	}
 }
 
-type ReasoningDisplayMode = "collapsed" | "verbose";
-
-interface ReplStreamRenderState {
-	thinkingShown: boolean;
-	toolInputs: Map<string, string>;
-	// Tracks whether the most recent emission to stdout was a `text`
-	// delta (the LLM's natural-language reply). Used by the turn-end
-	// hook to ensure a trailing newline is emitted so that subsequent
-	// logger output / readline prompt does not collide with the reply's
-	// last character. Reply content is on stdout; operational icons /
-	// banner stay on stderr.
-	lastTextEndedWithNewline: boolean;
-	hasEmittedText: boolean;
-}
-
 /**
  * Ensure the agent's reply stream ends on a newline. Called whenever an
  * assistant message completes during a turn (which happens once per
@@ -1829,51 +1831,6 @@ function finalizeStreamRender(state: ReplStreamRenderState): void {
 	state.lastTextEndedWithNewline = false;
 }
 
-function createStreamRenderState(): ReplStreamRenderState {
-	return {
-		thinkingShown: false,
-		toolInputs: new Map(),
-		lastTextEndedWithNewline: false,
-		hasEmittedText: false,
-	};
-}
-
-function stringifyJson(value: unknown): string {
-	const serialized = JSON.stringify(value);
-	return serialized ?? String(value);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value != null;
-}
-
-function summarizeInlineText(text: string, maxLength = 120): string {
-	const singleLine = text.replace(/\s+/gu, " ").trim();
-	if (singleLine.length <= maxLength) {
-		return singleLine;
-	}
-
-	return `${singleLine.slice(0, Math.max(0, maxLength - 3))}...`;
-}
-
-function summarizeToolOutput(output: unknown): string {
-	if (isRecord(output)) {
-		const result = output.result;
-		if (typeof result === "string") {
-			return summarizeInlineText(result);
-		}
-
-		const content = output.content;
-		if (typeof content === "string") {
-			return summarizeInlineText(content.split(/\r?\n/u, 1)[0] ?? content);
-		}
-	}
-
-	const raw =
-		typeof output === "string" ? output : stringifyJson(output ?? "undefined");
-	return summarizeInlineText(raw.split(/\r?\n/u, 1)[0] ?? raw);
-}
-
 function renderStreamEvent(
 	event: LLMStreamEvent,
 	reasoningDisplay: ReasoningDisplayMode,
@@ -1893,8 +1850,7 @@ function renderStreamEvent(
 			// a stray `\n` even when the reply already ended on `\n`.
 			if (event.delta.length > 0) {
 				renderState.hasEmittedText = true;
-				renderState.lastTextEndedWithNewline =
-					event.delta.endsWith("\n");
+				renderState.lastTextEndedWithNewline = event.delta.endsWith("\n");
 			}
 			break;
 		case "reasoning":
@@ -3444,12 +3400,68 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 				// (which is the SQLite cold-store).
 				//
 				// 进程内 AgentService session 列表(TUI/web/agent-mesh)。是 /resume
-				// 冷存的热存补集。Slice B+ 会加 `/sessions <id>` 切入。
+				// 冷存的热存补集。Slice D 起 `/sessions <id>` 可重放某个 session 的历史。
 				const svcSessions = listAgentServiceSessions(agentService);
 				stderr.write(`${renderAgentServiceSessionsTable(svcSessions)}\n`);
 				stderr.write(
-					"(read-only in Slice A; switching via `/sessions <id>` lands in Slice B)\n",
+					"Use `/sessions <id>` to replay an in-process session's history.\n",
 				);
+				continue;
+			}
+
+			if (trimmed.startsWith("/sessions ")) {
+				// Candidate 1 Slice D: replay a chosen session's history. Use
+				// the synchronous `historySnapshot` rather than a live
+				// `runRenderSubscription` here so replay order is
+				// deterministic and the render doesn't interleave with any
+				// concurrent live turn output (the inline render path is
+				// still authoritative for the current session's live turn).
+				//
+				// Slice D `/sessions <id>`:用 historySnapshot 同步重放。
+				// 不接管 live 渲染(inline 路径仍是 live turn 的唯一渲染源),
+				// 仅显示已落到 EventBus history 里的事件。
+				const targetId = trimmed.slice("/sessions ".length).trim();
+				if (targetId.length === 0) {
+					stderr.write("Usage: /sessions <id>\n");
+					continue;
+				}
+				const target = findAgentServiceSession(agentService, targetId);
+				if (target == null) {
+					stderr.write(`Session not found: ${targetId}\n`);
+					stderr.write("Run `/sessions` to list available ids.\n");
+					continue;
+				}
+				const replayState = createStreamRenderState();
+				const replayCtx = {
+					stdout,
+					stderr,
+					displayMode: reasoningDisplay,
+					renderState: replayState,
+				};
+				stderr.write(
+					`\n--- replay: ${targetId} (${target.origin}, ${target.status}) ---\n`,
+				);
+				// Pull every buffered event for the target session and
+				// render it through the same translator that future
+				// subscription-driven view modes will use.
+				const events = agentService
+					._getEventBus()
+					.historySnapshot({ sessionId: targetId });
+				for (const event of events) {
+					renderAgentEvent(event, replayCtx);
+				}
+				// If the recorded turn ended on a non-newline text delta
+				// (e.g., session was killed mid-stream before
+				// assistant.message landed), ensure a trailing newline so
+				// the closing banner doesn't concatenate onto the last
+				// reply character.
+				if (
+					replayState.hasEmittedText &&
+					!replayState.lastTextEndedWithNewline
+				) {
+					stdout.write("\n");
+				}
+				stderr.write(`--- end of replay (${events.length} events) ---\n\n`);
 				continue;
 			}
 

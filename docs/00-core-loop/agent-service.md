@@ -296,14 +296,22 @@ Task #22 follow-on(Linear Task #29)分 6 个 slice 把 TUI 接到同一个 `Agen
 | A | TUI read-side: `getOrCreateAgentService` singleton + `/sessions` command | ✅ landed (commit `dcaecaf`) |
 | B | TUI write-side: `createTuiSession` / `markSessionStatus` per turn | ✅ landed (commit `875db9d`) |
 | C | turn-level event pump: `runAgentLoop` hooks + LLMStreamEvent → AgentEventPayload | ✅ landed (commit `26ea659`) |
-| D | rendering: drive TUI render off `service.subscribe()` (enables `/sessions <id>` switching) | pending |
+| D | rendering: `renderAgentEvent` + `runRenderSubscription` primitives; `/sessions <id>` replays history via `historySnapshot` (subscription primitive built for future view-mode UX) | ✅ landed |
 | E | cross-process IPC (decision deferred — currently single-process assumption) | pending |
-| F | E2E integration tests + this doc's final summary | pending |
+| F | E2E integration tests + this doc's final summary | ✅ landed |
 
 **Slice A (landed)**:
 - `packages/agent-core/src/repl/agent-service-bridge.ts` — `getOrCreateAgentService()` reuses the same `globalThis.__quilin_agent_service__` key as `apps/web/lib/agent-service-client.ts`, so any single process running both Web and TUI sees one `AgentService`. `listAgentServiceSessions()` + `findAgentServiceSession()` are thin pass-throughs for read-only consumers.
-- `packages/agent-core/src/repl.ts` — new `/sessions` slash command renders the in-process session table (id / origin / status / title / lastActiveAt). `/resume` (SQLite cold-store) and `/sessions` (in-memory AgentService) coexist; switching via `/sessions <id>` lands in Slice B.
+- `packages/agent-core/src/repl.ts` — new `/sessions` slash command renders the in-process session table (id / origin / status / title / lastActiveAt). `/resume` (SQLite cold-store) and `/sessions` (in-memory AgentService) coexist; `<id>` replay support ships in Slice D.
 - 10 new tests in `agent-service-bridge.test.ts`; agent-core suite now 2328 passed / 1 skipped.
+
+**Slice D (landed)**:
+- `packages/agent-core/src/repl/render-shared.ts` (NEW) — extracted shared render state types (`ReplStreamRenderState`, `ReasoningDisplayMode`) + text utility helpers (`summarizeInlineText`, `summarizeToolOutput`, `stringifyJson`, `isRecord`) so the live inline render path and the new replay render path share a single source of truth.
+- `packages/agent-core/src/repl/agent-service-bridge.ts` — `renderAgentEvent(event, ctx)` translates `AgentEventPayload` back into render side-effects (symmetric counterpart to the inline `renderStreamEvent` for `LLMStreamEvent`). `runRenderSubscription({service, sessionId, onEvent, afterSeq?, abortSignal?})` is a long-running subscription primitive built for future view-mode UX (close handle + abort wiring + onEvent-throw resilience).
+- `packages/agent-core/src/repl.ts` — new `/sessions <id>` slash command. Uses `historySnapshot({sessionId})` + `renderAgentEvent` for deterministic synchronous replay (avoids the streamText / subscription microtask race documented in the planner spec). Live-turn rendering stays on the inline `renderStreamEvent` path — the planner-authorized conservative fallback.
+- 28 new tests in `agent-service-bridge.test.ts` (renderAgentEvent per payload variant + runRenderSubscription lifecycle + `render-shared` helper coverage + replay-pipeline integration), plus 7 cross-frontend tests in `services/agent-service/integration.test.ts` (added by Slice F). agent-core suite now 2427 passed / 1 skipped (was 2351 before Slice D).
+
+Slice D 渲染层:抽出 `render-shared.ts` 共享渲染状态/文本工具;新增 `renderAgentEvent`(AgentEvent → 渲染副作用)+ `runRenderSubscription`(长期订阅原语,留给未来 view-mode);`/sessions <id>` 用 `historySnapshot` 同步重放,确定性顺序、不接管 live turn(planner 授权的保守 fallback,避免 streamText 与 subscription 之间的微任务竞争)。
 
 Slice A:`/sessions` 是 in-memory 热存(AgentService)的 TUI 入口,与 `/resume` 冷存(SQLite checkpoint)并存。read-only,Slice B 才加 `<id>` 切换写侧。已落库(commit hash TBD,见 git history Task #29 Slice A)。
 

@@ -15,7 +15,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { AgentService } from "../services/agent-service/index.js";
-import type { AgentEvent } from "../services/agent-service/types.js";
+import type {
+	AgentEvent,
+	AgentEventPayload,
+} from "../services/agent-service/types.js";
 import {
 	createTuiSession,
 	createTurnEventPump,
@@ -23,7 +26,13 @@ import {
 	getOrCreateAgentService,
 	listAgentServiceSessions,
 	markSessionStatus,
+	renderAgentEvent,
+	runRenderSubscription,
 } from "./agent-service-bridge.js";
+import {
+	createStreamRenderState,
+	type ReplStreamRenderState,
+} from "./render-shared.js";
 
 interface GlobalShape {
 	__quilin_agent_service__: AgentService | undefined;
@@ -592,5 +601,760 @@ describe("createTurnEventPump (Slice C event pump)", () => {
 			pump.onAssistantMessage({ role: "assistant", content: "y" });
 			pump.closePendingParts();
 		}).not.toThrow();
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// Slice D — renderAgentEvent
+//
+// Coverage strategy:
+//   - One case per visible payload type (llm.text, llm.reasoning in both
+//     display modes, tool.call, tool.result, tool.result+isError,
+//     assistant.message finalize)
+//   - One case for each "lifecycle / framing" payload type to lock in
+//     the no-op contract (regression-guard against accidental render
+//     additions)
+//   - State threading: hasEmittedText / lastTextEndedWithNewline /
+//     thinkingShown survive across events
+// ─────────────────────────────────────────────────────────────────────
+
+interface FakeWriter {
+	chunks: string[];
+	write(chunk: string): void;
+}
+
+function makeWriter(): FakeWriter {
+	const chunks: string[] = [];
+	return {
+		chunks,
+		write(chunk: string): void {
+			chunks.push(chunk);
+		},
+	};
+}
+
+function wrapPayload(
+	payload: AgentEventPayload,
+	overrides: { seq?: number; sessionId?: string } = {},
+): AgentEvent {
+	return {
+		seq: overrides.seq ?? 1,
+		sessionId: overrides.sessionId ?? "s",
+		ts: new Date(0).toISOString(),
+		payload,
+		epoch: "epoch-test",
+	};
+}
+
+interface RenderCtx {
+	stdout: FakeWriter;
+	stderr: FakeWriter;
+	renderState: ReplStreamRenderState;
+}
+
+function makeCtx(
+	displayMode: "collapsed" | "verbose" = "collapsed",
+): RenderCtx & {
+	full: {
+		stdout: FakeWriter;
+		stderr: FakeWriter;
+		displayMode: "collapsed" | "verbose";
+		renderState: ReplStreamRenderState;
+	};
+} {
+	const stdout = makeWriter();
+	const stderr = makeWriter();
+	const renderState = createStreamRenderState();
+	return {
+		stdout,
+		stderr,
+		renderState,
+		full: { stdout, stderr, displayMode, renderState },
+	};
+}
+
+describe("renderAgentEvent (Slice D — replay translator)", () => {
+	it("llm.text writes the delta to stdout and tracks the trailing-newline flag", () => {
+		const ctx = makeCtx();
+		renderAgentEvent(
+			wrapPayload({ type: "llm.text", turnIndex: 1, delta: "Hello" }),
+			ctx.full,
+		);
+		expect(ctx.stdout.chunks).toEqual(["Hello"]);
+		expect(ctx.renderState.hasEmittedText).toBe(true);
+		expect(ctx.renderState.lastTextEndedWithNewline).toBe(false);
+
+		renderAgentEvent(
+			wrapPayload({ type: "llm.text", turnIndex: 1, delta: "world\n" }),
+			ctx.full,
+		);
+		expect(ctx.stdout.chunks).toEqual(["Hello", "world\n"]);
+		expect(ctx.renderState.lastTextEndedWithNewline).toBe(true);
+	});
+
+	it("llm.text with an empty delta does not clobber the trailing-newline flag", () => {
+		const ctx = makeCtx();
+		renderAgentEvent(
+			wrapPayload({ type: "llm.text", turnIndex: 1, delta: "done\n" }),
+			ctx.full,
+		);
+		expect(ctx.renderState.lastTextEndedWithNewline).toBe(true);
+		// Provider final empty flush — must not flip the flag.
+		renderAgentEvent(
+			wrapPayload({ type: "llm.text", turnIndex: 1, delta: "" }),
+			ctx.full,
+		);
+		expect(ctx.renderState.lastTextEndedWithNewline).toBe(true);
+	});
+
+	it("llm.reasoning in collapsed mode renders the thinking line once per turn", () => {
+		const ctx = makeCtx("collapsed");
+		renderAgentEvent(
+			wrapPayload({
+				type: "llm.reasoning",
+				turnIndex: 1,
+				delta: "let me think",
+			}),
+			ctx.full,
+		);
+		renderAgentEvent(
+			wrapPayload({
+				type: "llm.reasoning",
+				turnIndex: 1,
+				delta: " about it",
+			}),
+			ctx.full,
+		);
+		// One thinking line total (state.thinkingShown latches after the
+		// first reasoning event).
+		expect(ctx.stderr.chunks).toEqual(["💭 [thinking...]\n"]);
+		expect(ctx.renderState.thinkingShown).toBe(true);
+	});
+
+	it("llm.reasoning in verbose mode streams the raw delta to stderr", () => {
+		const ctx = makeCtx("verbose");
+		renderAgentEvent(
+			wrapPayload({
+				type: "llm.reasoning",
+				turnIndex: 1,
+				delta: "let me think",
+			}),
+			ctx.full,
+		);
+		renderAgentEvent(
+			wrapPayload({
+				type: "llm.reasoning",
+				turnIndex: 1,
+				delta: " about it",
+			}),
+			ctx.full,
+		);
+		expect(ctx.stderr.chunks).toEqual(["let me think", " about it"]);
+		// thinkingShown stays false in verbose mode — we stream deltas
+		// directly without the 💭 latch.
+		expect(ctx.renderState.thinkingShown).toBe(false);
+	});
+
+	it("tool.call writes the 🔧 calling line with a summarized JSON input", () => {
+		const ctx = makeCtx();
+		renderAgentEvent(
+			wrapPayload({
+				type: "tool.call",
+				turnIndex: 1,
+				toolCallId: "tc-1",
+				toolName: "file_read",
+				input: { path: "/etc/hosts" },
+			}),
+			ctx.full,
+		);
+		expect(ctx.stderr.chunks).toEqual([
+			'\n🔧 calling file_read({"path":"/etc/hosts"})\n',
+		]);
+	});
+
+	it("tool.result emits ✅ for success and ⚠️ for isError", () => {
+		const ctx = makeCtx();
+		renderAgentEvent(
+			wrapPayload({
+				type: "tool.result",
+				turnIndex: 1,
+				toolCallId: "tc-1",
+				toolName: "file_read",
+				output: "content",
+			}),
+			ctx.full,
+		);
+		renderAgentEvent(
+			wrapPayload({
+				type: "tool.result",
+				turnIndex: 1,
+				toolCallId: "tc-2",
+				toolName: "file_read",
+				output: "perm denied",
+				isError: true,
+			}),
+			ctx.full,
+		);
+		expect(ctx.stderr.chunks).toEqual([
+			"\n✅ file_read → content\n",
+			"\n⚠️ file_read → perm denied\n",
+		]);
+	});
+
+	it("assistant.message appends a finalize newline only when text ended without one", () => {
+		// Case 1: emitted text without trailing \n → finalize writes \n.
+		const ctx1 = makeCtx();
+		renderAgentEvent(
+			wrapPayload({ type: "llm.text", turnIndex: 1, delta: "Hello" }),
+			ctx1.full,
+		);
+		renderAgentEvent(
+			wrapPayload({
+				type: "assistant.message",
+				turnIndex: 1,
+				content: "Hello",
+			}),
+			ctx1.full,
+		);
+		expect(ctx1.stdout.chunks).toEqual(["Hello", "\n"]);
+		expect(ctx1.renderState.hasEmittedText).toBe(false);
+
+		// Case 2: text already ended on \n → no extra \n.
+		const ctx2 = makeCtx();
+		renderAgentEvent(
+			wrapPayload({ type: "llm.text", turnIndex: 1, delta: "Hi\n" }),
+			ctx2.full,
+		);
+		renderAgentEvent(
+			wrapPayload({
+				type: "assistant.message",
+				turnIndex: 1,
+				content: "Hi",
+			}),
+			ctx2.full,
+		);
+		expect(ctx2.stdout.chunks).toEqual(["Hi\n"]);
+
+		// Case 3: tool-only turn (no text deltas) → no finalize \n.
+		const ctx3 = makeCtx();
+		renderAgentEvent(
+			wrapPayload({
+				type: "assistant.message",
+				turnIndex: 1,
+				content: "",
+			}),
+			ctx3.full,
+		);
+		expect(ctx3.stdout.chunks).toEqual([]);
+	});
+
+	it("lifecycle / framing events are no-ops (regression guard)", () => {
+		const ctx = makeCtx();
+		const someSession = {
+			id: "g",
+			title: "x",
+			origin: "tui" as const,
+			status: "idle" as const,
+			turnCount: 0,
+			createdAt: new Date(0).toISOString(),
+			lastActiveAt: new Date(0).toISOString(),
+		};
+		const framing: AgentEventPayload[] = [
+			{ type: "llm.text_start", turnIndex: 1, textPartId: "text-1-0" },
+			{ type: "llm.text_end", turnIndex: 1, textPartId: "text-1-0" },
+			{
+				type: "llm.reasoning_start",
+				turnIndex: 1,
+				reasoningPartId: "reasoning-1-0",
+			},
+			{
+				type: "llm.reasoning_end",
+				turnIndex: 1,
+				reasoningPartId: "reasoning-1-0",
+			},
+			{ type: "turn.started", turnIndex: 1, userText: "hi" },
+			{ type: "turn.step_started", turnIndex: 1, stepIndex: 0 },
+			{ type: "turn.step_completed", turnIndex: 1, stepIndex: 0 },
+			{ type: "turn.completed", turnIndex: 1 },
+			// `session.created` + `session.updated` carry an `AgentSession`
+			// payload — must also be no-op. Slice D Reviewer A SUSPECT.
+			{ type: "session.created", session: someSession },
+			{ type: "session.updated", session: someSession },
+			{ type: "session.completed" },
+			{ type: "session.failed", error: "boom" },
+		];
+		for (const payload of framing) {
+			renderAgentEvent(wrapPayload(payload), ctx.full);
+		}
+		expect(ctx.stdout.chunks).toEqual([]);
+		expect(ctx.stderr.chunks).toEqual([]);
+	});
+
+	it("tool.call with undefined input renders the toolname with an empty argument list", () => {
+		// Slice D Reviewer A MEDIUM #3 — exercises the `payload.input ==
+		// null ? "" : stringifyJson(...)` branch.
+		const ctx = makeCtx();
+		renderAgentEvent(
+			wrapPayload({
+				type: "tool.call",
+				turnIndex: 1,
+				toolCallId: "tc-empty",
+				toolName: "no_args_tool",
+			}),
+			ctx.full,
+		);
+		expect(ctx.stderr.chunks).toEqual(["\n🔧 calling no_args_tool()\n"]);
+	});
+
+	it("assistant.message resets thinkingShown so subsequent turns re-render the thinking line", () => {
+		// Slice D Reviewer A MEDIUM #1 — multi-turn replay must reset
+		// `thinkingShown` at the turn boundary so each turn's reasoning
+		// produces its own `💭 [thinking...]` indicator in collapsed
+		// mode.
+		const ctx = makeCtx("collapsed");
+		renderAgentEvent(
+			wrapPayload({ type: "llm.reasoning", turnIndex: 1, delta: "t1" }),
+			ctx.full,
+		);
+		renderAgentEvent(
+			wrapPayload({ type: "assistant.message", turnIndex: 1, content: "" }),
+			ctx.full,
+		);
+		expect(ctx.renderState.thinkingShown).toBe(false);
+		renderAgentEvent(
+			wrapPayload({ type: "llm.reasoning", turnIndex: 2, delta: "t2" }),
+			ctx.full,
+		);
+		// Both turns' first reasoning event produced a thinking line.
+		expect(
+			ctx.stderr.chunks.filter((c) => c === "💭 [thinking...]\n"),
+		).toHaveLength(2);
+	});
+});
+
+describe("render-shared helpers (Slice D regression — Reviewer A MEDIUM #4)", () => {
+	it("summarizeToolOutput prefers the `result` string field when present", async () => {
+		const { summarizeToolOutput } = await import("./render-shared.js");
+		expect(summarizeToolOutput({ result: "the answer is 42" })).toBe(
+			"the answer is 42",
+		);
+	});
+
+	it("summarizeToolOutput falls back to the first line of `content` when no `result` string", async () => {
+		const { summarizeToolOutput } = await import("./render-shared.js");
+		expect(summarizeToolOutput({ content: "first line\nsecond line\n" })).toBe(
+			"first line",
+		);
+	});
+
+	it("summarizeToolOutput falls back to JSON when output is a plain non-record value", async () => {
+		const { summarizeToolOutput } = await import("./render-shared.js");
+		expect(summarizeToolOutput(42)).toBe("42");
+		expect(summarizeToolOutput(true)).toBe("true");
+	});
+
+	it("summarizeToolOutput uses raw string output as-is (first line)", async () => {
+		const { summarizeToolOutput } = await import("./render-shared.js");
+		expect(summarizeToolOutput("line one\nline two")).toBe("line one");
+	});
+
+	it("summarizeToolOutput handles undefined output with the 'undefined' fallback", async () => {
+		const { summarizeToolOutput } = await import("./render-shared.js");
+		// `output ?? "undefined"` short-circuits to the string "undefined"
+		// when output is null/undefined; then JSON-encoded.
+		const got = summarizeToolOutput(undefined);
+		expect(got).toBe('"undefined"');
+	});
+
+	it("stringifyJson returns String(value) when JSON.stringify yields undefined", async () => {
+		const { stringifyJson } = await import("./render-shared.js");
+		// JSON.stringify(undefined) returns undefined, so the fallback
+		// to `String(value)` kicks in.
+		expect(stringifyJson(undefined)).toBe("undefined");
+		// Functions also stringify to undefined.
+		const noop = () => undefined;
+		expect(stringifyJson(noop)).toBe(String(noop));
+	});
+
+	it("stringifyJson returns '[Circular]' on cyclic structures (Reviewer B SUSPECT defense)", async () => {
+		const { stringifyJson } = await import("./render-shared.js");
+		const cycle: { self?: unknown } = {};
+		cycle.self = cycle;
+		expect(stringifyJson(cycle)).toBe("[Circular]");
+	});
+
+	it("summarizeInlineText collapses whitespace and truncates with ellipsis", async () => {
+		const { summarizeInlineText } = await import("./render-shared.js");
+		expect(summarizeInlineText("a   b\nc\t d")).toBe("a b c d");
+		// At-boundary: length === maxLength (no truncation)
+		const at = "x".repeat(120);
+		expect(summarizeInlineText(at)).toBe(at);
+		expect(summarizeInlineText(at).length).toBe(120);
+		// Over-boundary: triggers `...` suffix
+		const over = "x".repeat(125);
+		const summarized = summarizeInlineText(over);
+		expect(summarized.endsWith("...")).toBe(true);
+		expect(summarized.length).toBe(120);
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// Slice D — runRenderSubscription
+// ─────────────────────────────────────────────────────────────────────
+
+async function waitForCondition(
+	predicate: () => boolean,
+	timeoutMs = 1000,
+): Promise<void> {
+	const start = Date.now();
+	while (!predicate()) {
+		if (Date.now() - start > timeoutMs) {
+			throw new Error(`waitForCondition: timed out after ${timeoutMs}ms`);
+		}
+		await new Promise((r) => setTimeout(r, 1));
+	}
+}
+
+describe("runRenderSubscription (Slice D — subscription primitive)", () => {
+	it("delivers events emitted after subscription start to onEvent", async () => {
+		const svc = getOrCreateAgentService();
+		createTuiSession(svc, "rs-live");
+		const seen: AgentEvent[] = [];
+		const handle = runRenderSubscription({
+			service: svc,
+			sessionId: "rs-live",
+			onEvent: (event) => seen.push(event),
+		});
+		svc.emitFromRunner("rs-live", {
+			type: "llm.text",
+			turnIndex: 1,
+			delta: "hi",
+		});
+		svc.emitFromRunner("rs-live", {
+			type: "llm.text",
+			turnIndex: 1,
+			delta: " there",
+		});
+		await waitForCondition(
+			() => seen.filter((e) => e.payload.type === "llm.text").length >= 2,
+		);
+		await handle.close();
+		const textDeltas = seen.filter((e) => e.payload.type === "llm.text");
+		expect(textDeltas).toHaveLength(2);
+	});
+
+	it("replays history when afterSeq is omitted (default: subscribe()'s history fan-out)", async () => {
+		const svc = getOrCreateAgentService();
+		createTuiSession(svc, "rs-history");
+		// Pre-load history before any subscription is established.
+		svc.emitFromRunner("rs-history", {
+			type: "llm.text",
+			turnIndex: 1,
+			delta: "past",
+		});
+		const seen: AgentEvent[] = [];
+		const handle = runRenderSubscription({
+			service: svc,
+			sessionId: "rs-history",
+			onEvent: (event) => seen.push(event),
+		});
+		await waitForCondition(() =>
+			seen.some(
+				(e) => e.payload.type === "llm.text" && e.payload.delta === "past",
+			),
+		);
+		await handle.close();
+		expect(
+			seen.some(
+				(e) => e.payload.type === "llm.text" && e.payload.delta === "past",
+			),
+		).toBe(true);
+	});
+
+	it("afterSeq option suppresses replay of events at or before the cursor", async () => {
+		const svc = getOrCreateAgentService();
+		createTuiSession(svc, "rs-cursor");
+		// Drive the bus to seq=3.
+		svc.emitFromRunner("rs-cursor", {
+			type: "llm.text",
+			turnIndex: 1,
+			delta: "a",
+		});
+		svc.emitFromRunner("rs-cursor", {
+			type: "llm.text",
+			turnIndex: 1,
+			delta: "b",
+		});
+		const cursorSeq = svc.currentSeq() - 1;
+		const seen: AgentEvent[] = [];
+		const handle = runRenderSubscription({
+			service: svc,
+			sessionId: "rs-cursor",
+			afterSeq: cursorSeq,
+			onEvent: (event) => seen.push(event),
+		});
+		// Allow drain ticks; with afterSeq at the latest seq, nothing
+		// should fire — earlier events are filtered out, no live events
+		// emitted yet.
+		for (let i = 0; i < 16; i += 1) {
+			await Promise.resolve();
+		}
+		expect(seen.filter((e) => e.payload.type === "llm.text")).toEqual([]);
+		// Now emit a fresh event; it should arrive.
+		svc.emitFromRunner("rs-cursor", {
+			type: "llm.text",
+			turnIndex: 1,
+			delta: "c",
+		});
+		await waitForCondition(() =>
+			seen.some(
+				(e) => e.payload.type === "llm.text" && e.payload.delta === "c",
+			),
+		);
+		await handle.close();
+	});
+
+	it("close() stops further event delivery and is idempotent", async () => {
+		const svc = getOrCreateAgentService();
+		createTuiSession(svc, "rs-close");
+		const seen: AgentEvent[] = [];
+		const handle = runRenderSubscription({
+			service: svc,
+			sessionId: "rs-close",
+			onEvent: (event) => seen.push(event),
+		});
+		await handle.close();
+		await handle.close(); // idempotent
+		svc.emitFromRunner("rs-close", {
+			type: "llm.text",
+			turnIndex: 1,
+			delta: "post-close",
+		});
+		// Give the bus a few ticks to dispatch (or not, since we're closed).
+		for (let i = 0; i < 16; i += 1) {
+			await Promise.resolve();
+		}
+		expect(seen.filter((e) => e.payload.type === "llm.text")).toEqual([]);
+	});
+
+	it("abortSignal already-aborted at construction prevents any delivery", async () => {
+		const svc = getOrCreateAgentService();
+		createTuiSession(svc, "rs-abort-pre");
+		const ac = new AbortController();
+		ac.abort();
+		const seen: AgentEvent[] = [];
+		const handle = runRenderSubscription({
+			service: svc,
+			sessionId: "rs-abort-pre",
+			abortSignal: ac.signal,
+			onEvent: (event) => seen.push(event),
+		});
+		svc.emitFromRunner("rs-abort-pre", {
+			type: "llm.text",
+			turnIndex: 1,
+			delta: "ignored",
+		});
+		for (let i = 0; i < 16; i += 1) {
+			await Promise.resolve();
+		}
+		await handle.close();
+		expect(seen.filter((e) => e.payload.type === "llm.text")).toEqual([]);
+	});
+
+	it("abortSignal fired after construction stops live delivery", async () => {
+		const svc = getOrCreateAgentService();
+		createTuiSession(svc, "rs-abort-post");
+		const ac = new AbortController();
+		const seen: AgentEvent[] = [];
+		const handle = runRenderSubscription({
+			service: svc,
+			sessionId: "rs-abort-post",
+			abortSignal: ac.signal,
+			onEvent: (event) => seen.push(event),
+		});
+		svc.emitFromRunner("rs-abort-post", {
+			type: "llm.text",
+			turnIndex: 1,
+			delta: "before",
+		});
+		await waitForCondition(
+			() =>
+				seen.filter(
+					(e) => e.payload.type === "llm.text" && e.payload.delta === "before",
+				).length === 1,
+		);
+		ac.abort();
+		// Give the subscription a beat to react to the abort.
+		for (let i = 0; i < 16; i += 1) {
+			await Promise.resolve();
+		}
+		svc.emitFromRunner("rs-abort-post", {
+			type: "llm.text",
+			turnIndex: 1,
+			delta: "after",
+		});
+		for (let i = 0; i < 16; i += 1) {
+			await Promise.resolve();
+		}
+		await handle.close();
+		expect(
+			seen.filter(
+				(e) => e.payload.type === "llm.text" && e.payload.delta === "after",
+			),
+		).toEqual([]);
+	});
+
+	it("onEvent throwing for one event does not break the subscription", async () => {
+		const svc = getOrCreateAgentService();
+		createTuiSession(svc, "rs-throw");
+		const seen: string[] = [];
+		const handle = runRenderSubscription({
+			service: svc,
+			sessionId: "rs-throw",
+			onEvent: (event) => {
+				if (event.payload.type === "llm.text" && event.payload.delta === "b") {
+					throw new Error("simulated render failure");
+				}
+				if (event.payload.type === "llm.text") {
+					seen.push(event.payload.delta);
+				}
+			},
+		});
+		svc.emitFromRunner("rs-throw", {
+			type: "llm.text",
+			turnIndex: 1,
+			delta: "a",
+		});
+		svc.emitFromRunner("rs-throw", {
+			type: "llm.text",
+			turnIndex: 1,
+			delta: "b",
+		});
+		svc.emitFromRunner("rs-throw", {
+			type: "llm.text",
+			turnIndex: 1,
+			delta: "c",
+		});
+		await waitForCondition(() => seen.length >= 2);
+		await handle.close();
+		expect(seen).toEqual(["a", "c"]);
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// Slice D — `/sessions <id>` end-to-end semantics
+//
+// Verifies the full pipeline:
+//   live turn pump → AgentService history → renderAgentEvent → stdout/stderr
+// without standing up the REPL. Mirrors what the TUI does when a user
+// types `/sessions <id>`.
+// ─────────────────────────────────────────────────────────────────────
+
+describe("/sessions <id> replay pipeline (Slice D)", () => {
+	it("renders a recorded turn's history identically to the live path", () => {
+		const svc = getOrCreateAgentService();
+		createTuiSession(svc, "rep-1");
+		// Drive a Slice C turn pump as the source — same translation as
+		// real TUI turns produce.
+		const pump = createTurnEventPump({
+			service: svc,
+			sessionId: "rep-1",
+			turnIndex: 1,
+		});
+		pump.onLLMStreamEvent({ type: "text", delta: "Hello " });
+		pump.onLLMStreamEvent({ type: "text", delta: "world" });
+		pump.onLLMStreamEvent({
+			type: "tool-call-end",
+			toolCallId: "tc-1",
+			toolName: "search",
+			inputText: '{"q":"foo"}',
+			input: { q: "foo" },
+		});
+		pump.onLLMStreamEvent({
+			type: "tool-result",
+			toolCallId: "tc-1",
+			toolName: "search",
+			output: "ok",
+		});
+		pump.onAssistantMessage({ role: "assistant", content: "Hello world" });
+		// Now replay via the /sessions <id> path: historySnapshot +
+		// renderAgentEvent.
+		const stdout = makeWriter();
+		const stderr = makeWriter();
+		const renderState = createStreamRenderState();
+		const events = svc._getEventBus().historySnapshot({ sessionId: "rep-1" });
+		for (const event of events) {
+			renderAgentEvent(event, {
+				stdout,
+				stderr,
+				displayMode: "collapsed",
+				renderState,
+			});
+		}
+		// Reply text ended up on stdout (with the assistant.message
+		// finalize newline).
+		expect(stdout.chunks.join("")).toBe("Hello world\n");
+		// Tool icon + result went to stderr.
+		expect(stderr.chunks.join("")).toContain("🔧 calling search");
+		expect(stderr.chunks.join("")).toContain("✅ search → ok");
+	});
+
+	it("replay survives circular tool outputs without throwing (defensive against JSON.stringify cycles)", () => {
+		const svc = getOrCreateAgentService();
+		createTuiSession(svc, "rep-circular");
+		// Construct a circular object — exactly the failure mode flagged
+		// by Slice D Reviewer B SUSPECT. Without the stringifyJson cycle
+		// guard, summarizeToolOutput → JSON.stringify would throw and the
+		// replay for-loop would tear down mid-stream.
+		const circular: { self?: unknown } = {};
+		circular.self = circular;
+		svc.emitFromRunner("rep-circular", {
+			type: "tool.result",
+			turnIndex: 1,
+			toolCallId: "tc-cycle",
+			toolName: "weird_tool",
+			output: circular,
+		});
+		const stdout = makeWriter();
+		const stderr = makeWriter();
+		const renderState = createStreamRenderState();
+		const events = svc
+			._getEventBus()
+			.historySnapshot({ sessionId: "rep-circular" });
+		expect(() => {
+			for (const event of events) {
+				renderAgentEvent(event, {
+					stdout,
+					stderr,
+					displayMode: "collapsed",
+					renderState,
+				});
+			}
+		}).not.toThrow();
+		// The output placeholder shows up in the rendered icon line.
+		expect(stderr.chunks.join("")).toContain("✅ weird_tool");
+	});
+
+	it("replays nothing when the session has no buffered events (just lifecycle)", () => {
+		const svc = getOrCreateAgentService();
+		createTuiSession(svc, "rep-empty");
+		const stdout = makeWriter();
+		const stderr = makeWriter();
+		const renderState = createStreamRenderState();
+		const events = svc
+			._getEventBus()
+			.historySnapshot({ sessionId: "rep-empty" });
+		// session.created is the only event; renderAgentEvent treats it
+		// as a no-op.
+		for (const event of events) {
+			renderAgentEvent(event, {
+				stdout,
+				stderr,
+				displayMode: "collapsed",
+				renderState,
+			});
+		}
+		expect(stdout.chunks).toEqual([]);
+		expect(stderr.chunks).toEqual([]);
 	});
 });

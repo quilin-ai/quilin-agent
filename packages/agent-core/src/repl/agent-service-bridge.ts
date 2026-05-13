@@ -20,10 +20,18 @@
 
 import type { LLMStreamEvent } from "../llm/types.js";
 import {
+	type AgentEvent,
 	AgentService,
 	type AgentSession,
 } from "../services/agent-service/index.js";
 import type { Message } from "../state/types.js";
+import {
+	type ReasoningDisplayMode,
+	type ReplStreamRenderState,
+	stringifyJson,
+	summarizeInlineText,
+	summarizeToolOutput,
+} from "./render-shared.js";
 
 /**
  * In-process AgentService singleton. Kept on `globalThis` so the
@@ -360,6 +368,264 @@ export function createTurnEventPump(opts: {
 		closePendingParts(): void {
 			closeText();
 			closeReasoning();
+		},
+	};
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Slice D — Subscription-driven replay rendering
+//
+// `renderAgentEvent` is the AgentEvent → visible side-effect translator:
+// the symmetric counterpart to the inline `renderStreamEvent` in
+// `repl.ts` that handles `LLMStreamEvent`. The inline path stays the
+// authoritative renderer for live turns (the StreamingLLMClient
+// callback fires synchronously and writes to stdout/stderr before any
+// subscription consumer could drain queued microtasks — see Slice D
+// timing analysis in `docs/00-core-loop/agent-service.md`). This path
+// powers the `/sessions <id>` command, which dumps a chosen session's
+// AgentService history via the synchronous `historySnapshot` so the
+// replay order is deterministic and free of microtask races.
+//
+// `runRenderSubscription` is the long-running subscription primitive
+// the planner spec called out. It's not on the `/sessions <id>` hot
+// path in Slice D (that path uses `historySnapshot` for determinism),
+// but it's the foundation for any future "live view-mode" UX. Slice D
+// ships it tested so later slices can wire it in without re-deriving
+// the subscription/abort/close lifecycle.
+//
+// Slice D 渲染层:
+//   - renderAgentEvent: AgentEvent → 渲染副作用(stdout/stderr)
+//   - runRenderSubscription: 长期 subscription 原语,Slice D 只测原语,
+//     /sessions <id> 用 historySnapshot 同步重放避免微任务排序漂移
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Context for `renderAgentEvent`. stdout/stderr are injected so the
+ * function is unit-testable against capture streams; displayMode and
+ * renderState mirror the live-render path's parameters so visual
+ * output stays in lock-step across the two paths.
+ *
+ * `renderAgentEvent` 上下文。stdout/stderr 通过参数注入,便于测试;
+ * displayMode/renderState 与 live 渲染路径同形,保证视觉一致。
+ */
+export interface RenderAgentEventCtx {
+	readonly stdout: { write: (chunk: string) => unknown };
+	readonly stderr: { write: (chunk: string) => unknown };
+	readonly displayMode: ReasoningDisplayMode;
+	readonly renderState: ReplStreamRenderState;
+}
+
+/**
+ * Translate an `AgentEvent` into render side-effects. Mirrors the
+ * inline `renderStreamEvent` from `repl.ts` so the visual output of a
+ * replay matches what a user would have seen live. Events without a
+ * direct visual counterpart (turn / session lifecycle, llm.*_start /
+ * llm.*_end brackets, llm.text_start / llm.text_end which only frame
+ * deltas) are silently no-op.
+ *
+ * The `assistant.message` event triggers a trailing-newline finalize
+ * pass equivalent to the live path's `finalizeStreamRender(state)`:
+ * if the replayed reply emitted text without a closing `\n`, append
+ * one so subsequent render output (the closing replay banner, or the
+ * next prompt) does not concatenate onto the reply's last character.
+ *
+ * AgentEvent → 渲染副作用。与 live 路径 renderStreamEvent 对偶。无视觉
+ * 对应的 event(lifecycle / *_start/*_end 框架)静默 no-op。
+ * assistant.message 触发与 live 一致的 finalize(确保末尾换行)。
+ */
+export function renderAgentEvent(
+	event: AgentEvent,
+	ctx: RenderAgentEventCtx,
+): void {
+	const { payload } = event;
+	switch (payload.type) {
+		case "llm.text": {
+			// Reply content goes to stdout — same channel as the inline
+			// live-render path. An empty final delta is a common provider
+			// pattern to flush state; ignore it for the trailing-newline
+			// flag (otherwise `"".endsWith("\n") === false` would clobber
+			// a previously-true flag and cause the finalize pass to write
+			// a stray `\n`).
+			ctx.stdout.write(payload.delta);
+			if (payload.delta.length > 0) {
+				ctx.renderState.hasEmittedText = true;
+				ctx.renderState.lastTextEndedWithNewline = payload.delta.endsWith("\n");
+			}
+			break;
+		}
+		case "llm.reasoning": {
+			if (ctx.displayMode === "verbose") {
+				ctx.stderr.write(payload.delta);
+				break;
+			}
+			if (!ctx.renderState.thinkingShown) {
+				ctx.renderState.thinkingShown = true;
+				ctx.stderr.write("💭 [thinking...]\n");
+			}
+			break;
+		}
+		case "tool.call": {
+			// Live path reconstructs `inputText` from buffered
+			// `tool-call-args-delta` chunks; in replay we only have the
+			// already-assembled `input` from the `tool.call` event, so
+			// stringify it here. This is the same JSON shape Slice C's
+			// pump emits, so a replay of a recorded turn produces the
+			// same icon line a live user would have seen — modulo the
+			// streaming animation that has no replay equivalent.
+			const inputText =
+				payload.input == null ? "" : stringifyJson(payload.input);
+			ctx.stderr.write(
+				`\n🔧 calling ${payload.toolName}(${summarizeInlineText(inputText)})\n`,
+			);
+			break;
+		}
+		case "tool.result": {
+			ctx.stderr.write(
+				`\n${payload.isError === true ? "⚠️" : "✅"} ${payload.toolName} → ${summarizeToolOutput(payload.output)}\n`,
+			);
+			break;
+		}
+		case "assistant.message": {
+			// Replay equivalent of the live `finalizeStreamRender`. The
+			// live path fires it from the `onAssistantMessage` hook
+			// (inside runAgentLoop, synchronous after streamText
+			// completion); the replay path fires it when the recorded
+			// assistant.message event is encountered.
+			if (
+				ctx.renderState.hasEmittedText &&
+				!ctx.renderState.lastTextEndedWithNewline
+			) {
+				ctx.stdout.write("\n");
+			}
+			ctx.renderState.hasEmittedText = false;
+			ctx.renderState.lastTextEndedWithNewline = false;
+			// Reset `thinkingShown` at the turn boundary so subsequent
+			// turns within a single `/sessions <id>` replay each get
+			// their own `💭 [thinking...]` line in collapsed mode. The
+			// live path resets implicitly because each turn allocates a
+			// fresh `createStreamRenderState()`; the replay path runs
+			// against ONE state across the whole history dump, so
+			// without this reset only the first turn's reasoning is
+			// visible (Slice D Reviewer A MEDIUM #1).
+			ctx.renderState.thinkingShown = false;
+			break;
+		}
+		// Lifecycle / bracketing events: intentionally no-op. The live
+		// path's `renderStreamEvent` doesn't render `text-start` /
+		// `text-end` / `reasoning-start` / `reasoning-end` either; we
+		// mirror that so replay output matches.
+		case "llm.text_start":
+		case "llm.text_end":
+		case "llm.reasoning_start":
+		case "llm.reasoning_end":
+		case "turn.started":
+		case "turn.step_started":
+		case "turn.step_completed":
+		case "turn.completed":
+		case "session.created":
+		case "session.updated":
+		case "session.completed":
+		case "session.failed":
+			break;
+	}
+}
+
+/**
+ * Long-running subscription primitive: drains the AgentService event
+ * bus for a given sessionId in the background and invokes `onEvent`
+ * for each event delivered. Returns a handle whose `close()` stops
+ * the drain and returns a Promise that resolves once the background
+ * task has unwound.
+ *
+ * Optional `afterSeq` lets callers replay history starting from a
+ * specific seq cursor (mirrors `AgentService.subscribe.afterSeq`).
+ * Optional `abortSignal` allows external code to tear the
+ * subscription down without holding the handle (e.g., from a
+ * higher-level lifecycle owner).
+ *
+ * Errors thrown by `onEvent` are swallowed so a single bad render
+ * doesn't kill the subscription — matches the live path's tolerance
+ * for callback failures.
+ *
+ * Slice D 起的长期 subscription 原语。后台 drain + onEvent。close()
+ * 同步停止 drain。afterSeq 用于历史 cursor;abortSignal 让外部生命周期
+ * 拥有方关流。onEvent 抛错被吞,避免一次渲染失败带垮整个订阅。
+ */
+export interface RunRenderSubscriptionOptions {
+	readonly service: AgentService;
+	readonly sessionId: string;
+	readonly onEvent: (event: AgentEvent) => void;
+	readonly afterSeq?: number;
+	readonly abortSignal?: AbortSignal;
+}
+
+export interface RenderSubscriptionHandle {
+	/**
+	 * Stop the subscription. Idempotent; second call is a no-op.
+	 * Returns a Promise that resolves when the background drain task
+	 * has fully unwound (so callers can await teardown).
+	 *
+	 * 停止订阅。幂等。返回 Promise,resolve 后台 drain 任务结束。
+	 */
+	readonly close: () => Promise<void>;
+}
+
+export function runRenderSubscription(
+	opts: RunRenderSubscriptionOptions,
+): RenderSubscriptionHandle {
+	const subscribeOptions: Parameters<AgentService["subscribe"]>[0] = {
+		sessionId: opts.sessionId,
+		...(opts.afterSeq == null ? {} : { afterSeq: opts.afterSeq }),
+	};
+	const sub = opts.service.subscribe(subscribeOptions);
+
+	let closed = false;
+
+	// Wire abortSignal → sub.close() so external lifecycle owners can
+	// tear the subscription down without holding the handle. If the
+	// signal is already aborted at construction time, close
+	// immediately so the drain loop bails on first iteration.
+	if (opts.abortSignal != null) {
+		if (opts.abortSignal.aborted) {
+			closed = true;
+			sub.close();
+		} else {
+			opts.abortSignal.addEventListener(
+				"abort",
+				() => {
+					if (closed) return;
+					closed = true;
+					sub.close();
+				},
+				{ once: true },
+			);
+		}
+	}
+
+	const drainPromise = (async () => {
+		try {
+			for await (const event of sub) {
+				if (closed) break;
+				try {
+					opts.onEvent(event);
+				} catch {
+					/* swallow render failure — keep subscription alive */
+				}
+			}
+		} catch {
+			/* subscription threw — stop draining */
+		}
+	})();
+
+	return {
+		async close() {
+			if (closed) {
+				await drainPromise.catch(() => undefined);
+				return;
+			}
+			closed = true;
+			sub.close();
+			await drainPromise.catch(() => undefined);
 		},
 	};
 }

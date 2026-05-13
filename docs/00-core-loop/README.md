@@ -50,6 +50,8 @@ Current component README files:
 - [eval-driven-development.md](./eval-driven-development.md) — Iter L+0: lightweight self-owned trace-eval layer; **prerequisite gate** for all subsequent harness changes. Six core metrics, trace catalog, runner, CI hook. / 轻量自有 trace eval 层；后续所有 harness 改动的合入闸门。
 - [`../05-tool/tool-taste.md`](../05-tool/tool-taste.md) — Iter L+1: marketing-style descriptors, lint, subagent capability advertisement, tool selection trace. / 工具品味：卖货式 descriptor、lint、subagent 能力宣传、工具选择 trace。
 - [`../02-context/auto-context-curation.md`](../02-context/auto-context-curation.md) — Iter L+2: trigger table for what context to auto-load when, relevance matching, staleness detection. / 上下文自动装配：什么时候 load 哪些 context 的策略表、相关性匹配、失效检测。
+- [agent-service.md](./agent-service.md) — In-process session/event service shared by TUI and web; sessions, history ring buffer, subscribe-with-replay API, Slice A–F plan. / TUI 与 web 共用的进程内 session/event 服务：sessions、history 环形缓冲、可回放订阅 API、Slice A–F 计划。
+- [tui-agent-service-integration.md](./tui-agent-service-integration.md) — How `repl.ts` plugs into `AgentService` end-to-end: bridge surface, live render vs replay paths, `/sessions <id>` semantics, per-turn lifecycle. / `repl.ts` 与 `AgentService` 端到端集成方式：桥接面、live 渲染与 replay 路径、`/sessions <id>` 语义、每 turn 生命周期。
 
 ## 决策 / Decisions
 
