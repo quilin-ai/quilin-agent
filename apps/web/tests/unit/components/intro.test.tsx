@@ -6,6 +6,14 @@ import type { SessionSummary } from "@/lib/schemas";
 
 vi.mock("next/navigation", () => ({
 	usePathname: () => "/",
+	useRouter: () => ({
+		push: vi.fn(),
+		replace: vi.fn(),
+		back: vi.fn(),
+		forward: vi.fn(),
+		refresh: vi.fn(),
+		prefetch: vi.fn(),
+	}),
 }));
 
 vi.mock("next/link", () => ({

@@ -34,6 +34,13 @@ vi.mock("next/link", () => ({
 	},
 }));
 
+// Use a "fresh" lastHeartbeatAt so terminal subagents (completed / blocked /
+// failed / cancelled) survive the AgentSwitcher visibility filter, which
+// hides terminal subagents older than 60s. Without this, the static
+// startedAt values would be 24h+ old at test time and every terminal
+// subagent would be filtered out before reaching the popover DOM.
+const NOW_ISO = new Date().toISOString();
+
 const SAMPLE_AGENTS: readonly AgentSummary[] = [
 	{
 		id: "main",
@@ -41,9 +48,9 @@ const SAMPLE_AGENTS: readonly AgentSummary[] = [
 		parentId: null,
 		task: "current",
 		status: "running",
-		startedAt: "2026-05-12T10:00:00Z",
+		startedAt: NOW_ISO,
 		elapsedMs: 724_000,
-		lastHeartbeatAt: null,
+		lastHeartbeatAt: NOW_ISO,
 		pendingAuthRequest: null,
 	},
 	{
@@ -52,9 +59,9 @@ const SAMPLE_AGENTS: readonly AgentSummary[] = [
 		parentId: "main",
 		task: "cross-review",
 		status: "running",
-		startedAt: "2026-05-12T10:00:00Z",
+		startedAt: NOW_ISO,
 		elapsedMs: 134_000,
-		lastHeartbeatAt: null,
+		lastHeartbeatAt: NOW_ISO,
 		pendingAuthRequest: null,
 	},
 	{
@@ -63,9 +70,9 @@ const SAMPLE_AGENTS: readonly AgentSummary[] = [
 		parentId: "main",
 		task: "biome --write",
 		status: "blocked",
-		startedAt: "2026-05-12T10:00:00Z",
+		startedAt: NOW_ISO,
 		elapsedMs: 38_000,
-		lastHeartbeatAt: null,
+		lastHeartbeatAt: NOW_ISO,
 		pendingAuthRequest: null,
 	},
 	{
@@ -74,9 +81,9 @@ const SAMPLE_AGENTS: readonly AgentSummary[] = [
 		parentId: "main",
 		task: "MIPROv2 done",
 		status: "completed",
-		startedAt: "2026-05-12T10:00:00Z",
+		startedAt: NOW_ISO,
 		elapsedMs: 522_000,
-		lastHeartbeatAt: null,
+		lastHeartbeatAt: NOW_ISO,
 		pendingAuthRequest: null,
 	},
 ];
@@ -199,11 +206,18 @@ describe("AgentSwitcher", () => {
 		expect(onSelect).toHaveBeenCalledWith("review-loop-r1");
 	});
 
-	it("renders spawn button when onSpawn provided", () => {
-		const onSpawn = vi.fn();
-		render(<AgentSwitcher agents={SAMPLE_AGENTS} currentAgentId="main" onSpawn={onSpawn} />);
-		fireEvent.click(screen.getByText(/派遣新子代理/));
-		expect(onSpawn).toHaveBeenCalled();
+	it("spawn affordance opens the inline task input", () => {
+		// The current AgentSwitcher implements spawn as an inline input
+		// (POSTs `/api/agents/spawn` itself) rather than calling a parent
+		// `onSpawn` callback. The test verifies the affordance: clicking
+		// "派遣新子代理" reveals the `spawn-input` field. The legacy
+		// `onSpawn` prop is still part of the type, but unused — kept for
+		// forward compatibility with future external-handler designs.
+		render(<AgentSwitcher agents={SAMPLE_AGENTS} currentAgentId="main" />);
+		fireEvent.click(screen.getByTestId("agent-switcher-toggle"));
+		expect(screen.queryByTestId("spawn-input")).toBeNull();
+		fireEvent.click(screen.getByTestId("spawn-open"));
+		expect(screen.getByTestId("spawn-input")).toBeInTheDocument();
 	});
 
 	it("closes the popover when clicking outside", () => {
@@ -233,6 +247,12 @@ describe("AgentSwitcher", () => {
 	});
 
 	it("renders pending + cancelled + failed status glyphs", () => {
+		// Use fresh `lastHeartbeatAt` so the AgentSwitcher's 60s terminal-
+		// subagent visibility filter keeps `cancelled-agent` and
+		// `failed-agent` in the popover. With null/stale timestamps the
+		// filter would hide them and the test couldn't observe their
+		// rendered glyphs.
+		const freshIso = new Date().toISOString();
 		const exotic: readonly AgentSummary[] = [
 			{
 				id: "pending-agent",
@@ -240,9 +260,9 @@ describe("AgentSwitcher", () => {
 				parentId: "main",
 				task: null,
 				status: "pending",
-				startedAt: "2026-05-12T10:00:00Z",
+				startedAt: freshIso,
 				elapsedMs: 1000,
-				lastHeartbeatAt: null,
+				lastHeartbeatAt: freshIso,
 				pendingAuthRequest: null,
 			},
 			{
@@ -251,9 +271,9 @@ describe("AgentSwitcher", () => {
 				parentId: "main",
 				task: null,
 				status: "cancelled",
-				startedAt: "2026-05-12T10:00:00Z",
+				startedAt: freshIso,
 				elapsedMs: 1000,
-				lastHeartbeatAt: null,
+				lastHeartbeatAt: freshIso,
 				pendingAuthRequest: null,
 			},
 			{
@@ -262,9 +282,9 @@ describe("AgentSwitcher", () => {
 				parentId: "main",
 				task: null,
 				status: "failed",
-				startedAt: "2026-05-12T10:00:00Z",
+				startedAt: freshIso,
 				elapsedMs: 1000,
-				lastHeartbeatAt: null,
+				lastHeartbeatAt: freshIso,
 				pendingAuthRequest: null,
 			},
 		];

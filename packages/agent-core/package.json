@@ -21,8 +21,6 @@
     "format": "biome format --write src/"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^3.0.69",
-    "@ai-sdk/openai": "^3.0.53",
     "@ai-sdk/openai-compatible": "^2.0.41",
     "@browserbasehq/stagehand": "^3.3.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
@@ -33,6 +31,7 @@
     "pino": "^10.3.1",
     "smol-toml": "^1.6.1",
     "turndown": "^7.2.4",
+    "undici": "^8.2.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
