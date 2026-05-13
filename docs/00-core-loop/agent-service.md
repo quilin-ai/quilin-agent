@@ -293,10 +293,10 @@ Task #22 follow-on(Linear Task #29)分 6 个 slice 把 TUI 接到同一个 `Agen
 
 | Slice | 内容 | 状态 |
 |-------|------|------|
-| A | TUI read-side: `getOrCreateAgentService` singleton + `/sessions` command | ✅ landed |
-| B | TUI write-side: `createSession` / `setSessionStatus` on input | pending |
-| C | turn-level event pump: `runAgentLoop` hooks → `AgentEventPayload` | pending |
-| D | rendering: drive TUI render off `service.subscribe()` | pending |
+| A | TUI read-side: `getOrCreateAgentService` singleton + `/sessions` command | ✅ landed (commit `dcaecaf`) |
+| B | TUI write-side: `createTuiSession` / `markSessionStatus` per turn | ✅ landed (commit `875db9d`) |
+| C | turn-level event pump: `runAgentLoop` hooks + LLMStreamEvent → AgentEventPayload | ✅ landed (commit `26ea659`) |
+| D | rendering: drive TUI render off `service.subscribe()` (enables `/sessions <id>` switching) | pending |
 | E | cross-process IPC (decision deferred — currently single-process assumption) | pending |
 | F | E2E integration tests + this doc's final summary | pending |
 
