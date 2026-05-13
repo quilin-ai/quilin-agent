@@ -10,6 +10,7 @@ import { streamText } from "ai";
 import { z } from "zod";
 
 import { agentRegistry, shortId } from "@/lib/agent-registry";
+import { getAgentService } from "@/lib/agent-service-client";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -50,6 +51,41 @@ export async function POST(req: Request): Promise<Response> {
 		task: parsed.task,
 		status: "running",
 	});
+	// Task #30 (minimal slice): shadow-register the subagent in the
+	// shared AgentService so the TUI's `/sessions` list and the admin
+	// probe can see it. The legacy `agent-registry` still owns the
+	// streamed text + tool events for `/api/agents` consumers; future
+	// slices will collapse both into AgentService events. Failure to
+	// register here must not block the spawn — `agent-registry` is the
+	// source of truth for the demo UX.
+	//
+	// Task #30 最小切片:把子代理影子注册到共享 AgentService,让 TUI 与
+	// admin probe 可见。当前 `/api/agents` 仍用 agent-registry,后续切片
+	// 再统一。注册失败不阻塞 spawn。
+	void getAgentService()
+		.then((svc) => {
+			try {
+				svc.createSession({
+					origin: "api",
+					id: agentId,
+					title: parsed.task.slice(0, 80),
+					// `parsed.parentId` is already `string | undefined`
+					// (Zod `.optional()`) — no `?? undefined` shim. Distinct
+					// from line 50's agent-registry default of "main":
+					// AgentService doesn't mirror a synthetic "main" parent,
+					// so absent parentId = "no parent" (the subagent appears
+					// at the top level until the parent chat session is also
+					// AgentService-tracked in a future slice).
+					parentId: parsed.parentId,
+					task: parsed.task,
+				});
+			} catch {
+				/* session id collision — already registered by a concurrent call; safe to ignore */
+			}
+		})
+		.catch(() => {
+			/* AgentService not available — degrade gracefully, agent-registry is authoritative */
+		});
 
 	const apiKey = process.env.DEEPSEEK_API_KEY ?? "";
 	if (apiKey.length === 0) {

@@ -151,12 +151,68 @@ describe("SessionRegistry.update", () => {
 	});
 });
 
+describe("SessionRegistry.create with Task #30 subagent topology fields", () => {
+	it("stores parentId when caller provides it (subagent spawn)", () => {
+		const reg = new SessionRegistry();
+		const child = reg.create({
+			origin: "api",
+			id: "subagent-1",
+			parentId: "main-session",
+		});
+		expect(child.parentId).toBe("main-session");
+	});
+
+	it("stores task when caller provides it (subagent spawn)", () => {
+		const reg = new SessionRegistry();
+		const child = reg.create({
+			origin: "api",
+			id: "subagent-1",
+			task: "lint the diff",
+		});
+		expect(child.task).toBe("lint the diff");
+	});
+
+	it("leaves parentId and task undefined for top-level sessions", () => {
+		const reg = new SessionRegistry();
+		const top = reg.create({ origin: "tui", id: "top-1" });
+		expect(top.parentId).toBeUndefined();
+		expect(top.task).toBeUndefined();
+	});
+
+	it("supports filtering sessions by parentId for parent → children topology queries", () => {
+		const reg = new SessionRegistry();
+		reg.create({ origin: "web", id: "main" });
+		reg.create({ origin: "api", id: "child-1", parentId: "main" });
+		reg.create({ origin: "api", id: "child-2", parentId: "main" });
+		reg.create({ origin: "api", id: "orphan" });
+		const children = reg.list().filter((s) => s.parentId === "main");
+		expect(children.map((s) => s.id).sort()).toEqual(["child-1", "child-2"]);
+	});
+
+	it("preserves parentId and task through immutable update()", () => {
+		const reg = new SessionRegistry();
+		reg.create({
+			origin: "api",
+			id: "subagent-update",
+			parentId: "main",
+			task: "review",
+		});
+		const updated = reg.update("subagent-update", { status: "running" });
+		expect(updated.parentId).toBe("main");
+		expect(updated.task).toBe("review");
+		expect(updated.status).toBe("running");
+	});
+});
+
 describe("SessionRegistry.create with explicit id", () => {
 	it("uses the caller-supplied id verbatim when provided", () => {
 		const registry = new SessionRegistry({
 			idGen: () => "auto-generated",
 		});
-		const session = registry.create({ origin: "web", id: "client-supplied-id" });
+		const session = registry.create({
+			origin: "web",
+			id: "client-supplied-id",
+		});
 		expect(session.id).toBe("client-supplied-id");
 		expect(registry.get("client-supplied-id")).not.toBeNull();
 		expect(registry.get("auto-generated")).toBeNull();
@@ -165,7 +221,9 @@ describe("SessionRegistry.create with explicit id", () => {
 	it("throws when the explicit id collides with an existing session", () => {
 		const registry = new SessionRegistry();
 		registry.create({ origin: "web", id: "dup" });
-		expect(() => registry.create({ origin: "tui", id: "dup" })).toThrow(/collision/);
+		expect(() => registry.create({ origin: "tui", id: "dup" })).toThrow(
+			/collision/,
+		);
 	});
 
 	it("falls back to idGen when id is omitted (backward compat)", () => {

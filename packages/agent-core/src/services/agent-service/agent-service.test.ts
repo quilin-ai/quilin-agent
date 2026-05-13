@@ -258,11 +258,27 @@ describe("AgentService.currentSeq", () => {
 		const svc = makeService();
 		const s = svc.createSession({ origin: "web", id: "scoped" });
 		// Emit a few events BEFORE capturing the cursor.
-		svc.emitFromRunner(s.id, { type: "llm.text", turnIndex: 1, delta: "before-1" });
-		svc.emitFromRunner(s.id, { type: "llm.text", turnIndex: 1, delta: "before-2" });
+		svc.emitFromRunner(s.id, {
+			type: "llm.text",
+			turnIndex: 1,
+			delta: "before-1",
+		});
+		svc.emitFromRunner(s.id, {
+			type: "llm.text",
+			turnIndex: 1,
+			delta: "before-2",
+		});
 		const cursor = svc.currentSeq();
-		svc.emitFromRunner(s.id, { type: "llm.text", turnIndex: 1, delta: "after-1" });
-		svc.emitFromRunner(s.id, { type: "llm.text", turnIndex: 1, delta: "after-2" });
+		svc.emitFromRunner(s.id, {
+			type: "llm.text",
+			turnIndex: 1,
+			delta: "after-1",
+		});
+		svc.emitFromRunner(s.id, {
+			type: "llm.text",
+			turnIndex: 1,
+			delta: "after-2",
+		});
 		const sub = svc.subscribe({ sessionId: s.id, afterSeq: cursor - 1 });
 		const events: AgentEvent[] = [];
 		// Pull from the queue until exhausted.

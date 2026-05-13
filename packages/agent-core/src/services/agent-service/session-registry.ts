@@ -65,6 +65,12 @@ export class SessionRegistry {
 			turnCount: 0,
 			createdAt: nowIso,
 			lastActiveAt: nowIso,
+			// Task #30: optional subagent topology fields. Only set when
+			// the caller supplies them — keeps the interface minimal for
+			// top-level sessions and lets the discriminated-union JSON
+			// serializer omit them entirely when absent.
+			...(input.parentId == null ? {} : { parentId: input.parentId }),
+			...(input.task == null ? {} : { task: input.task }),
 		};
 		this.sessions.set(id, session);
 		return session;

@@ -315,6 +315,32 @@ Slice D 渲染层:抽出 `render-shared.ts` 共享渲染状态/文本工具;新�
 
 Slice A:`/sessions` 是 in-memory 热存(AgentService)的 TUI 入口,与 `/resume` 冷存(SQLite checkpoint)并存。read-only,Slice B 才加 `<id>` 切换写侧。已落库(commit hash TBD,见 git history Task #29 Slice A)。
 
+## Task #30 — subagent topology (minimal slice landed) / 子代理拓扑（最小切片已落地）
+
+Task #29's Slices A–F unified the **chat** session model across TUI and web. Task #30 extends that to **subagent spawns**: a web request to `/api/agents/spawn` now shadow-registers the new subagent in the shared `AgentService` so the TUI's `/sessions` list and the admin probe can see it as a child of the spawning chat session.
+
+Task #29 的 Slice A–F 把**主聊天**会话模型在 TUI / web 之间统一了。Task #30 把这一统一延伸到**子代理 spawn**：web 的 `/api/agents/spawn` 请求会把新生成的子代理影子注册到共享的 `AgentService`，让 TUI 的 `/sessions` 列表和 admin probe 把它显示为发起聊天会话的子节点。
+
+### Changes (minimal slice) / 最小切片改动
+
+- `AgentSession` and `CreateSessionInput` (`packages/agent-core/src/services/agent-service/types.ts`) gained two optional fields: `parentId?: string` (the spawning chat's session id) and `task?: string` (echoes the subagent's task brief). Both default-undefined so existing callers stay binary-compatible.
+- `SessionRegistry.create` plumbs both fields through using conditional spread (`...(input.parentId == null ? {} : { parentId: input.parentId })`) so a top-level session's JSON serialization remains unchanged.
+- `apps/web/app/api/agents/spawn/route.ts` adds a fire-and-forget `getAgentService().then(svc => svc.createSession({origin:"api", id, parentId, task}))` next to the existing `agentRegistry.register(...)` call. The legacy `agent-registry` stays authoritative for `/api/agents` consumers; AgentService is the cross-frontend visibility surface. Collisions and unavailable-service errors are silently swallowed (agent-registry handles authoritative state for the demo UX).
+- 6 new tests (`session-registry.test.ts` +5, `integration.test.ts` +1) lock in the field semantics and the cross-frontend visibility DoD.
+
+`AgentSession` 和 `CreateSessionInput`（位于 `packages/agent-core/src/services/agent-service/types.ts`）新增两个可选字段：`parentId?: string`（发起聊天会话的 id）与 `task?: string`（回显子代理任务描述）。两个字段默认 undefined，已有调用方零破坏。`SessionRegistry.create` 用条件展开把新字段透传，顶层 session 的 JSON 序列化形状不变。`apps/web/app/api/agents/spawn/route.ts` 在原有 `agentRegistry.register(...)` 旁边追加 fire-and-forget 的 `getAgentService().then(svc => svc.createSession({origin:"api", id, parentId, task}))`，legacy `agent-registry` 仍是 `/api/agents` 消费方的权威源，AgentService 只承担跨前端可见性。冲突与 service 不可用情况都静默吞掉。新增 6 个测试覆盖字段语义与跨前端可见性。
+
+### Out-of-scope / 本切片不做的
+
+- Migrating `streamedText` / `toolEvents` / `usage` from agent-registry into AgentService events.
+- Migrating `/api/agents` GET handler to read from AgentService.
+- Status transitions (the shadow-registered session stays at `status: "idle"` forever; agent-registry owns the lifecycle).
+- Rendering `parentId` / `task` columns in TUI `/sessions` table — `renderAgentServiceSessionsTable` still shows `id / origin / status / title / lastActiveAt`.
+
+These all land in follow-up slices; the user-stated DoD ("subagent 跨前端可见 — TUI 和 admin probe 都能看到 web 起的 subagent") is met by the minimal slice alone.
+
+迁移流式文本、tool events、usage、`/api/agents` GET 路由读源、状态切换、TUI 列表新增列等都属于后续切片。本切片只满足用户陈述的 DoD —— "subagent 跨前端可见(TUI 与 admin probe 都能看到 web 起的 subagent)"。
+
 ## Review history / 评审历史
 
 Slice 1 converged after four cross-review rounds (8 reviewer agents total, all `typescript-reviewer`). Per CLAUDE.md's cross-review hard rule, two consecutive fresh reviewers must both report 0 real issues before landing. Round 4 (reviewers G and H) reported 0/0; the loop is closed.

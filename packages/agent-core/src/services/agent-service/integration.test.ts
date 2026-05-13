@@ -202,6 +202,29 @@ describe("AgentService cross-frontend integration (Slice F)", () => {
 		);
 	});
 
+	it("subagent spawn topology — parentId is visible to TUI bridge listSessions (Task #30)", () => {
+		// Mirrors apps/web/app/api/agents/spawn/route.ts (Task #30 minimal
+		// slice): a web subagent spawn calls
+		// `service.createSession({origin: "api", id, parentId, task})`.
+		// The TUI bridge's listSessions must see the new entry with its
+		// parentId so a future `/sessions` rendering can group children
+		// under their parent.
+		const svc = getOrCreateAgentService();
+		svc.createSession({ origin: "web", id: "main-chat-1" });
+		svc.createSession({
+			origin: "api",
+			id: "subagent-a1b2c3d4",
+			parentId: "main-chat-1",
+			task: "lint the diff",
+		});
+		const all = listAgentServiceSessions(svc);
+		const subs = all.filter((s) => s.parentId === "main-chat-1");
+		expect(subs).toHaveLength(1);
+		expect(subs[0]?.id).toBe("subagent-a1b2c3d4");
+		expect(subs[0]?.task).toBe("lint the diff");
+		expect(subs[0]?.origin).toBe("api");
+	});
+
 	it("singleton reuse across TUI and web — getOrCreateAgentService returns the same instance the web side would attach to", () => {
 		const tuiSide = getOrCreateAgentService();
 		// Simulate the web side touching globalThis directly — the

@@ -33,6 +33,10 @@ export interface AgentSession {
 	readonly turnCount: number;
 	readonly createdAt: string;
 	readonly lastActiveAt: string;
+	/** Task #30: parent session id when this session is a spawned subagent. */
+	readonly parentId?: string;
+	/** Task #30: task description for spawned subagents. */
+	readonly task?: string;
 }
 
 export type AgentEventPayload =
@@ -145,6 +149,10 @@ export interface CreateSessionInput {
 	readonly title?: string;
 	/** Optional explicit session id; collides → throws. */
 	readonly id?: string;
+	/** Task #30: parent session id (subagent spawn). */
+	readonly parentId?: string;
+	/** Task #30: task description (subagent spawn). */
+	readonly task?: string;
 }
 
 export interface EmitFromRunnerOptions {

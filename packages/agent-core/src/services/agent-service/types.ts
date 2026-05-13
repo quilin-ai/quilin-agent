@@ -33,6 +33,25 @@ export interface AgentSession {
 	readonly turnCount: number;
 	readonly createdAt: string;
 	readonly lastActiveAt: string;
+	/**
+	 * Optional parent session id. When set, this session is a child
+	 * spawned by another session (Task #30: web's `/api/agents/spawn`
+	 * registers subagents this way so the TUI's `/sessions` list and
+	 * the admin probe can see them as children of the spawning chat
+	 * session). Top-level sessions leave this `undefined`.
+	 *
+	 * 可选的父 session id。子代理(subagent)spawn 时设置,顶层 session 留空。
+	 * TUI /sessions 列表与 admin probe 用它把子代理挂到主代理下面。
+	 */
+	readonly parentId?: string;
+	/**
+	 * Optional task description for spawned subagents. Echoes the
+	 * spawn POST body's `task` field so consumers don't need to fetch
+	 * separate metadata. Top-level sessions leave this `undefined`.
+	 *
+	 * 子代理 spawn 时携带的任务描述,顶层 session 不需要。
+	 */
+	readonly task?: string;
 }
 
 /**
@@ -297,4 +316,20 @@ export interface CreateSessionInput {
 	 * 自动生成。Web chat 路由想让 session id 与浏览器 useChat id 对齐时用。
 	 */
 	readonly id?: string;
+	/**
+	 * Optional parent session id (Task #30: subagent spawn). When set,
+	 * the resulting `AgentSession.parentId` is populated so the TUI
+	 * and admin probe can render the parent → child topology.
+	 *
+	 * 可选父 session id。Task #30 — 子代理 spawn 时挂到主代理下面。
+	 */
+	readonly parentId?: string;
+	/**
+	 * Optional task description for subagent spawns. Stored on the
+	 * `AgentSession` so consumers don't need a separate metadata
+	 * fetch.
+	 *
+	 * 可选任务描述,子代理 spawn 用。
+	 */
+	readonly task?: string;
 }
