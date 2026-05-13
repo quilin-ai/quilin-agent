@@ -252,19 +252,93 @@ function ChatBody({
 	const bottomRef = useRef<HTMLDivElement | null>(null);
 	const autoScrollEnabledRef = useRef(true);
 	useEffect(() => {
-		const onScroll = (): void => {
-			const distanceFromBottom =
-				document.documentElement.scrollHeight - window.scrollY - window.innerHeight;
-			autoScrollEnabledRef.current = distanceFromBottom < 120;
+		// Detect *user-initiated* scroll-up via real input events
+		// (wheel up, ArrowUp / PageUp / Home keys, touch swipe down).
+		// We do NOT use the generic `scroll` event because
+		// `scrollIntoView` from our own RAF loop also fires it,
+		// creating a feedback loop where auto-scroll disables itself
+		// on the first frame. Discovered during 2026-05-13 e2e
+		// capability assessment.
+		//
+		// 不用 scroll 事件检测用户滚动 —— 我们自己的 scrollIntoView 也会
+		// 触发 scroll 事件,导致 onScroll handler 关掉 auto-scroll,形成
+		// 反向反馈循环。改成监听真实用户输入（wheel up / 键盘上翻 / 触摸下拉）。
+		const onWheel = (e: WheelEvent): void => {
+			if (e.deltaY < 0) autoScrollEnabledRef.current = false;
 		};
-		window.addEventListener("scroll", onScroll, { passive: true });
-		return () => window.removeEventListener("scroll", onScroll);
+		const onKey = (e: KeyboardEvent): void => {
+			if (
+				e.key === "ArrowUp" ||
+				e.key === "PageUp" ||
+				e.key === "Home" ||
+				(e.key === " " && e.shiftKey) // Shift+Space scrolls up
+			) {
+				autoScrollEnabledRef.current = false;
+			}
+			if (
+				e.key === "ArrowDown" ||
+				e.key === "PageDown" ||
+				e.key === "End" ||
+				e.key === " "
+			) {
+				// User explicitly asked to go down — opt back in to
+				// auto-follow if they reach the bottom.
+				const distance =
+					document.documentElement.scrollHeight -
+					window.scrollY -
+					window.innerHeight;
+				if (distance < 120) autoScrollEnabledRef.current = true;
+			}
+		};
+		let touchStartY = 0;
+		const onTouchStart = (e: TouchEvent): void => {
+			touchStartY = e.touches[0]?.clientY ?? 0;
+		};
+		const onTouchMove = (e: TouchEvent): void => {
+			const y = e.touches[0]?.clientY ?? 0;
+			if (y - touchStartY > 10) autoScrollEnabledRef.current = false;
+		};
+		window.addEventListener("wheel", onWheel, { passive: true });
+		window.addEventListener("keydown", onKey);
+		window.addEventListener("touchstart", onTouchStart, { passive: true });
+		window.addEventListener("touchmove", onTouchMove, { passive: true });
+		return () => {
+			window.removeEventListener("wheel", onWheel);
+			window.removeEventListener("keydown", onKey);
+			window.removeEventListener("touchstart", onTouchStart);
+			window.removeEventListener("touchmove", onTouchMove);
+		};
 	}, []);
-	// biome-ignore lint/correctness/useExhaustiveDependencies: fire scroll on every messages reference change (including streaming delta) — body only reads refs
+
+	// During streaming, useChat mutates `message.parts` in place rather
+	// than swapping references — so `useEffect([messages])` doesn't
+	// fire reliably on every delta. Drive a requestAnimationFrame loop
+	// while `streaming === true`, and keep the loop alive for an
+	// additional ~1.5s after streaming flips to false so any late
+	// layout shifts (streamdown's incomplete-markdown final reparse,
+	// font/image loads, hydration of tool cards) also keep the viewport
+	// pinned to the bottom.
+	//
+	// 流式期间 useChat 直接 mutate parts 数组,messages 引用不变,
+	// `useEffect([messages])` 不会每帧触发。改用 RAF 循环,在 streaming
+	// 期间持续把锚点滚进视图,流结束后再延长 1.5s 跟随最后的 layout shift。
 	useEffect(() => {
-		if (!autoScrollEnabledRef.current) return;
-		bottomRef.current?.scrollIntoView({ block: "end", inline: "nearest" });
-	}, [messages]);
+		let raf = 0;
+		let stopAt: number | null = streaming ? null : performance.now() + 1500;
+		const loop = (): void => {
+			if (autoScrollEnabledRef.current) {
+				bottomRef.current?.scrollIntoView({
+					block: "end",
+					inline: "nearest",
+				});
+			}
+			if (stopAt != null && performance.now() >= stopAt) return;
+			raf = requestAnimationFrame(loop);
+		};
+		raf = requestAnimationFrame(loop);
+		return () => cancelAnimationFrame(raf);
+	}, [streaming]);
+
 	// Re-enable auto-scroll on each user submit so a new question always
 	// jumps to the bottom regardless of where the user had scrolled before.
 	const forceScrollToBottom = useCallback((): void => {
@@ -308,7 +382,18 @@ function ChatBody({
 				))}
 				{/* Bottom sentinel for auto-scroll. The document scrolls (not q-view),
 				    so we anchor scrollIntoView() to this empty element at the end. */}
-				<div ref={bottomRef} aria-hidden="true" style={{ height: 1 }} />
+				{/* Scroll anchor — `scroll-margin-bottom` keeps the *last
+				    content row* clear of the fixed composer when
+				    `scrollIntoView({block: "end"})` aligns this anchor to
+				    the viewport bottom. The composer is ~88px tall plus
+				    ~32px breathing room → 120px total. Without this margin
+				    the last lines render behind the composer and the user
+				    has to scroll a bit further by hand. */}
+				<div
+					ref={bottomRef}
+					aria-hidden="true"
+					style={{ height: 1, scrollMarginBottom: "120px" }}
+				/>
 			</section>
 			<Composer
 				agents={[]}
@@ -371,7 +456,36 @@ function TurnMessage({
 	const parts = (message.parts ?? []) as readonly RawPart[];
 
 	const reasoningParts = parts.filter(isReasoningPart);
-	const toolParts = parts.filter(isToolPart);
+	// AI SDK v6's useChat sometimes creates BOTH a typed `tool-<name>`
+	// part and a generic `dynamic-tool` part with the SAME toolCallId
+	// for one call (depending on whether the client knows the tool's
+	// schema in its `tools` map). Rendering both produces duplicate
+	// React keys + duplicate tool cards in the UI. Dedup by
+	// `toolCallId`, preferring the specific `tool-<name>` type.
+	//
+	// useChat 对同一个工具调用偶尔会产出两个 part(`tool-<name>` + `dynamic-tool`),
+	// toolCallId 相同 → React key 冲突 + 重复渲染。按 toolCallId 去重,优先保留 `tool-<name>`。
+	const rawToolParts = parts.filter(isToolPart);
+	const toolDedup = new Map<string, RawPart>();
+	for (const p of rawToolParts) {
+		const id = extractToolCallId(p);
+		if (id == null) {
+			// No toolCallId — keep as-is, key it by something else later.
+			toolDedup.set(`unknown-${toolDedup.size}`, p);
+			continue;
+		}
+		const existing = toolDedup.get(id);
+		if (existing == null) {
+			toolDedup.set(id, p);
+			continue;
+		}
+		// Both exist: keep the specific `tool-<name>` over the
+		// generic `dynamic-tool`.
+		if (existing.type === "dynamic-tool" && p.type !== "dynamic-tool") {
+			toolDedup.set(id, p);
+		}
+	}
+	const toolParts = [...toolDedup.values()];
 	const textParts = parts.filter(
 		(p): p is RawPart & { text: string } => p.type === "text" && typeof p.text === "string",
 	);

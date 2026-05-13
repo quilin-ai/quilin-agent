@@ -131,8 +131,28 @@ export async function pumpFullStreamIntoAgentService(
 		service.emitFromRunner(sessionId, payload, { touchActivity });
 	}
 
+	/**
+	 * Build a part id that is **unique across steps within one turn**.
+	 *
+	 * The LLM (e.g. DeepSeek) reuses the same `text-start.id` (typically
+	 * `txt-0`) at the beginning of every step. Without per-step
+	 * disambiguation, AI SDK v6's `useChat` deduplicates the second-step
+	 * `text-start` against the first-step `text` part it has already
+	 * created, silently dropping all subsequent step output. This caused
+	 * the "second step text never renders" bug observed in multi-tool
+	 * turns (Bug #2 in `docs/15-introspection/web-e2e-capability-assessment.md`).
+	 *
+	 * We always append `-s${stepCount}` so the same `txt-0` id from
+	 * different steps becomes `txt-0-s1`, `txt-0-s2`, etc. — distinct in
+	 * the UIMessage parts list.
+	 *
+	 * 多步流中 LLM 复用同一个 text-start id（如 DeepSeek 总是发 `txt-0`），
+	 * useChat 会以 id 去重，第二个 step 的文本被丢弃。这里把 stepCount 拼到
+	 * id 末尾保证跨 step 唯一。
+	 */
 	function pickPartId(chunk: AiSdkFullStreamChunk, fallback: string): string {
-		return chunk.id ?? chunk.textId ?? chunk.reasoningId ?? fallback;
+		const base = chunk.id ?? chunk.textId ?? chunk.reasoningId ?? fallback;
+		return `${base}-s${stepCount}`;
 	}
 
 	function pickDelta(chunk: AiSdkFullStreamChunk): string {
@@ -171,7 +191,19 @@ export async function pumpFullStreamIntoAgentService(
 				break;
 			}
 			case "text-end": {
-				const id = pickPartId(chunk, activeText?.id ?? `text-${turnIndex}-${stepCount}`);
+				// Reuse the id stored at text-start time instead of
+				// recomputing via `pickPartId` here. `pickPartId`
+				// always appends `-s${stepCount}` and if `start-step`
+				// happens to arrive between this start/end pair (rare
+				// but legal in some providers) the end's id would
+				// silently get a different step suffix from the
+				// start's, leaving useChat with an unmatched
+				// `text-end` chunk that throws `UIMessageStreamError`.
+				// Reuse closes that race (Reviewer I MEDIUM #2,
+				// 2026-05-13).
+				const id =
+					activeText?.id ??
+					pickPartId(chunk, `text-${turnIndex}-${stepCount}`);
 				emit({ type: "llm.text_end", turnIndex, textPartId: id });
 				activeText = null;
 				break;
@@ -195,7 +227,13 @@ export async function pumpFullStreamIntoAgentService(
 				break;
 			}
 			case "reasoning-end": {
-				const id = pickPartId(chunk, activeReasoning?.id ?? `reasoning-${turnIndex}-${stepCount}`);
+				// Same race-fix as text-end: reuse the id stored at
+				// reasoning-start time. Recomputing via `pickPartId`
+				// here would misalign the suffix if `start-step`
+				// landed between the start/end pair.
+				const id =
+					activeReasoning?.id ??
+					pickPartId(chunk, `reasoning-${turnIndex}-${stepCount}`);
 				emit({ type: "llm.reasoning_end", turnIndex, reasoningPartId: id });
 				activeReasoning = null;
 				break;
@@ -336,20 +374,42 @@ function payloadToChunk(payload: AgentEventPayload): Record<string, unknown> | n
 		case "llm.reasoning_end":
 			return { type: "reasoning-end", id: payload.reasoningPartId };
 		case "tool.call":
+			// AI SDK v6 UIMessage wire format uses `tool-input-available`,
+			// NOT `tool-call`. `useChat`'s `processUIMessageStream` has no
+			// `case "tool-call":` arm — sending the legacy name aborts
+			// the stream (silently — useChat catches and stops feeding
+			// further chunks into the message), which dropped every
+			// `text-delta` that came after a tool call in multi-step
+			// turns. See `web-e2e-capability-assessment.md` Bug #3.
+			//
+			// AI SDK v6 UIMessage 协议把工具调用 wire chunk 命名为
+			// `tool-input-available`,不再是 `tool-call`。我们原来直接发
+			// `tool-call` 导致 useChat 不认识,默默中止该 message 的流处理,
+			// 工具调用之后的 text-delta 全部丢失(多 step 文本不渲染)。
 			return {
-				type: "tool-call",
+				type: "tool-input-available",
 				toolCallId: payload.toolCallId,
 				toolName: payload.toolName,
 				...(payload.input === undefined ? {} : { input: payload.input }),
 			};
 		case "tool.result":
+			// AI SDK v6 wire: `tool-output-available` (success) /
+			// `tool-output-error` (error). Legacy names `tool-result` /
+			// `tool-error` are NOT recognized by useChat — same silent-
+			// abort failure mode as `tool.call` above.
+			//
+			// AI SDK v6 协议:成功 → `tool-output-available`,失败 → `tool-output-error`。
+			if (payload.isError === true) {
+				return {
+					type: "tool-output-error",
+					toolCallId: payload.toolCallId,
+					errorText: extractErrorMessage(payload.output),
+				};
+			}
 			return {
-				type: payload.isError === true ? "tool-error" : "tool-result",
+				type: "tool-output-available",
 				toolCallId: payload.toolCallId,
-				toolName: payload.toolName,
-				...(payload.isError === true
-					? { error: extractErrorMessage(payload.output) }
-					: { output: payload.output }),
+				output: payload.output,
 			};
 		case "assistant.message":
 			// Out-of-band: the assembled text is already streamed via

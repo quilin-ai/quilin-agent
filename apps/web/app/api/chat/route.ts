@@ -155,17 +155,33 @@ const SYSTEM_PROMPT_BASE =
 	"你是麒麟 (Quilin),一个自演化的 AI Agent。" +
 	"用中文与用户对话,语气专业、精炼、有条理。回答里可以用 markdown,但避免过度装饰。";
 
-const SYSTEM_PROMPT_WITH_TOOLS =
-	`${SYSTEM_PROMPT_BASE}\n\n` +
-	"你有一组真实工具,先用工具查清事实再答,不要凭记忆编造。\n\n" +
-	"并行子代理 (web 层):\n" +
-	"- spawn_subagent(task): 派一个并行子代理跑一个独立子任务,立即返回 agentId,不等结果。\n" +
-	"- wait_for_subagents(agentIds): 阻塞等待你派的子代理跑完,返回它们的输出文本。\n\n" +
-	"原则:\n" +
-	"- 用户的请求能拆成多个互相独立的子任务、或明示要并行/多个 subagent/分别处理时,用 spawn_subagent 拆;否则直接答或自己调工具。\n" +
-	"- 派 spawn_subagent 必须紧接着 wait_for_subagents 拿结果,不要停在『已派遣』。\n" +
-	"- 综合 subagent 输出成自然语言答案,引用 URL,不要复制 JSON。\n" +
-	"- 涉及『最新』『最近』『版本』『近期』『当前』『动态』等时效性内容,**必须**用 web_fetch 工具查真实数据,不要凭训练记忆答。";
+// Build the with-tools prompt fresh on every request so the {{TODAY}} token
+// reflects the actual current date instead of being frozen at module load
+// time. DeepSeek's training data cutoff means it defaults to ~2025 when
+// asked about "latest" anything; without injecting today's date the agent
+// silently writes "2025年最新动态" tasks into subagents for queries that
+// should target 2026. Discovered during 2026-05-13 e2e capability
+// assessment.
+//
+// 每个请求重新拼 system prompt,把当前日期注入到 prompt 里。否则模型默认
+// 用训练截止时的"现在"(DeepSeek 大概 2025 年初),会把"最新"理解成 2025 年。
+function buildSystemPromptWithTools(): string {
+	const today = new Date().toISOString().slice(0, 10);
+	const currentYear = today.slice(0, 4);
+	return (
+		`${SYSTEM_PROMPT_BASE}\n\n` +
+		`今天是 ${today}。当前年份是 ${currentYear}。你的训练数据可能停留在更早的时间,所以涉及"最新""当前""今年""近期""版本"等时效性问题时,**不要**依赖记忆里的旧数据 —— 用 web_fetch 抓真实页面,并在搜索 query 里写明当前年份(例如 "Python ${currentYear} latest features" 而不是固定写 "2025年")。\n\n` +
+		"你有一组真实工具,先用工具查清事实再答,不要凭记忆编造。\n\n" +
+		"并行子代理 (web 层):\n" +
+		"- spawn_subagent(task): 派一个并行子代理跑一个独立子任务,立即返回 agentId,不等结果。task 描述里**不要硬编码具体年份**(让子代理自己用今天的日期去查);如果一定要写时间窗口,用『今年』『近 6 个月』之类的相对表达。\n" +
+		"- wait_for_subagents(agentIds): 阻塞等待你派的子代理跑完,返回它们的输出文本。\n\n" +
+		"原则:\n" +
+		"- 用户的请求能拆成多个互相独立的子任务、或明示要并行/多个 subagent/分别处理时,用 spawn_subagent 拆;否则直接答或自己调工具。\n" +
+		"- 派 spawn_subagent 必须紧接着 wait_for_subagents 拿结果,不要停在『已派遣』。\n" +
+		"- 综合 subagent 输出成自然语言答案,引用 URL,不要复制 JSON。\n" +
+		"- 涉及『最新』『最近』『版本』『近期』『当前』『动态』等时效性内容,**必须**用 web_fetch 工具查真实数据,不要凭训练记忆答。"
+	);
+}
 
 /* Tool catalog is loaded lazily on first chat via lib/tools-loader.ts. */
 
@@ -580,38 +596,111 @@ export async function POST(req: Request): Promise<Response> {
 			{ type: "turn.started", turnIndex: 1, userText: firstUserText },
 			{ touchActivity: true },
 		);
-		// Fire-and-forget background runner. `setImmediate` detaches
-		// the runner from the request task scope so a client disconnect
-		// cannot abort it; the AbortController on `meta` is the only
-		// way to cancel.
-		const metaRef = meta;
-		setImmediate(() => {
-			void runChatInBackground(service, sessionId, modelMessages, metaRef.abort).catch((e) => {
-				console.log(`[CHAT ${sessionId}] runner crashed: ${String(e)}`);
-				try {
-					service.emitFromRunner(
-						sessionId,
-						{ type: "session.failed", error: String(e) },
-						{ touchActivity: true },
-					);
-					service.setSessionStatus(sessionId, "failed");
-				} catch {
-					/* session may already be evicted */
-				}
-			});
+		// "C plan" (`docs/15-introspection/web-e2e-capability-assessment.md`
+		// §3 follow-up): for the fresh-start path, build `streamText`
+		// synchronously here and return AI SDK v6's official
+		// `toUIMessageStreamResponse()` directly to the browser. This
+		// avoids re-emitting via our hand-rolled `sse-translator`
+		// forward pump — which has to track the AI SDK's internal wire
+		// names (`tool-input-available` / `tool-output-available` /
+		// part-id-with-step-suffix / ...) and drifted out of sync,
+		// silently dropping post-tool-call text deltas in multi-step
+		// turns (Bug #3, fixed by this commit).
+		//
+		// AgentService still gets the full event stream so the TUI
+		// admin probe and any reconnect can replay the conversation —
+		// `result.fullStream` is internally tee'd by AI SDK on every
+		// getter access, so the background pump consumes an independent
+		// copy from the one `toUIMessageStreamResponse` ships to the
+		// browser.
+		//
+		// C 方案:fresh start 路径直接用 AI SDK v6 官方 toUIMessageStreamResponse,
+		// 避免自家 sse-translator 拼 wire format(已多次因 chunk type 重命名漂移导致渲染丢失)。
+		// fullStream 内部 tee,后台 pump 给 AgentService(跨前端可见 / reconnect)
+		// 与浏览器流互不影响。
+		//
+		// 使用外层 POST handler 已经构造好的 `provider` (line 491) — apiKey
+		// 空值的早返回也在外层处理 (line 485)。这里复用而非重新声明,避免
+		// dead code + shadow 变量 (Reviewer I MEDIUM #1, 2026-05-13)。
+		const spawnSubagentTool = makeSpawnSubagentTool(sessionId);
+		const builtinTools = (await getToolsCatalog()).adapted;
+		const result = streamText({
+			model: provider(DEEPSEEK_MODEL),
+			system: buildSystemPromptWithTools(),
+			messages: modelMessages,
+			tools: {
+				...builtinTools,
+				web_fetch: inlineWebFetchTool,
+				spawn_subagent: spawnSubagentTool,
+				wait_for_subagents: waitForSubagentsTool,
+			},
+			stopWhen: stepCountIs(15),
+			abortSignal: meta.abort.signal,
 		});
-	} else if (meta != null) {
-		touchMeta(sessionId);
-		console.log(`[CHAT ${sessionId}] reconnect: replaying ${eventCount} events from AgentService`);
+
+		// Background pump to AgentService — fire-and-forget. `setImmediate`
+		// detaches from the request task scope so client disconnect can't
+		// abort the runner; the AbortController on `meta` is the only
+		// way to cancel.
+		setImmediate(() => {
+			void pumpFullStreamIntoAgentService(result.fullStream, service, sessionId, 1)
+				.then((summary) => {
+					console.log(
+						`[CHAT ${sessionId}] pump COMPLETE (text=${summary.textDeltaCount} tools=${summary.toolCallCount} steps=${summary.stepCount} reason=${summary.finishReason ?? "(none)"})`,
+					);
+					try {
+						service.emitFromRunner(
+							sessionId,
+							{ type: "session.completed" },
+							{ touchActivity: true },
+						);
+						service.setSessionStatus(sessionId, "completed");
+					} catch {
+						/* session may already be evicted */
+					}
+				})
+				.catch((e) => {
+					console.log(`[CHAT ${sessionId}] pump crashed: ${String(e)}`);
+					try {
+						service.emitFromRunner(
+							sessionId,
+							{ type: "session.failed", error: String(e) },
+							{ touchActivity: true },
+						);
+						service.setSessionStatus(sessionId, "failed");
+					} catch {
+						/* session may already be evicted */
+					}
+				});
+		});
+
+		return result.toUIMessageStreamResponse({
+			sendReasoning: true,
+			headers: {
+				// Strict-epoch handshake: server's current epoch surfaced
+				// as a response header so non-`useChat` consumers (curl
+				// / admin probe) can read it without a separate call.
+				"x-quilin-epoch": serverEpoch,
+			},
+			onError: (err) => (err instanceof Error ? err.message : String(err)),
+		});
 	}
 
-	// At this point we either reconnected (meta is set, session is in
-	// AgentService, runner is alive in background) or freshly started
-	// (meta + AgentService session created, runner kicked off).
-	// Pass `startSeq` so the subscriber only sees events emitted at or
-	// after the session was (re)created — eliminates the
-	// evict+recreate-same-id replay bug where the new subscriber would
-	// see the old session's history before the new runner's output.
+	// Reconnect path: meta exists, hash matches, AgentService session
+	// is alive. Replay events from the bus via the hand-rolled
+	// subscriber stream (forward sse-translator). This path is rare
+	// (only when the browser refreshes mid-stream); fresh-start above
+	// uses the official `toUIMessageStreamResponse` wire.
+	touchMeta(sessionId);
+	console.log(`[CHAT ${sessionId}] reconnect: replaying ${eventCount} events from AgentService`);
+
+	// At this point: meta is set, session is in AgentService, runner
+	// is alive in background. Pass `startSeq` so the subscriber only
+	// sees events emitted at or after the session was (re)created.
+	// `meta` is non-null by the isReconnect predicate (line ~540), but
+	// TS can't narrow `let meta` after the `!isReconnect` early-return;
+	// optional chain falls back to 0 which makes subscribeAfterSeq = -1,
+	// which is the AgentService convention for "from the beginning".
 	const subscribeAfterSeq = (meta?.startSeq ?? 0) - 1;
 	return new Response(buildSubscriberStream(service, sessionId, serverEpoch, subscribeAfterSeq), {
 		headers: {
@@ -619,96 +708,9 @@ export async function POST(req: Request): Promise<Response> {
 			"Cache-Control": "no-cache, no-transform",
 			Connection: "keep-alive",
 			"x-vercel-ai-ui-message-stream": "v1",
-			// Strict-epoch handshake: server's current epoch is also
-			// surfaced as a response header so non-`useChat`
-			// consumers (TUI / admin probe / direct curl) can read
-			// it without having to call `/api/chat/status`
-			// separately. The browser `useChat` reads epoch via
-			// `/api/chat/status` because `DefaultChatTransport`
-			// doesn't expose response headers; the header here is
-			// belt-and-suspenders / debug aid.
 			"x-quilin-epoch": serverEpoch,
 		},
 	});
-}
-
-/**
- * Background LLM runner. Drives `streamText` and translates its
- * `fullStream` into structured `AgentEventPayload` events through
- * `pumpFullStreamIntoAgentService`. The runner outlives the HTTP
- * request via `setImmediate` detach; only `meta.abort.abort()` (via
- * the chat route's reconnect-restart path or the LRU eviction) stops
- * it.
- *
- * On normal completion: emits `session.completed` + flips status to
- * `completed`. On failure (caught exception) or user-driven cancel
- * (AbortError from `meta.abort`): emits `session.failed` + flips
- * status to `failed`. The chat route's POST `setImmediate` catch
- * block is the last-resort safety net for synchronous throws inside
- * this function before the try/catch establishes.
- *
- * 后台 LLM runner:fullStream → AgentEventPayload(经 sse-translator),
- * 整个 turn 结束 emit session.completed + setSessionStatus completed。
- * AbortController 触发会 fullStream throw,被 catch 后转 session.failed。
- */
-async function runChatInBackground(
-	service: AgentServiceLike,
-	sessionId: string,
-	modelMessages: Awaited<ReturnType<typeof convertToModelMessages>>,
-	abort: AbortController,
-): Promise<void> {
-	console.log(`[CHAT ${sessionId}] runner START`);
-	const provider = createOpenAICompatible({
-		name: "deepseek",
-		baseURL: DEEPSEEK_BASE,
-		apiKey: process.env.DEEPSEEK_API_KEY ?? "",
-	});
-	const spawnSubagentTool = makeSpawnSubagentTool(sessionId);
-	const builtinTools = (await getToolsCatalog()).adapted;
-	const result = streamText({
-		model: provider(DEEPSEEK_MODEL),
-		system: SYSTEM_PROMPT_WITH_TOOLS,
-		messages: modelMessages,
-		tools: {
-			...builtinTools,
-			web_fetch: inlineWebFetchTool,
-			spawn_subagent: spawnSubagentTool,
-			wait_for_subagents: waitForSubagentsTool,
-		},
-		stopWhen: stepCountIs(15),
-		abortSignal: abort.signal,
-	});
-
-	try {
-		const summary = await pumpFullStreamIntoAgentService(result.fullStream, service, sessionId, 1);
-		console.log(
-			`[CHAT ${sessionId}] runner COMPLETE (text=${summary.textDeltaCount} tools=${summary.toolCallCount} steps=${summary.stepCount} reason=${summary.finishReason ?? "(none)"})`,
-		);
-		// Final session.completed (after turn.completed already emitted
-		// by the pump on `finish`).
-		service.emitFromRunner(sessionId, { type: "session.completed" }, { touchActivity: true });
-		service.setSessionStatus(sessionId, "completed");
-	} catch (e) {
-		// AbortError vs unexpected error: both flow through here. We
-		// emit session.failed either way so subscribers see a clean
-		// termination — the SSE writer follows up with SSE_DONE_FRAME.
-		const message = e instanceof Error ? e.message : String(e);
-		console.log(`[CHAT ${sessionId}] runner caught: ${message}`);
-		// Session may have been evicted concurrently (reconnect-restart
-		// path). Guard each AgentService call against that race.
-		if (service.getSession(sessionId) != null) {
-			try {
-				service.emitFromRunner(
-					sessionId,
-					{ type: "session.failed", error: message },
-					{ touchActivity: true },
-				);
-				service.setSessionStatus(sessionId, "failed");
-			} catch {
-				/* eviction race — best-effort */
-			}
-		}
-	}
 }
 
 /**

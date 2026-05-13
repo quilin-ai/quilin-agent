@@ -112,8 +112,8 @@ build:
 
 # ============ Web UI (apps/web — Next.js 15) ============
 
-# 前端开发服务器（默认端口由 Next.js 决定）
-web-dev:
+# 前端 + API 路由开发服务器（Next.js dev，默认 127.0.0.1:3000）
+dev-web:
     pnpm --filter @quilin/web dev
 
 # 生产构建
@@ -145,7 +145,8 @@ web-lint:
 dev-memory:
     cd providers/memory && LOG_LEVEL=debug QUILIN_ENV=dev uv run python -m quilin_mem
 
-dev-web:
+# Python Crawl4AI MCP provider (providers/web)。前端 Next.js 用 `just dev-web`。
+dev-web-py:
     cd providers/web && LOG_LEVEL=debug QUILIN_ENV=dev uv run python -m quilin_web
 
 test-py:

@@ -25,9 +25,9 @@ http://127.0.0.1:53217/dashboard       ← legacy 7-panel UI (read-only, kept fo
 http://127.0.0.1:3000/                 ← new Next.js Web UI (apps/web dev server)
 ```
 
-English: Operationally, the legacy dashboard is **embedded** in agent-core and starts automatically; the new Next.js app is a **separate process** started via `just web-dev` (or `pnpm --filter @quilin/web dev`). The Next.js app proxies all API calls to agent-core through `apps/web/app/api/proxy/[...path]/route.ts`, so the user only ever points the browser at the Next.js port.
+English: Operationally, the legacy dashboard is **embedded** in agent-core and starts automatically; the new Next.js app is a **separate process** started via `just dev-web` (or `pnpm --filter @quilin/web dev`). The Next.js app proxies all API calls to agent-core through `apps/web/app/api/proxy/[...path]/route.ts`, so the user only ever points the browser at the Next.js port.
 
-中文：运行上，旧版 dashboard **嵌入**在 agent-core 中，自动启动；新版 Next.js 应用是**独立进程**，通过 `just web-dev`（或 `pnpm --filter @quilin/web dev`）启动。Next.js 应用通过 `apps/web/app/api/proxy/[...path]/route.ts` 代理所有 API 调用到 agent-core，所以用户只需把浏览器指向 Next.js 端口。
+中文：运行上，旧版 dashboard **嵌入**在 agent-core 中，自动启动；新版 Next.js 应用是**独立进程**，通过 `just dev-web`（或 `pnpm --filter @quilin/web dev`）启动。Next.js 应用通过 `apps/web/app/api/proxy/[...path]/route.ts` 代理所有 API 调用到 agent-core，所以用户只需把浏览器指向 Next.js 端口。
 
 English: The two UIs **share the same agent-core process** — they read the same in-memory state through different HTTP endpoints (`/api/dashboard/*` for legacy, `/api/v2/*` for new). There is no double-counting, no replication, no separate database.
 

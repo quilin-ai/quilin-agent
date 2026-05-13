@@ -276,7 +276,13 @@ describe("agentEventToSseChunk — text/reasoning", () => {
 });
 
 describe("agentEventToSseChunk — tool events", () => {
-	it("tool.call → {type:'tool-call', toolCallId, toolName, input?}", () => {
+	// AI SDK v6 UIMessage wire format requires `tool-input-available` /
+	// `tool-output-available` / `tool-output-error` — NOT the legacy
+	// `tool-call` / `tool-result` / `tool-error` names. useChat's
+	// `processUIMessageStream` switch has no arm for the legacy names,
+	// so emitting them silently abort-streams the message. See
+	// `web-e2e-capability-assessment.md` Bug #3.
+	it("tool.call → {type:'tool-input-available', toolCallId, toolName, input?}", () => {
 		const withInput = parseChunkFromFrame(
 			agentEventToSseChunk(
 				buildEvent({
@@ -289,7 +295,7 @@ describe("agentEventToSseChunk — tool events", () => {
 			) ?? "",
 		);
 		expect(withInput).toEqual({
-			type: "tool-call",
+			type: "tool-input-available",
 			toolCallId: "tc-1",
 			toolName: "file_read",
 			input: { path: "/etc/hosts" },
@@ -306,13 +312,13 @@ describe("agentEventToSseChunk — tool events", () => {
 			) ?? "",
 		);
 		expect(noInput).toEqual({
-			type: "tool-call",
+			type: "tool-input-available",
 			toolCallId: "tc-1",
 			toolName: "file_read",
 		});
 	});
 
-	it("tool.result (success) → {type:'tool-result', toolCallId, toolName, output}", () => {
+	it("tool.result (success) → {type:'tool-output-available', toolCallId, output}", () => {
 		const c = parseChunkFromFrame(
 			agentEventToSseChunk(
 				buildEvent({
@@ -324,15 +330,17 @@ describe("agentEventToSseChunk — tool events", () => {
 				}),
 			) ?? "",
 		);
+		// AI SDK v6 wire chunk shape: only toolCallId + output (toolName
+		// not echoed back; client looks it up via the prior
+		// tool-input-available).
 		expect(c).toEqual({
-			type: "tool-result",
+			type: "tool-output-available",
 			toolCallId: "tc-1",
-			toolName: "file_read",
 			output: "content here",
 		});
 	});
 
-	it("tool.result (isError=true) → {type:'tool-error', error: string}", () => {
+	it("tool.result (isError=true) → {type:'tool-output-error', errorText}", () => {
 		const stringErr = parseChunkFromFrame(
 			agentEventToSseChunk(
 				buildEvent({
@@ -346,10 +354,9 @@ describe("agentEventToSseChunk — tool events", () => {
 			) ?? "",
 		);
 		expect(stringErr).toEqual({
-			type: "tool-error",
+			type: "tool-output-error",
 			toolCallId: "tc-1",
-			toolName: "file_read",
-			error: "file not found",
+			errorText: "file not found",
 		});
 
 		const objErr = parseChunkFromFrame(
@@ -365,10 +372,9 @@ describe("agentEventToSseChunk — tool events", () => {
 			) ?? "",
 		);
 		expect(objErr).toEqual({
-			type: "tool-error",
+			type: "tool-output-error",
 			toolCallId: "tc-1",
-			toolName: "shell_exec",
-			error: "permission denied",
+			errorText: "permission denied",
 		});
 
 		const objMessage = parseChunkFromFrame(
@@ -383,7 +389,10 @@ describe("agentEventToSseChunk — tool events", () => {
 				}),
 			) ?? "",
 		);
-		expect(objMessage).toMatchObject({ type: "tool-error", error: "bad input" });
+		expect(objMessage).toMatchObject({
+			type: "tool-output-error",
+			errorText: "bad input",
+		});
 
 		// Fallback: stringifies unknown shapes.
 		const fallback = parseChunkFromFrame(
@@ -398,9 +407,12 @@ describe("agentEventToSseChunk — tool events", () => {
 				}),
 			) ?? "",
 		);
-		expect(fallback.type).toBe("tool-error");
-		expect(typeof fallback.error).toBe("string");
-		expect(JSON.parse(fallback.error as string)).toEqual({ weird: "shape", code: 7 });
+		expect(fallback.type).toBe("tool-output-error");
+		expect(typeof fallback.errorText).toBe("string");
+		expect(JSON.parse(fallback.errorText as string)).toEqual({
+			weird: "shape",
+			code: 7,
+		});
 
 		// Null output is acceptable on errors.
 		const nullOut = parseChunkFromFrame(
@@ -415,7 +427,7 @@ describe("agentEventToSseChunk — tool events", () => {
 				}),
 			) ?? "",
 		);
-		expect(nullOut.error).toBe("tool error");
+		expect(nullOut.errorText).toBe("tool error");
 	});
 });
 
@@ -537,10 +549,15 @@ describe("pumpFullStreamIntoAgentService — text-only stream", () => {
 			1,
 		);
 		const delta = emits.find((e) => e.payload.type === "llm.text");
+		// pickPartId now suffixes `-s${stepCount}` to disambiguate the
+		// same LLM-supplied id across multi-step streams (DeepSeek
+		// reuses `txt-0` per step → previously dropped the second-step
+		// text part in useChat). With no `start-step` chunk in this
+		// test, stepCount stays at 0 and the id becomes `t-s0`.
 		expect(delta?.payload).toMatchObject({
 			type: "llm.text",
 			delta: "v5-style",
-			textPartId: "t",
+			textPartId: "t-s0",
 		});
 	});
 
@@ -557,7 +574,62 @@ describe("pumpFullStreamIntoAgentService — text-only stream", () => {
 			1,
 		);
 		const start = emits.find((e) => e.payload.type === "llm.text_start");
-		expect(start?.payload).toMatchObject({ textPartId: "t-alt" });
+		// `-s0` suffix because no `start-step` precedes this fixture.
+		// See `pickPartId` docstring for the multi-step disambiguation
+		// rationale.
+		expect(start?.payload).toMatchObject({ textPartId: "t-alt-s0" });
+	});
+
+	it("disambiguates text-part ids across multiple steps (multi-tool turn regression)", async () => {
+		// Regression: LLMs like DeepSeek reuse `txt-0` at the start of
+		// every step. Without per-step suffixing, AI SDK v6 `useChat`
+		// dedupes the second-step text-start against the first-step
+		// text part and silently drops all step-2/3 output. We
+		// reproduce a two-step turn where both steps' text-start carry
+		// `id: "txt-0"` and assert that the emitted textPartIds are
+		// distinct (`txt-0-s1` vs `txt-0-s2`).
+		const { service, emits } = makeFakeService();
+		await pumpFullStreamIntoAgentService(
+			asyncIter([
+				{ type: "start-step" },
+				{ type: "text-start", id: "txt-0" },
+				{ type: "text-delta", id: "txt-0", delta: "step-one-text" },
+				{ type: "text-end", id: "txt-0" },
+				{ type: "tool-call", toolCallId: "tc-1", toolName: "f", input: {} },
+				{ type: "tool-result", toolCallId: "tc-1", toolName: "f", output: "ok" },
+				{ type: "finish-step", finishReason: "tool-calls" },
+				{ type: "start-step" },
+				{ type: "text-start", id: "txt-0" },
+				{ type: "text-delta", id: "txt-0", delta: "step-two-text" },
+				{ type: "text-end", id: "txt-0" },
+				{ type: "finish-step", finishReason: "stop" },
+				{ type: "finish", finishReason: "stop" },
+			] as AiSdkFullStreamChunk[]),
+			service,
+			"s1",
+			1,
+		);
+		const startIds = emits
+			.filter((e) => e.payload.type === "llm.text_start")
+			.map(
+				(e) =>
+					(e.payload as Extract<typeof e.payload, { type: "llm.text_start" }>)
+						.textPartId,
+			);
+		// First step's text-start gets `-s1`, second step's gets `-s2`.
+		expect(startIds).toEqual(["txt-0-s1", "txt-0-s2"]);
+		// Deltas must reference the in-step id, never collapsing into the
+		// other step's id.
+		const textPayloads = emits
+			.filter((e) => e.payload.type === "llm.text")
+			.map(
+				(e) =>
+					(e.payload as Extract<typeof e.payload, { type: "llm.text" }>),
+			);
+		expect(textPayloads[0]?.textPartId).toBe("txt-0-s1");
+		expect(textPayloads[0]?.delta).toBe("step-one-text");
+		expect(textPayloads[1]?.textPartId).toBe("txt-0-s2");
+		expect(textPayloads[1]?.delta).toBe("step-two-text");
 	});
 
 	it("emits assistant.message only when text was accumulated", async () => {
@@ -606,7 +678,8 @@ describe("pumpFullStreamIntoAgentService — reasoning", () => {
 		const types = emits.map((e) => e.payload.type);
 		expect(types).toEqual(["llm.reasoning_start", "llm.reasoning", "llm.reasoning_end"]);
 		const delta = emits[1]?.payload;
-		expect(delta).toMatchObject({ reasoningPartId: "rsn-0", delta: "thinking" });
+		// `-s0` suffix because no `start-step` precedes this fixture.
+		expect(delta).toMatchObject({ reasoningPartId: "rsn-0-s0", delta: "thinking" });
 	});
 
 	it("accepts `reasoning` field alias for delta value", async () => {
@@ -823,18 +896,20 @@ describe("Round trip: forward → reverse → forward", () => {
 			if (frame != null) sseFrames.push(frame);
 		}
 		const parsed = sseFrames.map(parseChunkFromFrame);
-		const call = parsed.find((c) => c.type === "tool-call");
-		const result = parsed.find((c) => c.type === "tool-result");
+		// AI SDK v6 wire names: `tool-input-available` /
+		// `tool-output-available`. Legacy `tool-call` / `tool-result`
+		// names abort useChat's stream silently.
+		const call = parsed.find((c) => c.type === "tool-input-available");
+		const result = parsed.find((c) => c.type === "tool-output-available");
 		expect(call).toEqual({
-			type: "tool-call",
+			type: "tool-input-available",
 			toolCallId: "tc-1",
 			toolName: "x",
 			input: { k: "v" },
 		});
 		expect(result).toEqual({
-			type: "tool-result",
+			type: "tool-output-available",
 			toolCallId: "tc-1",
-			toolName: "x",
 			output: { ok: 1 },
 		});
 	});

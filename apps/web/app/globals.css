@@ -1,5 +1,24 @@
 @import "tailwindcss";
 
+/* Tailwind v4 needs explicit @source directives to scan `node_modules`
+ * dependencies that ship their own Tailwind classes. `streamdown`
+ * (used in ConversationView / SubagentDetailView / SubagentLiveProgress /
+ * app/skills) emits markdown HTML decorated with `prose-*` and spacing
+ * utility classes; without this @source they get tree-shaken at build
+ * time and the rendered markdown looks unstyled. Streamdown 1.6.11
+ * already ships with CJK-friendly remark plugins (`remarkCjkFriendly`
+ * + `remarkCjkFriendlyGfmStrikethrough`) in its `defaultRemarkPlugins`,
+ * so the standalone `@streamdown/cjk` package is unnecessary — and
+ * passing it explicitly via `remarkPlugins=` overrides the default
+ * `remarkGfm`, breaking table rendering (lesson learned during the
+ * 2026-05-13 web e2e capability assessment).
+ *
+ * Tailwind v4 默认只扫源码,不扫 node_modules。streamdown 输出的 prose-* 间距类
+ * 不加 @source 会被 purge 掉。Streamdown 1.6.11 内置 cjkFriendly plugin,
+ * 不需要再单独装 @streamdown/cjk —— 反而注入会覆盖默认 remarkGfm,导致表格不渲染。
+ */
+@source "../node_modules/streamdown";
+
 /* ============================================================================
  * Quilin · 麒麟 — design tokens
  * Ported verbatim from .claude/worktrees/webui-rewrite/apps/web-demo/index.html

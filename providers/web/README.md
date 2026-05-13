@@ -37,7 +37,7 @@ Without `--extra crawler` the server still starts, but `web_extract` / `web_craw
 ## 启动 / Run
 
 ```bash
-just dev-web                  # 开发模式,日志 JSON 到 stderr
+just dev-web-py               # 开发模式,日志 JSON 到 stderr（`dev-web` 留给 apps/web Next.js）
 uv run python -m quilin_web   # 等价直接调用
 ```
 
