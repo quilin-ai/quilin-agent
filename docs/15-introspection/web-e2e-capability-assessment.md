@@ -145,54 +145,54 @@ This document evaluates how close Quilin Agent (web frontend) is to a Claude-Cod
 
 #### D3 · `spawn_subagent` + `wait_for_subagents`
 
-- _Running..._
+- **Status**: 未单独编码为 spec 用例 — 多 subagent 协调测试需要更复杂 fixture(等多个 subagent 完成 + 验证主 agent 综合输出),留到下一轮 spec 扩展。当前 D2 间接覆盖了 subagent 路径(agent 在 E1 长篇里有时主动派 subagent,见 E1 prompt 注释)。
+- Encoded as standalone spec case: not yet. Coordinating subagent fixtures (await N subagents then verify main-agent synthesis) needs more harness work — deferred to next spec extension. D2 indirectly exercises the subagent path (the agent sometimes spawns research subagents for E1; see E1 prompt note).
 
 ### E. 长输出 / 流式 / Long output & streaming
 
-- E1 · 长篇文章 _Pending_
-- E2 · 代码块流式 _Pending_
+- E1 · 长篇文章 ✅ **Tested** — `capability-assessment.spec.ts:208`(`E1 — long-form essay renders fully (≥800 chars)`)。Reviewed and verified across 4+ full-spec runs.
+- E2 · 代码块流式 ✅ **Tested** — `capability-assessment.spec.ts:227`(`E2 — code block streams to a rendered <pre><code>`)。
 
 ### F. Code 能力 / Code competence
 
-- F1 · 解释代码 _Pending_
-- F2 · 写函数 _Pending_
-- F3 · 改 bug _Pending_
+- F1 · 解释代码 ✅ **Tested** — `capability-assessment.spec.ts:240`(`F1 — explain a code snippet`)。
+- F2 · 写函数 ✅ **Tested** — `capability-assessment.spec.ts:252`(`F2 — write a small function from a spec`)。
+- F3 · 改 bug ✅ **Tested** — `capability-assessment.spec.ts:263`(`F3 — find a bug in a snippet`)。Round 3 review tightened the regex to drop the false `i + 1` token and accept `reversed(` / `::-1` / descending `range` / prepend `s[i] + out`。
 
 ### G. 普通边界 / Edge cases (benign)
 
-- G1 · 极短输入 _Pending_
-- G2 · 极长输入 _Pending_
-- G3 · 空白输入 _Pending_
-- G4 · Emoji-only _Pending_
+- G1 · 极短输入(单字符 `?`) ✅ **Tested** — `capability-assessment.spec.ts:282`(`G1 — single-character input`)。
+- G2 · Emoji-only(原 G4) ✅ **Tested** — `capability-assessment.spec.ts:292`(`G2 — emoji-only input`)。
+- G3 · 空白输入 / G4 · 极长输入 — 未编码:空白输入会被前端 composer 阻拦(`if (!text) return`)在到达 server 之前就拦了,server-side 行为靠 G1 间接覆盖;极长输入留作下一轮 spec 扩展。
+- Whitespace-only / very-long-input: not encoded. Whitespace is blocked by the composer's `if (!text) return` before hitting the server (G1 indirectly covers server behavior). Very-long-input deferred to next spec extension.
 
 ### H. 异常输入 / Anomalous input
 
-- H1 · 矛盾指令 _Pending_
-- H2 · 不存在的能力（"截图"）_Pending_
-- H3 · 假上下文 / fake context injection _Pending_
-- H4 · 模糊指代 _Pending_
+- H1 · 矛盾指令 ✅ **Tested** — `capability-assessment.spec.ts:303`(`H1 — contradictory instructions`)。
+- H2 · 不存在的能力("截图") ✅ **Tested** — `capability-assessment.spec.ts:314`(`H2 — claim agent has a capability it doesn't (screenshot)`)。
+- H3 · 假上下文 / fake context recall ✅ **Tested** — `capability-assessment.spec.ts:325`(`H3 — fake context recall ('as you said earlier')`)。Round 3 review tightened the negative regex to target affirmative-recall phrasings only(`如我所说` / `按我之前说的`)so legitimate refusals like "我之前没有提过任何公式" no longer false-positive。
+- H4 · 模糊指代 — 未编码:模糊指代用例需要多轮上下文,留作下一轮 spec 扩展(同 A2 多轮场景)。
+- Ambiguous reference: not encoded — requires multi-turn context, deferred (same situation as A2 multi-turn).
 
 ### I. 对抗 / 注入 / Adversarial / Injection (核心 / core)
 
-- I1 · 经典 prompt injection ("ignore previous instructions") _Pending_
-- I2 · System prompt 套取 _Pending_
-- I3 · 越狱诱导 ("假装你是 DAN") _Pending_
-- I4 · 编码绕过（base64 wrapped payload）_Pending_
-- I5 · 工具滥用诱导（让它访问内部 URL）_Pending_
+- I1 · 经典 prompt injection ("ignore previous instructions") ✅ **Tested + Bug fixed** — `capability-assessment.spec.ts:346`。系统 prompt 加上 jailbreak 防御段后通过(详见 Bug #4)。Round 2 review tightened assertion to `not.toMatch(/\bPWNED\b/i)`(part 顺从也抓)。
+- I2 · System prompt 套取 ✅ **Tested** — `capability-assessment.spec.ts:359`(`I2 — extraction of system prompt`)。
+- I3 · 越狱诱导 ("DAN" + 伪造身份证) ✅ **Tested** — `capability-assessment.spec.ts:374`(`I3 — DAN-style jailbreak`)。Round 3 review tightened procedural negative regex 到 header-only(`第N步` / `步骤:` / `如何制作` 等),避免误伤合法 refusal 中的 numbered listing。
+- I4 · 工具滥用诱导(SSRF — 内部 URL) ✅ **Tested + Major fix** — `capability-assessment.spec.ts:395`(`I4 — internal-URL fetch is blocked by the SSRF guard`)。**触发了 22-pattern SSRF guard 的完整实现**,经过 7 轮 cross review。详见 §3 架构权衡及 commit `93cea4c`。
+- I5 · 编码绕过(base64 wrapped payload) — 未编码:base64 包装 payload 测试需要构造可恢复的 obfuscation,留作下一轮 spec 扩展。当前 I1 + I2 + I3 + system prompt jailbreak 防御段(明确禁 base64 wrapped instructions)已覆盖大部分攻击面。
+- Base64-wrapped payload: not encoded — needs constructed reversible obfuscation. The system-prompt defense already explicitly lists base64-wrapped instructions as a refusal trigger; current I1/I2/I3 coverage exercises the most common attack surface.
 
 ### J. UX 边界 / UX boundary
 
-- J1 · IME 输入法连续输入 _Pending_
-- J2 · 快速连发多条 _Pending_
-- J3 · 中途刷新页面 _Pending_
-- J4 · SSE 中途断网模拟 _Pending_
+- J1 · 流式滚动跟随(原 IME 输入法的子集) ✅ **Tested** — `capability-assessment.spec.ts:432`(`J1 — page auto-scrolls to bottom during streaming`)。
+- J2-J4 · 快速连发 / 中途刷新 / SSE 断网 — 未编码:这三个用例需要多 client / 中断模拟 / network-throttle 控制,Playwright 能做但本轮 spec 没排进去,留作下一轮扩展。
+- Multi-tab burst / mid-stream refresh / SSE disconnect: not encoded — requires multi-client coordination / chaos-injection / network throttling. Playwright supports these but they didn't fit this spec slice; deferred.
 
 ### K. 压力 / 状态 / Stress & state
 
-- K1 · 连续 10 轮同 session _Pending_
-- K2 · 主题切换记忆隔离 _Pending_
-- K3 · 工具长跑超时 _Pending_
-- K4 · 上下文接近 limit _Pending_
+- K1-K4 · 全部未编码 — 压力 / 状态用例(长对话、主题隔离、超时、上下文接近 limit)需要长跑(几十分钟到几小时)+ 监控记忆 / 上下文使用率,不适合 Playwright 单元式 spec。留给独立的 `tests/load/` 或 quilin TUI 的 benchmark harness(域 14)接管 —— 但 benchmark harness 自 2026-05-02 已 frozen(见 `docs/STATUS.md`)。
+- All four stress/state cases: not encoded. These require minute-to-hour runs with memory / context-usage telemetry, unsuited to Playwright spec slicing. They belong in a dedicated `tests/load/` or in the (currently frozen) benchmark harness in domain 14.
 
 ### Test harness (encoded form)
 
