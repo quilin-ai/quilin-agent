@@ -17,6 +17,11 @@ export default defineConfig({
 	},
 	projects: [
 		{
+			// Default project is headless so `pnpm exec playwright test`
+			// can run in the background without stealing window focus.
+			// To watch the browser drive a run, append the CLI flag
+			// `--headed` (Playwright flips headless=false on the active
+			// project) — no separate project is needed.
 			name: "chromium",
 			use: { ...devices["Desktop Chrome"] },
 		},

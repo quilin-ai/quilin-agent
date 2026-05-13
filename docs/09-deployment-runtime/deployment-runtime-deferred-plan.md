@@ -94,6 +94,18 @@ English: The acceptance gate is a reload matrix. Tests must cover no-op reload, 
 
 中文：验收门槛是 reload matrix（重载矩阵）。测试必须覆盖无变更重载、有效动态重载、静态字段拒绝、格式错误文件拒绝、密钥遮蔽、并发重载串行化、回滚到上一代，以及守护进程状态在不变更状态的情况下报告当前生效代数。
 
+English: Validation must split into hard and soft layers. Hard validation covers schema shape, type bounds, referenced path existence (skill directory, mcpServer command, provider key source), and enum legality — failure must block the reload and keep the previous generation active. Soft validation covers connectivity probes (provider reachability, model availability, sandbox image pull) — failure must surface as warnings but must not block reload, because transient network conditions should not freeze configuration changes.
+
+中文：校验必须分硬层和软层。硬校验覆盖 schema 形状、类型范围、引用路径是否存在（skill 目录、mcpServer 命令、provider key 来源）和枚举合法性 —— 失败必须阻断重载，保留上一代配置生效。软校验覆盖连通性探测（provider 是否可达、模型是否可用、沙箱镜像能否拉取） —— 失败以警告形式呈现，但绝不阻断重载，因为短暂网络抖动不应冻结配置变更。
+
+English: A standalone `quilin config validate <path>` dry-run command must exist alongside the live reload path. It runs the same hard plus soft validation pipeline against an unapplied candidate file and returns structured JSON with rejected fields, warning fields, secret-redacted diff against the active generation, and the would-be classification (reloadable / restart-required / rejected). Users editing config should verify before they save, not after a reload fails.
+
+中文：在热重载路径之外，必须有独立的 `quilin config validate <path>` 试运行命令。它对未应用的候选配置文件跑同一套硬 + 软校验流水线，返回结构化 JSON：被拒字段、警告字段、相对当前代数的密钥遮蔽 diff，以及若应用会被分类为可热更新 / 需要重启 / 拒绝。用户编辑配置时应能在保存前先验证，而不是 reload 失败后才发现。
+
+English: Reload failures must be human-readable on every surface. The WebUI must show a banner with the rejected field name, the reason in natural language, the line and column in the offending file, and a remediation command. Terminal output must highlight the same fields with color and exit non-zero from `quilin config reload`. Stack-trace-only output is not acceptable for a config surface users edit by hand.
+
+中文：重载失败必须在所有界面上是人话。WebUI 应显示横幅，包含被拒字段名、自然语言原因、出错文件的行/列以及修复命令。终端输出必须用颜色高亮同一批字段，`quilin config reload` 以非零状态码退出。对一个用户会手动编辑的配置入口，只甩 stack trace（堆栈跟踪）是不可接受的。
+
 ## 守护进程运行时决策 / Daemon Runtime Decisions
 
 English: Daemon runtime（守护进程运行时，即长期驻留并负责后台协调的进程模式） should not be the default execution mode. The default remains foreground single-task or interactive execution. Daemon mode is only justified when Quilin needs long-lived adapters, background task supervision, WebUI dashboard streaming, scheduled update checks, or durable subagent coordination.
@@ -115,6 +127,20 @@ English: Read-only daemon commands must stay read-only. `quilin status`, `quilin
 English: Mutating daemon commands require an intent and a drain policy. `quilin daemon restart` must say whether it drains running tasks, cancels them, or refuses because active work cannot be safely resumed. The command should output affected task identifiers, adapter identifiers, sandbox leases, and the expected recovery path.
 
 中文：会修改状态的守护进程命令需要明确 intent（意图）和 drain policy（排空策略）。`quilin daemon restart` 必须说明它会排空运行任务、取消任务，还是因为活跃工作无法安全恢复而拒绝执行。该命令应输出受影响任务标识、适配器标识、沙箱租约和预期恢复路径。
+
+## Web 会话持久化优先级提升 / Web Session Persistence Priority Bump
+
+English: Per a 2026-05-13 user directive following the web E2E capability assessment, web-side session persistence is raised from "Iter F backlog" to a near-term priority. The motivation is that the current `apps/web` only persists messages to browser localStorage, which is durable across reboots but not across cache clears, incognito mode, browser switches, or device switches. Real users routinely clear caches and switch devices; conversation history loss in any of these flows is a product-level data-loss bug, not an edge case. The §2.6 SessionManager + SQLite design in `docs/09-deployment-runtime/README.md` is therefore promoted from "designed but unscheduled" to an Iter F deliverable.
+
+中文：2026-05-13 用户在 web E2E 能力评测后明确要求把 web 端的会话持久化从"Iter F backlog"提升到近期优先级。原因是当前 `apps/web` 只把消息存到浏览器 localStorage,这对重启可保留,但**清缓存 / 隐身模式 / 换浏览器 / 换设备全部会丢**。真实用户经常清缓存换设备,任何一条丢失对话历史的路径都是产品级数据丢失,不是边缘场景。因此 `docs/09-deployment-runtime/README.md` §2.6 的 SessionManager + SQLite 设计从"设计完但未排期"提升为 Iter F 必交付项。
+
+English: Acceptance criteria: (1) /api/chat POST writes message history to SQLite `sessions.db` keyed by `session_id`; (2) reconnect after server restart re-reads from SQLite and replays history; (3) /sessions list reads from SQLite (cross-browser visibility), with localStorage as a write-through cache for fast initial render; (4) explicit "delete session" wipes both localStorage and the SQLite row; (5) cross-device sync explicitly out of scope for the first slice (single-server / single-user assumption holds for Iter F).
+
+中文：验收标准:(1) `/api/chat` POST 把消息历史写到 SQLite `sessions.db`,按 `session_id` 主键;(2) 服务端重启后重连,从 SQLite 读回历史并回放;(3) `/sessions` 列表读自 SQLite(跨浏览器可见),localStorage 作为写穿透缓存加速首屏;(4) 显式"删除会话"同时清 localStorage 与 SQLite 行;(5) 跨设备同步在第一刀里明确不做(Iter F 保持单服务器/单用户假设)。
+
+English: Risk: the simplest path is a `better-sqlite3` synchronous driver inside the Next.js process. This works for single-server deployments but blocks horizontal scaling. Document this as a known constraint; the multi-server story (Postgres / D1 / Turso) defers to a later iter once the single-server slice is proven.
+
+中文:风险:最简路径是在 Next.js 进程内挂 `better-sqlite3` 同步驱动。这适合单服务器部署,但阻碍水平扩展。文档里明确这是已知约束;多服务器(Postgres / D1 / Turso)留到后续 iter,先把单服务器这一刀跑通。
 
 ## 长会话沙箱暂停与恢复 / Long-Session Sandbox Suspend and Resume
 
