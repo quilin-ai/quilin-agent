@@ -24,6 +24,7 @@
 | 交互 primitives Slice 2 UI 组件 (InlineQuestion/Approval/AsidePart) | `44edf95` | ✅ |
 | Round 4 backlog 清理 (snapshot_lost / depth limit / user.md guard) | `aa7df09` | ✅ |
 | 全 23 个 commit ahead → push 完成 |  | ✅ origin/master 同步 |
+| profile_updater pure-markdown refactor + 5 轮 cross-review 收敛(10 个 fresh reviewer)| `59a618d` | ✅ |
 
 Iter F 持久化故事 + 交互 primitives 前两片 + 用户画像 self-evolution 雏形 + 移动端 + 文档全部落库。
 
@@ -37,11 +38,7 @@ Iter F 持久化故事 + 交互 primitives 前两片 + 用户画像 self-evoluti
 
 ### 阻塞少、价值高(下次最先做)
 
-1. **profile_updater.py 纯 markdown 输出**
-   位置:`providers/memory/src/quilin_mem/profile_updater.py:19` `_format_user_md`
-   现状:已加 user-edit guard(`_is_auto_generated_user_md`),手动编辑的文件不被覆盖;但 `_format_user_md` 本身仍输出 YAML frontmatter shape。
-   下一步:把 `_format_user_md` / `_default_user_md` 改为纯 markdown 段落输出。需要同步更新 `providers/memory/tests/test_user_md_mirror.py` 等。预计 ~15M token。
-   关联文档:`docs/03-memory/profile-pure-markdown-migration.md`。
+1. ~~**profile_updater.py 纯 markdown 输出**~~ ✅ 已完成(commit `59a618d`,5 轮 cross-review 收敛 0/0)
 
 2. **交互 primitives Slice 3 — agent-core 后端钩子**
    位置:`packages/agent-core/src/safety/write-authority.ts` + 新增 `packages/agent-core/src/tools/ask-user-question.ts`
