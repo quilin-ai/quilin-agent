@@ -201,9 +201,7 @@ export async function pumpFullStreamIntoAgentService(
 				// `text-end` chunk that throws `UIMessageStreamError`.
 				// Reuse closes that race (Reviewer I MEDIUM #2,
 				// 2026-05-13).
-				const id =
-					activeText?.id ??
-					pickPartId(chunk, `text-${turnIndex}-${stepCount}`);
+				const id = activeText?.id ?? pickPartId(chunk, `text-${turnIndex}-${stepCount}`);
 				emit({ type: "llm.text_end", turnIndex, textPartId: id });
 				activeText = null;
 				break;
@@ -231,9 +229,7 @@ export async function pumpFullStreamIntoAgentService(
 				// reasoning-start time. Recomputing via `pickPartId`
 				// here would misalign the suffix if `start-step`
 				// landed between the start/end pair.
-				const id =
-					activeReasoning?.id ??
-					pickPartId(chunk, `reasoning-${turnIndex}-${stepCount}`);
+				const id = activeReasoning?.id ?? pickPartId(chunk, `reasoning-${turnIndex}-${stepCount}`);
 				emit({ type: "llm.reasoning_end", turnIndex, reasoningPartId: id });
 				activeReasoning = null;
 				break;
@@ -433,6 +429,45 @@ function payloadToChunk(payload: AgentEventPayload): Record<string, unknown> | n
 			// even on the failure path. Without it the client hangs
 			// waiting for more chunks until its socket times out.
 			return { type: "error", error: payload.error };
+		// Iter F 交互 primitives — AI SDK v6 custom data parts.
+		// Each maps to a `data-<name>` chunk that lands as a UIMessage
+		// part with type `"data-ask"` / `"data-approval"` / `"data-aside"`.
+		// The data payload is what useChat exposes via `part.data` on the
+		// client side; ConversationView's part renderer matches by `type`
+		// to dispatch InlineQuestion / InlineApproval / AsidePart.
+		// Spec: docs/07-safety-guardrails/interaction-primitives-spec.md §3.2.
+		case "ask_user_question":
+			return {
+				type: "data-ask",
+				data: {
+					askId: payload.askId,
+					question: payload.question,
+					mode: payload.mode,
+					...(payload.options === undefined ? {} : { options: payload.options }),
+					...(payload.defaultId === undefined ? {} : { defaultId: payload.defaultId }),
+					...(payload.timeoutMs === undefined ? {} : { timeoutMs: payload.timeoutMs }),
+				},
+			};
+		case "request_approval":
+			return {
+				type: "data-approval",
+				data: {
+					askId: payload.askId,
+					tool: payload.tool,
+					riskLevel: payload.riskLevel,
+					summary: payload.summary,
+					...(payload.detail === undefined ? {} : { detail: payload.detail }),
+					origin: payload.origin,
+				},
+			};
+		case "aside":
+			return {
+				type: "data-aside",
+				data: {
+					text: payload.text,
+					...(payload.weight === undefined ? {} : { weight: payload.weight }),
+				},
+			};
 	}
 }
 

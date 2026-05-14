@@ -117,7 +117,59 @@ export type AgentEventPayload =
 			readonly finishReason?: string;
 	  }
 	| { readonly type: "session.completed" }
-	| { readonly type: "session.failed"; readonly error: string };
+	| { readonly type: "session.failed"; readonly error: string }
+	// Iter F 交互 primitives — forward-declared on the web side ahead of
+	// agent-core support so the wire/translator/UI can land in parallel.
+	// Spec: docs/07-safety-guardrails/interaction-primitives-spec.md §3.
+	| {
+			readonly type: "ask_user_question";
+			readonly askId: string;
+			readonly question: string;
+			readonly mode: "single" | "multi" | "free_text";
+			readonly options?: ReadonlyArray<{
+				readonly id: string;
+				readonly label: string;
+				readonly description?: string;
+			}>;
+			readonly defaultId?: string;
+			readonly timeoutMs?: number;
+	  }
+	| {
+			readonly type: "request_approval";
+			readonly askId: string;
+			readonly tool: string;
+			readonly riskLevel: "low" | "medium" | "high" | "critical";
+			readonly summary: string;
+			readonly detail?: string;
+			readonly origin: "user" | "agent" | "idle";
+	  }
+	| {
+			readonly type: "aside";
+			readonly text: string;
+			readonly weight?: "low" | "normal";
+	  };
+
+/**
+ * Iter F 交互 primitives reply payloads — user → agent direction.
+ * Delivered via POST /api/chat/answer (not over SSE, which is one-way).
+ * Spec: docs/07-safety-guardrails/interaction-primitives-spec.md §3.3.
+ */
+export type AgentReplyPayload =
+	| {
+			readonly kind: "user_answered_question";
+			readonly askId: string;
+			readonly answer:
+				| { readonly mode: "single"; readonly selectedId: string }
+				| { readonly mode: "multi"; readonly selectedIds: ReadonlyArray<string> }
+				| { readonly mode: "free_text"; readonly text: string }
+				| { readonly mode: "timeout" };
+	  }
+	| {
+			readonly kind: "user_decision";
+			readonly askId: string;
+			readonly decision: "allow" | "deny" | "allow_always_low" | "allow_always_medium";
+			readonly reason?: string;
+	  };
 
 export interface AgentEvent {
 	readonly seq: number;
