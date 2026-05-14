@@ -31,6 +31,7 @@ This directory only carries current project facts.
 | [11-agent-mesh](11-agent-mesh/README.md) | Mesh SDK stub 和未来 AgentMesh runtime 边界 |
 | [13-skills](13-skills/README.md) | SKILL.md、catalog、`skill_view`、CRUD、guard、restore、watcher |
 | [14-benchmark-harness](14-benchmark-harness/README.md) | Frozen Benchmark implementation snapshot; read-only unless the user explicitly asks |
+| [15-introspection](15-introspection/README.md) | 元思考 / Introspection — Iter L+3 设计文档：六模块（Trace Store / Trigger / Reflector / Planner rationale / Narrator / Lessons）协作让 Agent 反思自己的执行规划。设计 gate，未实现。 |
 
 ## 写入规则 / Writing Rules
 

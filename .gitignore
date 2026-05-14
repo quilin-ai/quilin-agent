@@ -78,3 +78,10 @@ briefs/
 
 # Added by code-review-graph
 .code-review-graph/
+
+# === Local Playwright MCP debug artifacts ===
+.playwright-mcp/
+*.png
+
+# === Local Claude harness state ===
+.claude/scheduled_tasks.json
