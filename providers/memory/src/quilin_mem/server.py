@@ -11,6 +11,8 @@ from typing import Any
 from mcp.server.fastmcp import Context, FastMCP
 
 from .event_log import TraceContext, parse_traceparent
+from .kg import TemporalKnowledgeGraph
+from .kg_backfill import backfill_kg_from_memory
 from .logging import configure_once, logger
 from .observer import (
     L3aObserver,
@@ -860,6 +862,53 @@ def create_server(
             key=key,
             trace_context=_child_trace_context(parent_trace),
         )
+
+    @server.tool(name="memory_backfill_kg")
+    async def memory_backfill_kg_tool(
+        batch_size: int = 50,
+        max_records: int | None = None,
+        dry_run: bool = True,
+        ctx: Context[object, Any, object] | None = None,
+    ) -> str:
+        """Backfill the knowledge graph from existing memory records.
+
+        Walks `memory_records` across the working / episodic / semantic /
+        skill layers, runs the LLM triple extractor on each record's
+        text body, and (if `dry_run=False`) persists the resulting
+        edges into the TemporalKnowledgeGraph with `memory_id` linkage.
+
+        UX-4 Slice 2. Anti-hallucination filter (source_quote must be
+        verbatim substring) + anti-injection (random per-call boundary
+        token + system+user role split) run inside the extractor.
+
+        Args:
+            batch_size: Records to fetch per `list_by_layer` page
+                (1-200; clamped). Default 50.
+            max_records: Hard cap across all layers (1-10000; clamped).
+                None means "all available, up to the hard cap".
+            dry_run: When True (default), counts what would be added
+                without writing to the KG. Flip to False to persist.
+
+        Returns:
+            JSON string with `{processed, edges_added, skipped, errors, dry_run}`.
+        """
+        store = await resolve_store(ctx)
+        # Construct a per-call KG using the same DB path the store
+        # writes to — `TemporalKnowledgeGraph` shares the `memory.db`
+        # SQLite file with `memory_records`. Close on completion to
+        # release the connection.
+        kg = TemporalKnowledgeGraph()
+        try:
+            result = await backfill_kg_from_memory(
+                store=store,
+                kg=kg,
+                batch_size=batch_size,
+                max_records=max_records,
+                dry_run=dry_run,
+            )
+        finally:
+            await kg.close()
+        return json.dumps(result.to_dict())
 
     return server
 
