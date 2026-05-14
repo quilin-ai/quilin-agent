@@ -37,6 +37,7 @@
 | UX-4 KG Slice 3.1 — `kg_dump_for_viz` MCP tool + `TemporalKnowledgeGraph.dump_edges` + `/api/memory/graph` endpoint + 4 tests | `6afa74f` | ✅ |
 | UX-4 KG Slice 3.2 — `@xyflow/react` reactflow viz + 知识图谱 tab on /memory page | `9abbde8` | ✅(Playwright + cross-review 延迟到 iter 末) |
 | 交互 primitives Slice 3c 部分 — agent-core types 同步 + TUI 渲染 ask/approval/aside(input 路径仍 deferred,需要 IPC) | `6e2b65e` | ✅(render-only;input 仍 TODO) |
+| Iter-close cross-review polish — async-with KG context manager + open-ended valid_to test + retry-race epoch guard | `063dd68` | ✅(iter-level 3-reviewer pass: 0 + 0 + 1 HIGH-style + 2 MEDIUM 全修) |
 
 Iter F 持久化故事 + 交互 primitives 前两片 + 用户画像 self-evolution 雏形 + 移动端 + 文档全部落库。
 
