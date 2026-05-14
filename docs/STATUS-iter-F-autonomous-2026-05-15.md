@@ -34,6 +34,8 @@
 | Task #15 per-ask 128-bit capability token auth + 2 bonus bug fixes(timeout-forge / eviction-kind)+ 3 轮 cross-review (0/0) | `2b0f64a` | ✅ |
 | Task #16 option C — Python fcntl advisory lock on user.md(Python-vs-Python 关闭;TS-vs-Python 仍 documented gap)+ 3 new tests(含 falsifying)+ 2 轮 cross-review(0/0) | `0c09867` | ✅(option C 落地;option A TS 侧待续) |
 | Task #16 option A — proper-lockfile in TS profile-evolution.ts(完整 cross-language coverage)| `77390c7` | ✅(cross-review 按用户指示延迟到 iter 末整体跑) |
+| UX-4 KG Slice 3.1 — `kg_dump_for_viz` MCP tool + `TemporalKnowledgeGraph.dump_edges` + `/api/memory/graph` endpoint + 4 tests | `6afa74f` | ✅ |
+| UX-4 KG Slice 3.2 — `@xyflow/react` reactflow viz + 知识图谱 tab on /memory page | `9abbde8` | ✅(Playwright + cross-review 延迟到 iter 末) |
 
 Iter F 持久化故事 + 交互 primitives 前两片 + 用户画像 self-evolution 雏形 + 移动端 + 文档全部落库。
 
