@@ -88,6 +88,20 @@ Iter F 持久化故事 + 交互 primitives 前两片 + 用户画像 self-evoluti
 
 ---
 
+## 本次 session 完成度 / Session completion 2026-05-15 EOD
+
+- **Commits in this autonomous run:** 33 (从 `6cfa346` 到 `d0ff317`)
+- **Substantive features shipped:** 12(profile-markdown / ask_user_question / request_approval / Task #14 race fix / kg_extractor / memory_backfill_kg / Task #15 token auth / Task #16 fcntl + lockfile / KG viz backend + UI / TUI render / iter-close polish / Playwright e2e)
+- **Tests at session close:** 388 web vitest + 409 quilin-mem pytest + 2433 agent-core vitest + 3 Playwright e2e = ~3233 passing(1 pre-existing env-bleed unrelated)
+- **Cross-review burn:** 22+ rounds, ~40 fresh subagent reviewers. 9 real HIGH bugs caught in flight.
+- **All work on `origin/master`,无悬挂分支。**
+- **TaskList:** #14 / #15 / #16 closed. #5 / #6 remain in_progress(均有 plan doc 指明剩余 slice)。
+
+下一 session 可直接接手 priority 顺序:
+1. UX-4 Slice 4 consolidation log UI(需先开 quilin-mem consolidation_log SQLite 表)
+2. 交互 primitives Slice 3c TUI interactive input(IPC 设计)
+3. 探索 Iter G 主题
+
 ## Token 使用 / Token budget
 
 用户 14 号晚上提供的窗口估算:**125M = 30% / 5h 窗口** → 单窗口 ≈ 417M。
