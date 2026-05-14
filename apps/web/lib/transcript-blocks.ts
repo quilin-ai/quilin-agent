@@ -7,6 +7,12 @@ export interface RawPart {
 	readonly input?: unknown;
 	readonly output?: unknown;
 	readonly errorText?: string;
+	/**
+	 * AI SDK v6 custom data parts surface their payload here. Used by
+	 * the Iter F interaction primitives (`data-ask` / `data-approval` /
+	 * `data-aside`) — see InteractionBlock below + sse-translator.ts.
+	 */
+	readonly data?: unknown;
 }
 
 export interface ReasoningItem {
@@ -34,7 +40,19 @@ export interface TextBlock {
 	readonly text: string;
 }
 
-export type TranscriptBlock = ProcessBlock | TextBlock;
+/**
+ * Iter F 交互 primitives — inline interaction blocks dispatched from
+ * `data-ask` / `data-approval` / `data-aside` UIMessage parts.
+ * Spec: docs/07-safety-guardrails/interaction-primitives-spec.md §3.2.
+ */
+export interface InteractionBlock {
+	readonly type: "interaction";
+	readonly id: string;
+	readonly kind: "question" | "approval" | "aside";
+	readonly data: unknown;
+}
+
+export type TranscriptBlock = ProcessBlock | TextBlock | InteractionBlock;
 
 export function isReasoningPart(p: RawPart): boolean {
 	return p.type === "reasoning";
@@ -42,6 +60,17 @@ export function isReasoningPart(p: RawPart): boolean {
 
 export function isToolPart(p: RawPart): boolean {
 	return p.type.startsWith("tool-") || p.type === "dynamic-tool";
+}
+
+export function isInteractionPart(p: RawPart): boolean {
+	return p.type === "data-ask" || p.type === "data-approval" || p.type === "data-aside";
+}
+
+export function interactionKindOf(p: RawPart): "question" | "approval" | "aside" | null {
+	if (p.type === "data-ask") return "question";
+	if (p.type === "data-approval") return "approval";
+	if (p.type === "data-aside") return "aside";
+	return null;
 }
 
 export function toolNameOf(p: RawPart): string {
@@ -114,10 +143,23 @@ export function buildTranscriptBlocks(
 		});
 	};
 
+	let interactionOrdinal = 0;
 	for (const part of dedupeRenderableParts(parts)) {
 		if (part.type === "text" && typeof part.text === "string") {
 			flushProcess();
 			appendText(part.text);
+			continue;
+		}
+		const interactionKind = interactionKindOf(part);
+		if (interactionKind != null) {
+			flushProcess();
+			interactionOrdinal += 1;
+			blocks.push({
+				type: "interaction",
+				id: `${messageId}-interaction-${interactionOrdinal}`,
+				kind: interactionKind,
+				data: part.data ?? {},
+			});
 			continue;
 		}
 		if (isReasoningPart(part)) {

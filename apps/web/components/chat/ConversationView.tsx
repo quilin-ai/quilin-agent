@@ -6,6 +6,9 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Streamdown } from "streamdown";
 
+import { AsidePart, type AsidePartData } from "@/components/chat/AsidePart";
+import { InlineApproval, type InlineApprovalData } from "@/components/chat/InlineApproval";
+import { InlineQuestion, type InlineQuestionData } from "@/components/chat/InlineQuestion";
 import { SubagentDetailView } from "@/components/chat/SubagentDetailView";
 import { SubagentLiveProgress } from "@/components/chat/SubagentLiveProgress";
 import { Process } from "@/components/conversation/Process";
@@ -23,6 +26,7 @@ import {
 	buildTranscriptBlocks,
 	extractToolCallId,
 	extractToolPartsFromBlocks,
+	type InteractionBlock,
 	type ProcessBlock,
 	type RawPart,
 	type TextBlock,
@@ -745,6 +749,32 @@ function MarkdownTextBlock({
 	);
 }
 
+/**
+ * Iter F 交互 primitives dispatcher — picks the right component for
+ * each `data-ask` / `data-approval` / `data-aside` UIMessage part.
+ * Spec: docs/07-safety-guardrails/interaction-primitives-spec.md §3.2.
+ *
+ * 三个 primitive 部分的 dispatcher,根据 block.kind 路由到不同组件。
+ */
+function InteractionBlockView({
+	block,
+	sessionId,
+}: {
+	readonly block: InteractionBlock;
+	readonly sessionId: string;
+}): React.ReactElement | null {
+	if (block.kind === "question") {
+		return <InlineQuestion sessionId={sessionId} data={block.data as InlineQuestionData} />;
+	}
+	if (block.kind === "approval") {
+		return <InlineApproval sessionId={sessionId} data={block.data as InlineApprovalData} />;
+	}
+	if (block.kind === "aside") {
+		return <AsidePart data={block.data as AsidePartData} />;
+	}
+	return null;
+}
+
 function TurnMessage({
 	sessionId,
 	message,
@@ -786,6 +816,8 @@ function TurnMessage({
 					? blocks.map((block: TranscriptBlock) =>
 							block.type === "process" ? (
 								<ProcessBlockView key={block.id} block={block} streaming={streaming} />
+							) : block.type === "interaction" ? (
+								<InteractionBlockView key={block.id} block={block} sessionId={sessionId} />
 							) : (
 								<MarkdownTextBlock key={block.id} block={block} streaming={streaming} />
 							),
