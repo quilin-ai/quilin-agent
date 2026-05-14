@@ -7,7 +7,18 @@ import { Streamdown } from "streamdown";
 import { deriveAgentDisplayName } from "@/lib/agent-display-name";
 import { formatDuration } from "@/lib/format";
 
-type LiveStatus = "pending" | "running" | "blocked" | "completed" | "failed" | "cancelled";
+type LiveStatus =
+	| "pending"
+	| "running"
+	| "blocked"
+	| "completed"
+	| "failed"
+	| "cancelled"
+	// Round 4 LOW fix — distinct state when /api/agents/[id] 404s
+	// (registry evicted or server restarted). Previously this rendered
+	// as "completed · 0ms" which misled users into thinking the run
+	// actually finished. Now surfaces as "快照丢失 · snapshot lost".
+	| "snapshot_lost";
 
 interface AgentUsage {
 	readonly inputTokens: number;
@@ -51,6 +62,8 @@ function statusBadge(status: LiveStatus): { label: string; tone: string } {
 			return { label: "等待 · blocked", tone: "var(--fg-muted)" };
 		case "cancelled":
 			return { label: "已取消 · cancelled", tone: "var(--fg-muted)" };
+		case "snapshot_lost":
+			return { label: "快照丢失 · snapshot lost", tone: "var(--fg-subtle)" };
 		default:
 			return { label: status, tone: "var(--fg-muted)" };
 	}
@@ -88,19 +101,34 @@ export function SubagentLiveProgress({
 				const res = await fetch(`/api/agents/${agentId}`, { cache: "no-store" });
 				if (cancelledRef.current) return;
 				if (res.status === 404) {
+					// Registry doesn't have a live snapshot — either the
+					// subagent finished and its session evicted, or the
+					// server-side AgentService restarted. Display a
+					// distinct "snapshot lost" state instead of pretending
+					// the run completed normally. Round 4 LOW finding —
+					// previous code marked status="completed" with 0ms,
+					// misleading the user.
 					setExpanded(false);
 					setDetailAvailable(false);
 					setSnapshot({
 						displayName,
 						task,
-						status: "completed",
+						status: "snapshot_lost",
 						streamedText: "",
 						elapsedMs: 0,
 						usage: null,
 					});
 					return;
 				}
-				if (!res.ok) return;
+				if (!res.ok) {
+					// Non-404 server error (5xx). One retry after backoff;
+					// previous behaviour silently stopped polling. Round 4
+					// RECOMMEND #1 from cross-review.
+					if (!cancelledRef.current) {
+						timer = setTimeout(() => void tick(), POLL_INTERVAL_MS * 2);
+					}
+					return;
+				}
 				const body = (await res.json()) as AgentDetailResponse;
 				if (cancelledRef.current) return;
 				if (!body.ok || body.data == null) {

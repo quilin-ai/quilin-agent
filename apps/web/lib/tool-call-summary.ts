@@ -36,18 +36,28 @@ function arrayField(
 	return Array.isArray(value) ? value : null;
 }
 
+/**
+ * Recursive field walk caps at depth 4 — Round 4 RECOMMEND fix. Real
+ * tool input depth is ≤ 3 (request → params → key), so 4 is defensive
+ * without losing reach. Without the cap, a pathological deeply-nested
+ * object could overflow the JS call stack.
+ *
+ * Recursive walk with depth ≤ 4 — protects against pathologically
+ * nested input objects exhausting the JS stack.
+ */
 function firstStringField(
 	record: Record<string, unknown> | null,
 	keys: readonly string[],
+	depth = 0,
 ): { readonly key: string; readonly value: string } | null {
-	if (record == null) return null;
+	if (record == null || depth > 4) return null;
 	for (const key of keys) {
 		const value = stringField(record, key);
 		if (value != null) return { key, value };
 	}
 	for (const nestedKey of ["request", "params", "args", "body", "payload"]) {
 		const nested = asRecord(record[nestedKey]);
-		const found = firstStringField(nested, keys);
+		const found = firstStringField(nested, keys, depth + 1);
 		if (found != null) return found;
 	}
 	return null;

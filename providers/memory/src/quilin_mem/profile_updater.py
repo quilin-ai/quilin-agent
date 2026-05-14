@@ -98,6 +98,32 @@ def _default_user_md(profile_id: str = _DEFAULT_PROFILE_ID) -> str:
     return _format_user_md(profile_id, {}, _utcnow().isoformat())
 
 
+def _is_auto_generated_user_md(path: Path) -> bool:
+    """Detect whether `user.md` is in the auto-generated YAML-frontmatter
+    shape produced by ``_format_user_md``. Returns False if the file is
+    pure markdown / hand-edited — those should be left alone.
+
+    判断 user.md 是否是 auto-generated 的 YAML frontmatter 形态。纯 markdown
+    或手动编辑过的内容返回 False,sync_user_md 不会覆盖。
+
+    Heuristic: an auto-generated file always starts with ``---\\n`` and a
+    ``schema_version: 1`` line in the next handful of lines. Anything
+    else is treated as user-authored.
+    """
+    try:
+        first_chunk = path.read_text(encoding="utf-8", errors="replace")[:512]
+    except OSError:
+        return False
+    if not first_chunk.lstrip().startswith("---"):
+        return False
+    header_lines = first_chunk.splitlines()[:12]
+    for line in header_lines:
+        stripped = line.strip()
+        if stripped.startswith("schema_version"):
+            return True
+    return False
+
+
 class ProfileUpdater:
     """Single durable write entrypoint for UserProfile changes."""
 
@@ -161,7 +187,19 @@ class ProfileUpdater:
 
         If no profile exists yet a minimal template is written so the file
         always exists for external readers (editor, cron, etc.).
+
+        Honors a user-edit guard: when the existing file is NOT in the
+        auto-generated YAML-frontmatter shape (i.e., it looks like manual
+        markdown the user wrote), this method skips the overwrite to
+        avoid clobbering hand-edits. User directive 2026-05-15: profile
+        files should be pure markdown the user can shape, with the agent
+        appending observations rather than rewriting wholesale. See
+        docs/03-memory/profile-pure-markdown-migration.md.
+
+        手动编辑过的 user.md(无 schema_version YAML 头)不会被覆盖。
         """
+        if _USER_MD_PATH.exists() and not _is_auto_generated_user_md(_USER_MD_PATH):
+            return
         profile = self._store.get_profile(profile_id)
         _USER_MD_DIR.mkdir(parents=True, exist_ok=True)
         if profile is None:
