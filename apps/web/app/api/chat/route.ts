@@ -60,6 +60,7 @@ import {
 	SSE_DONE_FRAME,
 } from "@/lib/sse-translator";
 import { makeAskUserQuestionTool } from "@/lib/tools/ask-user-question";
+import { makeRequestApprovalTool } from "@/lib/tools/request-approval";
 import { getToolsCatalog } from "@/lib/tools-loader";
 import {
 	intentRewriteSystemNote,
@@ -840,6 +841,7 @@ export async function POST(req: Request): Promise<Response> {
 		// dead code + shadow 变量 (Reviewer I MEDIUM #1, 2026-05-13)。
 		const spawnSubagentTool = makeSpawnSubagentTool(sessionId);
 		const askUserQuestionTool = makeAskUserQuestionTool({ sessionId, service });
+		const requestApprovalTool = makeRequestApprovalTool({ sessionId, service });
 		const builtinTools = (await getToolsCatalog()).adapted;
 		const result = streamText({
 			model: provider(DEEPSEEK_MODEL),
@@ -851,6 +853,7 @@ export async function POST(req: Request): Promise<Response> {
 				spawn_subagent: spawnSubagentTool,
 				wait_for_subagents: waitForSubagentsTool,
 				ask_user_question: askUserQuestionTool,
+				request_approval: requestApprovalTool,
 			},
 			stopWhen: stepCountIs(15),
 			abortSignal: meta.abort.signal,
