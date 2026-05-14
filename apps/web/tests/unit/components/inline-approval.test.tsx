@@ -6,6 +6,7 @@ import { InlineApproval } from "@/components/chat/InlineApproval";
 describe("InlineApproval — Iter F 交互 primitives", () => {
 	const baseData = {
 		askId: "ap-1",
+		askToken: "test-token-ap1",
 		tool: "shell_exec",
 		riskLevel: "medium" as const,
 		summary: "rm -rf .next/cache",

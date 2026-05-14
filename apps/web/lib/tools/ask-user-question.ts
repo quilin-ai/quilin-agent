@@ -128,9 +128,19 @@ export function makeAskUserQuestionTool(deps: MakeAskUserQuestionToolDeps) {
 			const askId = generateAskId();
 			const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
+			// Register FIRST so the askToken exists before we emit the SSE
+			// event — the client needs the token to be able to answer.
+			const { askToken, reply: replyPromise } = awaitAsk({
+				sessionId: deps.sessionId,
+				askId,
+				kind: "user_answered_question",
+				timeoutMs,
+			});
+
 			deps.service.emitFromRunner(deps.sessionId, {
 				type: "ask_user_question",
 				askId,
+				askToken,
 				question: input.question,
 				mode: input.mode,
 				options: input.options,
@@ -138,13 +148,7 @@ export function makeAskUserQuestionTool(deps: MakeAskUserQuestionToolDeps) {
 				timeoutMs,
 			});
 
-			const reply: AgentReplyPayload = await awaitAsk({
-				sessionId: deps.sessionId,
-				askId,
-				kind: "user_answered_question",
-				timeoutMs,
-			});
-
+			const reply: AgentReplyPayload = await replyPromise;
 			return formatReplyForLlm(reply, input);
 		},
 	});

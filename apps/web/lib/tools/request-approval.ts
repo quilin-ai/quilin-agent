@@ -81,9 +81,19 @@ export function makeRequestApprovalTool(deps: MakeRequestApprovalToolDeps) {
 			const askId = generateAskId();
 			const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
+			// Register FIRST so the askToken exists before we emit the SSE
+			// event — the client needs the token to be able to answer.
+			const { askToken, reply: replyPromise } = awaitAsk({
+				sessionId: deps.sessionId,
+				askId,
+				kind: "user_decision",
+				timeoutMs,
+			});
+
 			deps.service.emitFromRunner(deps.sessionId, {
 				type: "request_approval",
 				askId,
+				askToken,
 				tool: input.tool,
 				riskLevel: input.riskLevel,
 				summary: input.summary,
@@ -91,13 +101,7 @@ export function makeRequestApprovalTool(deps: MakeRequestApprovalToolDeps) {
 				origin: input.origin,
 			});
 
-			const reply: AgentReplyPayload = await awaitAsk({
-				sessionId: deps.sessionId,
-				askId,
-				kind: "user_decision",
-				timeoutMs,
-			});
-
+			const reply: AgentReplyPayload = await replyPromise;
 			return formatDecisionForLlm(reply, input);
 		},
 	});

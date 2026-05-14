@@ -19,6 +19,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 export interface InlineQuestionData {
 	readonly askId: string;
+	/** Per-ask capability token sent with the SSE event; component must
+	 *  echo this in the POST body to /api/chat/answer (task #15). */
+	readonly askToken: string;
 	readonly question: string;
 	readonly mode: "single" | "multi" | "free_text";
 	readonly options?: ReadonlyArray<{
@@ -47,7 +50,7 @@ function formatRemaining(ms: number): string {
 }
 
 export function InlineQuestion({ sessionId, data, epoch }: InlineQuestionProps) {
-	const { askId, question, mode, options, defaultId, timeoutMs } = data;
+	const { askId, askToken, question, mode, options, defaultId, timeoutMs } = data;
 
 	const [status, setStatus] = useState<Status>("idle");
 	const [singleSelection, setSingleSelection] = useState<string | null>(defaultId ?? null);
@@ -97,6 +100,7 @@ export function InlineQuestion({ sessionId, data, epoch }: InlineQuestionProps) 
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({
 					sessionId,
+					askToken,
 					...(epoch == null ? {} : { epoch }),
 					reply: { kind: "user_answered_question", askId, answer },
 				}),
@@ -136,6 +140,7 @@ export function InlineQuestion({ sessionId, data, epoch }: InlineQuestionProps) 
 		multiSelection,
 		freeText,
 		askId,
+		askToken,
 		sessionId,
 		epoch,
 		options,

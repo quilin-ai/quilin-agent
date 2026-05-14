@@ -29,26 +29,43 @@ afterEach(() => {
 });
 
 describe("Slice 1 — pending-asks registry", () => {
-	it("registerAsk + resolveAsk round-trip", async () => {
-		const promise = registerAsk({
+	it("registerAsk + resolveAsk round-trip (with askToken)", async () => {
+		const { askToken, reply: promise } = registerAsk({
 			sessionId: "s1",
 			askId: "ask-1",
 			kind: "user_answered_question",
 		});
 		expect(snapshotPendingAsks().length).toBe(1);
+		expect(askToken).toMatch(/^[a-f0-9]{32}$/);
 		const reply: AgentReplyPayload = {
 			kind: "user_answered_question",
 			askId: "ask-1",
 			answer: { mode: "single", selectedId: "yes" },
 		};
-		const delivered = resolveAsk("s1", "ask-1", reply);
+		const delivered = resolveAsk("s1", "ask-1", askToken, reply);
 		expect(delivered).toBe(true);
 		expect(await promise).toEqual(reply);
 		expect(snapshotPendingAsks().length).toBe(0);
 	});
 
+	it("resolveAsk returns false when askToken mismatches", async () => {
+		registerAsk({
+			sessionId: "s1b",
+			askId: "ask-x",
+			kind: "user_answered_question",
+		});
+		const delivered = resolveAsk("s1b", "ask-x", "00000000000000000000000000000000", {
+			kind: "user_answered_question",
+			askId: "ask-x",
+			answer: { mode: "free_text", text: "spoofed" },
+		});
+		expect(delivered).toBe(false);
+		// The legitimate ask is still pending.
+		expect(snapshotPendingAsks().length).toBe(1);
+	});
+
 	it("resolveAsk returns false when no matching ask", () => {
-		const delivered = resolveAsk("nope", "missing", {
+		const delivered = resolveAsk("nope", "missing", "any-token", {
 			kind: "user_answered_question",
 			askId: "missing",
 			answer: { mode: "timeout" },
@@ -57,7 +74,7 @@ describe("Slice 1 — pending-asks registry", () => {
 	});
 
 	it("timeout auto-resolves with synthetic timeout reply (question)", async () => {
-		const promise = registerAsk({
+		const { reply: promise } = registerAsk({
 			sessionId: "s2",
 			askId: "ask-timeout",
 			kind: "user_answered_question",
@@ -73,7 +90,7 @@ describe("Slice 1 — pending-asks registry", () => {
 	});
 
 	it("timeout auto-resolves with synthetic deny reply (decision)", async () => {
-		const promise = registerAsk({
+		const { reply: promise } = registerAsk({
 			sessionId: "s3",
 			askId: "ask-deny-timeout",
 			kind: "user_decision",
@@ -89,13 +106,13 @@ describe("Slice 1 — pending-asks registry", () => {
 	});
 
 	it("clears timeout when manually resolved before deadline", async () => {
-		const promise = registerAsk({
+		const { askToken, reply: promise } = registerAsk({
 			sessionId: "s4",
 			askId: "ask-quick",
 			kind: "user_answered_question",
 			timeoutMs: 5000,
 		});
-		resolveAsk("s4", "ask-quick", {
+		resolveAsk("s4", "ask-quick", askToken, {
 			kind: "user_answered_question",
 			askId: "ask-quick",
 			answer: { mode: "single", selectedId: "fast" },
@@ -105,23 +122,67 @@ describe("Slice 1 — pending-asks registry", () => {
 		expect(snapshotPendingAsks().length).toBe(0);
 	});
 
+	it("eviction-on-cap preserves the evicted ask's own kind in the synthetic timeout reply", async () => {
+		// Regression test for the bug where eviction used the incoming
+		// ask's `kind` instead of the evicted ask's own `kind`, producing
+		// the wrong reply shape (a `user_decision` Promise getting a
+		// `user_answered_question` payload).
+		const decisionAsk = registerAsk({
+			sessionId: "s-cap",
+			askId: "decision-victim",
+			kind: "user_decision",
+			timeoutMs: 60_000,
+		});
+		// Simulate cap pressure by stuffing MAX-1 more registrations of
+		// the question kind, then one more triggers eviction of the
+		// oldest (decisionAsk). Use long timeouts so they don't auto-fire.
+		const filler: { askToken: string; reply: Promise<unknown> }[] = [];
+		// 999 to take total to MAX_PENDING_ASKS; then one more to trigger eviction.
+		for (let i = 0; i < 999; i += 1) {
+			filler.push(
+				registerAsk({
+					sessionId: "s-cap",
+					askId: `f-${i}`,
+					kind: "user_answered_question",
+					timeoutMs: 60_000,
+				}),
+			);
+		}
+		// This trigger registration evicts decisionAsk (the oldest).
+		registerAsk({
+			sessionId: "s-cap",
+			askId: "trigger",
+			kind: "user_answered_question",
+			timeoutMs: 60_000,
+		});
+		const evicted = await decisionAsk.reply;
+		// MUST be the user_decision shape (deny + reason=timeout), NOT
+		// a user_answered_question payload.
+		expect(evicted).toEqual({
+			kind: "user_decision",
+			askId: "decision-victim",
+			decision: "deny",
+			reason: "timeout",
+		});
+	});
+
 	it("two asks on same session different askId both register independently", async () => {
-		const p1 = registerAsk({ sessionId: "s5", askId: "a1", kind: "user_answered_question" });
-		const p2 = registerAsk({ sessionId: "s5", askId: "a2", kind: "user_decision" });
+		const r1 = registerAsk({ sessionId: "s5", askId: "a1", kind: "user_answered_question" });
+		const r2 = registerAsk({ sessionId: "s5", askId: "a2", kind: "user_decision" });
 		expect(snapshotPendingAsks().length).toBe(2);
-		resolveAsk("s5", "a1", {
+		resolveAsk("s5", "a1", r1.askToken, {
 			kind: "user_answered_question",
 			askId: "a1",
 			answer: { mode: "free_text", text: "ok" },
 		});
-		resolveAsk("s5", "a2", {
+		resolveAsk("s5", "a2", r2.askToken, {
 			kind: "user_decision",
 			askId: "a2",
 			decision: "allow",
 		});
-		const [r1, r2] = await Promise.all([p1, p2]);
-		expect(r1.askId).toBe("a1");
-		expect(r2.askId).toBe("a2");
+		const [reply1, reply2] = await Promise.all([r1.reply, r2.reply]);
+		expect(reply1.askId).toBe("a1");
+		expect(reply2.askId).toBe("a2");
 	});
 });
 
@@ -141,6 +202,7 @@ describe("Slice 1 — SSE translator for interaction events", () => {
 			event({
 				type: "ask_user_question",
 				askId: "ask-1",
+				askToken: "test-token-ask1",
 				question: "选哪个方案?",
 				mode: "single",
 				options: [
@@ -164,6 +226,7 @@ describe("Slice 1 — SSE translator for interaction events", () => {
 			event({
 				type: "ask_user_question",
 				askId: "ask-2",
+				askToken: "test-token-ask2",
 				question: "请输入年份",
 				mode: "free_text",
 			}),
@@ -178,6 +241,7 @@ describe("Slice 1 — SSE translator for interaction events", () => {
 			event({
 				type: "request_approval",
 				askId: "ap-1",
+				askToken: "test-token-ap1",
 				tool: "shell_exec",
 				riskLevel: "medium",
 				summary: "rm -rf .next/cache",
@@ -233,7 +297,45 @@ describe("Slice 1 — POST /api/chat/answer handler", () => {
 				method: "POST",
 				body: JSON.stringify({
 					sessionId: "s",
+					askToken: "0".repeat(32),
 					reply: { kind: "wrong", askId: "a", answer: { mode: "timeout" } },
+				}),
+			}),
+		);
+		expect(res.status).toBe(400);
+	});
+
+	it("400 when askToken is missing", async () => {
+		const { POST } = await import("@/app/api/chat/answer/route");
+		const res = await POST(
+			new Request("http://localhost/api/chat/answer", {
+				method: "POST",
+				body: JSON.stringify({
+					sessionId: "s-no-token",
+					reply: {
+						kind: "user_answered_question",
+						askId: "a",
+						answer: { mode: "free_text", text: "hi" },
+					},
+				}),
+			}),
+		);
+		expect(res.status).toBe(400);
+	});
+
+	it("400 when askToken is malformed (not 32 hex chars)", async () => {
+		const { POST } = await import("@/app/api/chat/answer/route");
+		const res = await POST(
+			new Request("http://localhost/api/chat/answer", {
+				method: "POST",
+				body: JSON.stringify({
+					sessionId: "s-bad-tok",
+					askToken: "not-hex",
+					reply: {
+						kind: "user_answered_question",
+						askId: "a",
+						answer: { mode: "free_text", text: "hi" },
+					},
 				}),
 			}),
 		);
@@ -247,6 +349,7 @@ describe("Slice 1 — POST /api/chat/answer handler", () => {
 				method: "POST",
 				body: JSON.stringify({
 					sessionId: "s-no-ask",
+					askToken: "0".repeat(32),
 					reply: {
 						kind: "user_answered_question",
 						askId: "non-existent",
@@ -259,7 +362,7 @@ describe("Slice 1 — POST /api/chat/answer handler", () => {
 	});
 
 	it("200 + {delivered:true} when matching ask is pending", async () => {
-		const replyPromise = registerAsk({
+		const { askToken, reply: replyPromise } = registerAsk({
 			sessionId: "s-good",
 			askId: "ask-ok",
 			kind: "user_answered_question",
@@ -271,6 +374,7 @@ describe("Slice 1 — POST /api/chat/answer handler", () => {
 				method: "POST",
 				body: JSON.stringify({
 					sessionId: "s-good",
+					askToken,
 					reply: {
 						kind: "user_answered_question",
 						askId: "ask-ok",
@@ -287,7 +391,7 @@ describe("Slice 1 — POST /api/chat/answer handler", () => {
 	});
 
 	it("multi mode round-trip via endpoint", async () => {
-		const replyPromise = registerAsk({
+		const { askToken, reply: replyPromise } = registerAsk({
 			sessionId: "s-multi",
 			askId: "m-1",
 			kind: "user_answered_question",
@@ -299,6 +403,7 @@ describe("Slice 1 — POST /api/chat/answer handler", () => {
 				method: "POST",
 				body: JSON.stringify({
 					sessionId: "s-multi",
+					askToken,
 					reply: {
 						kind: "user_answered_question",
 						askId: "m-1",
@@ -315,7 +420,7 @@ describe("Slice 1 — POST /api/chat/answer handler", () => {
 	});
 
 	it("user_decision allow_always_medium delivers correctly", async () => {
-		const replyPromise = registerAsk({
+		const { askToken, reply: replyPromise } = registerAsk({
 			sessionId: "s-dec",
 			askId: "dec-1",
 			kind: "user_decision",
@@ -327,6 +432,7 @@ describe("Slice 1 — POST /api/chat/answer handler", () => {
 				method: "POST",
 				body: JSON.stringify({
 					sessionId: "s-dec",
+					askToken,
 					reply: {
 						kind: "user_decision",
 						askId: "dec-1",

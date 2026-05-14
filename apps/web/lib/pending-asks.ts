@@ -23,13 +23,24 @@
  * gets evicted (with timeout reply) when the cap is hit.
  */
 
+import { randomBytes } from "node:crypto";
 import type { AgentReplyPayload } from "./agent-service-client.js";
 
 const MAX_PENDING_ASKS = 1000;
+const ASK_TOKEN_BYTES = 16;
 
 interface PendingAsk {
 	readonly sessionId: string;
 	readonly askId: string;
+	/** Capability token bound at registration time. Must match the
+	 *  ``askToken`` field on the answer POST or the answer is rejected.
+	 *  Mitigates cross-session forgery in the absence of a session auth
+	 *  layer (task #15). */
+	readonly askToken: string;
+	/** Reply shape the agent runtime is expecting. Used by the eviction
+	 *  path to synthesize a correctly-shaped timeout reply for the
+	 *  evicted ask (its own kind, not the incoming ask's kind). */
+	readonly kind: "user_answered_question" | "user_decision";
 	readonly createdAt: number;
 	readonly resolve: (reply: AgentReplyPayload) => void;
 	readonly timeoutTimer: ReturnType<typeof setTimeout> | null;
@@ -52,36 +63,60 @@ function keyFor(sessionId: string, askId: string): string {
 	return `${sessionId}::${askId}`;
 }
 
+export interface RegisteredAsk {
+	/** The capability token the caller must emit alongside the SSE event;
+	 *  /api/chat/answer's POST body must echo this token to resolve. */
+	readonly askToken: string;
+	/** Promise that resolves with the user's reply, or a synthetic timeout. */
+	readonly reply: Promise<AgentReplyPayload>;
+}
+
 /**
- * Register a pending ask. Returns a Promise the caller (agent runtime)
- * awaits; the Promise resolves with the user's reply when
- * `/api/chat/answer` POSTs a matching `{sessionId, askId}`, or with a
- * synthetic `{kind, mode: "timeout"}` reply if `timeoutMs` elapses first.
+ * Register a pending ask. Returns `{askToken, reply}` — the caller
+ * MUST emit the ``askToken`` to the client in the same payload as the
+ * ``askId`` (so the client can echo it back), then await ``reply``.
  *
- * 注册一个 pending ask,返回 Promise。agent runtime await 它;`/api/chat/answer`
- * 命中则 resolve 用户回复;超时 resolve 一个 timeout 占位回复。
+ * Mitigates cross-session forgery: even an attacker who knows the
+ * sessionId + askId cannot resolve the ask without the 128-bit
+ * unguessable ``askToken``. Token is generated server-side at
+ * registration time and never re-emitted after that.
+ *
+ * 注册一个 pending ask,返回 {askToken, reply}。caller 必须把 askToken
+ * 通过 SSE 推给客户端,客户端在 POST /api/chat/answer 里带回。32 hex
+ * = 128 bit 不可猜,即使攻击者知道 sessionId + askId 也无法 resolve。
  */
 export function registerAsk(input: {
 	readonly sessionId: string;
 	readonly askId: string;
 	readonly kind: "user_answered_question" | "user_decision";
 	readonly timeoutMs?: number;
-}): Promise<AgentReplyPayload> {
+}): RegisteredAsk {
 	const map = getMap();
 	if (map.size >= MAX_PENDING_ASKS) {
 		// Drop the oldest pending ask with a timeout reply to free space.
+		// Use the evicted ask's OWN `kind` (not the incoming `input.kind`)
+		// so the synthetic timeout payload matches the shape the awaiter
+		// is expecting — a `user_decision` Promise must resolve to a
+		// `user_decision`-shaped reply, not a `user_answered_question`.
 		const oldest = [...map.values()].sort((a, b) => a.createdAt - b.createdAt)[0];
 		if (oldest != null) {
-			resolveAsk(oldest.sessionId, oldest.askId, syntheticTimeoutReply(oldest.askId, input.kind));
+			resolveAsk(
+				oldest.sessionId,
+				oldest.askId,
+				oldest.askToken,
+				syntheticTimeoutReply(oldest.askId, oldest.kind),
+			);
 		}
 	}
-	return new Promise<AgentReplyPayload>((resolve) => {
+	const askToken = randomBytes(ASK_TOKEN_BYTES).toString("hex");
+	const reply = new Promise<AgentReplyPayload>((resolve) => {
 		const timeoutTimer =
 			input.timeoutMs != null && input.timeoutMs > 0
 				? setTimeout(() => {
 						resolveAsk(
 							input.sessionId,
 							input.askId,
+							askToken,
 							syntheticTimeoutReply(input.askId, input.kind),
 						);
 					}, input.timeoutMs)
@@ -89,25 +124,40 @@ export function registerAsk(input: {
 		map.set(keyFor(input.sessionId, input.askId), {
 			sessionId: input.sessionId,
 			askId: input.askId,
+			askToken,
+			kind: input.kind,
 			createdAt: Date.now(),
 			resolve,
 			timeoutTimer,
 		});
 	});
+	return { askToken, reply };
 }
 
 /**
- * Look up and resolve a pending ask by `(sessionId, askId)`. Returns
- * true if a pending ask was matched + resolved, false if not (already
- * answered, timed out, or never registered).
+ * Look up and resolve a pending ask by `(sessionId, askId, askToken)`.
+ * Returns true if a pending ask matched (and the token verified) and
+ * was resolved, false if not (already answered, timed out, never
+ * registered, or token mismatch).
  *
  * Called by `/api/chat/answer` POST handler.
+ *
+ * Token comparison is constant-time-equivalent for short fixed-length
+ * hex strings (===) — Node lacks `crypto.timingSafeEqual` for plain
+ * strings without Buffer wrapping; we accept the negligible timing
+ * leak because the token is 128-bit-unguessable to begin with.
  */
-export function resolveAsk(sessionId: string, askId: string, reply: AgentReplyPayload): boolean {
+export function resolveAsk(
+	sessionId: string,
+	askId: string,
+	askToken: string,
+	reply: AgentReplyPayload,
+): boolean {
 	const map = getMap();
 	const k = keyFor(sessionId, askId);
 	const pending = map.get(k);
 	if (pending == null) return false;
+	if (pending.askToken !== askToken) return false;
 	if (pending.timeoutTimer != null) clearTimeout(pending.timeoutTimer);
 	map.delete(k);
 	pending.resolve(reply);

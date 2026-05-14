@@ -14,6 +14,9 @@ import { useCallback, useState } from "react";
 
 export interface InlineApprovalData {
 	readonly askId: string;
+	/** Per-ask capability token; component must echo it in the POST
+	 *  body to /api/chat/answer (task #15). */
+	readonly askToken: string;
 	readonly tool: string;
 	readonly riskLevel: "low" | "medium" | "high" | "critical";
 	readonly summary: string;
@@ -42,7 +45,7 @@ function riskColor(level: InlineApprovalData["riskLevel"]): string {
 }
 
 export function InlineApproval({ sessionId, data, epoch }: InlineApprovalProps) {
-	const { askId, tool, riskLevel, summary, detail, origin } = data;
+	const { askId, askToken, tool, riskLevel, summary, detail, origin } = data;
 
 	const [status, setStatus] = useState<Status>("idle");
 	const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -62,6 +65,7 @@ export function InlineApproval({ sessionId, data, epoch }: InlineApprovalProps) 
 					headers: { "content-type": "application/json" },
 					body: JSON.stringify({
 						sessionId,
+						askToken,
 						...(epoch == null ? {} : { epoch }),
 						reply: { kind: "user_decision", askId, decision: decisionKind },
 					}),
@@ -83,7 +87,7 @@ export function InlineApproval({ sessionId, data, epoch }: InlineApprovalProps) 
 				setStatus("error");
 			}
 		},
-		[sessionId, epoch, askId],
+		[sessionId, epoch, askId, askToken],
 	);
 
 	const onAllow = useCallback((): void => {

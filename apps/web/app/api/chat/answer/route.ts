@@ -35,6 +35,12 @@ import { resolveAsk } from "@/lib/pending-asks";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+// `timeout` mode is intentionally absent here — it's a SERVER-side
+// synthetic reply produced by the `pending-asks` setTimeout callback,
+// never something a client can submit. Allowing clients to post
+// `mode=timeout` would let a token-holding browser force the LLM to
+// believe the user never answered, opening a self-DoS / signal-
+// manipulation vector against the agent's own session.
 const QuestionAnswerSchema = z.discriminatedUnion("mode", [
 	z.object({ mode: z.literal("single"), selectedId: z.string().min(1).max(120) }),
 	z.object({
@@ -42,12 +48,16 @@ const QuestionAnswerSchema = z.discriminatedUnion("mode", [
 		selectedIds: z.array(z.string().min(1).max(120)).min(1).max(16),
 	}),
 	z.object({ mode: z.literal("free_text"), text: z.string().min(1).max(4000) }),
-	z.object({ mode: z.literal("timeout") }),
 ]);
 
 const ReplyBodySchema = z.object({
 	sessionId: z.string().min(1).max(200),
 	epoch: z.string().min(1).max(200).optional(),
+	/** Per-ask capability token. The agent emits this alongside the
+	 *  ask event on the SSE stream; the client must echo it back here
+	 *  to authorize the answer. 128-bit unguessable random token from
+	 *  pending-asks.registerAsk (task #15). */
+	askToken: z.string().regex(/^[a-f0-9]{32}$/),
 	reply: z.discriminatedUnion("kind", [
 		z.object({
 			kind: z.literal("user_answered_question"),
@@ -77,7 +87,7 @@ export async function POST(req: Request): Promise<Response> {
 			{ status: 400 },
 		);
 	}
-	const { sessionId, epoch, reply } = parsed.data;
+	const { sessionId, epoch, askToken, reply } = parsed.data;
 
 	// Strict-epoch handshake (optional — caller may skip on first call).
 	if (epoch != null) {
@@ -94,13 +104,14 @@ export async function POST(req: Request): Promise<Response> {
 	}
 
 	const askId = reply.askId;
-	const delivered = resolveAsk(sessionId, askId, reply as AgentReplyPayload);
+	const delivered = resolveAsk(sessionId, askId, askToken, reply as AgentReplyPayload);
 	if (!delivered) {
-		// Two reasons:
-		//  - ask expired (5-min timeout already fired) — agent runtime
-		//    resolved with synthetic timeout reply
-		//  - ask was never registered (browser racing — shouldn't happen
-		//    unless someone replays a stale request)
+		// Three reasons (intentionally collapsed to one error code so
+		// the server doesn't disclose which dimension failed — a token
+		// mismatch is less informative to an attacker than a 401):
+		//  - ask expired (5-min timeout already fired)
+		//  - ask was never registered (browser racing / stale replay)
+		//  - askToken mismatch (forgery attempt or stale token)
 		return NextResponse.json({ error: "ask expired" }, { status: 410 });
 	}
 	return NextResponse.json({ delivered: true });

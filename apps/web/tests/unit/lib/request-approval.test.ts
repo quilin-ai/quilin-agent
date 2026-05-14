@@ -26,13 +26,14 @@ function makeFakeService(): {
 describe("makeRequestApprovalTool", () => {
 	it("emits request_approval event and returns formatted allow string", async () => {
 		const { service, emitted } = makeFakeService();
-		const awaitAsk = vi.fn(
-			async (): Promise<AgentReplyPayload> => ({
+		const awaitAsk = vi.fn(() => ({
+			askToken: "fake-token-abc",
+			reply: Promise.resolve<AgentReplyPayload>({
 				kind: "user_decision",
 				askId: "fixed-id",
 				decision: "allow",
 			}),
-		);
+		}));
 
 		const approvalTool = makeRequestApprovalTool({
 			sessionId: "sess-7",
@@ -164,13 +165,14 @@ describe("makeRequestApprovalTool", () => {
 
 	it("defaults origin to agent when not provided", async () => {
 		const { service, emitted } = makeFakeService();
-		const awaitAsk = vi.fn(
-			async (): Promise<AgentReplyPayload> => ({
+		const awaitAsk = vi.fn(() => ({
+			askToken: "tok",
+			reply: Promise.resolve<AgentReplyPayload>({
 				kind: "user_decision",
 				askId: "x",
 				decision: "allow",
 			}),
-		);
+		}));
 		const approvalTool = makeRequestApprovalTool({
 			sessionId: "s",
 			service,
@@ -191,13 +193,14 @@ describe("makeRequestApprovalTool", () => {
 
 	it("respects caller-provided timeoutMs", async () => {
 		const { service } = makeFakeService();
-		const awaitAsk = vi.fn(
-			async (): Promise<AgentReplyPayload> => ({
+		const awaitAsk = vi.fn(() => ({
+			askToken: "tok",
+			reply: Promise.resolve<AgentReplyPayload>({
 				kind: "user_decision",
 				askId: "x",
 				decision: "allow",
 			}),
-		);
+		}));
 		const approvalTool = makeRequestApprovalTool({
 			sessionId: "s",
 			service,

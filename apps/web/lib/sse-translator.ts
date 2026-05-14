@@ -441,6 +441,7 @@ function payloadToChunk(payload: AgentEventPayload): Record<string, unknown> | n
 				type: "data-ask",
 				data: {
 					askId: payload.askId,
+					askToken: payload.askToken,
 					question: payload.question,
 					mode: payload.mode,
 					...(payload.options === undefined ? {} : { options: payload.options }),
@@ -453,6 +454,7 @@ function payloadToChunk(payload: AgentEventPayload): Record<string, unknown> | n
 				type: "data-approval",
 				data: {
 					askId: payload.askId,
+					askToken: payload.askToken,
 					tool: payload.tool,
 					riskLevel: payload.riskLevel,
 					summary: payload.summary,

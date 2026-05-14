@@ -6,6 +6,7 @@ import { InlineQuestion } from "@/components/chat/InlineQuestion";
 describe("InlineQuestion — Iter F 交互 primitives", () => {
 	const baseData = {
 		askId: "ask-1",
+		askToken: "test-token-ask1",
 		question: "选哪个方案?",
 		mode: "single" as const,
 		options: [
@@ -96,6 +97,7 @@ describe("InlineQuestion — Iter F 交互 primitives", () => {
 				sessionId="s"
 				data={{
 					askId: "ft-1",
+					askToken: "test-token-ft1",
 					question: "请输入年份",
 					mode: "free_text" as const,
 				}}

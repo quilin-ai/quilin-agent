@@ -27,13 +27,14 @@ function makeFakeService(): {
 describe("makeAskUserQuestionTool", () => {
 	it("emits ask_user_question event and returns formatted single-select answer", async () => {
 		const { service, emitted } = makeFakeService();
-		const awaitAsk = vi.fn(
-			async (): Promise<AgentReplyPayload> => ({
+		const awaitAsk = vi.fn(() => ({
+			askToken: "fake-token-abc",
+			reply: Promise.resolve<AgentReplyPayload>({
 				kind: "user_answered_question",
 				askId: "fixed-id",
 				answer: { mode: "single", selectedId: "opt-a" },
 			}),
-		);
+		}));
 
 		const askTool = makeAskUserQuestionTool({
 			sessionId: "sess-1",
@@ -208,13 +209,14 @@ describe("makeAskUserQuestionTool", () => {
 
 	it("respects caller-provided timeoutMs in the awaitAsk registration", async () => {
 		const { service } = makeFakeService();
-		const awaitAsk = vi.fn(
-			async (): Promise<AgentReplyPayload> => ({
+		const awaitAsk = vi.fn(() => ({
+			askToken: "fake-token-xyz",
+			reply: Promise.resolve<AgentReplyPayload>({
 				kind: "user_answered_question",
 				askId: "x",
 				answer: { mode: "free_text", text: "hi" },
 			}),
-		);
+		}));
 		const askTool = makeAskUserQuestionTool({
 			sessionId: "s",
 			service,

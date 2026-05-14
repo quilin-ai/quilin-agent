@@ -124,6 +124,9 @@ export type AgentEventPayload =
 	| {
 			readonly type: "ask_user_question";
 			readonly askId: string;
+			/** Per-ask capability token. Client must echo this in the
+			 *  /api/chat/answer POST body to authorize the answer. */
+			readonly askToken: string;
 			readonly question: string;
 			readonly mode: "single" | "multi" | "free_text";
 			readonly options?: ReadonlyArray<{
@@ -137,6 +140,9 @@ export type AgentEventPayload =
 	| {
 			readonly type: "request_approval";
 			readonly askId: string;
+			/** Per-ask capability token. Client must echo this in the
+			 *  /api/chat/answer POST body to authorize the decision. */
+			readonly askToken: string;
 			readonly tool: string;
 			readonly riskLevel: "low" | "medium" | "high" | "critical";
 			readonly summary: string;
