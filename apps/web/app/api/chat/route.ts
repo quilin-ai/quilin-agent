@@ -41,6 +41,11 @@ import { deriveAgentDisplayName } from "@/lib/agent-display-name";
 import { agentRegistry, shortId } from "@/lib/agent-registry";
 import { type AgentServiceLike, getAgentService } from "@/lib/agent-service-client";
 import {
+	appendObservationsToUserMd,
+	extractProfileObservations,
+	isProfileEvolutionEnabled,
+} from "@/lib/profile-evolution";
+import {
 	insertMessage,
 	insertMessageIfAbsent,
 	isPersistenceEnabled,
@@ -896,6 +901,32 @@ export async function POST(req: Request): Promise<Response> {
 						service.setSessionStatus(sessionId, "completed");
 					} catch {
 						/* session may already be evicted */
+					}
+					// Profile self-evolution (Task #12 / docs/03-memory/
+					// profile-pure-markdown-migration.md §3). Best-effort,
+					// fire-and-forget; failures don't block anything.
+					// Skip trivially short turns where there's no signal.
+					if (
+						isProfileEvolutionEnabled() &&
+						summary.assembledText.length >= 50 &&
+						titleSource != null &&
+						titleSource.length > 0
+					) {
+						void (async () => {
+							try {
+								const obs = await extractProfileObservations({
+									userText: titleSource,
+									assistantText: summary.assembledText,
+								});
+								if (obs.length === 0) return;
+								const result = await appendObservationsToUserMd(obs);
+								console.log(
+									`[CHAT ${sessionId}] profile-evolution appended=${result.appended} skipped=${result.skipped ?? "(none)"}`,
+								);
+							} catch (e) {
+								console.log(`[CHAT ${sessionId}] profile-evolution crashed: ${String(e)}`);
+							}
+						})();
 					}
 				})
 				.catch((e) => {

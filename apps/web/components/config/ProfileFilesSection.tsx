@@ -103,13 +103,16 @@ function parseFrontmatter(content: string): ParsedFrontmatter {
 		if (ln.length === 0) continue;
 		const listMatch = ln.match(/^-\s+(.+)$/);
 		if (listMatch != null && currentKey != null) {
-			currentList.push(listMatch[1].replace(/^["']|["']$/g, ""));
+			const listItem = listMatch[1] ?? "";
+			currentList.push(listItem.replace(/^["']|["']$/g, ""));
 			continue;
 		}
 		flushList();
 		const kvMatch = raw.match(/^\s*([a-zA-Z_][\w-]*):\s*(.*)$/);
 		if (kvMatch == null) continue;
-		const [, key, valuePart] = kvMatch;
+		const key = kvMatch[1] ?? "";
+		const valuePart = kvMatch[2] ?? "";
+		if (key.length === 0) continue;
 		const trimmed = valuePart.trim();
 		if (trimmed.length === 0) {
 			// May be start of a multiline list — defer.
