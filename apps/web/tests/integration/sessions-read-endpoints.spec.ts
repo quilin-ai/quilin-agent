@@ -22,10 +22,13 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
 	_resetDbForTests,
+	deleteSession,
 	extractFirstTextFromParts,
 	insertMessage,
 	insertMessageIfAbsent,
 	listSessionsForReadEndpoint,
+	readSessionMessages,
+	readSessionStats,
 	upsertSession,
 } from "@/lib/sessions-db";
 import { persistedPartsToUIParts, type UIPart } from "@/lib/sessions-db/persisted-to-ui";
@@ -459,5 +462,149 @@ describe("Slice 2 — GET /api/sessions/[id] handler", () => {
 			params: Promise.resolve({ id: longId }),
 		});
 		expect(res2.status).toBe(400);
+	});
+});
+
+describe("Slice 3 — deleteSession helper (spec T4)", () => {
+	it("hard-deletes session + cascades messages", () => {
+		upsertSession({ id: "to-delete", title: "x", origin: "web" });
+		insertMessageIfAbsent({
+			id: "m1",
+			sessionId: "to-delete",
+			seq: 0,
+			role: "user",
+			parts: [{ type: "text", text: "kept until delete" }],
+		});
+		insertMessage({
+			id: "m2",
+			sessionId: "to-delete",
+			seq: 1,
+			role: "assistant",
+			parts: [],
+		});
+
+		expect(readSessionStats("to-delete")).toBeDefined();
+		expect(readSessionMessages("to-delete").length).toBe(2);
+
+		const removed = deleteSession("to-delete");
+		expect(removed).toBe(true);
+
+		// Session row gone.
+		expect(readSessionStats("to-delete")).toBeUndefined();
+		// Messages CASCADE-deleted (FK in 0001_init.sql).
+		expect(readSessionMessages("to-delete").length).toBe(0);
+	});
+
+	it("returns false when session does not exist (idempotent)", () => {
+		expect(deleteSession("never-existed")).toBe(false);
+	});
+
+	it("respects persistence flag — no-op when disabled", () => {
+		upsertSession({ id: "p-disabled", origin: "web" });
+		expect(readSessionStats("p-disabled")).toBeDefined();
+		process.env.QUILIN_WEB_PERSISTENCE = "off";
+		expect(deleteSession("p-disabled")).toBe(false);
+		// Row not actually removed (flag check short-circuited).
+		process.env.QUILIN_WEB_PERSISTENCE = "on";
+		expect(readSessionStats("p-disabled")).toBeDefined();
+	});
+});
+
+describe("Slice 3 — DELETE /api/sessions/[id] handler (spec T4 + T12)", () => {
+	it("removes session + returns { deleted: true }", async () => {
+		upsertSession({ id: "del-api", title: "via DELETE", origin: "web" });
+		insertMessageIfAbsent({
+			id: "del-msg",
+			sessionId: "del-api",
+			seq: 0,
+			role: "user",
+			parts: [{ type: "text", text: "hi" }],
+		});
+
+		const { DELETE } = await import("@/app/api/sessions/[id]/route");
+		const res = await DELETE(
+			new Request("http://localhost/api/sessions/del-api", { method: "DELETE" }),
+			{ params: Promise.resolve({ id: "del-api" }) },
+		);
+		const body = await res.json();
+		expect(res.status).toBe(200);
+		expect(body.deleted).toBe(true);
+		expect(readSessionStats("del-api")).toBeUndefined();
+	});
+
+	it("404 when session does not exist", async () => {
+		const { DELETE } = await import("@/app/api/sessions/[id]/route");
+		const res = await DELETE(
+			new Request("http://localhost/api/sessions/nope", { method: "DELETE" }),
+			{ params: Promise.resolve({ id: "nope" }) },
+		);
+		expect(res.status).toBe(404);
+	});
+
+	it("404 when persistence disabled", async () => {
+		process.env.QUILIN_WEB_PERSISTENCE = "off";
+		const { DELETE } = await import("@/app/api/sessions/[id]/route");
+		const res = await DELETE(new Request("http://localhost/api/sessions/x", { method: "DELETE" }), {
+			params: Promise.resolve({ id: "x" }),
+		});
+		expect(res.status).toBe(404);
+	});
+
+	it("400 on invalid id (empty or oversized)", async () => {
+		const { DELETE } = await import("@/app/api/sessions/[id]/route");
+		const r1 = await DELETE(new Request("http://localhost/api/sessions/", { method: "DELETE" }), {
+			params: Promise.resolve({ id: "" }),
+		});
+		expect(r1.status).toBe(400);
+		const longId = "x".repeat(201);
+		const r2 = await DELETE(
+			new Request(`http://localhost/api/sessions/${longId}`, { method: "DELETE" }),
+			{ params: Promise.resolve({ id: longId }) },
+		);
+		expect(r2.status).toBe(400);
+	});
+});
+
+describe("Slice 3 — T3 partial-parts persisted on mid-stream crash", () => {
+	it("placeholder assistant row with empty parts visible in listing after row insert without finalize", () => {
+		// Slice 1 recorder inserts a placeholder assistant row immediately when
+		// the run starts. If the process crashes before any text-delta lands,
+		// the row stays with parts_json='[]' and finalized_at=NULL. Spec T3
+		// requires this row to remain visible via the list endpoint so the
+		// /sessions page can render it as a "completed-but-truncated" turn.
+		upsertSession({ id: "crash-mid", title: "stream crashed", origin: "web" });
+		insertMessageIfAbsent({
+			id: "user-prompt",
+			sessionId: "crash-mid",
+			seq: 0,
+			role: "user",
+			parts: [{ type: "text", text: "first prompt" }],
+			finalized: true,
+		});
+		insertMessage({
+			id: "assistant-partial",
+			sessionId: "crash-mid",
+			seq: 1,
+			role: "assistant",
+			parts: [], // mid-stream crash — recorder never wrote any snapshot
+			finalized: false,
+		});
+
+		const stats = readSessionStats("crash-mid");
+		expect(stats?.message_count).toBe(2);
+
+		const rows = listSessionsForReadEndpoint();
+		const crashed = rows.find((r) => r.id === "crash-mid");
+		expect(crashed).toBeDefined();
+		expect(crashed?.message_count).toBe(2);
+		// Preview comes from the last user message, not the empty assistant row.
+		expect(crashed?.preview).toBe("first prompt");
+
+		// /api/sessions/[id] still returns both rows; assistant row has empty
+		// parts + null finalized_at.
+		const msgs = readSessionMessages("crash-mid");
+		const assistant = msgs.find((m) => m.id === "assistant-partial");
+		expect(assistant?.parts).toEqual([]);
+		expect(assistant?.finalized_at).toBeNull();
 	});
 });

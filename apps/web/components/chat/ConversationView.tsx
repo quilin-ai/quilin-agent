@@ -99,8 +99,53 @@ export function ConversationView({
 		const stored = loadSession(sessionId);
 		if (stored != null && stored.messages.length > 0) {
 			setStoredMessages(stored.messages);
+			setHydrated(true);
+			return;
 		}
-		setHydrated(true);
+		// Slice 3 restart recovery: localStorage doesn't have this session
+		// (cache cleared / cross-browser / first visit). Try the SQLite-backed
+		// `/api/sessions/[id]` endpoint as a fallback so the conversation
+		// can resume from the server-side persisted history.
+		//
+		// Slice 3 重启恢复:本地缓存没有该 session(清缓存 / 跨浏览器 / 首次访问)→
+		// fallback 到服务端 `/api/sessions/[id]`,从 SQLite 持久化恢复历史。
+		let cancelled = false;
+		(async () => {
+			try {
+				const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
+					cache: "no-store",
+				});
+				if (!res.ok || cancelled) {
+					setHydrated(true);
+					return;
+				}
+				const body = (await res.json()) as {
+					readonly messages?: ReadonlyArray<{
+						readonly id: string;
+						readonly role: string;
+						readonly parts: readonly unknown[];
+					}>;
+				};
+				const fetched = body.messages;
+				if (cancelled) return;
+				if (Array.isArray(fetched) && fetched.length > 0) {
+					setStoredMessages(
+						fetched.map((m) => ({
+							id: m.id,
+							role: m.role,
+							parts: m.parts,
+						})) as readonly UIMessage[],
+					);
+				}
+			} catch {
+				// network failure / API down — fall through to fresh-start UI
+			} finally {
+				if (!cancelled) setHydrated(true);
+			}
+		})();
+		return () => {
+			cancelled = true;
+		};
 	}, [sessionId]);
 
 	if (!hydrated) {

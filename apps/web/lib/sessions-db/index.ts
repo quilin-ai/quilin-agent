@@ -242,6 +242,26 @@ export function upsertSession(input: {
 }
 
 /**
+ * DELETE a session and all its messages (CASCADE via FK). Returns true
+ * if a row was removed, false if the session didn't exist. Idempotent.
+ *
+ * Used by Slice 3's DELETE /api/sessions/[id] endpoint per spec §7.
+ * Hard delete (not soft) — the spec's `deleted_at` column is reserved
+ * for a future "trash/undelete" UX. AgentService runner abort + evict
+ * is the caller's responsibility (route handler).
+ *
+ * 硬删 session + messages(外键级联)。Slice 3 DELETE endpoint 用,spec §7。
+ * AgentService runner abort + evict 由调用方(route)负责,不在 DB 层。
+ */
+export function deleteSession(sessionId: string): boolean {
+	if (!isPersistenceEnabled()) return false;
+	const db = getDb();
+	const stmt = db.prepare(`DELETE FROM sessions WHERE id = @id`);
+	const result = stmt.run({ id: sessionId });
+	return result.changes > 0;
+}
+
+/**
  * INSERT a user (or system) message row for an existing session. If a
  * row with the same `(session_id, seq)` exists, this throws — duplicate
  * inserts indicate a bug in the caller's seq tracking. Use
@@ -415,9 +435,8 @@ export function listSessionsForReadEndpoint(input?: {
 		last_user_parts_json: string | null;
 	}[];
 	return rows.map((r) => {
-		const previewParts = r.last_user_parts_json != null
-			? parsePartsJson(r.last_user_parts_json)
-			: [];
+		const previewParts =
+			r.last_user_parts_json != null ? parsePartsJson(r.last_user_parts_json) : [];
 		return {
 			id: r.id,
 			title: r.title,
