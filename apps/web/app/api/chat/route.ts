@@ -40,19 +40,20 @@ import { z } from "zod";
 import { agentRegistry, shortId } from "@/lib/agent-registry";
 import { type AgentServiceLike, getAgentService } from "@/lib/agent-service-client";
 import {
+	insertMessage,
+	insertMessageIfAbsent,
+	isPersistenceEnabled,
+	nextSeq,
+	upsertSession,
+} from "@/lib/sessions-db";
+import { recordAssistantMessage } from "@/lib/sessions-db/recorder";
+import {
 	agentEventToSseChunk,
 	pumpFullStreamIntoAgentService,
 	SSE_DONE_FRAME,
 } from "@/lib/sse-translator";
 import { getToolsCatalog } from "@/lib/tools-loader";
-import {
-	evictSession,
-	getMeta,
-	hashMessages,
-	setMeta,
-	touchMeta,
-	type WebSessionMeta,
-} from "@/lib/web-session-meta";
+import { evictSession, getMeta, hashMessages, setMeta, touchMeta } from "@/lib/web-session-meta";
 
 /**
  * Dynamically load agent-core's built tool factory at request time.
@@ -693,6 +694,58 @@ export async function POST(req: Request): Promise<Response> {
 			{ type: "turn.started", turnIndex: 1, userText: firstUserText },
 			{ touchActivity: true },
 		);
+
+		// SQLite persistence (Iter F Slice 1 / `docs/09-deployment-runtime/
+		// web-session-persistence-spec.md` §4). Fresh-start path. When
+		// the persistence flag is off this whole block becomes a no-op
+		// because the helpers short-circuit on `isPersistenceEnabled`.
+		//
+		// Writes happen synchronously BEFORE `setImmediate` kicks off the
+		// pump so a slow LLM response can never leave us with an unwritten
+		// user message (spec §4.1).
+		//
+		// SQLite 持久化(Iter F Slice 1 / spec §4):fresh-start 路径在 pump
+		// 启动前把 user message 同步写盘,保证慢 LLM 不丢 prompt;assistant
+		// 行先插占位,recorder 订阅 AgentService event bus 做 debounce snapshot。
+		const persistenceOn = isPersistenceEnabled();
+		const assistantMessageId = `qmsg-${shortId()}`;
+		const startSeqForRecorder = startSeq;
+		if (persistenceOn) {
+			try {
+				upsertSession({ id: sessionId, title, origin: "web" });
+				const lastUserMsg = body.messages[body.messages.length - 1];
+				if (lastUserMsg != null && lastUserMsg.role === "user") {
+					const userMessageId = lastUserMsg.id ?? `qmsg-${shortId()}`;
+					insertMessageIfAbsent({
+						id: userMessageId,
+						sessionId,
+						seq: nextSeq(sessionId),
+						role: "user",
+						parts: (lastUserMsg.parts ?? []) as readonly unknown[],
+						finalized: true,
+					});
+				}
+				insertMessage({
+					id: assistantMessageId,
+					sessionId,
+					seq: nextSeq(sessionId),
+					role: "assistant",
+					parts: [],
+					finalized: false,
+				});
+			} catch (e) {
+				// Spec §4.1: SQLite write failure must fail-fast with 503 so
+				// the client retries instead of running the model on data
+				// we can't persist. Because AgentService/meta were already
+				// created above, evict before returning; otherwise the same
+				// body could retry into the reconnect branch and wait on a
+				// runner that never started.
+				console.log(`[CHAT ${sessionId}] sqlite write failed: ${String(e)}`);
+				evictSession(sessionId, service, "sqlite persistence failed");
+				return new Response("session persistence unavailable", { status: 503 });
+			}
+		}
+
 		// "C plan" (`docs/15-introspection/web-e2e-capability-assessment.md`
 		// §3 follow-up): for the fresh-start path, build `streamText`
 		// synchronously here and return AI SDK v6's official
@@ -734,6 +787,35 @@ export async function POST(req: Request): Promise<Response> {
 			stopWhen: stepCountIs(15),
 			abortSignal: meta.abort.signal,
 		});
+
+		// Background recorder — subscribes to AgentService events and
+		// snapshots the assistant message's parts_json into SQLite at
+		// debounced intervals + finalize on terminal events. Runs in
+		// parallel with the pump (both consume from independent
+		// AgentService event-bus subscriptions; the pump pushes events
+		// in, the recorder pulls them out — they do not race on the
+		// same shared state).
+		//
+		// 后台 recorder 与 pump 并行,订阅 AgentService event bus,debounce
+		// 把 assistant parts 快照写入 messages 行;终态事件触发 finalize。
+		if (persistenceOn) {
+			setImmediate(() => {
+				void recordAssistantMessage({
+					service,
+					sessionId,
+					messageId: assistantMessageId,
+					turnIndex: 1,
+					// `startSeq` was captured before createSession; minus 1
+					// so the subscriber sees `turn.started` and everything
+					// thereafter. Matches the reconnect subscriber's offset
+					// convention (`subscribeAfterSeq = startSeq - 1`).
+					afterSeq: startSeqForRecorder - 1,
+					expectedEpoch: serverEpoch,
+				}).catch((e) => {
+					console.log(`[CHAT ${sessionId}] recorder crashed: ${String(e)}`);
+				});
+			});
+		}
 
 		// Background pump to AgentService — fire-and-forget. `setImmediate`
 		// detaches from the request task scope so client disconnect can't

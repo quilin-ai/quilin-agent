@@ -591,6 +591,44 @@ main.q-workspace.no-composer {
 	color: var(--fg);
 }
 
+.q-message-segment {
+	margin: 18px 0 24px;
+}
+
+.q-message-segment:first-child {
+	margin-top: 0;
+}
+
+.q-copy-markdown {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	margin-top: 12px;
+	padding: 0;
+	border: none;
+	background: transparent;
+	color: var(--fg-subtle);
+	font-family: "JetBrains Mono", monospace;
+	font-size: 11px;
+	letter-spacing: 0.04em;
+	cursor: pointer;
+	transition: color 120ms linear;
+}
+
+.q-copy-markdown:hover {
+	color: var(--fg-muted);
+}
+
+.q-copy-markdown:focus-visible {
+	outline: 1px solid var(--border-strong);
+	outline-offset: 4px;
+}
+
+.q-copy-icon {
+	font-size: 12px;
+	line-height: 1;
+}
+
 /* Markdown rendering (Streamdown). Used for assistant body + subagent
    streamedText. Styles cover headings, paragraphs, lists, tables, code
    blocks, blockquotes, and links — keeps the demo's serif rhythm. */
@@ -993,6 +1031,45 @@ main.q-workspace.no-composer {
 }
 .q-tool-call .q-tool-call-body {
 	padding-top: 4px;
+}
+.q-tool-call-group-list {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+.q-tool-call-subcall {
+	border-top: 1px solid var(--border);
+	padding-top: 8px;
+}
+.q-tool-call-subcall:first-child {
+	border-top: none;
+	padding-top: 0;
+}
+.q-tool-call-subcall summary {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	cursor: pointer;
+	color: var(--fg-muted);
+	font-family: "JetBrains Mono", monospace;
+	font-size: 11px;
+	letter-spacing: 0.04em;
+	list-style: none;
+}
+.q-tool-call-subcall summary::-webkit-details-marker {
+	display: none;
+}
+.q-tool-call-subcall summary::before {
+	content: "▸";
+	color: var(--fg-subtle);
+	margin-right: 6px;
+}
+.q-tool-call-subcall[open] summary::before {
+	content: "▾";
+}
+.q-tool-call-subcall > div {
+	margin-top: 8px;
 }
 .q-tool-call-head .kw {
 	font-family: "Noto Sans SC", sans-serif;

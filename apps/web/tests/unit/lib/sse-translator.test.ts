@@ -59,6 +59,9 @@ function makeFakeService(): {
 		currentEpoch(): string {
 			return "test-epoch";
 		},
+		currentSeq(): number {
+			return 0;
+		},
 		emitFromRunner(
 			sessionId: string,
 			payload: AgentEventPayload,
@@ -611,21 +614,14 @@ describe("pumpFullStreamIntoAgentService — text-only stream", () => {
 		);
 		const startIds = emits
 			.filter((e) => e.payload.type === "llm.text_start")
-			.map(
-				(e) =>
-					(e.payload as Extract<typeof e.payload, { type: "llm.text_start" }>)
-						.textPartId,
-			);
+			.map((e) => (e.payload as Extract<typeof e.payload, { type: "llm.text_start" }>).textPartId);
 		// First step's text-start gets `-s1`, second step's gets `-s2`.
 		expect(startIds).toEqual(["txt-0-s1", "txt-0-s2"]);
 		// Deltas must reference the in-step id, never collapsing into the
 		// other step's id.
 		const textPayloads = emits
 			.filter((e) => e.payload.type === "llm.text")
-			.map(
-				(e) =>
-					(e.payload as Extract<typeof e.payload, { type: "llm.text" }>),
-			);
+			.map((e) => e.payload as Extract<typeof e.payload, { type: "llm.text" }>);
 		expect(textPayloads[0]?.textPartId).toBe("txt-0-s1");
 		expect(textPayloads[0]?.delta).toBe("step-one-text");
 		expect(textPayloads[1]?.textPartId).toBe("txt-0-s2");

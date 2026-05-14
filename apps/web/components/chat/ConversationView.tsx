@@ -17,6 +17,17 @@ import {
 } from "@/components/conversation/ToolCall";
 import { Composer } from "@/components/shell/Composer";
 import { loadSession, saveSession } from "@/lib/session-store";
+import {
+	buildTranscriptBlocks,
+	extractToolCallId,
+	extractToolPartsFromBlocks,
+	type ProcessBlock,
+	type RawPart,
+	type TextBlock,
+	type ToolGroupItem,
+	type TranscriptBlock,
+	toolNameOf,
+} from "@/lib/transcript-blocks";
 
 interface SpawnSubagentOutput {
 	readonly agentId: string;
@@ -275,18 +286,11 @@ function ChatBody({
 			) {
 				autoScrollEnabledRef.current = false;
 			}
-			if (
-				e.key === "ArrowDown" ||
-				e.key === "PageDown" ||
-				e.key === "End" ||
-				e.key === " "
-			) {
+			if (e.key === "ArrowDown" || e.key === "PageDown" || e.key === "End" || e.key === " ") {
 				// User explicitly asked to go down — opt back in to
 				// auto-follow if they reach the bottom.
 				const distance =
-					document.documentElement.scrollHeight -
-					window.scrollY -
-					window.innerHeight;
+					document.documentElement.scrollHeight - window.scrollY - window.innerHeight;
 				if (distance < 120) autoScrollEnabledRef.current = true;
 			}
 		};
@@ -324,7 +328,7 @@ function ChatBody({
 	// 期间持续把锚点滚进视图,流结束后再延长 1.5s 跟随最后的 layout shift。
 	useEffect(() => {
 		let raf = 0;
-		let stopAt: number | null = streaming ? null : performance.now() + 1500;
+		const stopAt: number | null = streaming ? null : performance.now() + 1500;
 		const loop = (): void => {
 			if (autoScrollEnabledRef.current) {
 				bottomRef.current?.scrollIntoView({
@@ -406,33 +410,6 @@ function ChatBody({
 	);
 }
 
-interface RawPart {
-	readonly type: string;
-	readonly text?: string;
-	readonly toolName?: string;
-	readonly toolCallId?: string;
-	readonly state?: string;
-	readonly input?: unknown;
-	readonly output?: unknown;
-	readonly errorText?: string;
-}
-
-function isReasoningPart(p: RawPart): boolean {
-	return p.type === "reasoning";
-}
-function isToolPart(p: RawPart): boolean {
-	return p.type.startsWith("tool-") || p.type === "dynamic-tool";
-}
-function toolNameOf(p: RawPart): string {
-	if (p.toolName) return p.toolName;
-	return p.type.replace(/^tool-/, "");
-}
-function extractToolCallId(p: RawPart): string | null {
-	if (typeof p.toolCallId === "string" && p.toolCallId.length > 0) {
-		return p.toolCallId;
-	}
-	return null;
-}
 function toolKindOf(name: string): ToolCallKind {
 	if (name.includes("subagent")) return "subagent";
 	if (name.includes("memory") || name.includes("mem")) return "memory";
@@ -445,6 +422,189 @@ function toolStatusOf(state: string | undefined): ToolCallStatus {
 	return "pending";
 }
 
+function stableToolPartKey(part: RawPart): string {
+	return [
+		toolNameOf(part),
+		part.state ?? "",
+		JSON.stringify(part.input ?? null),
+		JSON.stringify(part.output ?? null),
+		part.errorText ?? "",
+	]
+		.join("|")
+		.slice(0, 160);
+}
+
+function fallbackCopyText(text: string): boolean {
+	const textarea = document.createElement("textarea");
+	textarea.value = text;
+	textarea.setAttribute("readonly", "true");
+	textarea.style.position = "fixed";
+	textarea.style.top = "-1000px";
+	textarea.style.opacity = "0";
+	document.body.appendChild(textarea);
+	textarea.focus();
+	textarea.select();
+	const copied = document.execCommand("copy");
+	document.body.removeChild(textarea);
+	return copied;
+}
+
+function MarkdownCopyButton({ text }: { readonly text: string }): React.ReactElement {
+	const [copied, setCopied] = useState(false);
+	const onCopy = useCallback(async () => {
+		let ok = fallbackCopyText(text);
+		try {
+			if (!ok && navigator.clipboard?.writeText != null) {
+				await navigator.clipboard.writeText(text);
+				ok = true;
+			}
+		} catch {
+			ok = fallbackCopyText(text);
+		}
+		setCopied(ok);
+		window.setTimeout(() => setCopied(false), 1400);
+	}, [text]);
+
+	return (
+		<button
+			type="button"
+			className="q-copy-markdown"
+			onClick={onCopy}
+			aria-label="复制 markdown 原文"
+		>
+			<span className="q-copy-icon" aria-hidden="true">
+				⧉
+			</span>
+			<span>{copied ? "已复制" : "复制 markdown"}</span>
+		</button>
+	);
+}
+
+function ToolCallDetails({ part }: { readonly part: RawPart }): React.ReactElement {
+	return (
+		<div style={{ fontFamily: '"JetBrains Mono", monospace', fontSize: 11 }}>
+			{part.input !== undefined ? (
+				<div style={{ marginBottom: 6 }}>
+					<div style={{ color: "var(--fg-muted)" }}>input</div>
+					<pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>
+						{JSON.stringify(part.input, null, 2)}
+					</pre>
+				</div>
+			) : null}
+			{part.output !== undefined ? (
+				<div>
+					<div style={{ color: "var(--fg-muted)" }}>output</div>
+					<pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>
+						{JSON.stringify(part.output, null, 2)}
+					</pre>
+				</div>
+			) : null}
+			{part.errorText ? (
+				<div style={{ color: "var(--accent-vermillion)" }}>{part.errorText}</div>
+			) : null}
+		</div>
+	);
+}
+
+function ToolGroup({ item }: { readonly item: ToolGroupItem }): React.ReactElement {
+	const first = item.calls[0];
+	const status: ToolCallStatus = item.calls.some((part) => toolStatusOf(part.state) === "error")
+		? "error"
+		: item.calls.some((part) => toolStatusOf(part.state) === "pending")
+			? "pending"
+			: "done";
+	const count = item.calls.length;
+	const name = item.name;
+	const kind = toolKindOf(name);
+	const statusLabel =
+		count > 1
+			? `${status === "done" ? "▢ done" : status === "error" ? "✕ error" : "▪ running"} · ${count} 次`
+			: undefined;
+
+	return (
+		<ToolCall
+			name={count > 1 ? `${name} × ${count}` : name}
+			kind={kind}
+			status={status}
+			statusLabel={statusLabel}
+			grouped={false}
+		>
+			{count > 1 ? (
+				<div className="q-tool-call-group-list">
+					{item.calls.map((part, idx) => (
+						<details
+							key={extractToolCallId(part) ?? `${name}-${stableToolPartKey(part)}`}
+							className="q-tool-call-subcall"
+						>
+							<summary>
+								<span>调用 {idx + 1}</span>
+								<span>{toolStatusOf(part.state)}</span>
+							</summary>
+							<ToolCallDetails part={part} />
+						</details>
+					))}
+				</div>
+			) : first != null ? (
+				<ToolCallDetails part={first} />
+			) : null}
+		</ToolCall>
+	);
+}
+
+function ProcessBlockView({
+	block,
+	streaming,
+}: {
+	readonly block: ProcessBlock;
+	readonly streaming: boolean;
+}): React.ReactElement {
+	return (
+		<Process title="过程 · process" defaultOpen={streaming} status={streaming ? "running" : "done"}>
+			{block.items.map((item, idx) => {
+				if (item.type === "reasoning") {
+					return (
+						<Reasoning
+							// biome-ignore lint/suspicious/noArrayIndexKey: process block order is append-only during one streamed turn
+							key={`r-${block.id}-${idx}`}
+							title="思考 · reasoning"
+						>
+							<p style={{ whiteSpace: "pre-wrap", margin: 0 }}>{item.part.text ?? ""}</p>
+						</Reasoning>
+					);
+				}
+				const groupKey =
+					item.calls.map(extractToolCallId).filter(Boolean).join("-") ||
+					`${item.name}-${stableToolPartKey(item.calls[0] ?? { type: item.name })}`;
+				return <ToolGroup key={`tg-${block.id}-${groupKey}`} item={item} />;
+			})}
+		</Process>
+	);
+}
+
+function MarkdownTextBlock({
+	block,
+	streaming,
+}: {
+	readonly block: TextBlock;
+	readonly streaming: boolean;
+}): React.ReactElement {
+	return (
+		<div className="q-message-segment">
+			<div className="q-md">
+				<Streamdown
+					mode={streaming ? "streaming" : "static"}
+					parseIncompleteMarkdown
+					controls={{ table: false, code: false, mermaid: false }}
+				>
+					{block.text}
+				</Streamdown>
+				{streaming ? <span className="q-stream-cursor" /> : null}
+			</div>
+			<MarkdownCopyButton text={block.text} />
+		</div>
+	);
+}
+
 function TurnMessage({
 	message,
 	streaming,
@@ -454,44 +614,13 @@ function TurnMessage({
 }): React.ReactElement {
 	const isUser = message.role === "user";
 	const parts = (message.parts ?? []) as readonly RawPart[];
-
-	const reasoningParts = parts.filter(isReasoningPart);
-	// AI SDK v6's useChat sometimes creates BOTH a typed `tool-<name>`
-	// part and a generic `dynamic-tool` part with the SAME toolCallId
-	// for one call (depending on whether the client knows the tool's
-	// schema in its `tools` map). Rendering both produces duplicate
-	// React keys + duplicate tool cards in the UI. Dedup by
-	// `toolCallId`, preferring the specific `tool-<name>` type.
-	//
-	// useChat 对同一个工具调用偶尔会产出两个 part(`tool-<name>` + `dynamic-tool`),
-	// toolCallId 相同 → React key 冲突 + 重复渲染。按 toolCallId 去重,优先保留 `tool-<name>`。
-	const rawToolParts = parts.filter(isToolPart);
-	const toolDedup = new Map<string, RawPart>();
-	for (const p of rawToolParts) {
-		const id = extractToolCallId(p);
-		if (id == null) {
-			// No toolCallId — keep as-is, key it by something else later.
-			toolDedup.set(`unknown-${toolDedup.size}`, p);
-			continue;
-		}
-		const existing = toolDedup.get(id);
-		if (existing == null) {
-			toolDedup.set(id, p);
-			continue;
-		}
-		// Both exist: keep the specific `tool-<name>` over the
-		// generic `dynamic-tool`.
-		if (existing.type === "dynamic-tool" && p.type !== "dynamic-tool") {
-			toolDedup.set(id, p);
-		}
-	}
-	const toolParts = [...toolDedup.values()];
-	const textParts = parts.filter(
-		(p): p is RawPart & { text: string } => p.type === "text" && typeof p.text === "string",
-	);
-	const body = textParts.map((p) => p.text).join("");
-
-	const hasProcess = !isUser && (reasoningParts.length > 0 || toolParts.length > 0);
+	const blocks = buildTranscriptBlocks(parts, message.id);
+	const toolParts = extractToolPartsFromBlocks(blocks);
+	const body = blocks
+		.filter((block): block is TextBlock => block.type === "text")
+		.map((block) => block.text)
+		.join("");
+	const hasProcess = !isUser && blocks.some((block) => block.type === "process");
 
 	return (
 		<article className="q-turn" data-role={message.role}>
@@ -511,59 +640,15 @@ function TurnMessage({
 				)}
 			</div>
 			<div className="q-turn-body">
-				{hasProcess ? (
-					<Process
-						title="过程 · process"
-						defaultOpen={streaming}
-						status={streaming ? "running" : "done"}
-					>
-						{reasoningParts.map((p, idx) => (
-							<Reasoning
-								// biome-ignore lint/suspicious/noArrayIndexKey: parts list is append-only in turn order; idx is stable for the message lifetime
-								key={`r-${message.id}-${idx}`}
-								title="思考 · reasoning"
-							>
-								<p style={{ whiteSpace: "pre-wrap", margin: 0 }}>{p.text ?? ""}</p>
-							</Reasoning>
-						))}
-						{toolParts.map((p, idx) => {
-							const name = toolNameOf(p);
-							const kind = toolKindOf(name);
-							const status = toolStatusOf(p.state);
-							const partKey = extractToolCallId(p) ?? `t-${message.id}-${idx}-${name}`;
-							// Group with the previous tool call when it has the same name —
-							// reduces visual spacing on consecutive same-type ops (e.g.,
-							// three back-to-back spawn_subagent calls).
-							const prevPart = idx > 0 ? toolParts[idx - 1] : null;
-							const grouped = prevPart != null && toolNameOf(prevPart) === name;
-							return (
-								<ToolCall key={partKey} name={name} kind={kind} status={status} grouped={grouped}>
-									<div style={{ fontFamily: '"JetBrains Mono", monospace', fontSize: 11 }}>
-										{p.input !== undefined ? (
-											<div style={{ marginBottom: 6 }}>
-												<div style={{ color: "var(--fg-muted)" }}>input</div>
-												<pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>
-													{JSON.stringify(p.input, null, 2)}
-												</pre>
-											</div>
-										) : null}
-										{p.output !== undefined ? (
-											<div>
-												<div style={{ color: "var(--fg-muted)" }}>output</div>
-												<pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>
-													{JSON.stringify(p.output, null, 2)}
-												</pre>
-											</div>
-										) : null}
-										{p.errorText ? (
-											<div style={{ color: "var(--accent-vermillion)" }}>{p.errorText}</div>
-										) : null}
-									</div>
-								</ToolCall>
-							);
-						})}
-					</Process>
-				) : null}
+				{!isUser
+					? blocks.map((block: TranscriptBlock) =>
+							block.type === "process" ? (
+								<ProcessBlockView key={block.id} block={block} streaming={streaming} />
+							) : (
+								<MarkdownTextBlock key={block.id} block={block} streaming={streaming} />
+							),
+						)
+					: null}
 				{/* Inline live progress for any spawned subagents — rendered OUTSIDE
 				    the Process panel so it stays visible after Process auto-collapses
 				    when streaming ends. Each panel polls /api/agents/[id] live. */}
@@ -575,25 +660,11 @@ function TurnMessage({
 								<SubagentLiveProgress key={`live-${s.agentId}`} agentId={s.agentId} task={s.task} />
 							))
 					: null}
-				{body.length > 0 || !hasProcess ? (
+				{isUser && (body.length > 0 || !hasProcess) ? (
 					isUser ? (
 						// User input stays plain text — typed by a human, no markdown.
 						<p style={{ whiteSpace: "pre-wrap" }}>{body}</p>
-					) : (
-						// Assistant body is markdown; Streamdown renders tables, lists,
-						// code blocks, etc., and gracefully parses incomplete markdown
-						// while tokens are still streaming in.
-						<div className="q-md">
-							<Streamdown
-								mode={streaming ? "streaming" : "static"}
-								parseIncompleteMarkdown
-								controls={{ table: false, code: false, mermaid: false }}
-							>
-								{body}
-							</Streamdown>
-							{streaming ? <span className="q-stream-cursor" /> : null}
-						</div>
-					)
+					) : null
 				) : null}
 			</div>
 		</article>

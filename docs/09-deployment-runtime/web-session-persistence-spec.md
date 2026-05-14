@@ -296,6 +296,20 @@ English:
 - `/api/chat` POST writes user + assistant rows
 - Tests T1 + T2
 
+**已知限制 / Known limitation:** Fresh-start path on a reused `sessionId`
+(same browser, second prompt overwriting the first via `evictSession`)
+does not delete or merge the prior turn's rows from SQLite. Multiple
+`role='user'` rows for the same session are expected at this slice.
+Slice 2 read endpoints render them as separate historical entries;
+Slice 3's `DELETE /api/sessions/<id>` provides the bulk cleanup path,
+and Slice 4's reconnect-recovery may add per-turn dedup.
+
+**Known limitation:** Fresh-start re-using a `sessionId` (second prompt
+in the same browser tab) leaves the previous turn's rows in SQLite. The
+GET endpoints in Slice 2 will surface these as historical entries
+without filtering. Slice 3's `DELETE` covers cleanup; Slice 4 may add
+per-turn dedup.
+
 ### Slice 2 — Read path + UI integration(~2 day)
 
 - `GET /api/sessions`, `GET /api/sessions/<id>`
