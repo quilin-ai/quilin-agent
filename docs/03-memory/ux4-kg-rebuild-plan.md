@@ -38,7 +38,18 @@ English: I expected the KG layer to be empty per the UX-4 backlog entry, but a `
 
 ## 切片建议 / Slicing
 
-### Slice 1 — kg_extractor.py + 单元测试(~15M)
+### ~~Slice 1 — kg_extractor.py + 单元测试~~ ✅ 已完成 commit `b1e4a6d`
+
+实际成果(超过原 plan 范围):
+- LLM 抽取走 system+user 双消息,system 喂规则,user 包文本(防 prompt injection)
+- 数据块用 `<MEMORY_TEXT_<random>>` 包,random 是 secrets.token_hex(8) 16 hex(防 attacker 拼闭合标签逃逸)
+- SSRF guard:base_url 必须 https + host 在 `ALLOWED_LLM_HOSTS` allowlist 里(防内部端点跳转)
+- 反幻觉:source_quote 必须是输入文本 verbatim 子串(strip 后)
+- 反代词坍缩:subject/object 不能是 the user / they / 用户 / 他 等泛指
+- per-field 长度 cap 500 chars
+- DI seam:`llm_caller` / `boundary_token` / `generateAskId` 全可注入,28 个测试零网络
+
+### ~~Slice 1 原文(供参考)~~
 
 English: Pure Python module under `providers/memory/src/quilin_mem/kg_extractor.py`. Async function `extract_edges_from_memory(record, llm)` that:
 1. Takes a `MemoryRecord` (text body + metadata)
