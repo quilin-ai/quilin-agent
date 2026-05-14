@@ -38,6 +38,7 @@
 | UX-4 KG Slice 3.2 — `@xyflow/react` reactflow viz + 知识图谱 tab on /memory page | `9abbde8` | ✅(Playwright + cross-review 延迟到 iter 末) |
 | 交互 primitives Slice 3c 部分 — agent-core types 同步 + TUI 渲染 ask/approval/aside(input 路径仍 deferred,需要 IPC) | `6e2b65e` | ✅(render-only;input 仍 TODO) |
 | Iter-close cross-review polish — async-with KG context manager + open-ended valid_to test + retry-race epoch guard | `063dd68` | ✅(iter-level 3-reviewer pass: 0 + 0 + 1 HIGH-style + 2 MEDIUM 全修) |
+| Playwright e2e for /memory 知识图谱 tab — 3 cases real Chromium 全过 | `fc4afe3` | ✅(满足 feedback_playwright_after_cross_review.md 硬规则) |
 
 Iter F 持久化故事 + 交互 primitives 前两片 + 用户画像 self-evolution 雏形 + 移动端 + 文档全部落库。
 
