@@ -28,6 +28,7 @@
 | docs: STATUS + Slice 3 plan | `2c52ed8` | ✅ |
 | 交互 primitives Slice 3a — `ask_user_question` tool + 11 tests + 1 轮 cross-review | `7c48bc4` | ✅ |
 | 交互 primitives Slice 3b path A — `request_approval` tool + 9 tests + 1 轮 cross-review (0/0) | `74e9f1e` | ✅ |
+| Task #14 user.md TS/Python race — observations section 保留 + atomic write + 2 轮 cross-review (0/0) | `40e2914` | ✅ |
 
 Iter F 持久化故事 + 交互 primitives 前两片 + 用户画像 self-evolution 雏形 + 移动端 + 文档全部落库。
 
