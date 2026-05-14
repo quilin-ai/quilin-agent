@@ -66,7 +66,17 @@ English: Pure Python module under `providers/memory/src/quilin_mem/kg_extractor.
 - 幻觉过滤:source_quote 不在原文 → drop
 - temporal dedup:同 (s,p,o) 已存在且 valid_from 重合 → 不重复 INSERT
 
-### Slice 2 — memory_backfill_kg MCP 工具(~10M)
+### ~~Slice 2 — memory_backfill_kg MCP 工具~~ ✅ 已完成 commit `901e989`
+
+成果:
+- `kg_backfill.py` 纯编排模块 + Protocol contracts(StoreLike / KGLike / MemoryRecordLike),12 tests 零网络
+- `server.py` 新增 `memory_backfill_kg(batch_size, max_records, dry_run)` MCP tool
+- 走 4 个 memory layer(working / episodic / semantic / skill),逐条调 kg_extractor
+- 默认 dry_run=True 安全 inspection 模式
+- per-triple error isolation,单条失败不阻塞整个 walk
+- 硬上限:batch 1-200(默认 50),max_records 1-10000
+
+### Slice 2 原文(供参考)
 
 English: `providers/memory/src/quilin_mem/server.py` 注册新 tool `memory_backfill_kg`,接收 `{batch_size, max_records, dry_run}`。遍历 `memory_records` 表,对每条调 Slice 1 的 extractor。返回 `{processed, edges_added, errors}`。
 
