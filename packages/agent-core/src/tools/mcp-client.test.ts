@@ -513,6 +513,8 @@ describe.sequential("MCPClientManager", () => {
 			// memory_observe is filtered out (internal tool — invoked by the
 			// observer bridge directly, never advertised to the LLM).
 			expect(toolNames).toEqual([
+				"kg_dump_for_viz",
+				"memory_backfill_kg",
 				"memory_recall",
 				"memory_store",
 				"scratchpad_clear",

@@ -184,7 +184,41 @@ export type AgentEventPayload =
 			readonly finishReason?: string;
 	  }
 	| { readonly type: "session.completed" }
-	| { readonly type: "session.failed"; readonly error: string };
+	| { readonly type: "session.failed"; readonly error: string }
+	// Iter F 交互 primitives — forward-declared on the agent-core side
+	// so TUI render path (`renderAgentEvent`) can pattern-match these
+	// without TypeScript errors. The actual emit/handle wire lives in
+	// apps/web for now; agent-core only OBSERVES. Plan for full TUI
+	// integration in docs/07-safety-guardrails/interaction-primitives-slice-3c-tui-plan.md.
+	| {
+			readonly type: "ask_user_question";
+			readonly askId: string;
+			readonly askToken: string;
+			readonly question: string;
+			readonly mode: "single" | "multi" | "free_text";
+			readonly options?: ReadonlyArray<{
+				readonly id: string;
+				readonly label: string;
+				readonly description?: string;
+			}>;
+			readonly defaultId?: string;
+			readonly timeoutMs?: number;
+	  }
+	| {
+			readonly type: "request_approval";
+			readonly askId: string;
+			readonly askToken: string;
+			readonly tool: string;
+			readonly riskLevel: "low" | "medium" | "high" | "critical";
+			readonly summary: string;
+			readonly detail?: string;
+			readonly origin: "user" | "agent" | "idle";
+	  }
+	| {
+			readonly type: "aside";
+			readonly text: string;
+			readonly weight?: "low" | "normal";
+	  };
 
 /**
  * Envelope wrapped around every payload. `seq` is monotonic across the entire

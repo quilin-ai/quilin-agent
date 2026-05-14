@@ -527,6 +527,39 @@ export function renderAgentEvent(
 		case "session.completed":
 		case "session.failed":
 			break;
+		// Iter F 交互 primitives — TUI render-only for now. Interactive
+		// response handling (readline prompt → POST resolveAsk) requires
+		// IPC because pending-asks lives in the web process; TUI is a
+		// separate Node process so it can only OBSERVE these events,
+		// not resolve them. Plan in
+		// docs/07-safety-guardrails/interaction-primitives-slice-3c-tui-plan.md.
+		// Render-only is still useful — operator running TUI sees that
+		// the agent asked a question and knows to switch to web to answer.
+		case "ask_user_question": {
+			const optionsLine =
+				payload.options == null || payload.options.length === 0
+					? ""
+					: ` [${payload.options.map((o, i) => `${i + 1}=${o.label}`).join(", ")}]`;
+			ctx.stderr.write(
+				`\n❓ agent asks: ${payload.question} (mode=${payload.mode})${optionsLine}` +
+					"\n   ↳ answer via web UI (ask_user_question event id=" +
+					payload.askId +
+					")\n",
+			);
+			break;
+		}
+		case "request_approval": {
+			ctx.stderr.write(
+				`\n🔐 agent requests approval: ${payload.tool} (${payload.riskLevel.toUpperCase()}) — ` +
+					`${payload.summary}\n   ↳ decide via web UI (request_approval event id=${payload.askId})\n`,
+			);
+			break;
+		}
+		case "aside": {
+			// Muted italic-equivalent in TUI = stderr with leading ›.
+			ctx.stderr.write(`\n› ${payload.text}\n`);
+			break;
+		}
 	}
 }
 
