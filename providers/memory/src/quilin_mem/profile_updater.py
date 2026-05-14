@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import fcntl
 import json
 import os
-from collections.abc import Iterable
+import time
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -11,6 +14,58 @@ from .profile_store import ProfileAuditEntry, ProfileSignal, ProfileStore
 _DEFAULT_PROFILE_ID = "default"
 _USER_MD_DIR = Path.home() / ".quilin"
 _USER_MD_PATH = _USER_MD_DIR / "user.md"
+_USER_MD_LOCK_PATH = _USER_MD_DIR / "user.md.lock"
+_LOCK_TIMEOUT_S = 5.0
+_LOCK_POLL_S = 0.05
+
+
+@contextmanager
+def _user_md_lock() -> Iterator[None]:
+    """Acquire a POSIX advisory exclusive lock on ``user.md.lock``.
+
+    Closes the in-process Python-vs-Python concurrency window in
+    ``sync_user_md``: two threads or two processes hitting the
+    read-modify-write region simultaneously now serialize through
+    ``fcntl.flock`` on a sentinel file in the same directory.
+
+    Task #16 option C (Python-only). The TS-vs-Python race is still
+    open — TS profile-evolution.ts doesn't take this lock yet. Plan
+    for closing that side is in ``docs/03-memory/task-16-cross-language-flock-plan.md``.
+
+    用 fcntl.flock 锁住 ``~/.quilin/user.md.lock`` sentinel,关掉 Python
+    端的同进程内 / 跨 Python 进程的写竞争。TS 端的对应实现需要单独 commit。
+
+    Timeout: ``_LOCK_TIMEOUT_S`` seconds with backoff polling. Raises
+    ``TimeoutError`` rather than blocking forever so a stuck holder
+    can't deadlock the agent runtime.
+
+    The ``user.md.lock`` sentinel file is intentionally NOT unlinked
+    after release — POSIX advisory locks are scoped to the file
+    descriptor, not the inode, so the file persisting between runs
+    has no semantic effect on lock acquisition. Unlinking would
+    introduce a TOCTOU window (delete after release, but another
+    process holds an fd to the now-stale inode).
+    """
+    _USER_MD_DIR.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(_USER_MD_LOCK_PATH), os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        deadline = time.monotonic() + _LOCK_TIMEOUT_S
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError as exc:
+                if time.monotonic() > deadline:
+                    raise TimeoutError(
+                        f"user.md lock acquisition timed out after {_LOCK_TIMEOUT_S}s"
+                    ) from exc
+                time.sleep(_LOCK_POLL_S)
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
 
 
 def _utcnow() -> datetime:
@@ -297,51 +352,56 @@ class ProfileUpdater:
 
         Race 修复(task #14):TS ``profile-evolution.ts`` 在 ``## Quilin 观察``
         段追加用户观察但不回写 SQLite。覆盖前抠出该段并保留到新内容尾部。
+
+        Lock (task #16 option C, 2026-05-15): the read + write region
+        — INCLUDING the user-edit guard check — is wrapped in an
+        fcntl-based advisory lock on ``~/.quilin/user.md.lock`` to
+        serialize Python-side writes. The guard re-check inside the
+        lock closes a TOCTOU window where a concurrent Python writer
+        could flip the file from auto-generated to hand-edited between
+        the guard and the overwrite. TS-side coordination still TODO —
+        plan in ``docs/03-memory/task-16-cross-language-flock-plan.md``.
         """
-        if _USER_MD_PATH.exists() and not _is_auto_generated_user_md(_USER_MD_PATH):
-            return
+        with _user_md_lock():
+            # User-edit guard MUST be inside the lock — a concurrent
+            # writer could convert the file from auto-generated to
+            # hand-edited between a pre-lock check and the overwrite.
+            if _USER_MD_PATH.exists() and not _is_auto_generated_user_md(_USER_MD_PATH):
+                return
+            preserved_observations: str | None = None
+            if _USER_MD_PATH.exists():
+                try:
+                    existing = _USER_MD_PATH.read_text(encoding="utf-8", errors="replace")
+                    preserved_observations = _extract_observations_section(existing)
+                except OSError:
+                    preserved_observations = None
 
-        preserved_observations: str | None = None
-        if _USER_MD_PATH.exists():
-            try:
-                existing = _USER_MD_PATH.read_text(encoding="utf-8", errors="replace")
-                preserved_observations = _extract_observations_section(existing)
-            except OSError:
-                preserved_observations = None
-
-        profile = self._store.get_profile(profile_id)
-        _USER_MD_DIR.mkdir(parents=True, exist_ok=True)
-        if profile is None:
-            content = _default_user_md(profile_id)
-        else:
-            content = _format_user_md(
-                profile_id=profile.profile_id,
-                non_sensitive=profile.non_sensitive,
-                updated_at=profile.updated_at.isoformat(),
-                updated_by=profile.updated_by,
-                scope=profile.scope,
-            )
-        if preserved_observations is not None and preserved_observations.strip():
-            if content.endswith("\n\n"):
-                separator = ""
-            elif content.endswith("\n"):
-                separator = "\n"
+            profile = self._store.get_profile(profile_id)
+            _USER_MD_DIR.mkdir(parents=True, exist_ok=True)
+            if profile is None:
+                content = _default_user_md(profile_id)
             else:
-                separator = "\n\n"
-            content = f"{content}{separator}{preserved_observations.rstrip()}\n"
-        # Atomic write: write to a temp file in the same directory, then
-        # os.replace into place. Prevents partial-file readers from seeing
-        # a half-written user.md if the process crashes mid-write.
-        # NOTE residual race (task #14, second-pass review 2026-05-15): a
-        # concurrent TS-side `appendFile` between this method's read at
-        # line 306 and the rename below can still lose 1 observation. The
-        # full fix would require cross-language flock coordination or
-        # moving observations into SQLite. For the current local single-
-        # user threat model (sub-second windows, recoverable data) we
-        # accept the residual window and prefer atomicity over locks.
-        tmp_path = _USER_MD_PATH.with_suffix(_USER_MD_PATH.suffix + ".tmp")
-        tmp_path.write_text(content, encoding="utf-8")
-        os.replace(tmp_path, _USER_MD_PATH)
+                content = _format_user_md(
+                    profile_id=profile.profile_id,
+                    non_sensitive=profile.non_sensitive,
+                    updated_at=profile.updated_at.isoformat(),
+                    updated_by=profile.updated_by,
+                    scope=profile.scope,
+                )
+            if preserved_observations is not None and preserved_observations.strip():
+                if content.endswith("\n\n"):
+                    separator = ""
+                elif content.endswith("\n"):
+                    separator = "\n"
+                else:
+                    separator = "\n\n"
+                content = f"{content}{separator}{preserved_observations.rstrip()}\n"
+            # Atomic write: write to a temp file in the same directory, then
+            # os.replace into place. Prevents partial-file readers from seeing
+            # a half-written user.md if the process crashes mid-write.
+            tmp_path = _USER_MD_PATH.with_suffix(_USER_MD_PATH.suffix + ".tmp")
+            tmp_path.write_text(content, encoding="utf-8")
+            os.replace(tmp_path, _USER_MD_PATH)
 
     def reset(self) -> None:
         self._store._reset()

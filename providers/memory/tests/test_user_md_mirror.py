@@ -148,6 +148,138 @@ def test_metadata_value_rejects_control_chars() -> None:
             profile.to_markdown()
 
 
+def test_user_md_lock_serializes_concurrent_python_writes(tmp_path: Path) -> None:
+    """Task #16 option C: fcntl-based advisory lock serializes Python-side
+    writes so two threads / processes can't interleave the read-modify-write
+    region.
+
+    Hermetic via in-process threads. Each thread invokes ``sync_user_md``
+    against the same tmp_path; the assertion is that all of them succeed
+    AND the final file is well-formed (no torn writes / corrupted JSON
+    in the header comment).
+    """
+    import threading
+
+    from quilin_mem.profile_store import ProfileStore, emit_profile_signal
+    from quilin_mem.profile_updater import ProfileUpdater
+
+    store = ProfileStore(str(tmp_path / "memory.db"))
+    updater = ProfileUpdater(store)
+    user_md_dir = tmp_path / ".quilin"
+    user_md_path = user_md_dir / "user.md"
+
+    import quilin_mem.profile_updater as pu
+
+    orig_dir = pu._USER_MD_DIR
+    orig_path = pu._USER_MD_PATH
+    orig_lock = pu._USER_MD_LOCK_PATH
+    pu._USER_MD_DIR = user_md_dir
+    pu._USER_MD_PATH = user_md_path
+    pu._USER_MD_LOCK_PATH = user_md_dir / "user.md.lock"
+    try:
+        # Pre-populate a profile so sync writes content, not just template.
+        signal = emit_profile_signal(
+            "default", {"communication_style": "concise"}, source="test"
+        )
+        updater.apply_signal(signal, who="test", why="seed")
+
+        errors: list[Exception] = []
+
+        def worker() -> None:
+            try:
+                updater.sync_user_md(profile_id="default")
+            except Exception as exc:  # noqa: BLE001 — propagate to main thread
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker) for _ in range(10)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+
+        # No thread crashed.
+        assert errors == [], f"workers raised: {errors}"
+        # Final file is well-formed: starts with the canonical HTML comment header.
+        content = user_md_path.read_text(encoding="utf-8")
+        assert content.startswith("<!-- quilin-profile schema=1 ")
+        # And the profile field is present (proves the write actually completed).
+        assert "communication_style" in content
+    finally:
+        pu._USER_MD_DIR = orig_dir
+        pu._USER_MD_PATH = orig_path
+        pu._USER_MD_LOCK_PATH = orig_lock
+
+
+def test_user_md_lock_blocks_concurrent_acquirer_until_released(tmp_path: Path) -> None:
+    """Falsifying test: the lock must actually block — a second thread
+    that tries to acquire while the first holds it should NOT enter the
+    critical section until the first releases.
+
+    This is the test that would fail if `_user_md_lock` were a no-op:
+    we record an explicit start/end timestamp from each thread and
+    assert the intervals don't overlap.
+    """
+    import threading
+    import time
+
+    import quilin_mem.profile_updater as pu
+    from quilin_mem.profile_updater import _user_md_lock
+
+    orig_dir = pu._USER_MD_DIR
+    orig_lock = pu._USER_MD_LOCK_PATH
+    pu._USER_MD_DIR = tmp_path
+    pu._USER_MD_LOCK_PATH = tmp_path / "user.md.lock"
+    try:
+        intervals: list[tuple[float, float]] = []
+        intervals_lock = threading.Lock()
+
+        def worker() -> None:
+            with _user_md_lock():
+                start = time.monotonic()
+                # Long enough that two concurrent threads would visibly
+                # overlap if the lock did NOT serialize them.
+                time.sleep(0.05)
+                end = time.monotonic()
+                with intervals_lock:
+                    intervals.append((start, end))
+
+        threads = [threading.Thread(target=worker) for _ in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+
+        # Sort by start time and assert no overlap with the next interval.
+        intervals.sort()
+        for (_, end_i), (start_j, _) in zip(intervals, intervals[1:], strict=False):
+            assert start_j >= end_i, (
+                f"intervals overlapped: end={end_i} > next_start={start_j} — lock NOT serializing"
+            )
+    finally:
+        pu._USER_MD_DIR = orig_dir
+        pu._USER_MD_LOCK_PATH = orig_lock
+
+
+def test_user_md_lock_can_be_acquired_and_released_multiple_times(tmp_path: Path) -> None:
+    """The lock context manager must be re-entrant across sequential calls
+    (each call opens its own fd; no FD leak).
+    """
+    import quilin_mem.profile_updater as pu
+    from quilin_mem.profile_updater import _user_md_lock
+
+    orig_dir = pu._USER_MD_DIR
+    orig_lock = pu._USER_MD_LOCK_PATH
+    pu._USER_MD_DIR = tmp_path
+    pu._USER_MD_LOCK_PATH = tmp_path / "user.md.lock"
+    try:
+        for _ in range(5):
+            with _user_md_lock():
+                pass  # acquire + release each iteration
+    finally:
+        pu._USER_MD_DIR = orig_dir
+        pu._USER_MD_LOCK_PATH = orig_lock
+
+
 def test_sync_user_md_preserves_quilin_observations_section(tmp_path: Path) -> None:
     """Race fix: ``sync_user_md`` must preserve any TS-appended observations
     in the ``## Quilin 观察 / Agent-observed notes`` section across rewrites.
