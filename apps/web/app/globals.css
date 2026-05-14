@@ -1731,3 +1731,106 @@ footer.q-composer:focus-within {
 .q-back-btn:hover {
 	opacity: 0.7;
 }
+
+/* ============================================================================
+ * Mobile (≤640px) — UX-6
+ * ============================================================================
+ * 窄屏切换:左侧 vertical rail → 顶部 sticky 横向 chip 条;composer 给 iOS
+ * home indicator 留 safe-area;主内容去掉 rail 占位 padding。
+ *
+ * Narrow-viewport switch: vertical left rail flips to a top horizontal
+ * chip bar below the header; composer reserves iOS safe-area-inset-bottom
+ * so the home indicator never covers it; main workspace drops the rail
+ * left-padding.
+ * ============================================================================ */
+@media (max-width: 640px) {
+	:root {
+		--head-h: 60px;
+		--rail-mobile-h: 44px;
+		--col-width: 100vw;
+	}
+
+	header.q-app-header {
+		padding: 0 12px;
+	}
+
+	/* Rail: vertical fixed left → horizontal fixed top bar under header */
+	aside.q-rail-strip {
+		top: var(--head-h);
+		bottom: auto;
+		left: 0;
+		right: 0;
+		width: 100%;
+		height: var(--rail-mobile-h);
+		flex-direction: row;
+		align-items: stretch;
+		padding: 4px 8px;
+		gap: 4px;
+		overflow-x: auto;
+		overflow-y: hidden;
+		-webkit-overflow-scrolling: touch;
+		border-right: 0;
+		border-bottom: 1px solid var(--border);
+	}
+	aside.q-rail-strip:hover,
+	aside.q-rail-strip[data-pinned="true"] {
+		width: 100%;
+		box-shadow: none;
+	}
+	.q-strip-item {
+		flex: 0 0 auto;
+		width: auto;
+		padding: 6px 12px;
+		border-left: none;
+		border-bottom: 2px solid transparent;
+		gap: 4px;
+		min-height: 36px;
+	}
+	.q-strip-item.active {
+		border-left-color: transparent;
+		border-bottom-color: var(--accent-vermillion);
+	}
+	.q-strip-item .glyph {
+		writing-mode: horizontal-tb;
+		font-size: 14px;
+		letter-spacing: 0.04em;
+		flex: 0 0 auto;
+		text-align: left;
+	}
+	.q-strip-item .count,
+	.q-strip-item .name-full {
+		display: none !important;
+	}
+	aside.q-rail-strip:hover .q-strip-item,
+	aside.q-rail-strip[data-pinned="true"] .q-strip-item {
+		padding: 6px 12px;
+	}
+	aside.q-rail-strip:hover .q-strip-item .glyph,
+	aside.q-rail-strip[data-pinned="true"] .q-strip-item .glyph {
+		display: inline-block;
+	}
+
+	/* Main: drop the rail left-padding; add room for the top chip bar */
+	main.q-workspace {
+		padding-left: 0;
+		padding-right: 0;
+		padding-top: calc(var(--head-h) + var(--rail-mobile-h) + 16px);
+	}
+	main.q-workspace.no-composer {
+		padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 24px);
+	}
+	.q-view {
+		padding: 0 12px;
+	}
+
+	/* Composer: snap to viewport sides + reserve iOS safe-area */
+	footer.q-composer {
+		left: 12px;
+		right: 12px;
+		bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+		transform: none;
+		width: auto;
+		max-width: none;
+		padding: 10px 14px;
+	}
+}
