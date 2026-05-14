@@ -25,6 +25,8 @@
 | Round 4 backlog 清理 (snapshot_lost / depth limit / user.md guard) | `aa7df09` | ✅ |
 | 全 23 个 commit ahead → push 完成 |  | ✅ origin/master 同步 |
 | profile_updater pure-markdown refactor + 5 轮 cross-review 收敛(10 个 fresh reviewer)| `59a618d` | ✅ |
+| docs: STATUS + Slice 3 plan | `2c52ed8` | ✅ |
+| 交互 primitives Slice 3a — `ask_user_question` tool + 11 tests + 1 轮 cross-review | `7c48bc4` | ✅ |
 
 Iter F 持久化故事 + 交互 primitives 前两片 + 用户画像 self-evolution 雏形 + 移动端 + 文档全部落库。
 

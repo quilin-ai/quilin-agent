@@ -39,7 +39,7 @@ English: Web side is fully ready. Agent-core side has zero of the slice 3 work y
 
 ## 切片建议 / Slicing
 
-### 3a — `ask_user_question` 工具 + 事件 emit(~12M token)
+### ~~3a — `ask_user_question` 工具 + 事件 emit~~ ✅ 已完成 commit `7c48bc4`
 
 English: Build the tool as a `ToolWithMetadata` factory that takes a `(askId) => Promise<reply>` dependency injection. Tool execution:
 
@@ -60,7 +60,26 @@ English: Build the tool as a `ToolWithMetadata` factory that takes a `(askId) =>
 - Timeout reply (`{mode: "timeout"}`) → tool returns "user did not answer within Xs" error result.
 - Multi-select / free_text shapes covered.
 
-### 3b — Web 注入 `awaitAsk` + WriteAuthority confirm hook(~10M token)
+### 3b — `request_approval` tool + WriteAuthority web confirm hook(~12-15M token)
+
+**架构发现 / Architecture discovery 2026-05-15:** chat 路由直接用 AI SDK
+`streamText`,**不走 agent-core 的 runAgentLoop / WriteAuthority**。Slice 3b
+两条路:
+
+- (路径 A,简单) 把 `request_approval` 实现成跟 `ask_user_question` 同构的
+  独立工具(`makeRequestApprovalTool(...)`)。LLM 在调用敏感工具前主动调
+  `request_approval` 拿到 user_decision,本地判断后决定要不要执行。
+  优点:不动现有架构;缺点:依赖 LLM 自律,易绕过。
+- (路径 B,正确) 给现有 web 工具(`shell_exec` / `file_write` / `spawn_subagent`
+  写入路径等)套一层 WriteAuthority wrapper,wrapper 内部走 confirm hook,
+  hook 调 `registerAsk` 等用户裁定。
+  优点:架构干净,LLM 无法绕过;缺点:需要识别哪些工具是"敏感",分类需要
+  跟现有 RiskLevel / sandboxPolicy 对齐。
+
+推荐:**先实现路径 A 拿到完整 wire 实证,再下一个 Iter 做路径 B**。理由是
+路径 A 是 2 文件的小改动可以快速 ship + 在 web UI 真实跑通 InlineApproval;
+路径 B 涉及给每个 web 工具加 metadata + risk 分类,更适合做完 Slice 3 整片
+之后再设计。
 
 English: When the web process constructs the `AgentService` (in `agent-service-client.ts`), it needs to:
 
