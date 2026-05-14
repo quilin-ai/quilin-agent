@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
 import threading
 from datetime import datetime
@@ -203,6 +204,68 @@ class TemporalKnowledgeGraph:
             as_of,
             filters=filters,
         )
+
+    async def dump_edges(
+        self,
+        *,
+        limit: int = 500,
+        as_of: datetime | str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Bulk-read KG edges for viz / inspection (UX-4 Slice 3 backend).
+
+        Returns up to `limit` edges as plain dicts, newest first by
+        `created_at`. When `as_of` is provided, only edges whose
+        `[valid_from, valid_to]` window contains that moment are returned.
+
+        UX-4 Slice 3 后端:批量读 KG edges 给 /api/memory/graph 用。
+        默认按 created_at 倒序取 limit 条;传 as_of 只返时序上该时刻有效的边。
+        """
+        return await asyncio.to_thread(self._dump_edges_sync, limit, as_of)
+
+    def _dump_edges_sync(
+        self,
+        limit: int,
+        as_of: datetime | str | None,
+    ) -> list[dict[str, Any]]:
+        effective_limit = max(1, min(int(limit), 2000))
+        resolved_as_of = normalize_datetime(as_of)
+        params: list[Any] = []
+        where_clauses: list[str] = []
+        if resolved_as_of is not None:
+            where_clauses.append("valid_from <= ?")
+            params.append(resolved_as_of.isoformat())
+            where_clauses.append("(valid_to IS NULL OR valid_to >= ?)")
+            params.append(resolved_as_of.isoformat())
+        where = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+        params.append(effective_limit)
+        with self._lock:
+            rows = self._conn.execute(
+                f"""
+                SELECT edge_id, subject, predicate, object,
+                       valid_from, valid_to, memory_id, weight,
+                       metadata_json, created_at
+                FROM kg_edges
+                {where}
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+        return [
+            {
+                "edge_id": row["edge_id"],
+                "subject": row["subject"],
+                "predicate": row["predicate"],
+                "object": row["object"],
+                "valid_from": row["valid_from"],
+                "valid_to": row["valid_to"],
+                "memory_id": row["memory_id"],
+                "weight": float(row["weight"]),
+                "metadata": json.loads(row["metadata_json"]) if row["metadata_json"] else None,
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
 
     def _ensure_schema(self) -> None:
         ensure_schema(self._conn)

@@ -210,3 +210,64 @@ async def test_search_extracts_entities_from_query_text() -> None:
     results = await graph.search("我记得老孟是谁吗", max_hops=1)
 
     assert [(result.subject, result.object) for result in results] == [("用户", "老孟")]
+
+
+async def test_dump_edges_returns_newest_first_within_limit() -> None:
+    """UX-4 Slice 3 backend: dump_edges returns edges newest-first up to limit."""
+    graph = TemporalKnowledgeGraph(db_path=":memory:")
+    # Insert 5 edges; we expect dump_edges to return them all (limit
+    # default 500 >> 5), with newest first.
+    for i in range(5):
+        await graph.add_edge(f"S{i}", "p", f"O{i}", weight=0.5 + 0.1 * i)
+    edges = await graph.dump_edges(limit=10)
+    assert len(edges) == 5
+    # All subjects/objects are present.
+    subjects = {e["subject"] for e in edges}
+    assert subjects == {"S0", "S1", "S2", "S3", "S4"}
+    # Each row has the expected shape.
+    first = edges[0]
+    for key in (
+        "edge_id",
+        "subject",
+        "predicate",
+        "object",
+        "valid_from",
+        "valid_to",
+        "memory_id",
+        "weight",
+        "metadata",
+        "created_at",
+    ):
+        assert key in first
+
+
+async def test_dump_edges_honors_limit_clamp() -> None:
+    """limit is clamped to [1, 2000]."""
+    graph = TemporalKnowledgeGraph(db_path=":memory:")
+    for i in range(3):
+        await graph.add_edge(f"S{i}", "p", "O")
+    # Way-too-big limit gets clamped down — we still get back what exists.
+    edges = await graph.dump_edges(limit=999_999)
+    assert len(edges) == 3
+    # Zero / negative limit clamped UP to 1.
+    edges_one = await graph.dump_edges(limit=0)
+    assert len(edges_one) == 1
+
+
+async def test_dump_edges_as_of_filter_excludes_out_of_window_edges() -> None:
+    """as_of filters edges whose [valid_from, valid_to] doesn't contain the moment."""
+    graph = TemporalKnowledgeGraph(db_path=":memory:")
+    await graph.add_edge(
+        "Ada", "works at", "Anthropic",
+        valid_from="2025-01-01T00:00:00+00:00",
+        valid_to="2025-06-01T00:00:00+00:00",
+    )
+    await graph.add_edge(
+        "Ada", "works at", "OpenAI",
+        valid_from="2024-01-01T00:00:00+00:00",
+        valid_to="2024-12-31T00:00:00+00:00",
+    )
+    # Query at 2025-03 → only the Anthropic edge should be valid.
+    edges = await graph.dump_edges(as_of="2025-03-01T00:00:00+00:00")
+    assert len(edges) == 1
+    assert edges[0]["object"] == "Anthropic"

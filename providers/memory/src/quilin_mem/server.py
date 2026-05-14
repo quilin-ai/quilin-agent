@@ -863,6 +863,53 @@ def create_server(
             trace_context=_child_trace_context(parent_trace),
         )
 
+    @server.tool(name="kg_dump_for_viz")
+    async def kg_dump_for_viz_tool(
+        limit: int = 500,
+        as_of: str | None = None,
+        ctx: Context[object, Any, object] | None = None,
+    ) -> str:
+        """Bulk-dump KG edges for /api/memory/graph visualization.
+
+        Returns up to `limit` edges as a JSON-encoded `{nodes, edges}`
+        payload sized for reactflow / cytoscape:
+        - nodes:  [{id: entity, label: entity}]  (deduplicated)
+        - edges:  [{id, source, target, label, valid_from, valid_to,
+                    memory_id, weight}]
+
+        UX-4 Slice 3 backend. limit clamped to [1, 2000]. `as_of`,
+        if provided as ISO 8601, filters edges to those temporally
+        valid at that moment.
+        """
+        del ctx  # not used; signature compatibility with other tools
+        kg = TemporalKnowledgeGraph()
+        try:
+            raw_edges = await kg.dump_edges(limit=limit, as_of=as_of)
+        finally:
+            await kg.close()
+
+        # Deduplicate nodes by entity name.
+        node_set: set[str] = set()
+        for edge in raw_edges:
+            node_set.add(str(edge["subject"]))
+            node_set.add(str(edge["object"]))
+        nodes = [{"id": name, "label": name} for name in sorted(node_set)]
+
+        edges = [
+            {
+                "id": edge["edge_id"],
+                "source": edge["subject"],
+                "target": edge["object"],
+                "label": edge["predicate"],
+                "valid_from": edge["valid_from"],
+                "valid_to": edge["valid_to"],
+                "memory_id": edge["memory_id"],
+                "weight": edge["weight"],
+            }
+            for edge in raw_edges
+        ]
+        return json.dumps({"nodes": nodes, "edges": edges})
+
     @server.tool(name="memory_backfill_kg")
     async def memory_backfill_kg_tool(
         batch_size: int = 50,
