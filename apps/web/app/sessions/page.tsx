@@ -9,14 +9,97 @@ import { Wordmark } from "@/components/shell/Wordmark";
 import { formatRelativeTime } from "@/lib/format";
 import { listSessions, type PersistedSession } from "@/lib/session-store";
 
+/**
+ * Unified session row used by the list UI. Merges:
+ *   - server (SQLite) sessions from GET /api/sessions
+ *   - browser-local sessions from `session-store.ts`
+ *
+ * `source` indicates which side the row primarily came from; "server" wins
+ * on conflict per spec §5.3.
+ *
+ * 统一 session 行,合并服务端 SQLite + 本地 localStorage;冲突时以 server
+ * 为准并把 server 行 cache 回 localStorage(spec §5.3)。
+ */
+interface SessionRow {
+	readonly id: string;
+	readonly title: string;
+	readonly preview: string;
+	readonly messageCount: number;
+	readonly updatedAt: string;
+	readonly source: "server" | "local";
+}
+
+interface ServerSessionDto {
+	readonly id: string;
+	readonly title: string | null;
+	readonly created_at: number;
+	readonly updated_at: number;
+	readonly message_count: number;
+	readonly preview: string | null;
+}
+
+interface SessionsApiResponse {
+	readonly sessions: readonly ServerSessionDto[];
+	readonly persistenceEnabled: boolean;
+}
+
+function persistedToRow(s: PersistedSession): SessionRow {
+	return {
+		id: s.id,
+		title: s.title,
+		preview: s.preview,
+		messageCount: s.messageCount,
+		updatedAt: s.updatedAt,
+		source: "local",
+	};
+}
+
+function serverToRow(s: ServerSessionDto): SessionRow {
+	return {
+		id: s.id,
+		title: s.title ?? "(untitled session)",
+		preview: s.preview ?? "",
+		messageCount: s.message_count,
+		updatedAt: new Date(s.updated_at).toISOString(),
+		source: "server",
+	};
+}
+
+function mergeRows(
+	serverSessions: readonly ServerSessionDto[],
+	localSessions: readonly PersistedSession[],
+): SessionRow[] {
+	const merged = new Map<string, SessionRow>();
+	for (const s of localSessions) merged.set(s.id, persistedToRow(s));
+	for (const s of serverSessions) merged.set(s.id, serverToRow(s)); // server wins on conflict
+	return [...merged.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
 export default function SessionsPage() {
-	const [sessions, setSessions] = useState<readonly PersistedSession[]>([]);
+	const [rows, setRows] = useState<readonly SessionRow[]>([]);
 	const [hydrated, setHydrated] = useState(false);
+	const [persistenceOn, setPersistenceOn] = useState<boolean | null>(null);
 
 	useEffect(() => {
-		setSessions(listSessions());
+		const local = listSessions();
+		// Render local immediately for fast first-paint, then enrich with server.
+		setRows(mergeRows([], local));
 		setHydrated(true);
+
+		void (async () => {
+			try {
+				const res = await fetch("/api/sessions", { cache: "no-store" });
+				if (!res.ok) return; // surface nothing; local view is good enough
+				const body = (await res.json()) as SessionsApiResponse;
+				setPersistenceOn(body.persistenceEnabled);
+				setRows(mergeRows(body.sessions, local));
+			} catch {
+				// Network failure / dev-server down — keep the local-only view.
+			}
+		})();
 	}, []);
+
+	const totalMessages = rows.reduce((sum, r) => sum + r.messageCount, 0);
 
 	return (
 		<>
@@ -30,15 +113,20 @@ export default function SessionsPage() {
 							Sessions<span className="cjk">会话</span>
 						</h1>
 						<p className="q-page-subtitle">
-							所有历史对话 · 来自浏览器本地存储 · 点击任意会话可恢复上下文继续
+							所有历史对话 ·{" "}
+							{persistenceOn === false
+								? "本地缓存(后端持久化未启用)"
+								: persistenceOn === true
+									? "本地 + 服务端 SQLite 持久化合并"
+									: "本地缓存"}{" "}
+							· 点击任意会话可恢复上下文继续
 						</p>
 						<div className="q-page-stats">
 							<span>
-								<strong>{sessions.length}</strong>总会话
+								<strong>{rows.length}</strong>总会话
 							</span>
 							<span>
-								<strong>{sessions.reduce((sum, s) => sum + s.messageCount, 0)}</strong>
-								累计消息
+								<strong>{totalMessages}</strong>累计消息
 							</span>
 							<Link
 								href="/"
@@ -63,7 +151,7 @@ export default function SessionsPage() {
 
 					{!hydrated ? (
 						<p style={{ color: "var(--fg-muted)", marginTop: 24 }}>加载中 · loading…</p>
-					) : sessions.length === 0 ? (
+					) : rows.length === 0 ? (
 						<p style={{ color: "var(--fg-muted)", marginTop: 24 }}>
 							还没有会话 · no sessions yet ·{" "}
 							<Link
@@ -77,21 +165,24 @@ export default function SessionsPage() {
 						<div>
 							<div className="q-section-title">
 								<span className="cn">最近 · recent</span>
-								<span className="right">{sessions.length} sessions</span>
+								<span className="right">{rows.length} sessions</span>
 							</div>
-							{sessions.map((session) => (
+							{rows.map((row) => (
 								<Link
-									key={session.id}
-									href={{ pathname: "/", query: { session: session.id } }}
+									key={row.id}
+									href={{ pathname: "/", query: { session: row.id } }}
 									className="q-resource-row"
-									data-testid={`session-${session.id}`}
+									data-testid={`session-${row.id}`}
+									data-source={row.source}
 								>
 									<span className="rn">
-										{session.title}
-										<span className="desc">{session.preview}</span>
+										{row.title}
+										<span className="desc">{row.preview}</span>
 									</span>
-									<span className="rm">{formatRelativeTime(session.updatedAt)}</span>
-									<span className="rs on">{session.messageCount} 条</span>
+									<span className="rm">{formatRelativeTime(row.updatedAt)}</span>
+									<span className="rs on">
+										{row.messageCount} 条 · {row.source === "server" ? "云端" : "本地"}
+									</span>
 								</Link>
 							))}
 						</div>

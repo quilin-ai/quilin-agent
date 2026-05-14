@@ -371,6 +371,86 @@ export function nextSeq(sessionId: string): number {
 }
 
 /**
+ * Slice 2 list endpoint helper — paginated session list with derived
+ * preview text (first text part of the latest user message in the
+ * session). Skips soft-deleted rows. Default page size 100, max 200.
+ *
+ * Slice 2 列表 endpoint 用 — 分页列出 session,每行带 message_count + 来自
+ * 最新 user 消息的 preview 文本。skips deleted_at IS NOT NULL。
+ */
+export function listSessionsForReadEndpoint(input?: {
+	readonly limit?: number;
+	readonly offset?: number;
+}): readonly {
+	readonly id: string;
+	readonly title: string | null;
+	readonly created_at: number;
+	readonly updated_at: number;
+	readonly origin: string;
+	readonly message_count: number;
+	readonly preview: string | null;
+}[] {
+	const limit = Math.min(Math.max(input?.limit ?? 100, 1), 200);
+	const offset = Math.max(input?.offset ?? 0, 0);
+	const db = getDb();
+	const rows = db
+		.prepare(
+			`SELECT s.id, s.title, s.created_at, s.updated_at, s.origin,
+			        (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) AS message_count,
+			        (SELECT parts_json FROM messages m2
+			          WHERE m2.session_id = s.id AND m2.role = 'user'
+			          ORDER BY m2.seq DESC LIMIT 1) AS last_user_parts_json
+			 FROM sessions s
+			 WHERE s.deleted_at IS NULL
+			 ORDER BY s.updated_at DESC
+			 LIMIT @limit OFFSET @offset`,
+		)
+		.all({ limit, offset }) as {
+		id: string;
+		title: string | null;
+		created_at: number;
+		updated_at: number;
+		origin: string;
+		message_count: number;
+		last_user_parts_json: string | null;
+	}[];
+	return rows.map((r) => {
+		const previewParts = r.last_user_parts_json != null
+			? parsePartsJson(r.last_user_parts_json)
+			: [];
+		return {
+			id: r.id,
+			title: r.title,
+			created_at: r.created_at,
+			updated_at: r.updated_at,
+			origin: r.origin,
+			message_count: r.message_count,
+			preview: extractFirstTextFromParts(previewParts),
+		};
+	});
+}
+
+/**
+ * Extract the first `type: "text"` part's text. Used for deriving title /
+ * preview from a parts array of either raw `UIMessage.parts` or stored
+ * persisted parts.
+ *
+ * 从 parts 数组(原 UIMessage.parts 或 stored PersistedPart)取首段文本 —
+ * 用于 title / preview 派生。
+ */
+export function extractFirstTextFromParts(parts: readonly unknown[]): string | null {
+	for (const p of parts) {
+		if (typeof p !== "object" || p == null) continue;
+		const obj = p as { readonly type?: unknown; readonly text?: unknown };
+		if (obj.type === "text" && typeof obj.text === "string") return obj.text;
+		// PersistedPart shape: { kind: "text", text }
+		const pp = p as { readonly kind?: unknown; readonly text?: unknown };
+		if (pp.kind === "text" && typeof pp.text === "string") return pp.text;
+	}
+	return null;
+}
+
+/**
  * Read row counts — used by tests and by the `/api/sessions/<id>` GET in
  * Slice 2. Returns `undefined` when no session row exists.
  *
