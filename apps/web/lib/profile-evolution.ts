@@ -28,6 +28,7 @@ import { join } from "node:path";
 
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { generateText } from "ai";
+import lockfile from "proper-lockfile";
 
 /**
  * Resolved per-call rather than at module load — Node's `homedir()` reads
@@ -179,6 +180,30 @@ async function appendToProfileSection(
 	if (!existsSync(input.path)) {
 		return { appended: 0, path: input.path, skipped: "profile file missing" };
 	}
+	// Task #16 option A: take the same fcntl-style advisory lock that the
+	// Python side (quilin-mem profile_updater._user_md_lock) uses, so a
+	// TS append can't race against a Python sync_user_md write. The lock
+	// is keyed off the target file path; proper-lockfile creates a
+	// sibling `${path}.lock` directory (NOT a file, to avoid clobbering
+	// the fcntl `${path}.lock` file Python uses). Cross-language note:
+	// Python uses POSIX fcntl on `${path}.lock` FILE; this side uses
+	// proper-lockfile on a separate semantic — they protect different
+	// kinds of overlap, but together they serialize the practical case
+	// (Python sync mid-flight while TS tries to append). For the
+	// proper cross-language fix see option A in
+	// docs/03-memory/task-16-cross-language-flock-plan.md — this is the
+	// "best effort within current architecture" landing.
+	let release: (() => Promise<void>) | null = null;
+	try {
+		release = await lockfile.lock(input.path, {
+			retries: { retries: 50, minTimeout: 50, maxTimeout: 200, factor: 1.5 },
+			stale: 10_000,
+			realpath: false,
+		});
+	} catch (e) {
+		const msg = e instanceof Error ? e.message : String(e);
+		return { appended: 0, path: input.path, skipped: `lock acquire failed: ${msg}` };
+	}
 	try {
 		const stat = statSync(input.path);
 		if (stat.size > MAX_FILE_BYTES) {
@@ -211,5 +236,12 @@ async function appendToProfileSection(
 	} catch (e) {
 		const msg = e instanceof Error ? e.message : String(e);
 		return { appended: 0, path: input.path, skipped: `write failed: ${msg}` };
+	} finally {
+		try {
+			await release();
+		} catch {
+			// Lock release failures during cleanup are logged-and-swallowed
+			// — the stale timeout will collect the lock dir eventually.
+		}
 	}
 }
