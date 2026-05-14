@@ -121,7 +121,12 @@ async def test_dry_run_counts_edges_but_does_not_write() -> None:
 async def test_real_run_writes_edges_with_correct_metadata() -> None:
     """dry_run=False persists edges with source_quote in metadata and memory_id linkage."""
     store = FakeStore(
-        {"working": [FakeRecord("r99", "Ada works at Anthropic.", _T0)], "episodic": [], "semantic": [], "skill": []}
+        {
+            "working": [FakeRecord("r99", "Ada works at Anthropic.", _T0)],
+            "episodic": [],
+            "semantic": [],
+            "skill": [],
+        }
     )
     kg = FakeKG()
     triple = ExtractedTriple(
@@ -200,7 +205,12 @@ async def test_empty_content_is_skipped() -> None:
 async def test_extractor_returning_empty_list_increments_skipped() -> None:
     """Record processed but no triples extracted → counts as skipped (not error)."""
     store = FakeStore(
-        {"working": [FakeRecord("r1", "ambiguous text", _T0)], "episodic": [], "semantic": [], "skill": []}
+        {
+            "working": [FakeRecord("r1", "ambiguous text", _T0)],
+            "episodic": [],
+            "semantic": [],
+            "skill": [],
+        }
     )
     kg = FakeKG()
 

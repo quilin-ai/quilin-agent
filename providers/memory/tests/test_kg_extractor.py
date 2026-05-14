@@ -20,7 +20,6 @@ from quilin_mem.kg_extractor import (
     parse_llm_triples,
 )
 
-
 _FIXED_TIME = datetime(2026, 5, 15, 4, 0, 0, tzinfo=UTC)
 
 
@@ -543,6 +542,16 @@ def test_attacker_injected_close_tag_in_text_does_not_escape() -> None:
     assert last_close > attacker_close  # real close is after the fake one
 
 
+def test_is_allowed_llm_host_handles_unparseable_url() -> None:
+    """SSRF guard returns False on malformed URLs without raising."""
+    from quilin_mem.kg_extractor import _is_allowed_llm_host
+
+    assert _is_allowed_llm_host("") is False
+    assert _is_allowed_llm_host("not-a-url") is False
+    # https with no host
+    assert _is_allowed_llm_host("https://") is False
+
+
 def test_extracted_triple_is_frozen_dataclass() -> None:
     triple = ExtractedTriple(
         subject="A",
@@ -551,5 +560,5 @@ def test_extracted_triple_is_frozen_dataclass() -> None:
         valid_from=_FIXED_TIME,
         source_quote="A p B",
     )
-    with pytest.raises(Exception):  # FrozenInstanceError subclass
+    with pytest.raises((AttributeError, TypeError)):
         triple.subject = "X"  # type: ignore[misc]

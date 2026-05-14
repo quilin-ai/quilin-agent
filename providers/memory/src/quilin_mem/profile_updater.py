@@ -322,7 +322,12 @@ class ProfileUpdater:
                 scope=profile.scope,
             )
         if preserved_observations is not None and preserved_observations.strip():
-            separator = "" if content.endswith("\n\n") else ("\n" if content.endswith("\n") else "\n\n")
+            if content.endswith("\n\n"):
+                separator = ""
+            elif content.endswith("\n"):
+                separator = "\n"
+            else:
+                separator = "\n\n"
             content = f"{content}{separator}{preserved_observations.rstrip()}\n"
         # Atomic write: write to a temp file in the same directory, then
         # os.replace into place. Prevents partial-file readers from seeing

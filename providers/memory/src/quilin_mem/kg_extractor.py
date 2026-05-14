@@ -107,7 +107,9 @@ class ExtractedTriple:
 LlmCaller = Callable[[str, str, bytes], str]
 
 
-def _default_llm_caller(base_url: str, api_key: str, payload: bytes) -> str:  # pragma: no cover — network seam
+def _default_llm_caller(  # pragma: no cover — network seam
+    base_url: str, api_key: str, payload: bytes
+) -> str:
     """Synchronous HTTP POST to a DeepSeek-compatible chat-completions
     endpoint. Mirrors observer.py's pattern so tests can DI-replace it.
     Marked no-cover because unit tests inject a fake caller via the
@@ -245,10 +247,7 @@ def _is_allowed_llm_host(base_url: str) -> bool:
     host = (parsed.hostname or "").lower()
     if not host:
         return False
-    for allowed in ALLOWED_LLM_HOSTS:
-        if host == allowed or host.endswith("." + allowed):
-            return True
-    return False
+    return any(host == allowed or host.endswith("." + allowed) for allowed in ALLOWED_LLM_HOSTS)
 
 
 def _validate_triple(
