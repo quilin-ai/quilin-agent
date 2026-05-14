@@ -882,11 +882,13 @@ def create_server(
         valid at that moment.
         """
         del ctx  # not used; signature compatibility with other tools
-        kg = TemporalKnowledgeGraph()
-        try:
+        # Use the class's async context manager so a future maintainer who
+        # adds work after `dump_edges` doesn't accidentally trip a
+        # use-after-close on `kg`. The `raw_edges` list is plain Python
+        # dicts so the post-processing below works either way, but
+        # `async with` makes the resource scope unambiguous.
+        async with TemporalKnowledgeGraph() as kg:
             raw_edges = await kg.dump_edges(limit=limit, as_of=as_of)
-        finally:
-            await kg.close()
 
         # Deduplicate nodes by entity name.
         node_set: set[str] = set()

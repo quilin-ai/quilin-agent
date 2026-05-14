@@ -113,23 +113,33 @@ export function KnowledgeGraphView({ onSelectMemory }: KnowledgeGraphViewProps) 
 	const [error, setError] = useState<string | null>(null);
 	const [loading, setLoading] = useState(true);
 
+	// Track an "in-flight epoch" so rapid retry clicks don't race —
+	// only the most recent fetch's result wins. A user double-clicking
+	// "重试" would otherwise see flicker as both fetches resolve in
+	// arbitrary order.
+	const fetchEpochRef = useState<{ current: number }>({ current: 0 })[0];
+
 	const fetchGraph = useCallback(async () => {
+		const myEpoch = ++fetchEpochRef.current;
 		setLoading(true);
 		setError(null);
 		try {
 			const res = await fetch("/api/memory/graph?limit=500", { cache: "no-store" });
+			if (myEpoch !== fetchEpochRef.current) return; // superseded
 			if (!res.ok) {
 				const body = (await res.json().catch(() => null)) as GraphErrorResponse | null;
 				throw new Error(body?.error.message ?? `HTTP ${res.status}`);
 			}
 			const body = (await res.json()) as GraphFetchResponse;
+			if (myEpoch !== fetchEpochRef.current) return;
 			setData(body.data);
 		} catch (e) {
+			if (myEpoch !== fetchEpochRef.current) return;
 			setError(e instanceof Error ? e.message : String(e));
 		} finally {
-			setLoading(false);
+			if (myEpoch === fetchEpochRef.current) setLoading(false);
 		}
-	}, []);
+	}, [fetchEpochRef]);
 
 	useEffect(() => {
 		void fetchGraph();

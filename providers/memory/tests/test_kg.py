@@ -271,3 +271,23 @@ async def test_dump_edges_as_of_filter_excludes_out_of_window_edges() -> None:
     edges = await graph.dump_edges(as_of="2025-03-01T00:00:00+00:00")
     assert len(edges) == 1
     assert edges[0]["object"] == "Anthropic"
+
+
+async def test_dump_edges_as_of_includes_open_ended_edges() -> None:
+    """An edge with `valid_to=None` (no expiry) is always returned by as_of filter."""
+    graph = TemporalKnowledgeGraph(db_path=":memory:")
+    await graph.add_edge(
+        "Ada", "lives in", "SF",
+        valid_from="2020-01-01T00:00:00+00:00",
+        # no valid_to — open-ended
+    )
+    await graph.add_edge(
+        "Bob", "lives in", "NYC",
+        valid_from="2024-01-01T00:00:00+00:00",
+        valid_to="2024-06-01T00:00:00+00:00",
+    )
+    # as_of in 2025: only the open-ended Ada edge should remain (Bob's expired).
+    edges = await graph.dump_edges(as_of="2025-03-01T00:00:00+00:00")
+    assert len(edges) == 1
+    assert edges[0]["subject"] == "Ada"
+    assert edges[0]["valid_to"] is None
