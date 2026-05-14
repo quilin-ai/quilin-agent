@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { KnowledgeGraphView } from "@/components/memory/KnowledgeGraphView";
 import { AppHeader } from "@/components/shell/AppHeader";
 import { RailStrip } from "@/components/shell/RailStrip";
 import { Wordmark } from "@/components/shell/Wordmark";
@@ -58,6 +59,7 @@ export default function MemoryPage() {
 	const [filter, setFilter] = useState("");
 	const [tierFilter, setTierFilter] = useState<string>("all");
 	const [expandedId, setExpandedId] = useState<string | null>(null);
+	const [view, setView] = useState<"list" | "graph">("list");
 
 	const loadMemory = useCallback(async () => {
 		setLoading(true);
@@ -159,9 +161,69 @@ export default function MemoryPage() {
 								↻ 刷新
 							</button>
 						</div>
+
+						<div
+							style={{
+								display: "flex",
+								gap: 4,
+								marginTop: 12,
+								borderBottom: "1px solid var(--border)",
+							}}
+							role="tablist"
+							aria-label="Memory view"
+						>
+							<button
+								type="button"
+								role="tab"
+								aria-selected={view === "list"}
+								data-testid="memory-tab-list"
+								onClick={() => setView("list")}
+								style={{
+									padding: "8px 16px",
+									background: "transparent",
+									border: "none",
+									borderBottom:
+										view === "list"
+											? "2px solid var(--accent-vermillion)"
+											: "2px solid transparent",
+									color: view === "list" ? "var(--fg)" : "var(--fg-muted)",
+									cursor: "pointer",
+									fontFamily: '"Noto Sans SC", sans-serif',
+									fontSize: 13,
+								}}
+							>
+								列表 · list
+							</button>
+							<button
+								type="button"
+								role="tab"
+								aria-selected={view === "graph"}
+								data-testid="memory-tab-graph"
+								onClick={() => setView("graph")}
+								style={{
+									padding: "8px 16px",
+									background: "transparent",
+									border: "none",
+									borderBottom:
+										view === "graph"
+											? "2px solid var(--accent-vermillion)"
+											: "2px solid transparent",
+									color: view === "graph" ? "var(--fg)" : "var(--fg-muted)",
+									cursor: "pointer",
+									fontFamily: '"Noto Sans SC", sans-serif',
+									fontSize: 13,
+								}}
+							>
+								知识图谱 · graph
+							</button>
+						</div>
 					</div>
 
-					{loading && memory == null ? (
+					{view === "graph" ? (
+						<div style={{ marginTop: 20 }}>
+							<KnowledgeGraphView />
+						</div>
+					) : loading && memory == null ? (
 						<p style={{ color: "var(--fg-muted)", marginTop: 24 }}>加载中 · loading…</p>
 					) : error != null ? (
 						<p style={{ color: "var(--accent-vermillion)", marginTop: 24 }}>加载失败 · {error}</p>
