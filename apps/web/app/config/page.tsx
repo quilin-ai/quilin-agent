@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+import { ProfileFilesSection } from "@/components/config/ProfileFilesSection";
 import { AppHeader } from "@/components/shell/AppHeader";
 import { RailStrip } from "@/components/shell/RailStrip";
 import { Wordmark } from "@/components/shell/Wordmark";
@@ -262,6 +263,8 @@ export default function ConfigPage() {
 									))}
 								</Section>
 							) : null}
+
+							<ProfileFilesSection />
 						</div>
 					)}
 				</section>
