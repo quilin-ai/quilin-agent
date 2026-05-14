@@ -46,6 +46,7 @@ const SAMPLE_AGENTS: readonly AgentSummary[] = [
 		id: "main",
 		kind: "main",
 		parentId: null,
+		displayName: "主代理",
 		task: "current",
 		status: "running",
 		startedAt: NOW_ISO,
@@ -57,6 +58,7 @@ const SAMPLE_AGENTS: readonly AgentSummary[] = [
 		id: "review-loop-r1",
 		kind: "subagent",
 		parentId: "main",
+		displayName: "代码审查",
 		task: "cross-review",
 		status: "running",
 		startedAt: NOW_ISO,
@@ -68,6 +70,7 @@ const SAMPLE_AGENTS: readonly AgentSummary[] = [
 		id: "lint-fixer",
 		kind: "subagent",
 		parentId: "main",
+		displayName: "Lint 修复",
 		task: "biome --write",
 		status: "blocked",
 		startedAt: NOW_ISO,
@@ -79,6 +82,7 @@ const SAMPLE_AGENTS: readonly AgentSummary[] = [
 		id: "dspy-validator",
 		kind: "subagent",
 		parentId: "main",
+		displayName: "DSPy 验证",
 		task: "MIPROv2 done",
 		status: "completed",
 		startedAt: NOW_ISO,
@@ -191,9 +195,7 @@ describe("AgentSwitcher", () => {
 
 	it("renders subagent label when current is a subagent", () => {
 		render(<AgentSwitcher agents={SAMPLE_AGENTS} currentAgentId="review-loop-r1" />);
-		expect(screen.getByTestId("agent-switcher-toggle")).toHaveTextContent(
-			"子代理 · review-loop-r1",
-		);
+		expect(screen.getByTestId("agent-switcher-toggle")).toHaveTextContent("子代理 · 代码审查");
 	});
 
 	it("toggles the popover open + selects a row", () => {
@@ -202,7 +204,7 @@ describe("AgentSwitcher", () => {
 		const toggle = screen.getByTestId("agent-switcher-toggle");
 		fireEvent.click(toggle);
 		expect(toggle.getAttribute("data-active")).toBe("true");
-		fireEvent.click(screen.getByText("review-loop-r1"));
+		fireEvent.click(screen.getByText("代码审查"));
 		expect(onSelect).toHaveBeenCalledWith("review-loop-r1");
 	});
 
@@ -243,7 +245,7 @@ describe("AgentSwitcher", () => {
 		expect(runningGlyphs.length).toBeGreaterThan(0);
 		expect(screen.getByText("✕")).toBeInTheDocument();
 		expect(screen.getByText("▢")).toBeInTheDocument();
-		expect(screen.getByText("lint-fixer")).toBeInTheDocument();
+		expect(screen.getByText("Lint 修复")).toBeInTheDocument();
 	});
 
 	it("renders pending + cancelled + failed status glyphs", () => {
@@ -292,9 +294,7 @@ describe("AgentSwitcher", () => {
 		fireEvent.click(screen.getByTestId("agent-switcher-toggle"));
 		expect(screen.getByText("○")).toBeInTheDocument();
 		expect(screen.getByText("—")).toBeInTheDocument();
-		expect(screen.getByText("pending-agent")).toBeInTheDocument();
-		expect(screen.getByText("cancelled-agent")).toBeInTheDocument();
-		expect(screen.getByText("failed-agent")).toBeInTheDocument();
+		expect(screen.getAllByText("子代理")).toHaveLength(3);
 	});
 });
 

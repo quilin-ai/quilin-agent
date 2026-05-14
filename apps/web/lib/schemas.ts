@@ -188,6 +188,7 @@ export const AgentSummarySchema = z.object({
 	id: AgentId,
 	kind: z.enum(["main", "subagent"]),
 	parentId: AgentId.nullable(),
+	displayName: z.string().min(1).max(48).optional(),
 	task: z.string().nullable(),
 	status: AgentStatus,
 	startedAt: IsoDateTime,

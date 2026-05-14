@@ -122,7 +122,7 @@ export async function GET(): Promise<Response> {
 function getInlineDescription(name: string): string {
 	switch (name) {
 		case "spawn_subagent":
-			return "派遣一个并行的子代理(subagent)去执行一个独立的子任务。Fire-and-forget,立即返回 agentId,需配合 wait_for_subagents 拿结果。";
+			return "派遣一个并行子代理(subagent)执行独立子任务。普通调研默认主代理先搜索/抓取;明确要求并行或确需多视角时使用,默认最多 2 个,需配合 wait_for_subagents 拿结果。";
 		case "wait_for_subagents":
 			return "等待 spawn_subagent 派出的子代理跑完,返回每个 subagent 的最终输出。";
 		case "web_fetch":

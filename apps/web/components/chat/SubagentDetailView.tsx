@@ -11,6 +11,7 @@ import {
 	type ToolCallStatus,
 } from "@/components/conversation/ToolCall";
 import { Composer } from "@/components/shell/Composer";
+import { deriveAgentDisplayName } from "@/lib/agent-display-name";
 import { formatDuration } from "@/lib/format";
 import type { AgentStatus } from "@/lib/schemas";
 
@@ -64,6 +65,7 @@ interface AgentDetail {
 	readonly id: string;
 	readonly kind: "main" | "subagent";
 	readonly parentId: string | null;
+	readonly displayName?: string | null;
 	readonly task: string | null;
 	readonly status: AgentStatus;
 	readonly startedAt: string;
@@ -141,22 +143,26 @@ export function SubagentDetailView({ agentId, parentSessionId }: SubagentDetailV
 
 	const onSelectAgent = useCallback(
 		(id: string) => {
+			const effectiveParentId = parentSessionId ?? detail?.parentId ?? null;
 			if (id === "main") {
-				if (parentSessionId) {
-					router.push(`/?session=${encodeURIComponent(parentSessionId)}`);
+				if (effectiveParentId) {
+					router.push(`/?session=${encodeURIComponent(effectiveParentId)}`);
 				} else {
 					router.push("/");
 				}
 				return;
 			}
 			if (id === agentId) return;
-			const suffix = parentSessionId ? `&from=${encodeURIComponent(parentSessionId)}` : "";
+			const suffix = effectiveParentId ? `&from=${encodeURIComponent(effectiveParentId)}` : "";
 			router.push(`/?session=${encodeURIComponent(id)}${suffix}`);
 		},
-		[router, parentSessionId, agentId],
+		[router, parentSessionId, detail?.parentId, agentId],
 	);
 
 	const isStreaming = detail?.status === "running" || detail?.status === "pending";
+	const displayName =
+		detail?.displayName?.trim() ||
+		(detail ? deriveAgentDisplayName(detail.task) : deriveAgentDisplayName(null));
 
 	return (
 		<main className="q-workspace">
@@ -168,7 +174,7 @@ export function SubagentDetailView({ agentId, parentSessionId }: SubagentDetailV
 							className="cjk"
 							style={{ marginLeft: 8, fontFamily: '"JetBrains Mono", monospace' }}
 						>
-							{agentId}
+							{displayName}
 						</span>
 					</h1>
 					{notFound ? (
@@ -188,6 +194,9 @@ export function SubagentDetailView({ agentId, parentSessionId }: SubagentDetailV
 										父代理 <strong>{detail.parentId}</strong>
 									</span>
 								) : null}
+								<span title={agentId}>
+									id <strong>{agentId}</strong>
+								</span>
 							</div>
 						</>
 					) : (
@@ -198,7 +207,7 @@ export function SubagentDetailView({ agentId, parentSessionId }: SubagentDetailV
 				{detail && !notFound ? (
 					<article className="q-turn" data-role="assistant" data-testid="subagent-stream">
 						<div className="q-turn-label">
-							<span>{agentId}</span>
+							<span>{displayName}</span>
 							<span className="dot">·</span>
 							<span className="cjk-tag">subagent</span>
 						</div>
@@ -206,7 +215,8 @@ export function SubagentDetailView({ agentId, parentSessionId }: SubagentDetailV
 							{(detail.toolEvents?.length ?? 0) > 0 ? (
 								<Process
 									title="过程 · process"
-									defaultOpen
+									autoScrollKey={`${detail.status}:${detail.toolEvents?.length ?? 0}`}
+									defaultOpen={isStreaming}
 									status={isStreaming ? "running" : "done"}
 								>
 									{mergeToolEvents(detail.toolEvents ?? []).map((t) => (
@@ -215,7 +225,7 @@ export function SubagentDetailView({ agentId, parentSessionId }: SubagentDetailV
 											name={t.toolName}
 											kind={toolKindOf(t.toolName)}
 											status={t.status}
-											defaultOpen
+											defaultOpen={isStreaming && t.status !== "done"}
 										>
 											<div style={{ fontFamily: '"JetBrains Mono", monospace', fontSize: 11 }}>
 												{t.input !== undefined ? (

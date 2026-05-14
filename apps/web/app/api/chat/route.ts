@@ -37,6 +37,7 @@
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { convertToModelMessages, stepCountIs, streamText, tool, type UIMessage } from "ai";
 import { z } from "zod";
+import { deriveAgentDisplayName } from "@/lib/agent-display-name";
 import { agentRegistry, shortId } from "@/lib/agent-registry";
 import { type AgentServiceLike, getAgentService } from "@/lib/agent-service-client";
 import {
@@ -53,6 +54,11 @@ import {
 	SSE_DONE_FRAME,
 } from "@/lib/sse-translator";
 import { getToolsCatalog } from "@/lib/tools-loader";
+import {
+	intentRewriteSystemNote,
+	rewriteUserIntentText,
+	type UserIntentRewrite,
+} from "@/lib/user-intent-rewrite";
 import { evictSession, getMeta, hashMessages, setMeta, touchMeta } from "@/lib/web-session-meta";
 
 /**
@@ -135,7 +141,7 @@ function isBlockedHostname(hostname: string): boolean {
 
 const inlineWebFetchTool = tool({
 	description:
-		"Fetch HTTP(S) resources. Returns response body as text (truncated to 30KB) plus status/content-type. Use this for any external data, including search engine result pages.",
+		"Fetch HTTP(S) resources. Returns response body as text (truncated to 30KB) plus status/content-type. Use this for any external data, including search engine result pages. Before building search URLs from user text, normalize obvious Chinese typo/IME/ASR errors and search the corrected intent.",
 	inputSchema: z.object({
 		url: z.string().url(),
 		method: z.enum(["GET", "POST", "HEAD"]).default("GET"),
@@ -257,18 +263,26 @@ const SYSTEM_PROMPT_BASE =
 //
 // 每个请求重新拼 system prompt,把当前日期注入到 prompt 里。否则模型默认
 // 用训练截止时的"现在"(DeepSeek 大概 2025 年初),会把"最新"理解成 2025 年。
-function buildSystemPromptWithTools(): string {
+function buildSystemPromptWithTools(intentRewrite: UserIntentRewrite | null = null): string {
 	const today = new Date().toISOString().slice(0, 10);
 	const currentYear = today.slice(0, 4);
+	const rewriteNote = intentRewriteSystemNote(intentRewrite);
 	return (
 		`${SYSTEM_PROMPT_BASE}\n\n` +
 		`今天是 ${today}。当前年份是 ${currentYear}。你的训练数据可能停留在更早的时间,所以涉及"最新""当前""今年""近期""版本"等时效性问题时,**不要**依赖记忆里的旧数据 —— 用 web_fetch 抓真实页面,并在搜索 query 里写明当前年份(例如 "Python ${currentYear} latest features" 而不是固定写 "2025年")。\n\n` +
+		"输入纠错 / intent rewrite:\n" +
+		"- 用户消息可能包含中文同音、输入法误选或语音识别错字。执行工具前先判断原文是否有明显不合语义的片段。\n" +
+		"- 高置信时直接按更自然的意图改写搜索 query / subagent task / 工具参数,并可在回答里简短说明『我按……理解』。\n" +
+		"- 低置信时不要擅自改写,先问一句澄清。\n" +
+		(rewriteNote.length > 0 ? `\n${rewriteNote}\n\n` : "\n") +
 		"你有一组真实工具,先用工具查清事实再答,不要凭记忆编造。\n\n" +
 		"并行子代理 (web 层):\n" +
 		"- spawn_subagent(task): 派一个并行子代理跑一个独立子任务,立即返回 agentId,不等结果。task 描述里**不要硬编码具体年份**(让子代理自己用今天的日期去查);如果一定要写时间窗口,用『今年』『近 6 个月』之类的相对表达。\n" +
 		"- wait_for_subagents(agentIds): 阻塞等待你派的子代理跑完,返回它们的输出文本。\n\n" +
 		"原则:\n" +
-		"- 用户的请求能拆成多个互相独立的子任务、或明示要并行/多个 subagent/分别处理时,用 spawn_subagent 拆;否则直接答或自己调工具。\n" +
+		"- 普通调研/研究/分析类请求默认由主代理先自己做 1 次 web_fetch / web_search 类搜索或抓取,建立事实底座;不要仅因为出现『调研』『研究』『分析』就派 subagent。\n" +
+		"- 只有用户明确要求并行/多个 subagent/分别处理,或任务天然需要 2 个以上互相独立的视角(例如竞品对比 + 法规风险、技术实现 + 市场数据)时,才用 spawn_subagent 拆;否则直接答或自己调工具。\n" +
+		"- 默认最多派 2 个 subagent;超过 2 个必须是用户指定数量,或你能说明为什么确实需要更多正交视角,并在最终答案里说明理由。\n" +
 		"- 派 spawn_subagent 必须紧接着 wait_for_subagents 拿结果,不要停在『已派遣』。\n" +
 		"- 综合 subagent 输出成自然语言答案,引用 URL,不要复制 JSON。\n" +
 		"- 涉及『最新』『最近』『版本』『近期』『当前』『动态』等时效性内容,**必须**用 web_fetch 工具查真实数据,不要凭训练记忆答。"
@@ -289,7 +303,7 @@ function buildSystemPromptWithTools(): string {
 function makeSpawnSubagentTool(sessionId: string) {
 	return tool({
 		description:
-			"派遣一个并行的子代理(subagent)去执行一个独立的子任务。【强制使用场景】用户消息出现『subagent / 子代理 / 派 N 个 / 开 N 个 / 分别查 / 同时查 / 并行』等任意触发词时,主代理必须用本工具拆任务。【关键】本工具是 fire-and-forget,只立即返回 agentId 不等结果;派完所有 subagent 后,你必须紧接着调 `wait_for_subagents` 才能拿到它们的输出来汇总给用户——否则用户只看到一句『已派遣』什么实质答案都没有,这是严重失败。",
+			"派遣一个并行的子代理(subagent)去执行一个独立的子任务。适用场景:用户明确要求『subagent / 子代理 / 派 N 个 / 开 N 个 / 分别处理 / 同时查 / 并行』,或任务确实需要 2 个以上互相独立的视角。普通调研不要默认派 subagent,主代理应先自己用 web_fetch / web_search 类工具建立事实底座。默认最多派 2 个 subagent;超过 2 个必须是用户指定数量,或能说明为什么需要更多正交视角。【关键】本工具是 fire-and-forget,只立即返回 agentId 不等结果;派完所有 subagent 后,你必须紧接着调 `wait_for_subagents` 才能拿到它们的输出来汇总给用户——否则用户只看到一句『已派遣』什么实质答案都没有,这是严重失败。",
 		inputSchema: z.object({
 			task: z
 				.string()
@@ -300,24 +314,30 @@ function makeSpawnSubagentTool(sessionId: string) {
 				),
 		}),
 		execute: async ({ task }: { task: string }) => {
+			const taskRewrite = rewriteUserIntentText(task);
+			const effectiveTask = taskRewrite.normalizedText;
 			const agentId = `subagent-${shortId()}`;
+			const displayName = deriveAgentDisplayName(effectiveTask);
 			agentRegistry.register({
 				id: agentId,
 				kind: "subagent",
 				parentId: sessionId,
-				task,
+				displayName,
+				task: effectiveTask,
 				status: "running",
 			});
 
 			// Fire-and-forget: kick off the subagent's own DeepSeek call in the
 			// background so this tool returns immediately and the parent LLM can
 			// continue spawning more subagents or replying to the user.
-			void runSubagentInBackground(agentId, task);
+			void runSubagentInBackground(agentId, effectiveTask);
 
 			return {
 				agentId,
+				displayName,
 				status: "spawned" as const,
-				task,
+				task: effectiveTask,
+				originalTask: taskRewrite.changed ? task : null,
 				note: "已派遣;继续派其它 subagent 或调用 wait_for_subagents 等待结果。",
 			};
 		},
@@ -362,6 +382,7 @@ const waitForSubagentsTool = tool({
 			if (r == null) {
 				return {
 					agentId: id,
+					displayName: null,
 					status: "not_found" as const,
 					task: null,
 					text: "",
@@ -373,6 +394,7 @@ const waitForSubagentsTool = tool({
 			const endedMs = r.lastHeartbeatAt ? new Date(r.lastHeartbeatAt).getTime() : Date.now();
 			return {
 				agentId: r.id,
+				displayName: r.displayName,
 				status: r.status,
 				task: r.task,
 				text: r.streamedText,
@@ -395,6 +417,9 @@ const waitForSubagentsTool = tool({
 });
 
 async function runSubagentInBackground(agentId: string, task: string): Promise<void> {
+	const taskRewrite = rewriteUserIntentText(task);
+	const effectiveTask = taskRewrite.normalizedText;
+	const displayName = deriveAgentDisplayName(effectiveTask);
 	const log = (event: string, payload?: Record<string, unknown>): void => {
 		console.log(
 			`[SUBAGENT ${agentId}] ${event}`,
@@ -402,10 +427,10 @@ async function runSubagentInBackground(agentId: string, task: string): Promise<v
 		);
 	};
 	const apiKey = process.env.DEEPSEEK_API_KEY ?? "";
-	log("START", { task, hasApiKey: apiKey.length > 0 });
+	log("START", { task, effectiveTask, hasApiKey: apiKey.length > 0 });
 	if (apiKey.length === 0) {
 		// No key — write a deterministic mock to the registry stream
-		const reply = `[mock subagent ${agentId}] 已完成任务: ${task}`;
+		const reply = `[mock subagent ${displayName}] 已完成任务: ${effectiveTask}`;
 		for (const ch of reply) {
 			agentRegistry.appendStream(agentId, ch);
 			await new Promise<void>((r) => setTimeout(r, 30));
@@ -431,13 +456,14 @@ async function runSubagentInBackground(agentId: string, task: string): Promise<v
 		const result = streamText({
 			model: provider("deepseek-chat"),
 			system:
-				`你是 Quilin 子代理 (subagent ${agentId})。今天是 ${today}。\n` +
-				`任务: ${task}\n\n` +
+				`你是 Quilin 子代理「${displayName}」(id: ${agentId})。今天是 ${today}。\n` +
+				`任务: ${effectiveTask}\n\n` +
 				"原则:\n" +
 				"- 用中文,完整、可读地把任务做完;不要停在『我先...』这种意图陈述上。\n" +
+				"- 如果任务文本中有明显中文同音/输入法错误,先按自然语义纠正后再搜索;低置信时在结果里说明不确定。\n" +
 				"- 调工具是手段不是义务。任务需要外部事实或最新数据(版本号、发布日期、近期新闻、当前状态等)时调 web_fetch 等真实工具;不需要时直接基于你的知识答。\n" +
 				"- 调了工具就把结果综合成答案,不要复制原始 JSON。引用事实时附 URL。",
-			messages: [{ role: "user", content: task }],
+			messages: [{ role: "user", content: effectiveTask }],
 			tools: subagentTools,
 			stopWhen: stepCountIs(20),
 			maxRetries: 1,
@@ -603,6 +629,9 @@ export async function POST(req: Request): Promise<Response> {
 	});
 
 	const modelMessages = await convertToModelMessages(body.messages);
+	const latestUserMessage = [...body.messages].reverse().find((m) => m.role === "user");
+	const latestUserText = extractFirstTextPart(latestUserMessage?.parts);
+	const intentRewrite = latestUserText != null ? rewriteUserIntentText(latestUserText) : null;
 
 	// Reasoner mode: no tools, but emits reasoning_content → reasoning UI part.
 	// Reasoner runs straight through `toUIMessageStreamResponse` without
@@ -617,7 +646,7 @@ export async function POST(req: Request): Promise<Response> {
 	if (IS_REASONER) {
 		const result = streamText({
 			model: provider(DEEPSEEK_MODEL),
-			system: buildSystemPromptWithTools(),
+			system: buildSystemPromptWithTools(intentRewrite),
 			messages: modelMessages,
 		});
 		return result.toUIMessageStreamResponse({ sendReasoning: true });
@@ -776,7 +805,7 @@ export async function POST(req: Request): Promise<Response> {
 		const builtinTools = (await getToolsCatalog()).adapted;
 		const result = streamText({
 			model: provider(DEEPSEEK_MODEL),
-			system: buildSystemPromptWithTools(),
+			system: buildSystemPromptWithTools(intentRewrite),
 			messages: modelMessages,
 			tools: {
 				...builtinTools,

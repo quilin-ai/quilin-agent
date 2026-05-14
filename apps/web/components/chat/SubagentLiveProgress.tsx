@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { type CSSProperties, useEffect, useRef, useState } from "react";
 import { Streamdown } from "streamdown";
 
+import { deriveAgentDisplayName } from "@/lib/agent-display-name";
 import { formatDuration } from "@/lib/format";
 
 type LiveStatus = "pending" | "running" | "blocked" | "completed" | "failed" | "cancelled";
@@ -15,6 +16,8 @@ interface AgentUsage {
 }
 
 interface AgentSnapshot {
+	readonly displayName?: string | null;
+	readonly task?: string | null;
 	readonly status: LiveStatus;
 	readonly streamedText: string;
 	readonly elapsedMs: number;
@@ -28,6 +31,7 @@ interface AgentDetailResponse {
 
 export interface SubagentLiveProgressProps {
 	readonly agentId: string;
+	readonly displayName?: string;
 	readonly task: string;
 	readonly parentSessionId?: string;
 }
@@ -64,28 +68,57 @@ function statusBadge(status: LiveStatus): { label: string; tone: string } {
  */
 export function SubagentLiveProgress({
 	agentId,
+	displayName,
 	task,
 	parentSessionId,
 }: SubagentLiveProgressProps) {
 	const [snapshot, setSnapshot] = useState<AgentSnapshot | null>(null);
+	const [detailAvailable, setDetailAvailable] = useState(false);
+	const [expanded, setExpanded] = useState(false);
 	const cancelledRef = useRef(false);
+	const previewRef = useRef<HTMLDivElement | null>(null);
 
 	useEffect(() => {
 		cancelledRef.current = false;
+		setDetailAvailable(false);
 		let timer: ReturnType<typeof setTimeout> | null = null;
 
 		const tick = async (): Promise<void> => {
 			try {
 				const res = await fetch(`/api/agents/${agentId}`, { cache: "no-store" });
-				if (!res.ok || cancelledRef.current) return;
+				if (cancelledRef.current) return;
+				if (res.status === 404) {
+					setExpanded(false);
+					setDetailAvailable(false);
+					setSnapshot({
+						displayName,
+						task,
+						status: "completed",
+						streamedText: "",
+						elapsedMs: 0,
+						usage: null,
+					});
+					return;
+				}
+				if (!res.ok) return;
 				const body = (await res.json()) as AgentDetailResponse;
-				if (cancelledRef.current || !body.ok || body.data == null) return;
+				if (cancelledRef.current) return;
+				if (!body.ok || body.data == null) {
+					setDetailAvailable(false);
+					return;
+				}
 				const next: AgentSnapshot = {
+					displayName: body.data.displayName,
+					task: body.data.task,
 					status: body.data.status,
 					streamedText: body.data.streamedText,
 					elapsedMs: body.data.elapsedMs,
 					usage: body.data.usage ?? null,
 				};
+				if (next.status !== "running" && next.status !== "pending") {
+					setExpanded(false);
+				}
+				setDetailAvailable(true);
 				setSnapshot(next);
 				if (next.status === "running" || next.status === "pending") {
 					timer = setTimeout(() => void tick(), POLL_INTERVAL_MS);
@@ -103,100 +136,107 @@ export function SubagentLiveProgress({
 			cancelledRef.current = true;
 			if (timer != null) clearTimeout(timer);
 		};
-	}, [agentId]);
+	}, [agentId, displayName, task]);
 
 	const status = snapshot?.status ?? "pending";
 	const badge = statusBadge(status);
 	const text = snapshot?.streamedText ?? "";
+	const liveTask = snapshot?.task ?? task;
+	const label =
+		snapshot?.displayName?.trim() || displayName?.trim() || deriveAgentDisplayName(liveTask);
 	const elapsed = snapshot?.elapsedMs ?? 0;
 	const usage = snapshot?.usage ?? null;
 	const isLive = status === "running" || status === "pending";
 	const detailHref = `/?session=${encodeURIComponent(agentId)}${
 		parentSessionId != null ? `&from=${encodeURIComponent(parentSessionId)}` : ""
 	}`;
+	const preview = text.length > 0 ? text : liveTask;
+	const showPreview = preview.length > 0 && (isLive || expanded);
+
+	useEffect(() => {
+		if (!isLive || expanded || preview.length === 0) return;
+		const requestFrame =
+			window.requestAnimationFrame ??
+			((cb: FrameRequestCallback): number => window.setTimeout(() => cb(Date.now()), 0));
+		const cancelFrame = window.cancelAnimationFrame ?? window.clearTimeout;
+		const frame = requestFrame(() => {
+			const el = previewRef.current;
+			if (el == null) return;
+			el.scrollTop = el.scrollHeight;
+		});
+		return () => cancelFrame(frame);
+	}, [expanded, isLive, preview]);
 
 	return (
 		<section
 			className="q-subagent-live"
 			data-agent-id={agentId}
 			data-status={status}
-			style={{
-				marginTop: 8,
-				marginBottom: 8,
-				padding: "8px 12px",
-				border: "1px solid var(--border)",
-				borderLeft: `3px solid ${badge.tone}`,
-				background: "var(--bg-elev-1, transparent)",
-				fontSize: 12,
-			}}
+			data-expanded={expanded ? "true" : "false"}
+			style={{ "--q-subagent-tone": badge.tone } as CSSProperties}
 		>
-			<header
-				style={{
-					display: "flex",
-					alignItems: "center",
-					gap: 8,
-					marginBottom: text.length > 0 ? 6 : 0,
-					fontFamily: '"JetBrains Mono", monospace',
-					fontSize: 11,
-					letterSpacing: "0.04em",
-					color: "var(--fg-muted)",
-					flexWrap: "wrap",
-				}}
-			>
-				<span style={{ color: badge.tone }}>
+			<header className="q-subagent-live-head">
+				<span className="q-subagent-live-mark">
 					{isLive ? "▪" : status === "completed" ? "▢" : "✕"}
 				</span>
-				<Link
-					href={detailHref}
-					style={{
-						color: "var(--fg)",
-						textDecoration: "none",
-						fontWeight: 500,
-					}}
-					data-testid={`subagent-live-link-${agentId}`}
-				>
-					{agentId}
-				</Link>
-				<span style={{ color: badge.tone }}>{badge.label}</span>
-				<span style={{ marginLeft: "auto" }}>{formatDuration(elapsed)}</span>
+				{detailAvailable ? (
+					<Link
+						href={detailHref}
+						className="q-subagent-live-title"
+						data-testid={`subagent-live-link-${agentId}`}
+						title={agentId}
+					>
+						{label}
+					</Link>
+				) : (
+					<span
+						className="q-subagent-live-title"
+						data-testid={`subagent-live-title-${agentId}`}
+						title={`${agentId} · detail unavailable`}
+					>
+						{label}
+					</span>
+				)}
+				<span className="q-subagent-live-status">{badge.label}</span>
+				<span className="q-subagent-live-elapsed">{formatDuration(elapsed)}</span>
 				{usage != null && usage.totalTokens > 0 ? (
 					<span
 						title={`输入 · in ${usage.inputTokens} / 输出 · out ${usage.outputTokens}`}
 						data-testid={`subagent-tokens-${agentId}`}
+						className="q-subagent-live-tokens"
 					>
 						{usage.totalTokens} tok
 					</span>
 				) : null}
+				<div className="q-subagent-live-actions">
+					<button
+						type="button"
+						className="q-subagent-live-action"
+						onClick={() => setExpanded((prev) => !prev)}
+						aria-expanded={expanded}
+					>
+						{expanded ? "收起" : "展开"}
+					</button>
+					{detailAvailable ? (
+						<Link className="q-subagent-live-action" href={detailHref} title={agentId}>
+							详情
+						</Link>
+					) : null}
+				</div>
 			</header>
-			<div
-				style={{
-					fontFamily: '"Noto Sans SC", sans-serif',
-					color: "var(--fg-muted)",
-					fontSize: 11,
-					marginBottom: text.length > 0 ? 6 : 0,
-				}}
-			>
-				任务 · task：{task}
-			</div>
-			{text.length > 0 ? (
+			{showPreview ? (
 				<div
-					className="q-md"
-					style={{
-						margin: 0,
-						maxHeight: 240,
-						overflow: "auto",
-						fontFamily: '"Noto Sans SC", sans-serif',
-						fontSize: 12,
-						lineHeight: 1.55,
-						color: "var(--fg)",
-					}}
+					ref={previewRef}
+					className="q-subagent-live-preview q-md"
+					data-has-output={text.length > 0 ? "true" : "false"}
+					data-tail-scroll={isLive && !expanded ? "true" : "false"}
 				>
 					<Streamdown
 						mode={isLive ? "streaming" : "static"}
 						parseIncompleteMarkdown
 						controls={{ table: false, code: false, mermaid: false }}
 					>
-						{text}
+						{preview}
 					</Streamdown>
 					{isLive ? <span className="q-stream-cursor" /> : null}
 				</div>

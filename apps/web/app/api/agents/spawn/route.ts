@@ -9,8 +9,10 @@ import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { streamText } from "ai";
 import { z } from "zod";
 
+import { deriveAgentDisplayName } from "@/lib/agent-display-name";
 import { agentRegistry, shortId } from "@/lib/agent-registry";
 import { getAgentService } from "@/lib/agent-service-client";
+import { rewriteUserIntentText } from "@/lib/user-intent-rewrite";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -44,11 +46,15 @@ export async function POST(req: Request): Promise<Response> {
 	}
 
 	const agentId = `subagent-${shortId()}`;
+	const taskRewrite = rewriteUserIntentText(parsed.task);
+	const effectiveTask = taskRewrite.normalizedText;
+	const displayName = deriveAgentDisplayName(effectiveTask);
 	agentRegistry.register({
 		id: agentId,
 		kind: "subagent",
 		parentId: parsed.parentId ?? "main",
-		task: parsed.task,
+		displayName,
+		task: effectiveTask,
 		status: "running",
 	});
 	// Task #30 (minimal slice): shadow-register the subagent in the
@@ -68,7 +74,7 @@ export async function POST(req: Request): Promise<Response> {
 				svc.createSession({
 					origin: "api",
 					id: agentId,
-					title: parsed.task.slice(0, 80),
+					title: displayName,
 					// `parsed.parentId` is already `string | undefined`
 					// (Zod `.optional()`) — no `?? undefined` shim. Distinct
 					// from line 50's agent-registry default of "main":
@@ -77,7 +83,7 @@ export async function POST(req: Request): Promise<Response> {
 					// at the top level until the parent chat session is also
 					// AgentService-tracked in a future slice).
 					parentId: parsed.parentId,
-					task: parsed.task,
+					task: effectiveTask,
 				});
 			} catch {
 				/* session id collision — already registered by a concurrent call; safe to ignore */
@@ -89,7 +95,7 @@ export async function POST(req: Request): Promise<Response> {
 
 	const apiKey = process.env.DEEPSEEK_API_KEY ?? "";
 	if (apiKey.length === 0) {
-		return mockStream(agentId, parsed.task);
+		return mockStream(agentId, effectiveTask);
 	}
 
 	try {
@@ -100,8 +106,8 @@ export async function POST(req: Request): Promise<Response> {
 		});
 		const result = streamText({
 			model: provider(DEEPSEEK_MODEL),
-			system: `你是 Quilin 派遣的子代理(subagent ${agentId})。任务: ${parsed.task}。完成后简要汇报结果给主代理,语气专业精炼。`,
-			messages: [{ role: "user", content: parsed.task }],
+			system: `你是 Quilin 派遣的子代理「${displayName}」(id: ${agentId})。任务: ${effectiveTask}。如果任务里有明显中文同音/输入法错误,先按自然语义纠正后再搜索。完成后简要汇报结果给主代理,语气专业精炼。`,
+			messages: [{ role: "user", content: effectiveTask }],
 			maxRetries: 0,
 		});
 		// Mirror textStream into registry (background, doesn't block response)
@@ -117,6 +123,7 @@ export async function POST(req: Request): Promise<Response> {
 		})();
 		const response = result.toUIMessageStreamResponse();
 		response.headers.set("x-agent-id", agentId);
+		response.headers.set("x-agent-display-name", encodeURIComponent(displayName));
 		response.headers.set("x-stream-mode", "deepseek");
 		return response;
 	} catch (error) {
@@ -129,7 +136,8 @@ export async function POST(req: Request): Promise<Response> {
 }
 
 function mockStream(agentId: string, task: string): Response {
-	const text = `[mock subagent ${agentId}] 已完成任务: ${task}`;
+	const displayName = deriveAgentDisplayName(task);
+	const text = `[mock subagent ${displayName}] 已完成任务: ${task}`;
 	const encoder = new TextEncoder();
 	const messageId = `msg-${shortId()}`;
 	const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -159,6 +167,7 @@ function mockStream(agentId: string, task: string): Response {
 			"content-type": "text/event-stream; charset=utf-8",
 			"cache-control": "no-store, no-transform",
 			"x-agent-id": agentId,
+			"x-agent-display-name": encodeURIComponent(displayName),
 			"x-stream-mode": "mock",
 			"x-vercel-ai-ui-message-stream": "v1",
 		},

@@ -16,7 +16,9 @@ import {
 	type ToolCallStatus,
 } from "@/components/conversation/ToolCall";
 import { Composer } from "@/components/shell/Composer";
+import { deriveAgentDisplayName } from "@/lib/agent-display-name";
 import { loadSession, saveSession } from "@/lib/session-store";
+import { summarizeProcessBlock, summarizeToolCall } from "@/lib/tool-call-summary";
 import {
 	buildTranscriptBlocks,
 	extractToolCallId,
@@ -31,12 +33,18 @@ import {
 
 interface SpawnSubagentOutput {
 	readonly agentId: string;
+	readonly displayName?: string;
 	readonly task?: string;
+}
+
+interface QueuedUserMessage {
+	readonly id: string;
+	readonly text: string;
 }
 
 function extractSpawnedSubagent(
 	p: RawPart,
-): { readonly agentId: string; readonly task: string } | null {
+): { readonly agentId: string; readonly displayName: string; readonly task: string } | null {
 	if (toolNameOf(p) !== "spawn_subagent") return null;
 	const out = p.output;
 	if (typeof out !== "object" || out == null) return null;
@@ -49,7 +57,12 @@ function extractSpawnedSubagent(
 		typeof p.input === "object" && p.input != null && "task" in (p.input as object)
 			? String((p.input as { readonly task: unknown }).task ?? "")
 			: "";
-	return { agentId: candidate.agentId, task: taskFromOutput ?? taskFromInput };
+	const task = taskFromOutput ?? taskFromInput;
+	const displayName =
+		typeof candidate.displayName === "string" && candidate.displayName.trim().length > 0
+			? candidate.displayName.trim()
+			: deriveAgentDisplayName(task);
+	return { agentId: candidate.agentId, displayName, task };
 }
 
 export interface ConversationViewProps {
@@ -182,6 +195,14 @@ function ChatBody({
 		messages: storedMessages ? [...storedMessages] : undefined,
 		transport,
 	});
+	const streaming = status === "submitted" || status === "streaming";
+	const activeRunRef = useRef(streaming);
+	const queuedIdRef = useRef(0);
+	const [queuedSends, setQueuedSends] = useState<readonly QueuedUserMessage[]>([]);
+
+	useEffect(() => {
+		activeRunRef.current = streaming;
+	}, [streaming]);
 
 	// Mount hook:
 	//   1. Probe `/api/chat/status` to learn the server's current epoch
@@ -239,7 +260,6 @@ function ChatBody({
 		[router, sessionId],
 	);
 
-	const streaming = status === "submitted" || status === "streaming";
 	const sentInitial = useRef(false);
 
 	useEffect(() => {
@@ -251,6 +271,7 @@ function ChatBody({
 		}
 		if (!initialMessage) return;
 		sentInitial.current = true;
+		activeRunRef.current = true;
 		void sendMessage({ text: initialMessage });
 	}, [initialMessage, sendMessage, storedMessages]);
 
@@ -354,6 +375,33 @@ function ChatBody({
 		});
 	}, []);
 
+	const enqueueSend = useCallback(
+		(text: string): void => {
+			queuedIdRef.current += 1;
+			setQueuedSends((prev) => [
+				...prev,
+				{
+					id: `${sessionId}-queued-${queuedIdRef.current}`,
+					text,
+				},
+			]);
+			forceScrollToBottom();
+		},
+		[forceScrollToBottom, sessionId],
+	);
+
+	useEffect(() => {
+		if (streaming || activeRunRef.current || queuedSends.length === 0) return;
+		const next = queuedSends[0];
+		if (next == null) return;
+		activeRunRef.current = true;
+		setQueuedSends((prev) => prev.slice(1));
+		forceScrollToBottom();
+		void sendMessage({ text: next.text }).catch(() => {
+			activeRunRef.current = false;
+		});
+	}, [streaming, queuedSends, sendMessage, forceScrollToBottom]);
+
 	// Persist conversation to localStorage so /sessions page can list it.
 	useEffect(() => {
 		if (messages.length === 0) return;
@@ -362,11 +410,19 @@ function ChatBody({
 
 	const onSubmit = useCallback(
 		(text: string) => {
-			if (!text.trim()) return;
+			const trimmed = text.trim();
+			if (!trimmed) return;
 			forceScrollToBottom();
-			void sendMessage({ text });
+			if (streaming || activeRunRef.current || queuedSends.length > 0) {
+				enqueueSend(trimmed);
+				return;
+			}
+			activeRunRef.current = true;
+			void sendMessage({ text: trimmed }).catch(() => {
+				activeRunRef.current = false;
+			});
 		},
-		[sendMessage, forceScrollToBottom],
+		[sendMessage, forceScrollToBottom, streaming, queuedSends.length, enqueueSend],
 	);
 
 	return (
@@ -380,9 +436,13 @@ function ChatBody({
 				{messages.map((m: UIMessage, idx: number) => (
 					<TurnMessage
 						key={m.id}
+						sessionId={sessionId}
 						message={m}
 						streaming={streaming && idx === messages.length - 1 && m.role === "assistant"}
 					/>
+				))}
+				{queuedSends.map((queued, idx) => (
+					<QueuedUserTurn key={queued.id} message={queued} position={idx + 1} />
 				))}
 				{/* Bottom sentinel for auto-scroll. The document scrolls (not q-view),
 				    so we anchor scrollIntoView() to this empty element at the end. */}
@@ -407,6 +467,28 @@ function ChatBody({
 				onSelectAgent={onSelectAgent}
 			/>
 		</main>
+	);
+}
+
+function QueuedUserTurn({
+	message,
+	position,
+}: {
+	readonly message: QueuedUserMessage;
+	readonly position: number;
+}): React.ReactElement {
+	return (
+		<article className="q-turn" data-role="user" data-state="queued">
+			<div className="q-turn-label">
+				<span>you</span>
+				<span className="dot">·</span>
+				<span className="cjk-tag">你</span>
+				<span className="q-queued-badge">已排队 · queued {position}</span>
+			</div>
+			<div className="q-turn-body">
+				<p style={{ whiteSpace: "pre-wrap" }}>{message.text}</p>
+			</div>
+		</article>
 	);
 }
 
@@ -531,14 +613,16 @@ function ToolGroup({ item }: { readonly item: ToolGroupItem }): React.ReactEleme
 		>
 			{count > 1 ? (
 				<div className="q-tool-call-group-list">
-					{item.calls.map((part, idx) => (
+					{item.calls.map((part) => (
 						<details
 							key={extractToolCallId(part) ?? `${name}-${stableToolPartKey(part)}`}
 							className="q-tool-call-subcall"
 						>
 							<summary>
-								<span>调用 {idx + 1}</span>
-								<span>{toolStatusOf(part.state)}</span>
+								<span className="q-tool-call-subcall-title">{summarizeToolCall(part)}</span>
+								<span className={`q-tool-call-subcall-status ${toolStatusOf(part.state)}`}>
+									{toolStatusOf(part.state)}
+								</span>
 							</summary>
 							<ToolCallDetails part={part} />
 						</details>
@@ -558,8 +642,19 @@ function ProcessBlockView({
 	readonly block: ProcessBlock;
 	readonly streaming: boolean;
 }): React.ReactElement {
+	const autoScrollKey = block.items
+		.map((item) => {
+			if (item.type === "reasoning") return `r:${item.part.text?.length ?? 0}`;
+			return `t:${item.name}:${item.calls.map(stableToolPartKey).join(",")}`;
+		})
+		.join("|");
 	return (
-		<Process title="过程 · process" defaultOpen={streaming} status={streaming ? "running" : "done"}>
+		<Process
+			title={summarizeProcessBlock(block, streaming)}
+			autoScrollKey={autoScrollKey}
+			defaultOpen={streaming}
+			status={streaming ? "running" : "done"}
+		>
 			{block.items.map((item, idx) => {
 				if (item.type === "reasoning") {
 					return (
@@ -606,9 +701,11 @@ function MarkdownTextBlock({
 }
 
 function TurnMessage({
+	sessionId,
 	message,
 	streaming,
 }: {
+	readonly sessionId: string;
 	readonly message: UIMessage;
 	readonly streaming: boolean;
 }): React.ReactElement {
@@ -655,9 +752,23 @@ function TurnMessage({
 				{toolParts.length > 0
 					? toolParts
 							.map(extractSpawnedSubagent)
-							.filter((s): s is { readonly agentId: string; readonly task: string } => s != null)
+							.filter(
+								(
+									s,
+								): s is {
+									readonly agentId: string;
+									readonly displayName: string;
+									readonly task: string;
+								} => s != null,
+							)
 							.map((s) => (
-								<SubagentLiveProgress key={`live-${s.agentId}`} agentId={s.agentId} task={s.task} />
+								<SubagentLiveProgress
+									key={`live-${s.agentId}`}
+									agentId={s.agentId}
+									displayName={s.displayName}
+									parentSessionId={sessionId}
+									task={s.task}
+								/>
 							))
 					: null}
 				{isUser && (body.length > 0 || !hasProcess) ? (

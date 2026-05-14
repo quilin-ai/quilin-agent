@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { agentDisplayName } from "@/lib/agent-display-name";
 import { formatDuration } from "@/lib/format";
 import type { AgentSummary } from "@/lib/schemas";
 
@@ -151,8 +152,11 @@ export function AgentSwitcher({
 	).length;
 	const totalSubagentCount = agents.filter((a) => a.kind !== "main").length;
 
+	const currentAgent = rawAgents.find((a) => a.id === currentAgentId);
 	const currentLabel =
-		currentAgentId && currentAgentId !== "main" ? `子代理 · ${currentAgentId}` : "主代理";
+		currentAgentId && currentAgentId !== "main"
+			? `子代理 · ${agentDisplayName("subagent", currentAgent?.task ?? null, currentAgent?.displayName)}`
+			: "主代理";
 
 	const doSpawn = useCallback(async () => {
 		const trimmed = spawnTask.trim();
@@ -226,22 +230,25 @@ export function AgentSwitcher({
 				</div>
 				{agents.map((agent) => {
 					const active = agent.id === currentAgentId;
+					const displayName = agentDisplayName(agent.kind, agent.task, agent.displayName);
 					return (
 						<button
 							type="button"
 							key={agent.id}
 							className={`q-agent-row ${rowStatusClass(agent)}${active ? " active" : ""}`}
 							data-agent={agent.id}
+							title={agent.id}
 							onClick={() => {
 								onSelect?.(agent.id);
 								setOpen(false);
 							}}
 							role="option"
 							aria-selected={active}
+							aria-label={`${displayName} · ${agent.id}`}
 						>
 							<span className="agent-status">{statusGlyph(agent.status)}</span>
 							<span className="agent-name">
-								{agent.id}
+								{displayName}
 								{agent.task ? <span className="agent-task">{agent.task}</span> : null}
 							</span>
 							<span className="agent-time">{formatDuration(agent.elapsedMs)}</span>

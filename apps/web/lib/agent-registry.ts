@@ -1,3 +1,5 @@
+import { agentDisplayName } from "@/lib/agent-display-name";
+
 /**
  * In-memory agent registry for the demo subagent spawn feature.
  * Lives in the Next.js process (module-singleton survives between requests
@@ -28,6 +30,7 @@ export interface AgentRecord {
 	readonly id: string;
 	readonly kind: AgentKind;
 	readonly parentId: string | null;
+	readonly displayName: string;
 	readonly task: string | null;
 	status: AgentStatus;
 	readonly startedAt: string;
@@ -41,6 +44,7 @@ export interface AgentSummary {
 	readonly id: string;
 	readonly kind: AgentKind;
 	readonly parentId: string | null;
+	readonly displayName?: string;
 	readonly task: string | null;
 	readonly status: AgentStatus;
 	readonly startedAt: string;
@@ -61,6 +65,7 @@ class InMemoryAgentRegistry {
 			id: "main",
 			kind: "main",
 			parentId: null,
+			displayName: agentDisplayName("main", null),
 			task: null,
 			status: "running",
 			startedAt: nowIso(),
@@ -78,12 +83,13 @@ class InMemoryAgentRegistry {
 	register(
 		input: Omit<
 			AgentRecord,
-			"startedAt" | "lastHeartbeatAt" | "streamedText" | "toolEvents" | "usage"
-		>,
+			"startedAt" | "lastHeartbeatAt" | "streamedText" | "toolEvents" | "usage" | "displayName"
+		> & { readonly displayName?: string | null },
 	): AgentRecord {
 		const started = nowIso();
 		const record: AgentRecord = {
 			...input,
+			displayName: agentDisplayName(input.kind, input.task, input.displayName),
 			startedAt: started,
 			lastHeartbeatAt: started,
 			streamedText: "",
@@ -128,6 +134,7 @@ class InMemoryAgentRegistry {
 			id: r.id,
 			kind: r.kind,
 			parentId: r.parentId,
+			displayName: r.displayName,
 			task: r.task,
 			status: r.status,
 			startedAt: r.startedAt,

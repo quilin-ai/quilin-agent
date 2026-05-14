@@ -30,6 +30,7 @@ export async function GET(_req: Request, ctx: RouteContext): Promise<Response> {
 				id: record.id,
 				kind: record.kind,
 				parentId: record.parentId,
+				displayName: record.displayName,
 				task: record.task,
 				status: record.status,
 				startedAt: record.startedAt,
