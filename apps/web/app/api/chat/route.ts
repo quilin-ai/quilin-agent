@@ -59,6 +59,7 @@ import {
 	pumpFullStreamIntoAgentService,
 	SSE_DONE_FRAME,
 } from "@/lib/sse-translator";
+import { makeAskUserQuestionTool } from "@/lib/tools/ask-user-question";
 import { getToolsCatalog } from "@/lib/tools-loader";
 import {
 	intentRewriteSystemNote,
@@ -838,6 +839,7 @@ export async function POST(req: Request): Promise<Response> {
 		// 空值的早返回也在外层处理 (line 485)。这里复用而非重新声明,避免
 		// dead code + shadow 变量 (Reviewer I MEDIUM #1, 2026-05-13)。
 		const spawnSubagentTool = makeSpawnSubagentTool(sessionId);
+		const askUserQuestionTool = makeAskUserQuestionTool({ sessionId, service });
 		const builtinTools = (await getToolsCatalog()).adapted;
 		const result = streamText({
 			model: provider(DEEPSEEK_MODEL),
@@ -848,6 +850,7 @@ export async function POST(req: Request): Promise<Response> {
 				web_fetch: inlineWebFetchTool,
 				spawn_subagent: spawnSubagentTool,
 				wait_for_subagents: waitForSubagentsTool,
+				ask_user_question: askUserQuestionTool,
 			},
 			stopWhen: stepCountIs(15),
 			abortSignal: meta.abort.signal,
