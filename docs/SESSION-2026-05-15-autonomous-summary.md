@@ -20,6 +20,7 @@
 | 6 | `901e989` | feat(quilin-mem): memory_backfill_kg MCP tool — UX-4 Slice 2 | 1 round, 2 reviewers |
 | 7 | `d04cc14` | chore(quilin-mem): ruff cleanups + 1 new SSRF malformed-URL test | — |
 | 8 | `2b0f64a` | fix(web): per-ask capability token auth + 2 wire bugs (task #15) | 3 rounds, 6 reviewers |
+| 9 | `0c09867` | fix(quilin-mem): fcntl lock for Python-side user.md writes (task #16 option C) | 2 rounds, 4 reviewers |
 
 Plus 10 doc / STATUS commits between feature commits to keep handoff clean.
 

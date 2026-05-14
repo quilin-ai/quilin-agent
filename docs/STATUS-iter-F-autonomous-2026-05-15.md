@@ -32,6 +32,7 @@
 | UX-4 KG Slice 1 — kg_extractor.py (LLM 三元组抽取 + 反幻觉 + 反注入 + SSRF guard) + 28 tests + 3 轮 cross-review (0/0) | `b1e4a6d` | ✅ |
 | UX-4 KG Slice 2 — `memory_backfill_kg` MCP tool + kg_backfill.py 编排 + 12 tests + 1 轮 cross-review (0/0) | `901e989` | ✅ |
 | Task #15 per-ask 128-bit capability token auth + 2 bonus bug fixes(timeout-forge / eviction-kind)+ 3 轮 cross-review (0/0) | `2b0f64a` | ✅ |
+| Task #16 option C — Python fcntl advisory lock on user.md(Python-vs-Python 关闭;TS-vs-Python 仍 documented gap)+ 3 new tests(含 falsifying)+ 2 轮 cross-review(0/0) | `0c09867` | ✅(option C 落地;option A TS 侧待续) |
 
 Iter F 持久化故事 + 交互 primitives 前两片 + 用户画像 self-evolution 雏形 + 移动端 + 文档全部落库。
 
