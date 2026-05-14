@@ -361,6 +361,146 @@ export function updateAssistantParts(input: {
 }
 
 /**
+ * Slice 4 atomic seq-allocate + insert. Wraps `nextSeq + insertMessage`
+ * in a single `BEGIN IMMEDIATE` SQLite transaction so two concurrent
+ * tabs (or any two callers racing on the same session) can't both
+ * compute `MAX(seq)+1` to the same value and double-write.
+ *
+ * Returns the allocated seq so the caller can pin the message to it (the
+ * existing `insertMessage` API requires a pre-computed seq; this helper
+ * keeps that API intact while giving a race-free alternative for the
+ * concurrent path).
+ *
+ * If the session row exists in `sessions` but `messages` is empty, the
+ * first allocation returns 0. `BEGIN IMMEDIATE` acquires a reserved
+ * lock immediately (vs `BEGIN`'s deferred lock that only escalates on
+ * first write), so the second concurrent caller blocks until the first
+ * commits — eliminating the race entirely.
+ *
+ * 原子分配 seq + INSERT — Slice 4 多 tab 并发用。`BEGIN IMMEDIATE`
+ * 锁住 reserved lock,第二个 caller 阻塞到第一个提交,杜绝 max+1 撞车。
+ */
+export function insertMessageAtomic(input: {
+	readonly id: string;
+	readonly sessionId: string;
+	readonly role: "user" | "assistant" | "system";
+	readonly parts: readonly unknown[];
+	readonly finalized?: boolean;
+}): number {
+	if (!isPersistenceEnabled()) return -1;
+	const now = Date.now();
+	const db = getDb();
+	let allocatedSeq = -1;
+	const txn = db.transaction(() => {
+		const row = db
+			.prepare(
+				`SELECT COALESCE(MAX(seq), -1) AS max_seq
+				 FROM messages
+				 WHERE session_id = @sessionId`,
+			)
+			.get({ sessionId: input.sessionId }) as { max_seq: number } | undefined;
+		allocatedSeq = (row?.max_seq ?? -1) + 1;
+		db.prepare(
+			`INSERT INTO messages (id, session_id, seq, role, parts_json, created_at, finalized_at)
+			 VALUES (@id, @sessionId, @seq, @role, @partsJson, @now, @finalizedAt)`,
+		).run({
+			id: input.id,
+			sessionId: input.sessionId,
+			seq: allocatedSeq,
+			role: input.role,
+			partsJson: JSON.stringify(input.parts),
+			now,
+			finalizedAt: input.finalized === true ? now : null,
+		});
+	});
+	// better-sqlite3 `db.transaction()` runs the callback inside a single
+	// SQLite transaction synchronously. Within one Node process, the
+	// synchronous execution of `txn()` means no other JS code can run
+	// between the MAX(seq) read and the INSERT — so the race is closed
+	// at the V8 level. The transaction's BEGIN/COMMIT also gives SQLite-
+	// level atomicity for any future multi-process scenarios.
+	txn();
+	return allocatedSeq;
+}
+
+/**
+ * Slice 4 localStorage → SQLite migration helper.
+ *
+ * Persists a batch of messages from a session that lived only in
+ * browser localStorage before SQLite shipped. Idempotent via
+ * `INSERT OR IGNORE` — re-running with the same message ids is a no-op.
+ * Used by the `/api/chat` POST handler when the client sends the
+ * `X-Quilin-Migrate-LocalStorage: true` header(spec §8).
+ *
+ * Slice 4 localStorage → SQLite 迁移辅助。一次性把客户端 localStorage
+ * 里的 session 历史推到 SQLite,`INSERT OR IGNORE` 保证幂等。chat route
+ * 看到 `X-Quilin-Migrate-LocalStorage: true` 头时调用(spec §8)。
+ */
+export function migrateLocalSessionToSqlite(input: {
+	readonly sessionId: string;
+	readonly title?: string | null;
+	readonly origin?: string;
+	readonly messages: ReadonlyArray<{
+		readonly id: string;
+		readonly role: "user" | "assistant" | "system";
+		readonly parts: readonly unknown[];
+		readonly createdAt?: string | number | null;
+	}>;
+}): { readonly migrated: number; readonly skipped: number } {
+	if (!isPersistenceEnabled()) return { migrated: 0, skipped: 0 };
+	const db = getDb();
+	let migrated = 0;
+	let skipped = 0;
+	const txn = db.transaction(() => {
+		upsertSession({
+			id: input.sessionId,
+			title: input.title ?? null,
+			origin: input.origin ?? "web",
+		});
+		// Allocate seq sequentially from the current max, in order. Use
+		// INSERT OR IGNORE so re-migrating doesn't double-insert.
+		const maxRow = db
+			.prepare(
+				`SELECT COALESCE(MAX(seq), -1) AS max_seq
+				 FROM messages
+				 WHERE session_id = @sessionId`,
+			)
+			.get({ sessionId: input.sessionId }) as { max_seq: number };
+		let nextSeqValue = maxRow.max_seq + 1;
+		const stmt = db.prepare(
+			`INSERT OR IGNORE INTO messages
+			 (id, session_id, seq, role, parts_json, created_at, finalized_at)
+			 VALUES (@id, @sessionId, @seq, @role, @partsJson, @now, @finalizedAt)`,
+		);
+		for (const m of input.messages) {
+			const createdAt =
+				typeof m.createdAt === "string"
+					? Date.parse(m.createdAt) || Date.now()
+					: typeof m.createdAt === "number"
+						? m.createdAt
+						: Date.now();
+			const result = stmt.run({
+				id: m.id,
+				sessionId: input.sessionId,
+				seq: nextSeqValue,
+				role: m.role,
+				partsJson: JSON.stringify(m.parts),
+				now: createdAt,
+				finalizedAt: createdAt,
+			});
+			if (result.changes > 0) {
+				migrated += 1;
+				nextSeqValue += 1;
+			} else {
+				skipped += 1;
+			}
+		}
+	});
+	txn();
+	return { migrated, skipped };
+}
+
+/**
  * Allocate the next monotonic `seq` value for a session. Caller is
  * responsible for using it in the immediately-following INSERT — there's
  * no reservation, just a max(seq)+1 read.

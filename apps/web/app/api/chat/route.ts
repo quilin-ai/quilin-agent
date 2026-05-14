@@ -44,6 +44,7 @@ import {
 	insertMessage,
 	insertMessageIfAbsent,
 	isPersistenceEnabled,
+	migrateLocalSessionToSqlite,
 	nextSeq,
 	upsertSession,
 } from "@/lib/sessions-db";
@@ -739,6 +740,36 @@ export async function POST(req: Request): Promise<Response> {
 		const persistenceOn = isPersistenceEnabled();
 		const assistantMessageId = `qmsg-${shortId()}`;
 		const startSeqForRecorder = startSeq;
+		// Slice 4 localStorage → SQLite migration (spec §8). Client opts in
+		// by sending `X-Quilin-Migrate-LocalStorage: true` with the full
+		// body.messages history. We persist everything except the LAST entry
+		// (that's the new user prompt, handled by the regular write path
+		// below to keep title/preview derivation consistent). Returns the
+		// count back via `X-Quilin-Migrated` header.
+		//
+		// Slice 4 localStorage→SQLite 迁移(spec §8):client 带迁移 header 时
+		// 把 body.messages(末项除外,新 user prompt 走主路径)整体迁移过来。
+		const wantsMigration = req.headers.get("x-quilin-migrate-localstorage") === "true";
+		let migratedCount = 0;
+		if (persistenceOn && wantsMigration && body.messages.length > 1) {
+			try {
+				const historical = body.messages.slice(0, -1);
+				const result = migrateLocalSessionToSqlite({
+					sessionId,
+					title,
+					origin: "web",
+					messages: historical.map((m, i) => ({
+						id: m.id ?? `qmsg-migrated-${i}-${shortId()}`,
+						role: (m.role ?? "user") as "user" | "assistant" | "system",
+						parts: (m.parts ?? []) as readonly unknown[],
+					})),
+				});
+				migratedCount = result.migrated;
+			} catch (e) {
+				console.log(`[CHAT ${sessionId}] localStorage migration failed: ${String(e)}`);
+				// migration is best-effort; continue with normal flow
+			}
+		}
 		if (persistenceOn) {
 			try {
 				upsertSession({ id: sessionId, title, origin: "web" });
@@ -882,14 +913,19 @@ export async function POST(req: Request): Promise<Response> {
 				});
 		});
 
+		const responseHeaders: Record<string, string> = {
+			// Strict-epoch handshake: server's current epoch surfaced
+			// as a response header so non-`useChat` consumers (curl
+			// / admin probe) can read it without a separate call.
+			"x-quilin-epoch": serverEpoch,
+		};
+		// Slice 4 spec §8 — echo migrated count when the client opted in.
+		if (wantsMigration) {
+			responseHeaders["x-quilin-migrated"] = String(migratedCount);
+		}
 		return result.toUIMessageStreamResponse({
 			sendReasoning: true,
-			headers: {
-				// Strict-epoch handshake: server's current epoch surfaced
-				// as a response header so non-`useChat` consumers (curl
-				// / admin probe) can read it without a separate call.
-				"x-quilin-epoch": serverEpoch,
-			},
+			headers: responseHeaders,
 			onError: (err) => (err instanceof Error ? err.message : String(err)),
 		});
 	}
