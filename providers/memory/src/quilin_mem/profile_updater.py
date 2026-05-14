@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -145,6 +146,48 @@ def _default_user_md(profile_id: str = _DEFAULT_PROFILE_ID) -> str:
     return _format_user_md(profile_id, {}, _utcnow().isoformat())
 
 
+_OBSERVATIONS_HEADING = "## Quilin 观察 / Agent-observed notes"
+
+
+def _extract_observations_section(existing: str) -> str | None:
+    """Pull the ``## Quilin 观察 / Agent-observed notes`` section out of an
+    existing user.md so ``sync_user_md`` can preserve it across overwrites.
+
+    The TS-side ``profile-evolution.ts`` appends timestamped observations
+    to this section without round-tripping to SQLite (see task #14). If
+    we rewrote the file from SQLite alone, those appends would be lost.
+    This helper extracts the section verbatim (heading inclusive,
+    up to the next H2 boundary or EOF) so the caller can re-append it.
+
+    Returns ``None`` if the section is absent — the common case for
+    freshly-generated templates from ``_format_user_md`` (which doesn't
+    emit this section).
+
+    从已有 user.md 里抠出 "## Quilin 观察 / Agent-observed notes" 段,以便
+    ``sync_user_md`` 覆盖时保留 TS 端追加的观察。未找到该段返回 None。
+    """
+    lines = existing.splitlines(keepends=True)
+    start_idx: int | None = None
+    for i, line in enumerate(lines):
+        if line.strip() == _OBSERVATIONS_HEADING:
+            start_idx = i
+            break
+    if start_idx is None:
+        return None
+    end_idx = len(lines)
+    for j in range(start_idx + 1, len(lines)):
+        stripped = lines[j].strip()
+        # Next H2 boundary (or anything starting with `## `) closes the
+        # section. The closing fence ``---`` from legacy YAML also closes.
+        if stripped.startswith("## ") and stripped != _OBSERVATIONS_HEADING:
+            end_idx = j
+            break
+        if stripped == "---":
+            end_idx = j
+            break
+    return "".join(lines[start_idx:end_idx])
+
+
 def _is_auto_generated_user_md(path: Path) -> bool:
     """Detect whether ``user.md`` is in the auto-generated shape produced
     by ``_format_user_md``. Hand-edited files (no marker comment) return
@@ -245,18 +288,27 @@ class ProfileUpdater:
 
         手动编辑过的 user.md(无 schema_version YAML 头)不会被覆盖。
 
-        KNOWN ISSUE (pre-existing, tracked separately): the TS-side
-        ``profile-evolution.ts`` appends observations to the ``## Quilin 观察``
-        section of an auto-generated user.md WITHOUT writing them back to
-        SQLite. If this method runs after such a TS append, it will
-        rewrite the file from SQLite alone and silently drop those
-        observations. Fix path requires either (a) round-tripping TS
-        observations into SQLite before this overwrite, or (b) making
-        this method an append-only mirror to a dedicated section.
-        See ``docs/03-memory/profile-pure-markdown-migration.md`` §race.
+        Race fix (task #14, 2026-05-15): the TS-side ``profile-evolution.ts``
+        appends observations to the ``## Quilin 观察 / Agent-observed notes``
+        section of an auto-generated user.md without writing back to SQLite.
+        Before overwriting, this method now extracts that section (if
+        present) and re-appends it to the freshly generated content, so
+        TS appends survive Python-side observer signal applies.
+
+        Race 修复(task #14):TS ``profile-evolution.ts`` 在 ``## Quilin 观察``
+        段追加用户观察但不回写 SQLite。覆盖前抠出该段并保留到新内容尾部。
         """
         if _USER_MD_PATH.exists() and not _is_auto_generated_user_md(_USER_MD_PATH):
             return
+
+        preserved_observations: str | None = None
+        if _USER_MD_PATH.exists():
+            try:
+                existing = _USER_MD_PATH.read_text(encoding="utf-8", errors="replace")
+                preserved_observations = _extract_observations_section(existing)
+            except OSError:
+                preserved_observations = None
+
         profile = self._store.get_profile(profile_id)
         _USER_MD_DIR.mkdir(parents=True, exist_ok=True)
         if profile is None:
@@ -269,7 +321,22 @@ class ProfileUpdater:
                 updated_by=profile.updated_by,
                 scope=profile.scope,
             )
-        _USER_MD_PATH.write_text(content, encoding="utf-8")
+        if preserved_observations is not None and preserved_observations.strip():
+            separator = "" if content.endswith("\n\n") else ("\n" if content.endswith("\n") else "\n\n")
+            content = f"{content}{separator}{preserved_observations.rstrip()}\n"
+        # Atomic write: write to a temp file in the same directory, then
+        # os.replace into place. Prevents partial-file readers from seeing
+        # a half-written user.md if the process crashes mid-write.
+        # NOTE residual race (task #14, second-pass review 2026-05-15): a
+        # concurrent TS-side `appendFile` between this method's read at
+        # line 306 and the rename below can still lose 1 observation. The
+        # full fix would require cross-language flock coordination or
+        # moving observations into SQLite. For the current local single-
+        # user threat model (sub-second windows, recoverable data) we
+        # accept the residual window and prefer atomicity over locks.
+        tmp_path = _USER_MD_PATH.with_suffix(_USER_MD_PATH.suffix + ".tmp")
+        tmp_path.write_text(content, encoding="utf-8")
+        os.replace(tmp_path, _USER_MD_PATH)
 
     def reset(self) -> None:
         self._store._reset()

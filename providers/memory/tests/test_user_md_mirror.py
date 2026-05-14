@@ -148,6 +148,153 @@ def test_metadata_value_rejects_control_chars() -> None:
             profile.to_markdown()
 
 
+def test_sync_user_md_preserves_quilin_observations_section(tmp_path: Path) -> None:
+    """Race fix: ``sync_user_md`` must preserve any TS-appended observations
+    in the ``## Quilin 观察 / Agent-observed notes`` section across rewrites.
+
+    Without this, the Python side's full-overwrite-from-SQLite would
+    silently wipe the TS profile-evolution.ts appends every time an
+    observer signal fires (task #14).
+    """
+    from quilin_mem.profile_store import ProfileStore, emit_profile_signal
+    from quilin_mem.profile_updater import ProfileUpdater
+
+    store = ProfileStore(str(tmp_path / "memory.db"))
+    updater = ProfileUpdater(store)
+    user_md_dir = tmp_path / ".quilin"
+    user_md_path = user_md_dir / "user.md"
+
+    import quilin_mem.profile_updater as pu
+
+    orig_dir = pu._USER_MD_DIR
+    orig_path = pu._USER_MD_PATH
+    pu._USER_MD_DIR = user_md_dir
+    pu._USER_MD_PATH = user_md_path
+    try:
+        # Step 1: bootstrap an auto-generated user.md.
+        updater.sync_user_md(profile_id="default")
+        first = user_md_path.read_text(encoding="utf-8")
+        assert first.startswith("<!-- quilin-profile schema=1 ")
+        # Template doesn't include observations section yet.
+        assert "## Quilin 观察" not in first
+
+        # Step 2: simulate the TS-side append — write the section back.
+        ts_appended = (
+            first
+            + "\n## Quilin 观察 / Agent-observed notes\n\n"
+            "- `2026-05-15T03:00:00.000Z` — 用户偏好简短回复\n"
+            "- `2026-05-15T03:05:00.000Z` — 用户在 ~/.quilin 路径下手写过几段\n"
+        )
+        user_md_path.write_text(ts_appended, encoding="utf-8")
+
+        # Step 3: trigger another observer signal → sync_user_md rewrites.
+        signal = emit_profile_signal(
+            "default",
+            {"communication_style": "terse and direct"},
+            source="observer",
+        )
+        updater.update(signal, who="l3a_observer", why="new finding")
+
+        # Step 4: observations must survive.
+        after = user_md_path.read_text(encoding="utf-8")
+        assert "## Quilin 观察 / Agent-observed notes" in after
+        assert "用户偏好简短回复" in after
+        assert "用户在 ~/.quilin 路径下手写过几段" in after
+        # And the new SQLite-driven finding is also reflected.
+        assert "terse and direct" in after
+    finally:
+        pu._USER_MD_DIR = orig_dir
+        pu._USER_MD_PATH = orig_path
+
+
+def test_extract_observations_section_returns_none_when_absent() -> None:
+    """Helper returns None for files lacking the observations heading."""
+    from quilin_mem.profile_updater import _extract_observations_section
+
+    content = (
+        "<!-- quilin-profile schema=1 -->\n\n"
+        "# 关于用户\n\n## 基本信息\n\n- foo: bar\n"
+    )
+    assert _extract_observations_section(content) is None
+
+
+def test_extract_observations_section_handles_heading_at_eof() -> None:
+    """Heading is the last line of the file (no content, no trailing newline) —
+    the helper should still return a non-None capture so sync_user_md can
+    decide whether to re-append it.
+    """
+    from quilin_mem.profile_updater import _extract_observations_section
+
+    content_no_trailing_nl = "# Title\n\n## Quilin 观察 / Agent-observed notes"
+    extracted = _extract_observations_section(content_no_trailing_nl)
+    assert extracted is not None
+    assert extracted.strip() == "## Quilin 观察 / Agent-observed notes"
+
+    content_with_trailing_nl = "# Title\n\n## Quilin 观察 / Agent-observed notes\n"
+    extracted_nl = _extract_observations_section(content_with_trailing_nl)
+    assert extracted_nl is not None
+    assert "## Quilin 观察 / Agent-observed notes" in extracted_nl
+
+
+def test_extract_observations_section_handles_crlf_line_endings() -> None:
+    """The helper must work for files saved with Windows CRLF line endings."""
+    from quilin_mem.profile_updater import _extract_observations_section
+
+    content = (
+        "# Title\r\n\r\n"
+        "## Quilin 观察 / Agent-observed notes\r\n\r\n"
+        "- observation with CRLF\r\n"
+        "\r\n"
+        "## 其他段落\r\n\r\n"
+        "should NOT appear\r\n"
+    )
+    extracted = _extract_observations_section(content)
+    assert extracted is not None
+    assert "observation with CRLF" in extracted
+    assert "should NOT appear" not in extracted
+
+
+def test_extract_observations_section_stops_at_legacy_yaml_fence() -> None:
+    """The helper must stop at a `---` line so a legacy YAML doc separator
+    doesn't get folded into the captured observations section.
+    """
+    from quilin_mem.profile_updater import _extract_observations_section
+
+    content = (
+        "# Title\n\n"
+        "## Quilin 观察 / Agent-observed notes\n\n"
+        "- observation one\n"
+        "\n"
+        "---\n\n"
+        "Footer that should NOT be captured.\n"
+    )
+    extracted = _extract_observations_section(content)
+    assert extracted is not None
+    assert "observation one" in extracted
+    assert "Footer" not in extracted
+
+
+def test_extract_observations_section_stops_at_next_h2() -> None:
+    """The helper must NOT eat content from a sibling H2 below it."""
+    from quilin_mem.profile_updater import _extract_observations_section
+
+    content = (
+        "# Title\n\n"
+        "## Quilin 观察 / Agent-observed notes\n\n"
+        "- observation 1\n"
+        "- observation 2\n"
+        "\n"
+        "## 其他段落 / Other\n\n"
+        "- should NOT be captured\n"
+    )
+    extracted = _extract_observations_section(content)
+    assert extracted is not None
+    assert "observation 1" in extracted
+    assert "observation 2" in extracted
+    assert "should NOT be captured" not in extracted
+    assert "其他段落" not in extracted
+
+
 def test_profile_body_parser_skips_empty_bold_keys() -> None:
     """A degenerate hand-edit line ``- **: value`` should not insert
     an empty-string key into the parsed profile.
