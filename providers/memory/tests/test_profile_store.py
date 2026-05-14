@@ -121,9 +121,10 @@ def test_update_applies_signal_and_writes_user_md(tmp_path: Path) -> None:
         # Verify user.md written
         assert user_md_path.exists()
         content = user_md_path.read_text(encoding="utf-8")
-        assert 'schema_version: 1' in content
+        assert content.startswith("<!-- quilin-profile schema=1 ")
         assert '"default"' in content
-        assert 'global_projection' in content
+        # Signal's scope defaults to "project", so the header echoes that.
+        assert 'scope=project' in content
         assert 'communication_style' in content
         assert 'concise progress updates' in content
     finally:
@@ -150,7 +151,7 @@ def test_sync_user_md_writes_minimal_template_when_no_profile(tmp_path: Path) ->
 
         assert user_md_path.exists()
         content = user_md_path.read_text(encoding="utf-8")
-        assert 'schema_version: 1' in content
+        assert content.startswith("<!-- quilin-profile schema=1 ")
         assert '# 关于用户' in content
         assert '## 基本信息' in content
         assert '## 偏好 / Preferences' in content
@@ -276,12 +277,14 @@ def test_user_md_format_contains_all_required_sections() -> None:
 
     content = pu._format_user_md("default", {"key": "value"}, "2026-05-07T00:00:00+00:00")
 
-    # Frontmatter
-    assert content.startswith("---\n")
-    assert "schema_version: 1" in content
+    # Pure-markdown header (HTML comment, not YAML)
+    assert content.startswith("<!-- quilin-profile schema=1 ")
     assert '"default"' in content
-    assert "global_projection" in content
-    assert "last_updated" in content
+    assert "scope=global_projection" in content
+    assert "updated_at=" in content
+    assert "updated_by=" in content
+    assert "sensitive_export=false" in content
+    assert "---\n" not in content[:64]  # NO YAML frontmatter
 
     # Required sections
     assert "# 关于用户" in content
@@ -292,6 +295,39 @@ def test_user_md_format_contains_all_required_sections() -> None:
     # Field rendering
     assert "**key**" in content
     assert '"value"' in content
+
+
+def test_is_auto_generated_detects_legacy_yaml_and_html_marker(tmp_path: Path) -> None:
+    """Both legacy YAML and new HTML-comment shape should be detected as auto-generated."""
+    import quilin_mem.profile_updater as pu
+
+    # New HTML-comment shape
+    html_path = tmp_path / "html.md"
+    html_path.write_text(
+        '<!-- quilin-profile schema=1 profile_id="x" scope=global_projection -->\n\n# X\n',
+        encoding="utf-8",
+    )
+    assert pu._is_auto_generated_user_md(html_path) is True
+
+    # Legacy YAML frontmatter shape
+    yaml_path = tmp_path / "yaml.md"
+    yaml_path.write_text(
+        '---\nschema_version: 1\nprofile_id: "x"\n---\n\n# X\n', encoding="utf-8"
+    )
+    assert pu._is_auto_generated_user_md(yaml_path) is True
+
+    # Hand-edited pure markdown (no marker, no YAML)
+    plain_path = tmp_path / "plain.md"
+    plain_path.write_text("# 用户画像 / User Profile\n\n手写的内容\n", encoding="utf-8")
+    assert pu._is_auto_generated_user_md(plain_path) is False
+
+    # YAML-looking start but missing schema_version → treat as user-authored
+    yaml_no_schema = tmp_path / "yaml_no_schema.md"
+    yaml_no_schema.write_text("---\ntitle: notes\n---\n\nbody\n", encoding="utf-8")
+    assert pu._is_auto_generated_user_md(yaml_no_schema) is False
+
+    # Nonexistent file
+    assert pu._is_auto_generated_user_md(tmp_path / "missing.md") is False
 
 
 def test_user_md_default_template_has_placeholder_sections(tmp_path: Path) -> None:

@@ -16,15 +16,58 @@ def _utcnow() -> datetime:
     return datetime.now(UTC)
 
 
-def _format_user_md(profile_id: str, non_sensitive: dict, updated_at: str) -> str:
-    """Format a UserProfile as the canonical user.md Markdown."""
-    frontmatter: dict[str, object] = {
-        "schema_version": 1,
-        "profile_id": profile_id,
-        "scope": "global_projection",
-        "last_updated": updated_at,
-    }
+_AUTO_MARKER = "<!-- quilin-profile"
 
+
+_FORBIDDEN_METADATA_CHARS = frozenset(("\x00", " ", " "))
+
+
+def _safe_metadata_value(raw: str) -> str:
+    """JSON-quote a metadata value and reject values that would corrupt
+    the surrounding HTML comment or produce a malformed file.
+
+    Rejects:
+    - ``-->`` substring: would early-terminate the comment and leak the
+      rest of the value into rendered markdown body.
+    - NUL byte (``\\x00``): truncates the file in some C-string contexts.
+    - Unicode line / paragraph separators (U+2028, U+2029): treated as
+      line terminators by some parsers; harmless for the comment scope
+      but produces malformed metadata.
+    """
+    if "-->" in raw:
+        raise ValueError(
+            "metadata value cannot contain '-->'; it would early-terminate "
+            "the user.md header comment"
+        )
+    bad = _FORBIDDEN_METADATA_CHARS.intersection(raw)
+    if bad:
+        codepoints = ", ".join(f"U+{ord(ch):04X}" for ch in sorted(bad))
+        raise ValueError(
+            f"metadata value contains forbidden control character(s): {codepoints}"
+        )
+    return json.dumps(raw)
+
+
+def _format_user_md(
+    profile_id: str,
+    non_sensitive: dict,
+    updated_at: str,
+    *,
+    updated_by: str = "profile_updater",
+    scope: str = "global_projection",
+) -> str:
+    """Format a UserProfile as canonical pure-markdown ``user.md``.
+
+    User directive 2026-05-15: drop YAML frontmatter, render the file as
+    pure markdown the user can read and edit. A single invisible HTML
+    comment at the top preserves round-trip metadata (schema / id / scope
+    / updated_at / updated_by / sensitive_export) so ``sync_from_markdown``
+    can parse the auto-generated shape back into a ``UserProfile``.
+
+    用户指示 2026-05-15:user.md 改用纯 markdown,不要 YAML frontmatter。
+    元数据通过顶部一行 HTML 注释保留,既不渲染又可机读。手动编辑的文件
+    不携带该注释 → ``sync_user_md`` 不会覆盖(见 ``_is_auto_generated_user_md``)。
+    """
     # Categorize non_sensitive fields into sections
     basic_info: dict[str, object] = {}
     preferences: dict[str, object] = {}
@@ -48,6 +91,22 @@ def _format_user_md(profile_id: str, non_sensitive: dict, updated_at: str) -> st
             habits[key] = value
         else:
             basic_info[key] = value
+
+    # Defensive: even callers that pass validated `scope` values get
+    # guarded against `-->` injection. Cheap and prevents footguns if
+    # the function is reused for less-trusted inputs later.
+    if "-->" in scope:
+        raise ValueError(
+            "scope cannot contain '-->'; it would early-terminate the header comment"
+        )
+    header = (
+        f"{_AUTO_MARKER} schema=1 "
+        f"profile_id={_safe_metadata_value(profile_id)} "
+        f"scope={scope} "
+        f"updated_at={_safe_metadata_value(updated_at)} "
+        f"updated_by={_safe_metadata_value(updated_by)} "
+        f"sensitive_export=false -->\n\n"
+    )
 
     body_lines: list[str] = [
         "# 关于用户 / About the User",
@@ -78,19 +137,7 @@ def _format_user_md(profile_id: str, non_sensitive: dict, updated_at: str) -> st
     else:
         body_lines.append("*（暂无自动发现的行为模式）*")
 
-    body = "\n".join(body_lines) + "\n"
-
-    fm_lines: list[str] = []
-    for key, value in frontmatter.items():
-        if isinstance(value, bool):
-            rendered = "true" if value else "false"
-        elif isinstance(value, int | float):
-            rendered = str(value)
-        else:
-            rendered = json.dumps(str(value))
-        fm_lines.append(f"{key}: {rendered}")
-
-    return "---\n" + "\n".join(fm_lines) + "\n---\n\n" + body
+    return header + "\n".join(body_lines) + "\n"
 
 
 def _default_user_md(profile_id: str = _DEFAULT_PROFILE_ID) -> str:
@@ -99,28 +146,28 @@ def _default_user_md(profile_id: str = _DEFAULT_PROFILE_ID) -> str:
 
 
 def _is_auto_generated_user_md(path: Path) -> bool:
-    """Detect whether `user.md` is in the auto-generated YAML-frontmatter
-    shape produced by ``_format_user_md``. Returns False if the file is
-    pure markdown / hand-edited — those should be left alone.
+    """Detect whether ``user.md`` is in the auto-generated shape produced
+    by ``_format_user_md``. Hand-edited files (no marker comment) return
+    False so ``sync_user_md`` leaves them alone.
 
-    判断 user.md 是否是 auto-generated 的 YAML frontmatter 形态。纯 markdown
-    或手动编辑过的内容返回 False,sync_user_md 不会覆盖。
+    判断 user.md 是否是 auto-generated 形态。纯 markdown / 手动编辑过的
+    文件没有顶部 HTML 注释标记,返回 False。
 
-    Heuristic: an auto-generated file always starts with ``---\\n`` and a
-    ``schema_version: 1`` line in the next handful of lines. Anything
-    else is treated as user-authored.
+    Also accepts the legacy YAML-frontmatter shape for backward compat
+    during the migration period.
     """
     try:
         first_chunk = path.read_text(encoding="utf-8", errors="replace")[:512]
     except OSError:
         return False
-    if not first_chunk.lstrip().startswith("---"):
-        return False
-    header_lines = first_chunk.splitlines()[:12]
-    for line in header_lines:
-        stripped = line.strip()
-        if stripped.startswith("schema_version"):
-            return True
+    stripped = first_chunk.lstrip()
+    if stripped.startswith(_AUTO_MARKER):
+        return True
+    # Legacy YAML frontmatter detection (pre-2026-05-15 files)
+    if stripped.startswith("---"):
+        for line in first_chunk.splitlines()[:12]:
+            if line.strip().startswith("schema_version"):
+                return True
     return False
 
 
@@ -197,6 +244,16 @@ class ProfileUpdater:
         docs/03-memory/profile-pure-markdown-migration.md.
 
         手动编辑过的 user.md(无 schema_version YAML 头)不会被覆盖。
+
+        KNOWN ISSUE (pre-existing, tracked separately): the TS-side
+        ``profile-evolution.ts`` appends observations to the ``## Quilin 观察``
+        section of an auto-generated user.md WITHOUT writing them back to
+        SQLite. If this method runs after such a TS append, it will
+        rewrite the file from SQLite alone and silently drop those
+        observations. Fix path requires either (a) round-tripping TS
+        observations into SQLite before this overwrite, or (b) making
+        this method an append-only mirror to a dedicated section.
+        See ``docs/03-memory/profile-pure-markdown-migration.md`` §race.
         """
         if _USER_MD_PATH.exists() and not _is_auto_generated_user_md(_USER_MD_PATH):
             return
@@ -209,6 +266,8 @@ class ProfileUpdater:
                 profile_id=profile.profile_id,
                 non_sensitive=profile.non_sensitive,
                 updated_at=profile.updated_at.isoformat(),
+                updated_by=profile.updated_by,
+                scope=profile.scope,
             )
         _USER_MD_PATH.write_text(content, encoding="utf-8")
 

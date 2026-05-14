@@ -24,11 +24,14 @@ English: Switch both `user.md` and `soul.md` to pure markdown documents — no Y
    - `apps/web/components/config/ProfileFilesSection.tsx` 增加 `parseFrontmatter` 解析,既支持遗留 YAML frontmatter(backward compat)又支持纯 markdown。
    - `~/.quilin/user.md` 和 `~/.quilin/soul.md` 内容已替换成纯 markdown 模板(commit 540022d 之后)。
 
-2. **`providers/memory/src/quilin_mem/profile_store.py` 改造**(待办 / TODO):
-   - 把 `dump_frontmatter(profile)` 替换为 `dump_markdown(profile)`,后者输出纯 markdown 段落而非 `---yaml---body` 结构。
-   - 把 `load_frontmatter(path)` 替换为段落解析:用 `## <heading>` 切段,每段内容当作该字段的自由文本,**不再有 schema 验证**。
-   - 数据库侧(`profile_store` 的 SQLite schema)继续保留典型字段(profile_id / scope / created_at 等)做索引;但**文件层完全是 markdown**,DB 字段从 markdown 解析或由 observer 单独填充。
-   - 影响的测试:`tests/test_profile_store.py` / `tests/test_user_md_mirror.py` / `tests/test_soul_schema.py` — 后两个文件名暗示当前测的是 YAML schema 完整性,需要重写成 markdown 段落测试。
+2. **`providers/memory/src/quilin_mem/profile_store.py` 改造**(已落 / done — 2026-05-15):
+   - 用**不可见 HTML 注释**作为顶部元数据载体:`<!-- quilin-profile schema=1 profile_id="..." scope=... updated_at="..." updated_by="..." sensitive_export=false -->`。纯 markdown 渲染器(Streamdown / GitHub)忽略它,但 Python 可以 round-trip 解析回 `UserProfile`。
+   - `UserProfile.to_markdown` / `from_markdown` 走 `parse_profile_header`(新增),旧的 `parse_frontmatter` 保留(`soul_schema.py` 还在用 YAML)。
+   - `_format_user_md` / `_default_user_md` 对齐 `to_markdown` 的 key 集(`updated_at` 而非 `last_updated`,新增 `updated_by` + `sensitive_export`)。
+   - 防御 / Defensive:`_safe_metadata_value` + `UserProfile.to_markdown` inline guard 拒绝值里的 `-->`、NUL(`\x00`)、U+2028、U+2029,防止 comment escape 或文件畸形。`_split_header_tokens` 处理 JSON `\"` 转义;`_find_comment_close` 跳过引号内的 `-->`。
+   - SoulDocument(`soul_schema.py`)目前还吃 YAML,无 production caller(只有测试用),迁移延后到独立 commit。
+   - 测试新增 round-trip / 边界 / 控制字符 case,coverage 95%+。
+   - **未做 / Still open**:TS profile-evolution.ts 的 append 和 Python `sync_user_md` 的整体 overwrite 之间的 race(见 task #14)。
 
 3. **Agent self-evolution 写回**(待办 / TODO, 关联 [[project_user_self_evolution]] memory):
    - 在 `apps/web/app/api/chat/route.ts` POST handler 中,session 终态(`session.completed` / `turn.completed`)后异步触发一次 profile 更新流程:

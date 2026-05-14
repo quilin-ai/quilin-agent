@@ -59,14 +59,41 @@ class UserProfile:
         )
 
     def to_markdown(self, *, include_sensitive: bool = False) -> str:
-        frontmatter: dict[str, Any] = {
-            "schema_version": self.schema_version,
-            "profile_id": self.profile_id,
-            "updated_at": self.updated_at.isoformat(),
-            "updated_by": self.updated_by,
+        """Render the profile as pure markdown with an invisible HTML
+        comment header carrying machine-readable metadata.
+
+        User directive 2026-05-15: profile files are pure markdown, no
+        YAML frontmatter. The HTML comment is invisible when rendered
+        but parseable for round-trip.
+
+        Comment-injection guard: every quoted value is screened for the
+        substring ``-->`` which would early-terminate the surrounding
+        comment and leak the rest of the value into rendered body.
+        """
+        for raw in (self.profile_id, self.updated_at.isoformat(), self.updated_by, self.scope):
+            if "-->" in raw:
+                raise ValueError(
+                    "profile metadata value cannot contain '-->'; "
+                    "it would early-terminate the user.md header comment"
+                )
+            for forbidden in ("\x00", " ", " "):
+                if forbidden in raw:
+                    raise ValueError(
+                        f"profile metadata value contains forbidden control "
+                        f"character U+{ord(forbidden):04X}"
+                    )
+        metadata = {
+            "schema": str(self.schema_version),
+            "profile_id": json.dumps(self.profile_id),
+            "updated_at": json.dumps(self.updated_at.isoformat()),
+            "updated_by": json.dumps(self.updated_by),
             "scope": self.scope,
-            "sensitive_export": include_sensitive,
+            "sensitive_export": "true" if include_sensitive else "false",
         }
+        header = "<!-- quilin-profile " + " ".join(
+            f"{key}={value}" for key, value in metadata.items()
+        ) + " -->\n\n"
+
         body_profile = dict(self.non_sensitive)
         if include_sensitive:
             body_profile.update(
@@ -78,22 +105,27 @@ class UserProfile:
             )
 
         return (
-            "---\n"
-            f"{_dump_simple_yaml(frontmatter)}"
-            "---\n"
+            f"{header}"
             "# User Profile\n\n"
             f"{_profile_body_to_markdown(body_profile)}"
         )
 
     @classmethod
     def from_markdown(cls, markdown: str) -> Self:
-        frontmatter, body = parse_frontmatter(markdown)
-        schema_version = int(frontmatter.get("schema_version", 0))
+        metadata, body = parse_profile_header(markdown)
+        schema_version = int(metadata.get("schema", metadata.get("schema_version", 0)))
         if schema_version != PROFILE_SCHEMA_VERSION:
             raise ValueError("user.md schema_version must be 1")
 
         body_profile = _profile_body_from_markdown(body)
-        sensitive_export = bool(frontmatter.get("sensitive_export", False))
+        sensitive_export_raw = metadata.get("sensitive_export", False)
+        # Identity check, not bool() — bool("false") == True, which would
+        # silently leak sensitive fields. Only Python True or the literal
+        # string "true" (lowercased) counts as opt-in.
+        sensitive_export = (
+            sensitive_export_raw is True
+            or (isinstance(sensitive_export_raw, str) and sensitive_export_raw.lower() == "true")
+        )
         sensitive = {
             key: body_profile.pop(key)
             for key in list(body_profile)
@@ -103,11 +135,11 @@ class UserProfile:
             body_profile.pop(key, None)
 
         return cls(
-            profile_id=str(frontmatter["profile_id"]),
+            profile_id=str(metadata["profile_id"]),
             schema_version=schema_version,
-            scope=_validate_scope(str(frontmatter["scope"])),
-            updated_at=datetime.fromisoformat(str(frontmatter["updated_at"])),
-            updated_by=str(frontmatter["updated_by"]),
+            scope=_validate_scope(str(metadata["scope"])),
+            updated_at=datetime.fromisoformat(str(metadata["updated_at"])),
+            updated_by=str(metadata["updated_by"]),
             non_sensitive=body_profile,
             sensitive=sensitive,
         )
@@ -433,6 +465,110 @@ def parse_frontmatter(markdown: str) -> tuple[dict[str, Any], str]:
     return _load_simple_yaml(raw_frontmatter), body
 
 
+_PROFILE_HEADER_MARKER = "<!-- quilin-profile"
+
+
+def parse_profile_header(markdown: str) -> tuple[dict[str, Any], str]:
+    """Parse the pure-markdown profile header (HTML comment) into metadata.
+
+    Format: ``<!-- quilin-profile key1=value1 key2=value2 ... -->``
+    Values are JSON-parsed when possible (so quoted strings unquote),
+    otherwise kept as-is.
+
+    Backward compatibility: if the markdown starts with legacy YAML
+    frontmatter (``---\\n...---\\n``), defer to ``parse_frontmatter``.
+    """
+    stripped_lead = markdown.lstrip()
+    if stripped_lead.startswith("---\n"):
+        # Legacy YAML shape — delegate so old files still round-trip.
+        return parse_frontmatter(markdown)
+    if not stripped_lead.startswith(_PROFILE_HEADER_MARKER):
+        raise ValueError("markdown must start with quilin-profile header comment")
+
+    leading_offset = len(markdown) - len(stripped_lead)
+    end_marker = _find_comment_close(markdown, leading_offset + len(_PROFILE_HEADER_MARKER))
+    if end_marker < 0:
+        raise ValueError("quilin-profile header comment must be closed with -->")
+
+    header_inner = markdown[leading_offset + len(_PROFILE_HEADER_MARKER) : end_marker].strip()
+    body_start = end_marker + len("-->")
+    body = markdown[body_start:].lstrip("\n")
+
+    metadata: dict[str, Any] = {}
+    for token in _split_header_tokens(header_inner):
+        key, separator, raw_value = token.partition("=")
+        if not separator:
+            raise ValueError(f"invalid quilin-profile header token: {token}")
+        metadata[key.strip()] = _parse_scalar(raw_value.strip())
+    return metadata, body
+
+
+def _find_comment_close(markdown: str, start: int) -> int:
+    """Find the first ``-->`` outside of any JSON-quoted string region.
+
+    Defensive against pathological values containing ``-->``: even though
+    the writers reject such values (see ``_safe_metadata_value`` and the
+    ``to_markdown`` guard), the parser still treats string-internal
+    occurrences as not closing the comment.
+    """
+    in_string = False
+    escape_next = False
+    i = start
+    end = len(markdown)
+    while i < end:
+        ch = markdown[i]
+        if escape_next:
+            escape_next = False
+            i += 1
+            continue
+        if in_string and ch == "\\":
+            escape_next = True
+            i += 1
+            continue
+        if ch == '"':
+            in_string = not in_string
+            i += 1
+            continue
+        if not in_string and markdown.startswith("-->", i):
+            return i
+        i += 1
+    return -1
+
+
+def _split_header_tokens(header: str) -> list[str]:
+    """Split a header line by spaces, keeping JSON-quoted strings intact.
+
+    Handles JSON escape sequences inside quoted values: a backslash makes
+    the following character literal, so ``"Ray \\"admin\\""`` does not
+    prematurely flip ``in_string``.
+    """
+    tokens: list[str] = []
+    buffer: list[str] = []
+    in_string = False
+    escape_next = False
+    for ch in header:
+        if escape_next:
+            buffer.append(ch)
+            escape_next = False
+            continue
+        if in_string and ch == "\\":
+            buffer.append(ch)
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            buffer.append(ch)
+        elif ch.isspace() and not in_string:
+            if buffer:
+                tokens.append("".join(buffer))
+                buffer = []
+        else:
+            buffer.append(ch)
+    if buffer:
+        tokens.append("".join(buffer))
+    return tokens
+
+
 def _dump_simple_yaml(values: dict[str, Any]) -> str:
     lines: list[str] = []
     for key, value in values.items():
@@ -494,5 +630,13 @@ def _profile_body_from_markdown(body: str) -> dict[str, Any]:
         key, separator, raw_value = stripped[2:].partition(":")
         if not separator:
             continue
-        values[key.strip()] = _parse_scalar(raw_value.strip())
+        # _format_user_md renders keys as `**key**` (bold) for human
+        # readability; UserProfile.to_markdown renders plain `key`. Strip
+        # surrounding `**` so both shapes round-trip identically.
+        normalized_key = key.strip()
+        if normalized_key.startswith("**") and normalized_key.endswith("**"):
+            normalized_key = normalized_key[2:-2].strip()
+        if not normalized_key:
+            continue
+        values[normalized_key] = _parse_scalar(raw_value.strip())
     return values
