@@ -60,7 +60,11 @@ English: Build the tool as a `ToolWithMetadata` factory that takes a `(askId) =>
 - Timeout reply (`{mode: "timeout"}`) → tool returns "user did not answer within Xs" error result.
 - Multi-select / free_text shapes covered.
 
-### 3b — `request_approval` tool + WriteAuthority web confirm hook(~12-15M token)
+### ~~3b path A — `request_approval` tool~~ ✅ 已完成 commit `74e9f1e`(advisory 实现)
+
+> 路径 B(server-side WriteAuthority wrapper)仍 pending,延后到独立 iter。
+
+### 3b legacy plan(原文供参考)
 
 **架构发现 / Architecture discovery 2026-05-15:** chat 路由直接用 AI SDK
 `streamText`,**不走 agent-core 的 runAgentLoop / WriteAuthority**。Slice 3b
