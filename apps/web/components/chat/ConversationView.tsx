@@ -28,6 +28,7 @@ import {
 	extractToolPartsFromBlocks,
 	type InteractionBlock,
 	type ProcessBlock,
+	processBlockHasRunningTool,
 	type RawPart,
 	type TextBlock,
 	type ToolGroupItem,
@@ -813,15 +814,28 @@ function TurnMessage({
 			</div>
 			<div className="q-turn-body">
 				{!isUser
-					? blocks.map((block: TranscriptBlock) =>
-							block.type === "process" ? (
-								<ProcessBlockView key={block.id} block={block} streaming={streaming} />
-							) : block.type === "interaction" ? (
-								<InteractionBlockView key={block.id} block={block} sessionId={sessionId} />
-							) : (
-								<MarkdownTextBlock key={block.id} block={block} streaming={streaming} />
-							),
-						)
+					? blocks.map((block: TranscriptBlock, idx) => {
+							// Per-block streaming: only the trailing block (or a process block
+							// with still-in-flight tool calls) is "active". Earlier blocks
+							// have been superseded by subsequent transcript content and
+							// must NOT keep showing the "正在输出" pulse or streaming cursor.
+							// Bug fix 2026-05-15: previously every block got `streaming={message.streaming}`,
+							// which left completed segments perpetually flagged as live.
+							const isLastBlock = idx === blocks.length - 1;
+							const blockStreaming = (() => {
+								if (!streaming) return false;
+								if (isLastBlock) return true;
+								if (block.type === "process") return processBlockHasRunningTool(block);
+								return false;
+							})();
+							if (block.type === "process") {
+								return <ProcessBlockView key={block.id} block={block} streaming={blockStreaming} />;
+							}
+							if (block.type === "interaction") {
+								return <InteractionBlockView key={block.id} block={block} sessionId={sessionId} />;
+							}
+							return <MarkdownTextBlock key={block.id} block={block} streaming={blockStreaming} />;
+						})
 					: null}
 				{/* Inline live progress for any spawned subagents — rendered OUTSIDE
 				    the Process panel so it stays visible after Process auto-collapses

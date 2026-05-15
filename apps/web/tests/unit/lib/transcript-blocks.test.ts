@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { buildTranscriptBlocks, extractToolPartsFromBlocks } from "@/lib/transcript-blocks";
+import {
+	buildTranscriptBlocks,
+	extractToolPartsFromBlocks,
+	processBlockHasRunningTool,
+} from "@/lib/transcript-blocks";
 
 describe("buildTranscriptBlocks", () => {
 	it("interleaves process blocks with markdown text blocks in original part order", () => {
@@ -103,5 +107,94 @@ describe("buildTranscriptBlocks", () => {
 		const tools = extractToolPartsFromBlocks(blocks);
 		expect(tools).toHaveLength(1);
 		expect(tools[0]?.type).toBe("tool-web_fetch");
+	});
+});
+
+describe("processBlockHasRunningTool — Process UX bug fix 2026-05-15", () => {
+	it("returns true when at least one tool call has input-streaming state", () => {
+		const block = {
+			type: "process" as const,
+			id: "p1",
+			items: [
+				{
+					type: "tool-group" as const,
+					name: "shell_exec",
+					calls: [{ type: "tool-shell_exec", toolCallId: "c1", state: "input-streaming" }],
+				},
+			],
+		};
+		expect(processBlockHasRunningTool(block)).toBe(true);
+	});
+
+	it("returns true when at least one tool call has input-available state", () => {
+		const block = {
+			type: "process" as const,
+			id: "p2",
+			items: [
+				{
+					type: "tool-group" as const,
+					name: "web_fetch",
+					calls: [{ type: "tool-web_fetch", toolCallId: "c1", state: "input-available" }],
+				},
+			],
+		};
+		expect(processBlockHasRunningTool(block)).toBe(true);
+	});
+
+	it("returns false when all tool calls are output-available (terminal)", () => {
+		const block = {
+			type: "process" as const,
+			id: "p3",
+			items: [
+				{
+					type: "tool-group" as const,
+					name: "memory_recall",
+					calls: [
+						{ type: "tool-memory_recall", toolCallId: "c1", state: "output-available" },
+						{ type: "tool-memory_recall", toolCallId: "c2", state: "output-available" },
+					],
+				},
+			],
+		};
+		expect(processBlockHasRunningTool(block)).toBe(false);
+	});
+
+	it("returns false when block contains only reasoning items", () => {
+		const block = {
+			type: "process" as const,
+			id: "p4",
+			items: [
+				{
+					type: "reasoning" as const,
+					part: { type: "reasoning", text: "thinking…" },
+				},
+			],
+		};
+		expect(processBlockHasRunningTool(block)).toBe(false);
+	});
+
+	it("returns false on an empty block", () => {
+		const block = { type: "process" as const, id: "p5", items: [] };
+		expect(processBlockHasRunningTool(block)).toBe(false);
+	});
+
+	it("returns true when mixed: one running + one done", () => {
+		const block = {
+			type: "process" as const,
+			id: "p6",
+			items: [
+				{
+					type: "tool-group" as const,
+					name: "a",
+					calls: [{ type: "tool-a", toolCallId: "c1", state: "output-available" }],
+				},
+				{
+					type: "tool-group" as const,
+					name: "b",
+					calls: [{ type: "tool-b", toolCallId: "c2", state: "input-available" }],
+				},
+			],
+		};
+		expect(processBlockHasRunningTool(block)).toBe(true);
 	});
 });

@@ -58,6 +58,38 @@ export function isReasoningPart(p: RawPart): boolean {
 	return p.type === "reasoning";
 }
 
+/**
+ * AI SDK v6 tool-part lifecycle states that mean "still in flight":
+ * - `input-streaming`: tool args still being emitted by the LLM
+ * - `input-available`: args complete, awaiting execute()
+ * Anything else (`output-available`, `output-error`, missing) means
+ * the call has terminated.
+ *
+ * 仍在 in-flight 的 tool part state(args 还在流 / 已结束等执行)。其他
+ * 状态都视为已结束。
+ */
+const TOOL_RUNNING_STATES = new Set(["input-streaming", "input-available"]);
+
+/**
+ * True if this process block contains at least one tool call whose
+ * state is still non-terminal — used by ConversationView to keep the
+ * matching Process panel labelled "正在输出" / status="running" even
+ * when subsequent transcript blocks have already streamed in.
+ *
+ * 用于 ConversationView 判断:某个 process block 内部还有正在跑的 tool
+ * call 时,即使后面已经有新 block 来,本 block 仍应当展示 running 状态。
+ */
+export function processBlockHasRunningTool(block: ProcessBlock): boolean {
+	for (const item of block.items) {
+		if (item.type !== "tool-group") continue;
+		for (const call of item.calls) {
+			const state = call.state;
+			if (typeof state === "string" && TOOL_RUNNING_STATES.has(state)) return true;
+		}
+	}
+	return false;
+}
+
 export function isToolPart(p: RawPart): boolean {
 	return p.type.startsWith("tool-") || p.type === "dynamic-tool";
 }
