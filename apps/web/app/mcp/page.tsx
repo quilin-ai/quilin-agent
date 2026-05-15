@@ -65,11 +65,17 @@ export default function McpPage() {
 	const [loading, setLoading] = useState(true);
 	const [expandedId, setExpandedId] = useState<string | null>(null);
 
-	const loadCatalog = useCallback(async () => {
+	const loadCatalog = useCallback(async (refresh = false) => {
 		setLoading(true);
 		setError(null);
 		try {
-			const res = await fetch("/api/mcp", { cache: "no-store" });
+			// `refresh=true` flag tears down active MCP stdio subprocesses
+			// and respawns them, so newly-added `@server.tool` decorators in
+			// MCP servers take effect without restarting the dev server.
+			// First load (mount) skips the flag — just reads the cached
+			// catalog. The "↻ 重新加载" button passes refresh=true.
+			const url = refresh ? "/api/mcp?refresh=1" : "/api/mcp";
+			const res = await fetch(url, { cache: "no-store" });
 			const json = (await res.json()) as McpResponse | McpError;
 			if (!json.ok) {
 				setError(json.error.message);
@@ -123,7 +129,7 @@ export default function McpPage() {
 							)}
 							<button
 								type="button"
-								onClick={() => void loadCatalog()}
+								onClick={() => void loadCatalog(true)}
 								style={{
 									marginLeft: "auto",
 									padding: "5px 10px",

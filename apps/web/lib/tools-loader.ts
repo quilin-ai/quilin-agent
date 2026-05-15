@@ -87,6 +87,14 @@ declare global {
 	 * the work.
 	 */
 	var __quilin_tools_catalog_inflight__: Promise<ToolsCatalog> | undefined;
+	/**
+	 * Active MCPRegistry instance. Stored separately so `invalidateToolsCatalog`
+	 * can call `disconnectAll()` on it to terminate stdio subprocesses
+	 * before respawning, ensuring new tool registrations (e.g. agent-core
+	 * commits that add MCP tools) take effect without a full dev server
+	 * restart.
+	 */
+	var __quilin_mcp_registry__: { disconnectAll: () => Promise<void> } | undefined;
 }
 
 interface SkillsManagerForCreateBuiltins {
@@ -192,6 +200,43 @@ function classifyTool(name: string): {
 	return { source: "builtin", mcpServer: null };
 }
 
+/**
+ * Force a full reload of the tools catalog. Tears down active MCP
+ * stdio subprocesses (so new `@server.tool` registrations in
+ * providers/memory/src/quilin_mem/server.py take effect), clears
+ * both the globalThis cache and the in-flight promise, and lets
+ * the next `getToolsCatalog()` rebuild from scratch.
+ *
+ * Wired to `GET /api/mcp?refresh=1` (and `/api/tools?refresh=1`)
+ * so the operator can hit the "↻ 重新加载" button on /mcp to pick
+ * up newly-added MCP tools without restarting the whole `pnpm dev`
+ * stack. Idempotent — safe to call twice in a row.
+ *
+ * 强制重建 tools catalog:先把现有 MCPRegistry 的 stdio 子进程全部断开,
+ * 再清掉 globalThis cache + in-flight promise。下次 getToolsCatalog
+ * 调用会重新 spawn 所有 MCP 子进程,从而拿到最新的 @server.tool 注册。
+ * 解决用户痛点:改了 quilin-mem 的 MCP tool 后必须重启整个 dev server 才能见效。
+ */
+export async function invalidateToolsCatalog(): Promise<void> {
+	const oldRegistry = globalThis.__quilin_mcp_registry__;
+	globalThis.__quilin_mcp_registry__ = undefined;
+	globalThis.__quilin_tools_catalog__ = undefined;
+	// Best-effort wait for an in-flight build so the next caller doesn't
+	// receive a half-built catalog. If it's still pending we can't cancel,
+	// but clearing the cache + handle means the *next* call (after this
+	// one) rebuilds; we just accept that the current in-flight one finishes
+	// against the now-stale state.
+	globalThis.__quilin_tools_catalog_inflight__ = undefined;
+	if (oldRegistry != null) {
+		try {
+			await oldRegistry.disconnectAll();
+		} catch {
+			// Subprocess teardown failures are non-fatal — the new spawn
+			// will overwrite any stale fds; reaping is the OS's job.
+		}
+	}
+}
+
 export async function getToolsCatalog(): Promise<ToolsCatalog> {
 	const cached = globalThis.__quilin_tools_catalog__;
 	// Hot-reload during dev can leave a cache from a previous catalog
@@ -251,6 +296,11 @@ async function buildToolsCatalog(): Promise<ToolsCatalog> {
 		);
 		mcpTools = registry.getAllTools() as readonly AgentCoreToolMetadata[];
 		mcpResults = results;
+		// Park the live registry on globalThis so `invalidateToolsCatalog()`
+		// can call `disconnectAll()` on it before the next build cycle.
+		globalThis.__quilin_mcp_registry__ = registry as unknown as {
+			disconnectAll: () => Promise<void>;
+		};
 		const ok = results.filter((r) => r.error == null).length;
 		console.log(
 			`[TOOLS] catalog ready: ${builtins.length} builtin + ${mcpTools.length} mcp tools (${ok}/${results.length} servers)`,

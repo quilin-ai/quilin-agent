@@ -14,13 +14,20 @@
  * 的快照。Builtin + inline + MCP namespace 工具一视同仁。
  */
 
-import { getToolsCatalog } from "@/lib/tools-loader";
+import { getToolsCatalog, invalidateToolsCatalog } from "@/lib/tools-loader";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET(): Promise<Response> {
+export async function GET(req: Request): Promise<Response> {
 	try {
+		// `?refresh=1` forces a full MCP catalog rebuild. See /api/mcp GET
+		// for the rationale — same hot-reload mechanism wired to the
+		// /tools page too in case the operator hits it from there.
+		const refreshParam = new URL(req.url).searchParams.get("refresh");
+		if (refreshParam === "1" || refreshParam === "true") {
+			await invalidateToolsCatalog();
+		}
 		const catalog = await getToolsCatalog();
 		// The chat route adds three inline tools on top of the shared
 		// `getToolsCatalog()` output: `spawn_subagent` (factory-bound to

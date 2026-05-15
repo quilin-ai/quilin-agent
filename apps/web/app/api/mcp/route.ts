@@ -15,7 +15,7 @@
  */
 
 import { readMcpConfig } from "@/lib/mcp-loader";
-import { getToolsCatalog } from "@/lib/tools-loader";
+import { getToolsCatalog, invalidateToolsCatalog } from "@/lib/tools-loader";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -82,9 +82,20 @@ export interface McpServerView {
 	readonly tools: readonly ServerToolSummary[];
 }
 
-export async function GET(): Promise<Response> {
+export async function GET(req: Request): Promise<Response> {
 	try {
 		const config = readMcpConfig();
+		// `?refresh=1` (or `?refresh=true`) tears down active MCP stdio
+		// subprocesses and forces a full catalog rebuild on the next
+		// `getToolsCatalog()` call. Wired to the "↻ 重新加载" button on
+		// /mcp so the operator can pick up MCP tool additions
+		// (`@server.tool` decorators in providers/memory/src/quilin_mem)
+		// without restarting `pnpm dev`. Without this flag, the cached
+		// catalog stays sticky and new tools never appear.
+		const refreshParam = new URL(req.url).searchParams.get("refresh");
+		if (refreshParam === "1" || refreshParam === "true") {
+			await invalidateToolsCatalog();
+		}
 		const catalog = await getToolsCatalog();
 
 		const toolsByServer = new Map<string, ServerToolSummary[]>();
