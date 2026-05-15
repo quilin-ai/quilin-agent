@@ -16,6 +16,13 @@ const config: NextConfig = {
 	// Quilin Agent uses a localhost-only control plane (per docs/08-observability/web-ui-rebuild-plan §4).
 	// Proxy /api/v2/* through the apps/web Node runtime route handler so the browser
 	// never talks to the agent-core process directly (CORS + auth shaped at one chokepoint).
+
+	// When `QUILIN_STABLE_BUILD=1`, redirect the build artifact to
+	// `.next-stable-3008/` so the stable 3008 backend (started via
+	// `pnpm start:stable-3008`) doesn't fight over `.next/` with a
+	// concurrent `pnpm dev`. Without this, `pnpm build` clobbers the
+	// dev server's `.next/` cache and every dev route 500s.
+	...(process.env.QUILIN_STABLE_BUILD === "1" ? { distDir: ".next-stable-3008" } : {}),
 };
 
 export default config;

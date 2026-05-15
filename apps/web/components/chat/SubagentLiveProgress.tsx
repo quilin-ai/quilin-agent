@@ -1,5 +1,6 @@
 "use client";
 
+import type { Route } from "next";
 import Link from "next/link";
 import { type CSSProperties, useEffect, useRef, useState } from "react";
 import { Streamdown } from "streamdown";
@@ -175,9 +176,13 @@ export function SubagentLiveProgress({
 	const elapsed = snapshot?.elapsedMs ?? 0;
 	const usage = snapshot?.usage ?? null;
 	const isLive = status === "running" || status === "pending";
+	// Cast to `Route` because typedRoutes (enabled in next.config.ts) can't
+	// infer dynamic `?session=...&from=...` query strings; the path itself
+	// is "/" which IS a known route. Build-time error: TS2322 'string' is
+	// not assignable to 'UrlObject | RouteImpl<string>'.
 	const detailHref = `/?session=${encodeURIComponent(agentId)}${
 		parentSessionId != null ? `&from=${encodeURIComponent(parentSessionId)}` : ""
-	}`;
+	}` as Route;
 	const preview = text.length > 0 ? text : liveTask;
 	const showPreview = preview.length > 0 && (isLive || expanded);
 

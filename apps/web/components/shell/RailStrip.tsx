@@ -1,5 +1,6 @@
 "use client";
 
+import type { Route } from "next";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef } from "react";
@@ -13,7 +14,7 @@ export interface RailStripItem {
 	readonly nameEn: string;
 	readonly desc: string;
 	readonly count: number | string;
-	readonly href: string;
+	readonly href: Route | string;
 }
 
 export const DEFAULT_RAIL_ITEMS: readonly RailStripItem[] = [
@@ -133,7 +134,7 @@ export function RailStrip({ items = DEFAULT_RAIL_ITEMS, pinned: pinnedOverride }
 				return (
 					<Link
 						key={item.target}
-						href={item.href}
+						href={item.href as Route}
 						className={`q-strip-item${active ? " active" : ""}`}
 						data-target={item.target}
 						data-testid={`rail-${item.target}`}
