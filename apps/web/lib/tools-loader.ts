@@ -247,31 +247,52 @@ async function ensureMcpSourceWatcher(): Promise<void> {
 	if (process.env.QUILIN_MCP_HOT_RELOAD === "off") return;
 	const fsModule = await import("node:fs");
 	const path = await import("node:path");
+	const os = await import("node:os");
 	const workspaceRoot = process.cwd().replace(/\/apps\/web\/?$/, "");
-	const watchTargets = [
+	const watchDirs = [
 		path.join(workspaceRoot, "providers", "memory", "src"),
 		path.join(workspaceRoot, "providers", "web", "src"),
 	];
+	// Config files we ALSO watch: editing ~/.claude.json to add / remove
+	// an MCP server should propagate without a dev-server restart. The
+	// `QUILIN_CLAUDE_CONFIG` env var lets users override the path so the
+	// watcher follows that override too.
+	const claudeConfig = process.env.QUILIN_CLAUDE_CONFIG ?? path.join(os.homedir(), ".claude.json");
 	let debounceTimer: NodeJS.Timeout | null = null;
-	const trigger = (filename: string | null) => {
-		if (filename != null && !filename.endsWith(".py")) return;
+	const trigger = (source: string, filename: string | null) => {
+		// .py for Python MCP servers; .json for config; ignore anything else.
+		if (filename != null) {
+			const skip = !(filename.endsWith(".py") || filename.endsWith(".json") || source === "config");
+			if (skip) return;
+		}
 		if (debounceTimer != null) clearTimeout(debounceTimer);
 		debounceTimer = setTimeout(() => {
 			console.log(
-				`[MCP hot-reload] source change detected (${filename ?? "?"}) → invalidating catalog`,
+				`[MCP hot-reload] ${source} change detected (${filename ?? "?"}) → invalidating catalog`,
 			);
 			void invalidateToolsCatalog();
 		}, 300);
 	};
 	const fsWatchers: import("node:fs").FSWatcher[] = [];
-	for (const dir of watchTargets) {
+	for (const dir of watchDirs) {
 		try {
-			const w = fsModule.watch(dir, { recursive: true }, (_event, filename) => trigger(filename));
+			const w = fsModule.watch(dir, { recursive: true }, (_event, filename) =>
+				trigger("source", filename),
+			);
 			fsWatchers.push(w);
 		} catch {
 			// Directory missing or fs.watch unsupported — non-fatal, the
 			// manual "↻ 重新加载" button on /mcp is still available.
 		}
+	}
+	// Watch the .claude.json config file. Best-effort: if it doesn't exist
+	// yet we just skip (user can edit later but won't get hot-reload until
+	// the next server start).
+	try {
+		const cfgWatcher = fsModule.watch(claudeConfig, () => trigger("config", claudeConfig));
+		fsWatchers.push(cfgWatcher);
+	} catch {
+		// File missing → no watch. The /mcp page reload button still works.
 	}
 	if (fsWatchers.length === 0) return;
 	globalThis.__quilin_mcp_source_watcher__ = {
@@ -286,7 +307,9 @@ async function ensureMcpSourceWatcher(): Promise<void> {
 			if (debounceTimer != null) clearTimeout(debounceTimer);
 		},
 	};
-	console.log(`[MCP hot-reload] watching ${fsWatchers.length} source dir(s) for .py changes`);
+	console.log(
+		`[MCP hot-reload] watching ${fsWatchers.length} target(s): ${watchDirs.length} src dir(s) + .claude.json`,
+	);
 }
 
 export async function invalidateToolsCatalog(): Promise<void> {
