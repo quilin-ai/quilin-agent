@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { ConsolidationTimelineView } from "@/components/memory/ConsolidationTimelineView";
 import { KnowledgeGraphView } from "@/components/memory/KnowledgeGraphView";
 import { AppHeader } from "@/components/shell/AppHeader";
 import { RailStrip } from "@/components/shell/RailStrip";
@@ -59,7 +60,7 @@ export default function MemoryPage() {
 	const [filter, setFilter] = useState("");
 	const [tierFilter, setTierFilter] = useState<string>("all");
 	const [expandedId, setExpandedId] = useState<string | null>(null);
-	const [view, setView] = useState<"list" | "graph">("list");
+	const [view, setView] = useState<"list" | "graph" | "timeline">("list");
 
 	const loadMemory = useCallback(async () => {
 		setLoading(true);
@@ -216,12 +217,38 @@ export default function MemoryPage() {
 							>
 								知识图谱 · graph
 							</button>
+							<button
+								type="button"
+								role="tab"
+								aria-selected={view === "timeline"}
+								data-testid="memory-tab-timeline"
+								onClick={() => setView("timeline")}
+								style={{
+									padding: "8px 16px",
+									background: "transparent",
+									border: "none",
+									borderBottom:
+										view === "timeline"
+											? "2px solid var(--accent-vermillion)"
+											: "2px solid transparent",
+									color: view === "timeline" ? "var(--fg)" : "var(--fg-muted)",
+									cursor: "pointer",
+									fontFamily: '"Noto Sans SC", sans-serif',
+									fontSize: 13,
+								}}
+							>
+								整合时间线 · timeline
+							</button>
 						</div>
 					</div>
 
 					{view === "graph" ? (
 						<div style={{ marginTop: 20 }}>
 							<KnowledgeGraphView />
+						</div>
+					) : view === "timeline" ? (
+						<div style={{ marginTop: 20 }}>
+							<ConsolidationTimelineView />
 						</div>
 					) : loading && memory == null ? (
 						<p style={{ color: "var(--fg-muted)", marginTop: 24 }}>加载中 · loading…</p>
