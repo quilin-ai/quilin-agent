@@ -236,6 +236,21 @@ async function buildSkillsManager(now: number): Promise<SkillsManagerWithRoots> 
 	// debounces nothing but the cost is cheap).
 	if (enableWatcher) {
 		try {
+			// Tear down the old subscription before replacing it. Without
+			// this, a rebuild (triggered by `invalidateToolsCatalog`) would
+			// abandon the previous SkillsManager instance with its watcher
+			// still live, causing ghost `onCatalogChange` callbacks to fire
+			// against a stale catalog for the rest of the dev session.
+			// (Iter F iter-close cross-review HIGH 2026-05-15.)
+			const oldUnsubscribe = globalThis.__quilin_skills_unsubscribe__;
+			if (oldUnsubscribe != null) {
+				try {
+					oldUnsubscribe();
+				} catch {
+					// non-fatal; the old manager will be GC'd anyway
+				}
+				globalThis.__quilin_skills_unsubscribe__ = undefined;
+			}
 			const unsubscribe = mgr.onCatalogChange(() => {
 				console.log("[SKILLS hot-reload] catalog changed → invalidating tools catalog");
 				void invalidateToolsCatalogFromSkillsLoader();

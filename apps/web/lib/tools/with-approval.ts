@@ -115,6 +115,19 @@ export interface WrapToolWithApprovalOptions {
 }
 
 const DEFAULT_APPROVAL_TIMEOUT_MS = 5 * 60 * 1000;
+// Defensive caps applied to LLM-controlled summary/detail text before
+// emit. The summarize() callback contract asks callers to truncate,
+// but a downstream caller that forgets must not be able to flood the
+// approval-prompt UI with unbounded content. These caps match the
+// limits in `request-approval.ts`'s Zod schema for the user-facing
+// emit path; the wrapper applies the same bound to its own emit.
+const MAX_SUMMARY_CHARS = 1000;
+const MAX_DETAIL_CHARS = 4000;
+
+function truncate(value: string, maxChars: number): string {
+	if (value.length <= maxChars) return value;
+	return `${value.slice(0, maxChars - 1)}…`;
+}
 
 /**
  * Wrap an AI-SDK tool so its `execute()` is gated by the approval flow.
@@ -147,7 +160,14 @@ export function wrapToolWithApproval(
 				return originalExecute.call(inner, args, ctx);
 			}
 
-			const { summary, detail } = options.summarize(args);
+			const summarized = options.summarize(args);
+			// Defensive truncate: the summarize callback receives LLM-supplied
+			// args, so its output is implicitly LLM-tainted. The downstream UI
+			// renders summary/detail as TEXT (React virtual DOM escapes by
+			// default), but truncate also bounds the UI cost + log volume.
+			const summary = truncate(summarized.summary, MAX_SUMMARY_CHARS);
+			const detail =
+				summarized.detail === undefined ? undefined : truncate(summarized.detail, MAX_DETAIL_CHARS);
 			const askId = generateAskId();
 			const { askToken, reply: replyPromise } = awaitAsk({
 				sessionId: options.sessionId,

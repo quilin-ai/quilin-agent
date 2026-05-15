@@ -312,7 +312,40 @@ async function ensureMcpSourceWatcher(): Promise<void> {
 	);
 }
 
+// Reference counter for in-flight tool calls. While > 0, file-watcher-
+// triggered invalidates are DEFERRED so we don't kill stdio subprocesses
+// that a running shell_exec / memory_recall / etc. is waiting on. The
+// counter is exported so chat route can wrap its tool-call section in
+// `markToolCallInFlight()` ... `markToolCallDone()`. When the counter
+// drops to 0 and a deferred invalidate is queued, it fires.
+//
+// (Iter F iter-close cross-review HIGH 2026-05-15 — mid-flight invalidate
+// would orphan tool-call promises against a torn-down subprocess.)
+let inFlightToolCalls = 0;
+let pendingInvalidate = false;
+
+export function markToolCallInFlight(): void {
+	inFlightToolCalls += 1;
+}
+
+export function markToolCallDone(): void {
+	inFlightToolCalls = Math.max(0, inFlightToolCalls - 1);
+	if (inFlightToolCalls === 0 && pendingInvalidate) {
+		pendingInvalidate = false;
+		void invalidateToolsCatalog();
+	}
+}
+
 export async function invalidateToolsCatalog(): Promise<void> {
+	// If a tool call is currently mid-flight, defer the invalidate until
+	// it completes. Otherwise `disconnectAll()` would terminate the
+	// underlying stdio subprocess and orphan that promise. The pending
+	// flag is checked by `markToolCallDone()`.
+	if (inFlightToolCalls > 0) {
+		pendingInvalidate = true;
+		console.log(`[MCP hot-reload] defer invalidate (${inFlightToolCalls} tool call(s) in flight)`);
+		return;
+	}
 	const oldRegistry = globalThis.__quilin_mcp_registry__;
 	globalThis.__quilin_mcp_registry__ = undefined;
 	globalThis.__quilin_tools_catalog__ = undefined;

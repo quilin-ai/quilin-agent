@@ -63,7 +63,7 @@ import { makeAskUserQuestionTool } from "@/lib/tools/ask-user-question";
 import { makeNarrateAsideTool } from "@/lib/tools/narrate-aside";
 import { makeRequestApprovalTool } from "@/lib/tools/request-approval";
 import { wrapToolWithApproval } from "@/lib/tools/with-approval";
-import { getToolsCatalog } from "@/lib/tools-loader";
+import { getToolsCatalog, markToolCallDone, markToolCallInFlight } from "@/lib/tools-loader";
 import {
 	intentRewriteSystemNote,
 	rewriteUserIntentText,
@@ -455,6 +455,19 @@ async function runSubagentInBackground(agentId: string, task: string): Promise<v
 		return;
 	}
 	const today = new Date().toISOString().slice(0, 10);
+	// Subagent path is also subject to mid-flight invalidate — its
+	// `subagentTools` pulls the same MCP-backed `(await
+	// getToolsCatalog()).adapted` set as the main chat path. Use a
+	// once-only release flag so the try/finally below can call it
+	// regardless of how the stream drains. (Iter F iter-close
+	// cross-review Round 2 Reviewer B SUSPECT → confirmed REAL.)
+	markToolCallInFlight();
+	let subagentSlotReleased = false;
+	const releaseSubagentSlot = (): void => {
+		if (subagentSlotReleased) return;
+		subagentSlotReleased = true;
+		markToolCallDone();
+	};
 	try {
 		const provider = createOpenAICompatible({
 			name: "deepseek",
@@ -579,6 +592,11 @@ async function runSubagentInBackground(agentId: string, task: string): Promise<v
 		agentRegistry.updateStatus(agentId, "completed");
 	} catch {
 		agentRegistry.updateStatus(agentId, "failed");
+	} finally {
+		// Always release the in-flight slot so a sync throw or
+		// stream-drain exception doesn't permanently leak the
+		// hot-reload defer counter. Idempotent.
+		releaseSubagentSlot();
 	}
 }
 
@@ -871,23 +889,66 @@ export async function POST(req: Request): Promise<Response> {
 					},
 				})
 			: undefined;
-		const result = streamText({
-			model: provider(DEEPSEEK_MODEL),
-			system: buildSystemPromptWithTools(intentRewrite),
-			messages: modelMessages,
-			tools: {
-				...builtinTools,
-				...(wrappedShellExec ? { shell_exec: wrappedShellExec } : {}),
-				web_fetch: inlineWebFetchTool,
-				spawn_subagent: spawnSubagentTool,
-				wait_for_subagents: waitForSubagentsTool,
-				ask_user_question: askUserQuestionTool,
-				request_approval: requestApprovalTool,
-				narrate_aside: narrateAsideTool,
-			},
-			stopWhen: stepCountIs(15),
-			abortSignal: meta.abort.signal,
-		});
+		// Mark this chat turn as having an active tool-call surface so the
+		// hot-reload watcher in tools-loader.ts DEFERS any catalog
+		// invalidate until the streamText loop finishes. Without this,
+		// a `.py` edit mid-call would `disconnectAll()` the stdio
+		// subprocess that a running `shell_exec` was waiting on and
+		// orphan the promise. We pair markInFlight with a single
+		// once-only markDone wired to onFinish / onError / abort and
+		// also to a try/catch around the synchronous streamText
+		// construction (Reviewer B Round 2: a synchronous throw inside
+		// streamText({...}) would otherwise leak the counter by 1).
+		// The release closure also tears down its own abort listener
+		// so long-lived sessions with many reconnect turns don't
+		// accumulate O(N) stale closures on `meta.abort.signal`.
+		// (Iter F iter-close cross-review HIGH 2026-05-15.)
+		markToolCallInFlight();
+		// Capture the abort signal locally so the closure doesn't
+		// re-narrow `meta` (TS forgets the outer narrowing across the
+		// closure boundary).
+		const abortSignal = meta.abort.signal;
+		let toolCallMarkedDone = false;
+		const releaseToolCallSlot = (): void => {
+			if (toolCallMarkedDone) return;
+			toolCallMarkedDone = true;
+			abortSignal.removeEventListener("abort", releaseToolCallSlot);
+			markToolCallDone();
+		};
+		abortSignal.addEventListener("abort", releaseToolCallSlot, { once: true });
+		// IIFE so we can wrap the synchronous streamText() construction in
+		// a try/catch (Reviewer B Round 2: synchronous throw would
+		// otherwise leak the in-flight counter by 1) without needing a
+		// pre-declared `let result` whose generic type annotation
+		// conflicts with the actual ToolSet inferred from `tools:`.
+		const result = (() => {
+			try {
+				return streamText({
+					model: provider(DEEPSEEK_MODEL),
+					system: buildSystemPromptWithTools(intentRewrite),
+					messages: modelMessages,
+					tools: {
+						...builtinTools,
+						...(wrappedShellExec ? { shell_exec: wrappedShellExec } : {}),
+						web_fetch: inlineWebFetchTool,
+						spawn_subagent: spawnSubagentTool,
+						wait_for_subagents: waitForSubagentsTool,
+						ask_user_question: askUserQuestionTool,
+						request_approval: requestApprovalTool,
+						narrate_aside: narrateAsideTool,
+					},
+					stopWhen: stepCountIs(15),
+					abortSignal,
+					onFinish: releaseToolCallSlot,
+					onError: releaseToolCallSlot,
+				});
+			} catch (err) {
+				// Synchronous throw — onError never fires, abort signal may
+				// never fire. Release the slot here so the counter doesn't leak.
+				releaseToolCallSlot();
+				throw err;
+			}
+		})();
 
 		// Background recorder — subscribes to AgentService events and
 		// snapshots the assistant message's parts_json into SQLite at
