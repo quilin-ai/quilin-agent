@@ -60,6 +60,7 @@ import {
 	SSE_DONE_FRAME,
 } from "@/lib/sse-translator";
 import { makeAskUserQuestionTool } from "@/lib/tools/ask-user-question";
+import { makeNarrateAsideTool } from "@/lib/tools/narrate-aside";
 import { makeRequestApprovalTool } from "@/lib/tools/request-approval";
 import { getToolsCatalog } from "@/lib/tools-loader";
 import {
@@ -847,6 +848,7 @@ export async function POST(req: Request): Promise<Response> {
 		const spawnSubagentTool = makeSpawnSubagentTool(sessionId);
 		const askUserQuestionTool = makeAskUserQuestionTool({ sessionId, service });
 		const requestApprovalTool = makeRequestApprovalTool({ sessionId, service });
+		const narrateAsideTool = makeNarrateAsideTool({ sessionId, service });
 		const builtinTools = (await getToolsCatalog()).adapted;
 		const result = streamText({
 			model: provider(DEEPSEEK_MODEL),
@@ -859,6 +861,7 @@ export async function POST(req: Request): Promise<Response> {
 				wait_for_subagents: waitForSubagentsTool,
 				ask_user_question: askUserQuestionTool,
 				request_approval: requestApprovalTool,
+				narrate_aside: narrateAsideTool,
 			},
 			stopWhen: stepCountIs(15),
 			abortSignal: meta.abort.signal,
