@@ -39,7 +39,10 @@
 | 交互 primitives Slice 3c 部分 — agent-core types 同步 + TUI 渲染 ask/approval/aside(input 路径仍 deferred,需要 IPC) | `6e2b65e` | ✅(render-only;input 仍 TODO) |
 | Iter-close cross-review polish — async-with KG context manager + open-ended valid_to test + retry-race epoch guard | `063dd68` | ✅(iter-level 3-reviewer pass: 0 + 0 + 1 HIGH-style + 2 MEDIUM 全修) |
 | Playwright e2e for /memory 知识图谱 tab — 3 cases real Chromium 全过 | `fc4afe3` | ✅(满足 feedback_playwright_after_cross_review.md 硬规则) |
-| UX-4 KG Slice 4 backend — `consolidation_log` SQLite 表 + `ConsolidationLogStore` + 可选 hook 进 `Consolidator` + `consolidation_log_recent` MCP tool + 11 tests | `376beea` | ✅(backend; UI 部分 TBD) |
+| UX-4 KG Slice 4 backend — `consolidation_log` SQLite 表 + `ConsolidationLogStore` + 可选 hook 进 `Consolidator` + `consolidation_log_recent` MCP tool + 11 tests | `376beea` | ✅(backend; UI 部分 Codex 在做) |
+| 交互 primitives Slice 3c 完整 path A — agent-core 原生 `ask_user_question` + `request_approval` TUI 工具(readline 直接 prompt,无 IPC)+ 24 tests + mcp-client 测试 fixture 修正 | `b7c0f02` | ✅(path A advisory 完成;Path B 服务端 WriteAuthority 仍未来工作) |
+| feat(quilin-mem): `memory_delete` MCP tool — 让 agent 自己清理重复记忆 + 2 tests | `e059b9e` | ✅(user feedback 触发) |
+| fix(web): per-block streaming state — 只 trailing block 显示「正在输出」+ 光标,前面 process 段默认折叠 | `0107e98` | ✅(user screenshot bug) |
 
 Iter F 持久化故事 + 交互 primitives 前两片 + 用户画像 self-evolution 雏形 + 移动端 + 文档全部落库。
 
