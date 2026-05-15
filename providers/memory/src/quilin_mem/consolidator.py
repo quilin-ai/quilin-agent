@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from .idle_budget import IdleBudgetProvider, IdleBudgetResult
+
+if TYPE_CHECKING:
+    from .consolidation_log import ConsolidationLogStore
 
 ConsolidationActionKind = Literal["reflect", "prune_kg", "recompress_verbatim"]
 CONSOLIDATOR_SCHEMA_VERSION = 1
@@ -58,9 +61,11 @@ class Consolidator:
         budget_provider: IdleBudgetProvider | None = None,
         *,
         reranker: object | None = None,
+        log_store: ConsolidationLogStore | None = None,
     ) -> None:
         self._budget_provider = budget_provider or IdleBudgetProvider()
         self._reranker = reranker
+        self._log_store = log_store
         self._last_consolidation: datetime | None = None
         self._consolidation_count = 0
 
@@ -72,7 +77,7 @@ class Consolidator:
         now: datetime | None = None,
     ) -> ConsolidationProposal:
         budget = self._budget_provider.acquire(task, estimated_tokens)
-        return ConsolidationProposal(
+        proposal = ConsolidationProposal(
             task=task,
             dry_run=True,
             budget=budget,
@@ -80,6 +85,17 @@ class Consolidator:
             writes_performed=0,
             created_at=now or _utcnow(),
         )
+        # Persist to the optional log store (UX-4 Slice 4 unblocker).
+        # Failures here MUST NOT break the in-memory flow — log_store
+        # is purely observational. Swallow + ignore to honor the
+        # "Consolidator never fails just because the log is broken"
+        # contract.
+        if self._log_store is not None:
+            try:
+                self._log_store.append(proposal)
+            except Exception:  # pragma: no cover — defensive only
+                pass
+        return proposal
 
     def _proposal_actions(self, budget: IdleBudgetResult) -> list[ConsolidationAction]:
         blocked = budget.decision == "denied"

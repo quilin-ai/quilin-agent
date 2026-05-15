@@ -10,6 +10,7 @@ from typing import Any
 
 from mcp.server.fastmcp import Context, FastMCP
 
+from .consolidation_log import ConsolidationLogStore
 from .event_log import TraceContext, parse_traceparent
 from .kg import TemporalKnowledgeGraph
 from .kg_backfill import backfill_kg_from_memory
@@ -861,6 +862,53 @@ def create_server(
             session_id=session_id,
             key=key,
             trace_context=_child_trace_context(parent_trace),
+        )
+
+    @server.tool(name="consolidation_log_recent")
+    async def consolidation_log_recent_tool(
+        limit: int = 100,
+        ctx: Context[object, Any, object] | None = None,
+    ) -> str:
+        """Return the N most-recent consolidation proposals as JSON.
+
+        UX-4 Slice 4 backend. Reads from `ConsolidationLogStore` (which the
+        `Consolidator` writes to on every `propose()`). Used by the
+        /memory page consolidation timeline tab.
+
+        Returns JSON: `{available: bool, total: int, entries: [...]}`.
+        Each entry: `{id, task, dry_run, budget_decision, actions[],
+        writes_performed, created_at, schema_version}`. `actions[]` is
+        the JSON-decoded list of action dicts originally produced by
+        the Consolidator.
+
+        Args:
+            limit: How many entries (clamped to [1, 1000]). Default 100.
+
+        Returns:
+            JSON string suitable for `JSON.parse` on the TS side.
+        """
+        del ctx  # unused
+        with ConsolidationLogStore() as store:
+            entries = store.list_recent(limit=limit)
+            total = store.count()
+        return json.dumps(
+            {
+                "available": True,
+                "total": total,
+                "entries": [
+                    {
+                        "id": e.id,
+                        "task": e.task,
+                        "dry_run": e.dry_run,
+                        "budget_decision": e.budget_decision,
+                        "actions": e.actions,
+                        "writes_performed": e.writes_performed,
+                        "created_at": e.created_at.isoformat(),
+                        "schema_version": e.schema_version,
+                    }
+                    for e in entries
+                ],
+            }
         )
 
     @server.tool(name="kg_dump_for_viz")
