@@ -951,3 +951,54 @@ async def test_kg_dump_for_viz_tool_returns_empty_payload_when_kg_unseeded(
         payload = result
     assert payload.get("nodes") == []
     assert payload.get("edges") == []
+
+
+async def test_memory_delete_tool_removes_record_from_recall(server: object) -> None:
+    """memory_delete soft-deletes the record so memory_recall no longer returns it."""
+    import json
+
+    store_result = _decode_call_tool_result(
+        await server.call_tool(  # type: ignore[attr-defined]
+            "memory_store",
+            {"content": "duplicate observation about Ada"},
+        )
+    )
+    memory_id = store_result["id"]
+    assert isinstance(memory_id, str) and len(memory_id) > 0
+
+    # Recall sees it.
+    recall_before = _decode_call_tool_result(
+        await server.call_tool("memory_recall", {"query": "Ada"})  # type: ignore[attr-defined]
+    )
+    assert any(r.get("id") == memory_id for r in recall_before.get("records", []))
+
+    # Delete.
+    delete_result = _decode_call_tool_result(
+        await server.call_tool("memory_delete", {"memory_id": memory_id})  # type: ignore[attr-defined]
+    )
+    if isinstance(delete_result, str):
+        payload = json.loads(delete_result)
+    else:
+        payload = delete_result
+    assert payload.get("ok") is True
+    assert payload.get("memory_id") == memory_id
+
+    # Recall no longer sees it.
+    recall_after = _decode_call_tool_result(
+        await server.call_tool("memory_recall", {"query": "Ada"})  # type: ignore[attr-defined]
+    )
+    assert not any(r.get("id") == memory_id for r in recall_after.get("records", []))
+
+
+async def test_memory_delete_idempotent_on_unknown_id(server: object) -> None:
+    """memory_delete on a non-existent id returns ok=True without raising."""
+    import json
+
+    result = _decode_call_tool_result(
+        await server.call_tool("memory_delete", {"memory_id": "no-such-id"})  # type: ignore[attr-defined]
+    )
+    if isinstance(result, str):
+        payload = json.loads(result)
+    else:
+        payload = result
+    assert payload.get("ok") is True

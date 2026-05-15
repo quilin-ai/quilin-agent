@@ -771,6 +771,32 @@ def create_server(
             trace_context=_child_trace_context(parent_trace),
         )
 
+    @server.tool(name="memory_delete")
+    async def memory_delete_tool(
+        memory_id: str,
+        ctx: Context[object, Any, object] | None = None,
+    ) -> str:
+        """Soft-delete one memory record by id.
+
+        Use this when the agent recognizes duplicate or stale memory
+        records and wants to clean them up. The record is marked
+        `deleted=1` in SQLite and removed from the FTS index so future
+        `memory_recall` calls won't surface it; the row itself is
+        retained for audit. Idempotent: deleting an already-deleted
+        or non-existent id is a no-op (returns ok=true with deleted=false).
+
+        Args:
+            memory_id: Record id returned by `memory_store` or surfaced
+                by `memory_recall`.
+
+        Returns:
+            JSON string `{"ok": true, "memory_id": <id>}`.
+        """
+        del ctx  # not used
+        store = await resolve_store(ctx=None)
+        await store.delete(memory_id)
+        return json.dumps({"ok": True, "memory_id": memory_id})
+
     @server.tool(name="scratchpad_write")
     async def scratchpad_write_tool(
         task_id: str,
