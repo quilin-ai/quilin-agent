@@ -82,7 +82,14 @@ English: `providers/memory/src/quilin_mem/server.py` 注册新 tool `memory_back
 
 测试:dry_run=True 返回 plan 不写 KG;真 run 后 edges 表行数 > 0。
 
-### Slice 3 — TS /api/memory/graph + 可视化(~25M)
+### ~~Slice 3 — TS /api/memory/graph + 可视化~~ ✅ 已完成 commit `6afa74f` + `9abbde8` + Playwright e2e `fc4afe3`
+
+- `/api/memory/graph` GET 通过 `kg_dump_for_viz` MCP tool 返回 reactflow JSON。
+- `/memory` 页加了 `知识图谱` tab,使用 `@xyflow/react` v12 渲染。
+- 节点点击展开 record detail。
+- Playwright e2e at `apps/web/tests/e2e/memory-kg-tab.spec.ts`(commit `fc4afe3`).
+
+### Slice 3 原文(供参考)
 
 - TS endpoint `apps/web/app/api/memory/graph/route.ts` GET handler,通过现有 MCP client 调 KG 查询,返回 reactflow JSON shape `{ nodes: [{id, label, type}], edges: [{id, source, target, label, valid_from, valid_to}] }`
 - 装 `reactflow`(npm i react-flow)
@@ -91,7 +98,13 @@ English: `providers/memory/src/quilin_mem/server.py` 注册新 tool `memory_back
 
 测试:e2e 跑 /memory → 切到 graph tab → ≥ 1 个 node 渲染 + 可点击。
 
-### Slice 4 — consolidation log UI(~10M)
+### ~~Slice 4 — consolidation log UI~~ ✅ 已完成 commit `376beea` (backend MCP + SQLite 表) + `8df50c3` (timeline UI)
+
+- `consolidation_log` SQLite 表 + `quilin-mem` MCP tool `consolidation_log_query`(commit `376beea`).
+- `/api/memory/consolidations` TS endpoint 调 MCP tool。
+- `/memory` 页加 timeline tab(commit `8df50c3`),显示 reflection / decay / promotion 历史。
+
+### Slice 4 原文(供参考)
 
 - TS endpoint `/api/memory/consolidations` GET 读 consolidation log(已有 SQLite 表,quilin-mem 那边定义)
 - /memory 页加 timeline tab,显示 reflection / decay / promotion 历史
