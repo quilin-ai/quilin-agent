@@ -58,6 +58,8 @@ interface SkillsManagerInstance {
 	list(): readonly SkillDescriptor[];
 	findByName(name: string): SkillDescriptor | undefined;
 	load(name: string): Promise<LoadedSkill>;
+	/** File-watcher callback. Returns an unsubscribe function. */
+	onCatalogChange(cb: () => void): () => void;
 }
 interface SkillsManagerCtor {
 	new (options: {
@@ -77,6 +79,7 @@ export interface FilesystemScanCounts {
 }
 
 declare global {
+	var __quilin_skills_unsubscribe__: (() => void) | undefined;
 	var __quilin_skills_mgr__:
 		| {
 				readonly mgr: SkillsManagerInstance;
@@ -185,6 +188,20 @@ export async function getSkillsManager(): Promise<SkillsManagerWithRoots> {
 	}
 }
 
+/**
+ * Lazy import of `invalidateToolsCatalog` so this file (which is loaded
+ * inside `tools-loader.buildToolsCatalog`) doesn't form a circular
+ * import. Resolves on first call, caches, then re-uses.
+ */
+async function invalidateToolsCatalogFromSkillsLoader(): Promise<void> {
+	try {
+		const mod = await import("@/lib/tools-loader");
+		await mod.invalidateToolsCatalog();
+	} catch (e) {
+		console.log(`[SKILLS hot-reload] invalidate failed: ${String(e)}`);
+	}
+}
+
 async function buildSkillsManager(now: number): Promise<SkillsManagerWithRoots> {
 	const mod = (await import(
 		/* @vite-ignore */ /* webpackIgnore: true */ /* turbopackIgnore: true */ "@quilin/agent-core"
@@ -194,8 +211,16 @@ async function buildSkillsManager(now: number): Promise<SkillsManagerWithRoots> 
 	const workspaceRoot = process.cwd().replace(/\/apps\/web\/?$/, "");
 	const userSkillsDir = home.length > 0 ? `${home}/.claude/skills` : null;
 	const projectSkillsDir = `${workspaceRoot}/.claude/skills`;
+	// `watcherEnabled: true` (dev only) so SkillsManager's internal
+	// file watcher picks up SKILL.md edits and re-discovers; we then
+	// invalidate the tools catalog so the LLM sees the new/changed
+	// skill on its next call. Matches the MCP server hot-reload
+	// pattern in tools-loader.ts. Production stays off (filesystem
+	// watch can be noisy + not all hosts support recursive watch).
+	const enableWatcher =
+		process.env.NODE_ENV !== "production" && process.env.QUILIN_SKILL_HOT_RELOAD !== "off";
 	const mgr = new mod.SkillsManager({
-		watcherEnabled: false,
+		watcherEnabled: enableWatcher,
 		...(userSkillsDir == null ? {} : { userRoots: [userSkillsDir] }),
 		projectRoots: [projectSkillsDir],
 	});
@@ -203,6 +228,22 @@ async function buildSkillsManager(now: number): Promise<SkillsManagerWithRoots> 
 		await mgr.discover();
 	} catch (e) {
 		console.log(`[SKILLS] initial discover failed: ${String(e)}`);
+	}
+	// When a SKILL.md change fires, the manager re-discovers internally
+	// AND we kick the tool catalog cache so the next chat request rebuilds
+	// the LLM tool list with the updated skill metadata. Idempotent + safe
+	// to call multiple times in a burst (invalidateToolsCatalog itself
+	// debounces nothing but the cost is cheap).
+	if (enableWatcher) {
+		try {
+			const unsubscribe = mgr.onCatalogChange(() => {
+				console.log("[SKILLS hot-reload] catalog changed → invalidating tools catalog");
+				void invalidateToolsCatalogFromSkillsLoader();
+			});
+			globalThis.__quilin_skills_unsubscribe__ = unsubscribe;
+		} catch (e) {
+			console.log(`[SKILLS] watcher subscription failed: ${String(e)}`);
+		}
 	}
 	const fsCounts = await scanFilesystem(userSkillsDir, projectSkillsDir);
 	const holder = {
