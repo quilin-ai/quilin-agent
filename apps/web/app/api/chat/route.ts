@@ -62,6 +62,7 @@ import {
 import { makeAskUserQuestionTool } from "@/lib/tools/ask-user-question";
 import { makeNarrateAsideTool } from "@/lib/tools/narrate-aside";
 import { makeRequestApprovalTool } from "@/lib/tools/request-approval";
+import { wrapToolWithApproval } from "@/lib/tools/with-approval";
 import { getToolsCatalog } from "@/lib/tools-loader";
 import {
 	intentRewriteSystemNote,
@@ -850,12 +851,33 @@ export async function POST(req: Request): Promise<Response> {
 		const requestApprovalTool = makeRequestApprovalTool({ sessionId, service });
 		const narrateAsideTool = makeNarrateAsideTool({ sessionId, service });
 		const builtinTools = (await getToolsCatalog()).adapted;
+		// Path B server-side approval gate — wrap the highest-risk builtin
+		// tools so an approval prompt fires AUTOMATICALLY before they run,
+		// regardless of whether the LLM remembered to call request_approval
+		// voluntarily (Path A). Whitelist short-circuit applies for
+		// allow_always_low/medium decisions in the same session.
+		// Only wrap if the catalog actually has the tool (defensive — we
+		// don't break if a tool is absent in a particular build).
+		const wrappedShellExec = builtinTools.shell_exec
+			? wrapToolWithApproval(builtinTools.shell_exec, {
+					sessionId,
+					service,
+					toolName: "shell_exec",
+					riskLevel: "high",
+					summarize: (input: unknown) => {
+						const raw = input as { command?: string };
+						const command = typeof raw?.command === "string" ? raw.command : "(unknown)";
+						return { summary: command.length > 200 ? `${command.slice(0, 200)}…` : command };
+					},
+				})
+			: undefined;
 		const result = streamText({
 			model: provider(DEEPSEEK_MODEL),
 			system: buildSystemPromptWithTools(intentRewrite),
 			messages: modelMessages,
 			tools: {
 				...builtinTools,
+				...(wrappedShellExec ? { shell_exec: wrappedShellExec } : {}),
 				web_fetch: inlineWebFetchTool,
 				spawn_subagent: spawnSubagentTool,
 				wait_for_subagents: waitForSubagentsTool,
