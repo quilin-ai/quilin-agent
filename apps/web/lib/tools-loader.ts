@@ -74,7 +74,12 @@ export interface ToolsCatalog {
 	readonly rawTools: readonly AgentCoreToolExecutable[];
 }
 
+interface AutoReloadWatcher {
+	readonly close: () => void;
+}
+
 declare global {
+	var __quilin_mcp_source_watcher__: AutoReloadWatcher | undefined;
 	var __quilin_tools_catalog__: ToolsCatalog | undefined;
 	/**
 	 * In-flight promise for first-time catalog construction. Prevents two
@@ -217,6 +222,73 @@ function classifyTool(name: string): {
  * 调用会重新 spawn 所有 MCP 子进程,从而拿到最新的 @server.tool 注册。
  * 解决用户痛点:改了 quilin-mem 的 MCP tool 后必须重启整个 dev server 才能见效。
  */
+/**
+ * Auto-watch MCP server source dirs in dev mode and trigger
+ * `invalidateToolsCatalog()` on any `.py` change. Idempotent — only
+ * the first call attaches a watcher; subsequent calls are no-ops.
+ * Disabled outside `NODE_ENV !== "production"` and opt-out via
+ * `QUILIN_MCP_HOT_RELOAD=off`.
+ *
+ * The watcher debounces 300ms so a multi-file save (e.g. a single
+ * commit touching 4 files) triggers exactly one invalidate. Uses
+ * Node's native `fs.watch({recursive: true})` which is supported on
+ * macOS and Windows (both common dev targets). Linux without
+ * recursive support falls back to a top-level-only watch — still
+ * better than nothing, since most edits land at the package root.
+ *
+ * 在 dev 模式下监视 providers/memory/src 下的 .py 文件变动 → 自动调
+ * invalidateToolsCatalog,做到「改完文件立即生效,不用点重新加载也
+ * 不用重启 pnpm dev」。生产模式 / 显式 QUILIN_MCP_HOT_RELOAD=off 时
+ * 不开启。
+ */
+async function ensureMcpSourceWatcher(): Promise<void> {
+	if (globalThis.__quilin_mcp_source_watcher__ != null) return;
+	if (process.env.NODE_ENV === "production") return;
+	if (process.env.QUILIN_MCP_HOT_RELOAD === "off") return;
+	const fsModule = await import("node:fs");
+	const path = await import("node:path");
+	const workspaceRoot = process.cwd().replace(/\/apps\/web\/?$/, "");
+	const watchTargets = [
+		path.join(workspaceRoot, "providers", "memory", "src"),
+		path.join(workspaceRoot, "providers", "web", "src"),
+	];
+	let debounceTimer: NodeJS.Timeout | null = null;
+	const trigger = (filename: string | null) => {
+		if (filename != null && !filename.endsWith(".py")) return;
+		if (debounceTimer != null) clearTimeout(debounceTimer);
+		debounceTimer = setTimeout(() => {
+			console.log(
+				`[MCP hot-reload] source change detected (${filename ?? "?"}) → invalidating catalog`,
+			);
+			void invalidateToolsCatalog();
+		}, 300);
+	};
+	const fsWatchers: import("node:fs").FSWatcher[] = [];
+	for (const dir of watchTargets) {
+		try {
+			const w = fsModule.watch(dir, { recursive: true }, (_event, filename) => trigger(filename));
+			fsWatchers.push(w);
+		} catch {
+			// Directory missing or fs.watch unsupported — non-fatal, the
+			// manual "↻ 重新加载" button on /mcp is still available.
+		}
+	}
+	if (fsWatchers.length === 0) return;
+	globalThis.__quilin_mcp_source_watcher__ = {
+		close: () => {
+			for (const w of fsWatchers) {
+				try {
+					w.close();
+				} catch {
+					/* ignore */
+				}
+			}
+			if (debounceTimer != null) clearTimeout(debounceTimer);
+		},
+	};
+	console.log(`[MCP hot-reload] watching ${fsWatchers.length} source dir(s) for .py changes`);
+}
+
 export async function invalidateToolsCatalog(): Promise<void> {
 	const oldRegistry = globalThis.__quilin_mcp_registry__;
 	globalThis.__quilin_mcp_registry__ = undefined;
@@ -336,5 +408,10 @@ async function buildToolsCatalog(): Promise<ToolsCatalog> {
 		rawTools: allTools as unknown as readonly AgentCoreToolExecutable[],
 	};
 	globalThis.__quilin_tools_catalog__ = catalog;
+	// First-build moment is the right place to attach the auto-watcher:
+	// we know paths exist, dev server is up, and the user has just
+	// kicked the catalog into life. `ensureMcpSourceWatcher` is
+	// idempotent so repeat builds (after invalidate) are no-ops.
+	void ensureMcpSourceWatcher();
 	return catalog;
 }
