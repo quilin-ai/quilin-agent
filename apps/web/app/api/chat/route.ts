@@ -295,7 +295,7 @@ function buildSystemPromptWithTools(intentRewrite: UserIntentRewrite | null = nu
 		"- 综合 subagent 输出成自然语言答案,引用 URL,不要复制 JSON。\n" +
 		"- 涉及『最新』『最近』『版本』『近期』『当前』『动态』等时效性内容,**必须**用 web_fetch 工具查真实数据,不要凭训练记忆答。\n\n" +
 		"记忆管理 / memory hygiene:\n" +
-		"- 当用户要求『整理 / 清理 / 去重』记忆,或你通过 `quilin-mem/memory_recall` 看到明显重复 / 过期 / 互相矛盾的条目时,**主动调用 `quilin-mem/memory_delete(memory_id)` 把多余的删掉**,不要只口头说『我看到重复了』。\n" +
+		"- 当用户要求『整理 / 清理 / 去重』记忆,或你通过 `quilin-mem__memory_recall` 看到明显重复 / 过期 / 互相矛盾的条目时,**主动调用 `quilin-mem__memory_delete(memory_id)` 把多余的删掉**,不要只口头说『我看到重复了』。\n" +
 		"- 删的优先级:完全重复 > 已过期(用户后续推翻的) > 被新条目覆盖(同一事实更精确的版本) > 无信息量(噪声 / 测试残留)。\n" +
 		"- 删完用 `memory_recall` 校验剩余条目,告诉用户『删了 N 条,剩 M 条』。\n" +
 		"- 如果不确定是否该删,先用 `ask_user_question` 让用户确认。"
