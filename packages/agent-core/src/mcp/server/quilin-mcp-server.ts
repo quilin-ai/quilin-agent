@@ -107,21 +107,45 @@ export class QuilinMcpServer {
 	/** Attach a transport and start serving requests. Idempotent — calling twice on the same instance throws. */
 	/** 接上 transport 并开始服务请求。同一实例重复 connect 会抛异常。 */
 	async connect(transport: Transport): Promise<void> {
+		// TOCTOU guard: flip the flag synchronously before the await so two
+		// concurrent connect() calls cannot both pass the check. If the SDK
+		// connect rejects we roll the flag back so the caller can retry.
+		//
+		// TOCTOU 防护：在 await 之前同步翻转 flag，两个并发 connect() 不会都
+		// 过 guard。SDK connect reject 时把 flag 还原，调用方可以重试。
 		if (this.connected) {
 			throw new Error("QuilinMcpServer is already connected to a transport.");
 		}
-		await this.server.connect(transport);
 		this.connected = true;
+		try {
+			await this.server.connect(transport);
+		} catch (error) {
+			this.connected = false;
+			throw error;
+		}
 	}
 
 	/** Close the transport. Safe to call multiple times. */
 	/** 关闭 transport。可以多次调用。 */
 	async close(): Promise<void> {
+		// Mirror of connect(): flip the flag synchronously so two concurrent
+		// close() calls don't both reach `server.close()`. If the SDK close
+		// rejects we restore the flag so the caller can retry; the
+		// post-condition is "connected reflects the last successful state".
+		//
+		// 与 connect() 对称：在 await 之前同步翻转 flag，避免两个并发 close()
+		// 都打到 `server.close()`。SDK close reject 时还原 flag，让调用方可以
+		// 重试；不变式是 "connected 反映最后一次成功的状态"。
 		if (!this.connected) {
 			return;
 		}
-		await this.server.close();
 		this.connected = false;
+		try {
+			await this.server.close();
+		} catch (error) {
+			this.connected = true;
+			throw error;
+		}
 	}
 
 	/** Read-only public view of connection state — useful for diagnostics. */
@@ -141,8 +165,18 @@ export class QuilinMcpServer {
 				return createUnknownToolResult(name);
 			}
 			const rawArgs = request.params.arguments;
+			// `typeof [] === "object"` is true, so we must explicitly exclude
+			// arrays before casting to Record<string, unknown>. The SDK Zod
+			// schema already rejects array arguments upstream, but this is a
+			// pure-defensive guard so the cast stays sound if upstream loosens.
+			//
+			// `typeof [] === "object"` 也为 true，所以转成 Record<string, unknown>
+			// 前必须显式排除数组。SDK Zod schema 上游已经会拒掉数组 arguments，
+			// 这里是纯防御，万一上游放宽校验时转型仍然成立。
 			const args: Readonly<Record<string, unknown>> =
-				rawArgs != null && typeof rawArgs === "object"
+				rawArgs != null &&
+				typeof rawArgs === "object" &&
+				!Array.isArray(rawArgs)
 					? (rawArgs as Readonly<Record<string, unknown>>)
 					: {};
 			return this.toolBridge.callTool(name, args);

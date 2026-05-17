@@ -16,6 +16,7 @@
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -310,6 +311,145 @@ describe("QuilinMcpServer — Stage 3 skeleton", () => {
 		await harness.client.callTool({ name: "memory_recall" });
 
 		expect(calls).toEqual([{}]);
+	});
+
+	it("serializes concurrent connect() calls via TOCTOU-safe flag flip", async () => {
+		// Two concurrent connect() calls race the `if (this.connected)` guard.
+		// With a sync flag flip before the await, only one passes the guard;
+		// the other rejects with "already connected" before touching the SDK.
+		//
+		// 两个并发 connect() 抢 `if (this.connected)` guard。同步翻转 flag 后，
+		// 只有一个能过 guard，另一个直接被 "already connected" 拒绝，不会进 SDK。
+		const startSpy = vi.fn(async () => {
+			// Give the second call a chance to interleave before start resolves.
+			// 让第二个 call 有机会在 start resolve 之前插进来。
+			await new Promise((resolve) => setTimeout(resolve, 5));
+		});
+		const slowTransport: Transport = {
+			start: startSpy,
+			send: async () => {},
+			close: async () => {},
+		};
+		const server = new QuilinMcpServer();
+
+		const [first, second] = await Promise.allSettled([
+			server.connect(slowTransport),
+			server.connect(slowTransport),
+		]);
+
+		// Exactly one should fulfil, exactly one should reject.
+		// 必须正好一个成功、一个失败。
+		const fulfilledCount = [first, second].filter(
+			(r) => r.status === "fulfilled",
+		).length;
+		const rejectedCount = [first, second].filter(
+			(r) => r.status === "rejected",
+		).length;
+		expect(fulfilledCount).toBe(1);
+		expect(rejectedCount).toBe(1);
+		const rejection = [first, second].find((r) => r.status === "rejected") as
+			| PromiseRejectedResult
+			| undefined;
+		expect(String(rejection?.reason)).toMatch(/already connected/i);
+		// SDK transport.start must only run once — proves we did not let two
+		// connect calls both reach the SDK.
+		// SDK transport.start 必须只跑一次，证明两个 connect 没有都打到 SDK。
+		expect(startSpy).toHaveBeenCalledTimes(1);
+		expect(server.isConnected).toBe(true);
+
+		await server.close();
+	});
+
+	it("rolls connected back to false when the SDK connect rejects", async () => {
+		// If the transport.start throws, SDK server.connect rejects. Our
+		// connect() catch block must restore `connected = false` so subsequent
+		// observers (and `isConnected` callers) see the truthful "not
+		// connected" state rather than a zombie `true`.
+		//
+		// transport.start 抛错 → SDK server.connect reject。connect() 的 catch
+		// 必须把 `connected` 还原为 false，避免 `isConnected` 读到僵尸 `true`。
+		const failingTransport: Transport = {
+			start: async () => {
+				throw new Error("boom-start");
+			},
+			send: async () => {},
+			close: async () => {},
+		};
+		const server = new QuilinMcpServer();
+
+		await expect(server.connect(failingTransport)).rejects.toThrow(
+			/boom-start/,
+		);
+		// Critical assertion: with the bug, connected would remain true and
+		// future `isConnected` reads would be wrong; the rollback restores it.
+		// 关键断言：bug 存在时 connected 会留在 true，回滚后状态恢复正确。
+		expect(server.isConnected).toBe(false);
+	});
+
+	it("restores connected=true when the SDK close rejects", async () => {
+		// If SDK close throws, the underlying connection state is ambiguous.
+		// We surface the error and keep `connected = true` so the caller knows
+		// the close did not actually complete and can retry.
+		//
+		// SDK close 抛错时连接状态未知。把错误抛出去，并保持 `connected = true`，
+		// 让调用方知道 close 没真正完成，可以重试。
+		const failingTransport: Transport = {
+			start: async () => {},
+			send: async () => {},
+			close: async () => {
+				throw new Error("boom-close");
+			},
+		};
+		const server = new QuilinMcpServer();
+		await server.connect(failingTransport);
+		expect(server.isConnected).toBe(true);
+
+		await expect(server.close()).rejects.toThrow(/boom-close/);
+		// connected stays true because close did not succeed; otherwise the
+		// caller would mistakenly believe the transport was released.
+		// connected 保持 true，因为 close 没成功；否则调用方会误以为已释放。
+		expect(server.isConnected).toBe(true);
+	});
+
+	it("SDK rejects array arguments upstream — defensive Array.isArray guard documented in code", async () => {
+		// Belt-and-suspenders documentation: the production CallTool handler
+		// adds `&& !Array.isArray(rawArgs)` to its type guard, but the SDK's
+		// CallToolRequestSchema (Zod `record`) already rejects array
+		// arguments at the JSON-RPC layer with an "expected record, received
+		// array" error before the handler ever runs. This test pins that
+		// upstream behavior so a future SDK loosening is caught by CI rather
+		// than silently bypassing our defensive guard.
+		//
+		// 双重防护的实证：CallTool handler 加了 `!Array.isArray(rawArgs)` 防御，
+		// 而 SDK 的 CallToolRequestSchema（Zod `record`）已经在 JSON-RPC 层
+		// 把数组 arguments 拦下，handler 根本不会被调到。这里把上游行为钉死，
+		// 万一未来 SDK 放宽校验，CI 会立刻发现，而不是悄悄绕过我们的防御。
+		const calls: Array<Record<string, unknown>> = [];
+		const toolBridge: ToolBridge = {
+			callTool: async (_name, args) => {
+				calls.push({ ...args });
+				return { content: [{ type: "text", text: "should-not-run" }] };
+			},
+		};
+		harness = await setupHarness({ toolBridge });
+
+		// Deliberately feeding an array where the schema requires a record so
+		// we can lock in the upstream rejection behavior. Cast through
+		// `unknown` keeps biome happy without `any`.
+		// 故意传一个数组,目的是把上游"必须是 record"的拒绝行为钉死。
+		// 通过 `unknown` 中转可以避开 biome 的 no-any 规则。
+		const arrayArgs = [1, 2, 3] as unknown as Record<string, unknown>;
+		await expect(
+			harness.client.callTool({
+				name: "memory_recall",
+				arguments: arrayArgs,
+			}),
+		).rejects.toThrow(/expected record, received array/i);
+
+		// The defensive guard plus upstream Zod means our bridge is never
+		// invoked with a non-Record args object.
+		// 防御性 guard + 上游 Zod 双保险，bridge 永远不会拿到非 Record 的 args。
+		expect(calls).toEqual([]);
 	});
 
 	it("runQuilinMcpServerOnStdio constructs a connected server, closeable in tests", async () => {
