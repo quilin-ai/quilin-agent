@@ -13,13 +13,17 @@ export {
 	type ResourceBridge,
 } from "./exposed-resources.js";
 export {
+	createInvalidArgsResult,
 	createMockToolBridge,
 	createUnknownToolResult,
 	EXPOSED_TOOL_DESCRIPTORS,
+	EXPOSED_TOOL_INPUT_VALIDATORS,
 	EXPOSED_TOOL_NAMES,
 	type ExposedToolName,
 	isExposedToolName,
 	type ToolBridge,
+	type ValidateToolArgsResult,
+	validateToolArgs,
 } from "./exposed-tools.js";
 export {
 	QuilinMcpServer,

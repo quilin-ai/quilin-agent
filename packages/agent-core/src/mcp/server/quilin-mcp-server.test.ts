@@ -295,22 +295,41 @@ describe("QuilinMcpServer — Stage 3 skeleton", () => {
 		]);
 	});
 
-	it("passes an empty args object when the peer omits arguments entirely", async () => {
+	it("normalizes missing `arguments` to {} and lets inputSchema validation reject when fields are required", async () => {
 		// Covers the `rawArgs == null` branch in the call_tool handler:
-		// a peer that calls a whitelisted tool without `arguments` should
-		// still reach the bridge with `args === {}`.
+		// a peer that calls a whitelisted tool without `arguments` flows
+		// through the null-normalization (rawArgs → {}) and then into
+		// validateToolArgs, which rejects because `memory_recall` requires
+		// `query`. Result: isError:true and bridge never called.
+		//
+		// 覆盖 call_tool handler 里的 `rawArgs == null` 分支:peer 不带
+		// `arguments` 时,空值归一化到 {} 后进入 validateToolArgs;
+		// `memory_recall` 必填 `query` 所以会被拒。结果:isError:true,
+		// bridge 不会被调到。
 		const calls: Array<Record<string, unknown>> = [];
 		const toolBridge: ToolBridge = {
 			callTool: async (_name, args) => {
 				calls.push({ ...args });
-				return { content: [{ type: "text", text: "ok" }] };
+				return { content: [{ type: "text", text: "should-not-run" }] };
 			},
 		};
 		harness = await setupHarness({ toolBridge });
 
-		await harness.client.callTool({ name: "memory_recall" });
+		const result = (await harness.client.callTool({
+			name: "memory_recall",
+		})) as CallToolResult;
 
-		expect(calls).toEqual([{}]);
+		expect(result.isError).toBe(true);
+		const text = result.content
+			.filter(
+				(block): block is { type: "text"; text: string } =>
+					block.type === "text",
+			)
+			.map((block) => block.text)
+			.join("\n");
+		expect(text).toMatch(/invalid arguments/i);
+		expect(text).toMatch(/query/i);
+		expect(calls).toEqual([]);
 	});
 
 	it("serializes concurrent connect() calls via TOCTOU-safe flag flip", async () => {
@@ -461,5 +480,255 @@ describe("QuilinMcpServer — Stage 3 skeleton", () => {
 		expect(server.isConnected).toBe(true);
 		await server.close();
 		expect(server.isConnected).toBe(false);
+	});
+
+	describe("inputSchema enforcement (REAL-2 fix)", () => {
+		// These tests exercise validateToolArgs in the CallTool handler.
+		// The MCP SDK only validates the JSON-RPC envelope; without our
+		// gate, peer args that violate maxLength / required / enum would
+		// reach the bridge unchecked. Each test asserts:
+		//   (a) bridge is NOT called, and
+		//   (b) result.isError === true with a descriptive message.
+		//
+		// 这些测试跑 CallTool handler 里的 validateToolArgs。MCP SDK 只校验
+		// JSON-RPC envelope;没这道关,违反 maxLength / required / enum 的
+		// peer args 会原样打到 bridge。每个测试断言:
+		//   (a) bridge 不被调到;
+		//   (b) result.isError === true 且消息可读。
+
+		function makeCountingBridge(): {
+			bridge: ToolBridge;
+			callCount: () => number;
+		} {
+			let calls = 0;
+			return {
+				bridge: {
+					callTool: async (_name, _args) => {
+						calls += 1;
+						return {
+							content: [{ type: "text", text: "bridge-should-not-run" }],
+						};
+					},
+				},
+				callCount: () => calls,
+			};
+		}
+
+		function extractText(result: CallToolResult): string {
+			return result.content
+				.filter(
+					(block): block is { type: "text"; text: string } =>
+						block.type === "text",
+				)
+				.map((block) => block.text)
+				.join("\n");
+		}
+
+		it("rejects memory_save when content exceeds maxLength: 4096", async () => {
+			const { bridge, callCount } = makeCountingBridge();
+			harness = await setupHarness({ toolBridge: bridge });
+
+			const oversize = "x".repeat(4097);
+			const result = (await harness.client.callTool({
+				name: "memory_save",
+				arguments: { kind: "note", content: oversize },
+			})) as CallToolResult;
+
+			expect(result.isError).toBe(true);
+			const text = extractText(result);
+			expect(text).toMatch(/invalid arguments/i);
+			expect(text).toMatch(/content/i);
+			expect(callCount()).toBe(0);
+		});
+
+		it("rejects memory_save when required field is missing", async () => {
+			const { bridge, callCount } = makeCountingBridge();
+			harness = await setupHarness({ toolBridge: bridge });
+
+			const result = (await harness.client.callTool({
+				name: "memory_save",
+				// Missing `kind` field — required by the schema.
+				// 缺 `kind` 字段 —— schema 要求必填。
+				arguments: { content: "hello" },
+			})) as CallToolResult;
+
+			expect(result.isError).toBe(true);
+			const text = extractText(result);
+			expect(text).toMatch(/invalid arguments/i);
+			expect(text).toMatch(/kind/i);
+			expect(callCount()).toBe(0);
+		});
+
+		it("rejects memory_save when kind is not in the enum", async () => {
+			const { bridge, callCount } = makeCountingBridge();
+			harness = await setupHarness({ toolBridge: bridge });
+
+			const result = (await harness.client.callTool({
+				name: "memory_save",
+				arguments: { kind: "secret", content: "exfil" },
+			})) as CallToolResult;
+
+			expect(result.isError).toBe(true);
+			const text = extractText(result);
+			expect(text).toMatch(/invalid arguments/i);
+			expect(text).toMatch(/kind/i);
+			expect(callCount()).toBe(0);
+		});
+
+		it("rejects memory_save when content is empty (minLength: 1)", async () => {
+			const { bridge, callCount } = makeCountingBridge();
+			harness = await setupHarness({ toolBridge: bridge });
+
+			const result = (await harness.client.callTool({
+				name: "memory_save",
+				arguments: { kind: "note", content: "" },
+			})) as CallToolResult;
+
+			expect(result.isError).toBe(true);
+			const text = extractText(result);
+			expect(text).toMatch(/invalid arguments/i);
+			expect(callCount()).toBe(0);
+		});
+
+		it("rejects memory_recall with non-integer limit", async () => {
+			const { bridge, callCount } = makeCountingBridge();
+			harness = await setupHarness({ toolBridge: bridge });
+
+			const result = (await harness.client.callTool({
+				name: "memory_recall",
+				arguments: { query: "anything", limit: 3.5 },
+			})) as CallToolResult;
+
+			expect(result.isError).toBe(true);
+			const text = extractText(result);
+			expect(text).toMatch(/invalid arguments/i);
+			expect(text).toMatch(/limit/i);
+			expect(callCount()).toBe(0);
+		});
+
+		it("rejects memory_recall when limit exceeds maximum: 50", async () => {
+			const { bridge, callCount } = makeCountingBridge();
+			harness = await setupHarness({ toolBridge: bridge });
+
+			const result = (await harness.client.callTool({
+				name: "memory_recall",
+				arguments: { query: "anything", limit: 999 },
+			})) as CallToolResult;
+
+			expect(result.isError).toBe(true);
+			const text = extractText(result);
+			expect(text).toMatch(/invalid arguments/i);
+			expect(callCount()).toBe(0);
+		});
+
+		it("rejects web_fetch with non-URL string", async () => {
+			const { bridge, callCount } = makeCountingBridge();
+			harness = await setupHarness({ toolBridge: bridge });
+
+			const result = (await harness.client.callTool({
+				name: "web_fetch",
+				arguments: { url: "not a url" },
+			})) as CallToolResult;
+
+			expect(result.isError).toBe(true);
+			const text = extractText(result);
+			expect(text).toMatch(/invalid arguments/i);
+			expect(text).toMatch(/url/i);
+			expect(callCount()).toBe(0);
+		});
+
+		it("rejects memory_save with extra (additionalProperties: false)", async () => {
+			const { bridge, callCount } = makeCountingBridge();
+			harness = await setupHarness({ toolBridge: bridge });
+
+			const result = (await harness.client.callTool({
+				name: "memory_save",
+				arguments: {
+					kind: "note",
+					content: "valid",
+					unexpected: "should-be-rejected",
+				},
+			})) as CallToolResult;
+
+			expect(result.isError).toBe(true);
+			const text = extractText(result);
+			expect(text).toMatch(/invalid arguments/i);
+			expect(callCount()).toBe(0);
+		});
+
+		it("accepts memory_save with a valid 4096-char content (boundary)", async () => {
+			// Positive control: exactly at the upper bound must pass so we
+			// don't ship an off-by-one rejection.
+			//
+			// 阳性对照:正好等于上限必须通过,避免 off-by-one 误拒。
+			const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+			const toolBridge: ToolBridge = {
+				callTool: async (name, args) => {
+					calls.push({ name, args: { ...args } });
+					return { content: [{ type: "text", text: "ok" }] };
+				},
+			};
+			harness = await setupHarness({ toolBridge });
+
+			const exactMax = "y".repeat(4096);
+			const result = (await harness.client.callTool({
+				name: "memory_save",
+				arguments: { kind: "fact", content: exactMax },
+			})) as CallToolResult;
+
+			expect(result.isError ?? false).toBe(false);
+			expect(calls).toHaveLength(1);
+			expect(calls[0].name).toBe("memory_save");
+			expect((calls[0].args as { kind: string }).kind).toBe("fact");
+			expect((calls[0].args as { content: string }).content.length).toBe(4096);
+		});
+
+		it("accepts memory_recall with limit at the upper boundary 50", async () => {
+			const calls: Array<Record<string, unknown>> = [];
+			const toolBridge: ToolBridge = {
+				callTool: async (_name, args) => {
+					calls.push({ ...args });
+					return { content: [{ type: "text", text: "ok" }] };
+				},
+			};
+			harness = await setupHarness({ toolBridge });
+
+			const result = (await harness.client.callTool({
+				name: "memory_recall",
+				arguments: { query: "boundary", limit: 50 },
+			})) as CallToolResult;
+
+			expect(result.isError ?? false).toBe(false);
+			expect(calls).toEqual([{ query: "boundary", limit: 50 }]);
+		});
+	});
+
+	it("truncates long URI in UnknownResourceError message (SUSPECT-1 fix)", async () => {
+		// Hostile peer sends a 500-char URI. Our error message must echo
+		// at most ~80 chars + an ellipsis, so the peer cannot stuff
+		// arbitrary payload into the JSON-RPC error reply (log injection
+		// / noise amplification surface).
+		//
+		// 恶意 peer 发 500 字符 URI。错误消息最多回显 ~80 字符 + 省略号,
+		// 阻止 peer 把任意 payload 塞进 JSON-RPC error reply (日志注入 /
+		// 噪音放大风险)。
+		harness = await setupHarness();
+		const longUri = `bogus://${"A".repeat(500)}`;
+
+		const error = await harness.client.readResource({ uri: longUri }).then(
+			() => {
+				throw new Error("expected rejection");
+			},
+			(err: unknown) => err as Error,
+		);
+
+		const message = String(error);
+		// Echoed prefix must be present but the full 500-char tail must NOT.
+		expect(message).toMatch(/not exposed/i);
+		expect(message).toContain("…");
+		expect(message).not.toContain("A".repeat(200));
+		// Conservative upper bound: message length stays well below the
+		// raw input length. (80 prefix + framing < 500.)
+		expect(message.length).toBeLessThan(longUri.length);
 	});
 });

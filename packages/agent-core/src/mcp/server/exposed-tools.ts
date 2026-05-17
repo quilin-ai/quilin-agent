@@ -18,6 +18,7 @@
  */
 
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
+import { type ZodType, z } from "zod";
 
 /**
  * Names of tools exposed to peer MCP clients in Stage 3.
@@ -99,6 +100,15 @@ export const EXPOSED_TOOL_DESCRIPTORS: Readonly<Record<ExposedToolName, Tool>> =
 			},
 		},
 		web_fetch: {
+			// TODO(Stage-4): once we add the HTTP transport, enforce a
+			// token-bucket rate limiter per peer client so this tool stops
+			// being a free egress channel. Stage 3 stdio-only relies on the
+			// peer trust boundary (parent process spawned us) and does NOT
+			// rate-limit — see docs/research/2026-05-18-quilin-as-server.
+			//
+			// TODO(Stage-4)：HTTP transport 上线后，按 peer client 加 token-bucket
+			// 限流，避免这工具变成免费出口。Stage 3 只走 stdio，信任 parent process
+			// 的进程边界，不做限流；详见 docs/research/2026-05-18-quilin-as-server。
 			name: "web_fetch",
 			description:
 				"Fetch a single URL and convert the page to markdown (Turndown).",
@@ -116,6 +126,119 @@ export const EXPOSED_TOOL_DESCRIPTORS: Readonly<Record<ExposedToolName, Tool>> =
 			},
 		},
 	});
+
+/**
+ * Per-tool runtime validators. The MCP SDK Zod schema only validates the
+ * JSON-RPC envelope (`CallToolRequestSchema`); it does NOT enforce a tool's
+ * own `inputSchema`. Without this gate a peer could ship args that violate
+ * `maxLength`, `enum`, or `required` constraints and the bridge would be
+ * called with garbage. We co-locate a Zod schema next to each JSON Schema
+ * descriptor and run it in the CallTool handler before dispatch.
+ *
+ * 每个工具的运行时校验器。MCP SDK 的 Zod schema 只校验 JSON-RPC envelope
+ * (`CallToolRequestSchema`)；**不**对工具自身的 `inputSchema` 做校验。少了
+ * 这道关，peer 发的 args 可以违反 `maxLength` / `enum` / `required`，bridge
+ * 就会被垃圾输入打到。这里把 Zod schema 跟 JSON Schema 描述符并列放，在
+ * CallTool handler dispatch 前跑一遍。
+ *
+ * The Zod shapes must stay in lock-step with the JSON Schema in
+ * `EXPOSED_TOOL_DESCRIPTORS` above — if you change one, change the other.
+ *
+ * Zod 形状必须跟上面 `EXPOSED_TOOL_DESCRIPTORS` 里的 JSON Schema 完全对齐；
+ * 改一个就要同步改另一个。
+ */
+export const EXPOSED_TOOL_INPUT_VALIDATORS: Readonly<
+	Record<ExposedToolName, ZodType>
+> = Object.freeze({
+	memory_recall: z
+		.object({
+			query: z.string(),
+			limit: z.number().int().min(1).max(50).optional(),
+		})
+		.strict(),
+	memory_save: z
+		.object({
+			kind: z.enum(["note", "fact", "preference"]),
+			content: z.string().min(1).max(4096),
+		})
+		.strict(),
+	skill_search: z
+		.object({
+			query: z.string(),
+		})
+		.strict(),
+	web_fetch: z
+		.object({
+			url: z.string().url(),
+		})
+		.strict(),
+});
+
+/**
+ * Validate `args` against the tool's input schema. Returns `{ ok: true }`
+ * with the parsed args on success, or `{ ok: false, error }` with a
+ * human-readable error string suitable for embedding in a `CallToolResult`.
+ * Never throws — callers convert the failure into `isError: true`.
+ *
+ * 校验 `args` 是否符合工具 input schema。成功返回 `{ ok: true }` 带 parsed
+ * args；失败返回 `{ ok: false, error }`，error 是给人看的字符串，可以直接塞进
+ * `CallToolResult`。**永不抛**，调用方把失败转成 `isError: true`。
+ */
+export type ValidateToolArgsResult =
+	| { readonly ok: true; readonly args: Readonly<Record<string, unknown>> }
+	| { readonly ok: false; readonly error: string };
+
+export function validateToolArgs(
+	name: ExposedToolName,
+	args: Readonly<Record<string, unknown>>,
+): ValidateToolArgsResult {
+	const validator = EXPOSED_TOOL_INPUT_VALIDATORS[name];
+	const result = validator.safeParse(args);
+	if (result.success) {
+		return {
+			ok: true,
+			args: result.data as Readonly<Record<string, unknown>>,
+		};
+	}
+	// Build a compact one-line error: "field.path: message; field.path: message"
+	// so the peer can fix their call without us leaking internal state.
+	//
+	// 拼成一行紧凑错误："field.path: message; ..." 让 peer 能改请求，又不泄漏
+	// 内部状态。
+	const lines = result.error.issues.map((issue) => {
+		const path = issue.path.length > 0 ? issue.path.join(".") : "(root)";
+		return `${path}: ${issue.message}`;
+	});
+	return {
+		ok: false,
+		error: lines.join("; "),
+	};
+}
+
+/**
+ * Build the standard "invalid arguments" CallToolResult. Returned to the
+ * peer when `validateToolArgs` rejects the input. We return a result with
+ * `isError: true` instead of throwing so the transport stays alive (MCP
+ * convention; matches `createUnknownToolResult`).
+ *
+ * 构造标准的"参数非法" CallToolResult。`validateToolArgs` 拒掉时回给 peer。
+ * 返回 `isError: true` 而不是抛异常，让 transport 不见异常（MCP 约定；跟
+ * `createUnknownToolResult` 一致）。
+ */
+export function createInvalidArgsResult(
+	name: string,
+	error: string,
+): CallToolResult {
+	return {
+		content: [
+			{
+				type: "text",
+				text: `Invalid arguments for tool "${name}": ${error}`,
+			},
+		],
+		isError: true,
+	};
+}
 
 /**
  * Pluggable bridge to real Quilin subsystems. The skeleton ships a mock

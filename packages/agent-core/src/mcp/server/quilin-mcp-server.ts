@@ -35,13 +35,27 @@ import {
 	type ResourceBridge,
 } from "./exposed-resources.js";
 import {
+	createInvalidArgsResult,
 	createMockToolBridge,
 	createUnknownToolResult,
 	EXPOSED_TOOL_DESCRIPTORS,
 	EXPOSED_TOOL_NAMES,
 	isExposedToolName,
 	type ToolBridge,
+	validateToolArgs,
 } from "./exposed-tools.js";
+
+/**
+ * Max characters we echo from a peer-supplied URI back into an error
+ * message. Caps reflection length so a hostile peer cannot use the error
+ * path as a low-rate amplification or log-injection channel. Stdio peers
+ * are already trusted, but Stage 4 (HTTP) will inherit this gate.
+ *
+ * 在错误消息里回显 peer 传入 URI 的最大字符数。截断长度,避免恶意 peer
+ * 用错误路径做低速放大或日志注入。stdio peer 本就受信,但 Stage 4 (HTTP)
+ * 会继承这道关。
+ */
+const UNKNOWN_RESOURCE_URI_ECHO_MAX = 80;
 
 const SERVER_INFO = {
 	name: "quilin-mcp-server",
@@ -59,7 +73,20 @@ const SERVER_INFO = {
  */
 class UnknownResourceError extends Error {
 	constructor(uri: string) {
-		super(`Resource "${uri}" is not exposed by this Quilin MCP server.`);
+		// Truncate the echoed URI so a hostile peer cannot stuff arbitrary
+		// payloads into our error message (potential log injection / noise
+		// amplification). We keep the prefix because operators need enough
+		// to recognize a misconfigured client; full URI is recoverable from
+		// the originating request, not from this message.
+		//
+		// 截断回显的 URI,避免恶意 peer 把任意 payload 塞进错误消息
+		// (日志注入 / 噪音放大风险)。保留前缀让运维能识别配错的 client;
+		// 完整 URI 从原请求里能拿到,不依赖这条消息。
+		const echoed =
+			uri.length > UNKNOWN_RESOURCE_URI_ECHO_MAX
+				? `${uri.slice(0, UNKNOWN_RESOURCE_URI_ECHO_MAX)}…`
+				: uri;
+		super(`Resource "${echoed}" is not exposed by this Quilin MCP server.`);
 		this.name = "UnknownResourceError";
 	}
 }
@@ -179,7 +206,22 @@ export class QuilinMcpServer {
 				!Array.isArray(rawArgs)
 					? (rawArgs as Readonly<Record<string, unknown>>)
 					: {};
-			return this.toolBridge.callTool(name, args);
+			// inputSchema enforcement: the SDK validates the JSON-RPC envelope
+			// but NOT a tool's own inputSchema. Without this gate, peer-supplied
+			// args (e.g. `memory_save.content` exceeding `maxLength: 4096`,
+			// missing `required` fields, wrong enum values) would reach the
+			// bridge unchecked. Reject with `isError: true` so transport stays
+			// alive (MCP convention).
+			//
+			// inputSchema 强制：SDK 校验 JSON-RPC envelope，但**不**校验工具自身
+			// 的 inputSchema。少了这道关，peer 发的 args（比如 memory_save.content
+			// 超 4096 字符、缺 required 字段、enum 值不对）会原封不动打到 bridge。
+			// 失败回 isError:true，保持 transport 不挂（MCP 约定）。
+			const validation = validateToolArgs(name, args);
+			if (!validation.ok) {
+				return createInvalidArgsResult(name, validation.error);
+			}
+			return this.toolBridge.callTool(name, validation.args);
 		});
 
 		this.server.setRequestHandler(ListResourcesRequestSchema, async () => ({

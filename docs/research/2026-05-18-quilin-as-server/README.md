@@ -32,14 +32,14 @@ The exposed surface is intentionally narrow. Anything that can mutate the user's
 | `memory_recall` | Read-only semantic / KG recall over `quilin-mem` (4-tier memory store). | Other clients need long-term context Quilin already built up. | Low — read-only. |
 | `memory_save` | Append a single typed observation to `quilin-mem`. | Lets external clients log a useful note into Quilin. | Low — additive, bounded. |
 | `skill_search` | Search the local SKILL.md catalog (Skills engineering, domain 13). | Cross-client discoverability of Quilin skills. | Low — read-only catalog. |
-| `web_fetch` | Fetch a single URL → markdown via Turndown (already implemented as a tool). | Useful for client agents that lack a fetch tool. | Medium — outbound network; rate-limited. |
+| `web_fetch` | Fetch a single URL → markdown via Turndown (already implemented as a tool). | Useful for client agents that lack a fetch tool. | Medium — outbound network. Stage 3 does **not** rate-limit (stdio peer trust boundary); Stage 4 (HTTP transport) introduces a per-peer token-bucket limiter. See `// TODO(Stage-4)` in `exposed-tools.ts`. |
 
 | 工具 | 说明 | 暴露原因 | 风险 |
 |------|------|---------|------|
 | `memory_recall` | 只读：对 `quilin-mem`（四层记忆）做语义 / 知识图谱召回 | 别的客户端要复用 Quilin 已经积累的长期上下文 | 低，纯读 |
 | `memory_save` | 追加单条带类型的 observation 到 `quilin-mem` | 让外部 client 把有用笔记写回 Quilin | 低，仅追加、有上限 |
 | `skill_search` | 搜本地 SKILL.md 目录（Skills 工程，第 13 领域） | 让所有 client 都能发现 Quilin 的 skill | 低，只读目录 |
-| `web_fetch` | 拉单个 URL → Turndown 转 markdown（已实现的工具） | 给没有 fetch 工具的 client agent 用 | 中：出站网络；要限流 |
+| `web_fetch` | 拉单个 URL → Turndown 转 markdown（已实现的工具） | 给没有 fetch 工具的 client agent 用 | 中：出站网络。Stage 3 **不**做限流（信任 stdio peer 进程边界）；Stage 4（HTTP transport）引入 per-peer token-bucket 限流。代码里见 `exposed-tools.ts` 的 `// TODO(Stage-4)` 注释。 |
 
 **Explicitly NOT exposed in MVP** / **MVP 明确不暴露**:
 
