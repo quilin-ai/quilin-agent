@@ -122,14 +122,26 @@ export const ELICITATION_DEFAULT_TIMEOUT_MS = 60_000;
  * Anything else (javascript:, data:, file:, vbscript:, custom schemes, …) is
  * rejected before the resolver is called.
  *
+ * Exposed as a `Object.freeze`d readonly tuple so callers cannot cast the
+ * value and mutate the underlying collection (e.g.
+ * `(SET as Set<string>).add("javascript:")`). A `Set` instance is mutable at
+ * runtime even when typed `ReadonlySet`, so we do not expose one. Containment
+ * is checked with `Array.prototype.includes` against the frozen list (O(2),
+ * negligible cost for two entries).
+ *
  * URL 模式 elicitation handler 允许透出给 resolver 的协议白名单。其他协议
  * （javascript:, data:, file:, vbscript:, 自定义 scheme 等）在调用 resolver
  * 之前就会被拒绝。
+ *
+ * 这里导出的是 `Object.freeze` 的只读元组，调用方无法通过类型 cast 反向篡改
+ * 底层集合（例如 `(SET as Set<string>).add("javascript:")`）。`Set` 实例即使
+ * 标了 `ReadonlySet` 在运行时依然可变，所以我们不暴露 `Set`，而是用数组的
+ * `includes` 做查表（两项 O(2)，开销可忽略）。
  */
-export const ELICITATION_URL_ALLOWED_SCHEMES: ReadonlySet<string> = new Set([
+export const ELICITATION_URL_ALLOWED_SCHEMES = Object.freeze([
 	"https:",
 	"http:",
-]);
+] as const);
 
 /**
  * Maximum nesting depth allowed inside `requestedSchema`. Anything deeper is
@@ -278,7 +290,9 @@ function isAllowedElicitationUrl(rawUrl: string): boolean {
 	} catch {
 		return false;
 	}
-	return ELICITATION_URL_ALLOWED_SCHEMES.has(parsed.protocol);
+	return (ELICITATION_URL_ALLOWED_SCHEMES as readonly string[]).includes(
+		parsed.protocol,
+	);
 }
 
 interface SchemaBoundsOptions {

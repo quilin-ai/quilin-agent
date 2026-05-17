@@ -5,6 +5,7 @@ import {
 	ELICITATION_SCHEMA_MAX_DEPTH,
 	ELICITATION_SCHEMA_MAX_KEYS,
 	ELICITATION_SCHEMA_MAX_STRING_LEN,
+	ELICITATION_URL_ALLOWED_SCHEMES,
 	type ElicitationCapableClient,
 	type ElicitationHandlerOptions,
 	type ElicitationRequest,
@@ -566,5 +567,40 @@ describe("validateSchemaBounds (REAL-3 — unit-level)", () => {
 	it("handles arrays without counting them as object keys", () => {
 		const r = validateSchemaBounds({ list: [1, 2, 3, "x"] }, bounds);
 		expect(r.ok).toBe(true);
+	});
+});
+
+describe("ELICITATION_URL_ALLOWED_SCHEMES tamper resistance (Round 2 REAL-1)", () => {
+	it("exposes a frozen readonly array (not a Set instance)", () => {
+		// Set instances are runtime-mutable even when typed `ReadonlySet`.
+		// We must expose an Array so attackers cannot cast and `.add()`.
+		expect(Array.isArray(ELICITATION_URL_ALLOWED_SCHEMES)).toBe(true);
+		expect(Object.isFrozen(ELICITATION_URL_ALLOWED_SCHEMES)).toBe(true);
+	});
+
+	it("ignores runtime tamper attempts (cast + mutate cannot affect scheme check)", async () => {
+		// Attacker-style attempt: cast away the readonly modifier and try to
+		// push a hostile scheme. With a frozen array this throws in strict
+		// mode; with a Set the equivalent `.add` would silently succeed and
+		// open the gate. We assert (a) the push fails and (b) the underlying
+		// scheme check is unaffected.
+		const tampered = ELICITATION_URL_ALLOWED_SCHEMES as unknown as string[];
+		expect(() => tampered.push("javascript:")).toThrow();
+		expect(ELICITATION_URL_ALLOWED_SCHEMES).toEqual(["https:", "http:"]);
+
+		// And the elicitation handler still rejects javascript: end-to-end.
+		const resolver = vi.fn<ElicitationResolver>(() => ({ action: "accept" }));
+		const { handler } = registerAndGetHandler({ resolver });
+		const result = await handler(
+			{
+				params: {
+					mode: "url",
+					url: "javascript:alert(1)",
+				},
+			},
+			{},
+		);
+		expect(result).toEqual({ action: "cancel" });
+		expect(resolver).not.toHaveBeenCalled();
 	});
 });
