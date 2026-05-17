@@ -1,6 +1,21 @@
 # 记忆工程（Memory Engineering）
 
-> **实现状态（2026-04-30 校准）**
+> **实现状态（2026-05-18 增量更新，前序 2026-04-30 实证保留）**
+>
+> **2026-05-15 新增 / Shipped 2026-05-15**：
+> - ✅ **UX-4 KG-based 记忆重做完整 4 slice**：
+>   - Slice 1 `kg_extractor.py` —— LLM 三元组抽取 + 反幻觉 + 反注入 + SSRF guard + 28 tests (`b1e4a6d`)
+>   - Slice 2 `memory_backfill_kg` MCP tool —— 一次性回填现有 memory_records 到 KG + `kg_backfill.py` 编排 + 12 tests (`901e989`)
+>   - Slice 3.1 `kg_dump_for_viz` MCP tool + `TemporalKnowledgeGraph.dump_edges` + `apps/web/app/api/memory/graph/` endpoint + 4 tests (`6afa74f`)
+>   - Slice 3.2 `@xyflow/react` reactflow viz + 知识图谱 tab on /memory page + Playwright e2e (`9abbde8` + `fc4afe3`)
+>   - Slice 4 `consolidation_log` SQLite 表 + `ConsolidationLogStore` + `consolidation_log_recent` MCP tool + `/api/memory/consolidations` endpoint + timeline UI + 11 tests (`376beea` + `8df50c3`)
+>   - Plan 见 [`ux4-kg-rebuild-plan.md`](./ux4-kg-rebuild-plan.md)（已 ✅）
+> - ✅ **`memory_delete` MCP tool**：让 agent 自己清理重复/过时记忆 + 2 tests (`e059b9e`)
+> - ✅ **Profile self-evolution + 纯 markdown 迁移**：agent 把每轮会话观察自动 append 到 `~/.quilin/user.md` / `soul.md`（Task #12），user.md drop YAML frontmatter 改纯 markdown（Task #13 + `59a618d`）
+> - ✅ **跨语言 user.md write lock**：Python fcntl advisory lock (`0c09867`) + TS `proper-lockfile` (`77390c7`)，关闭 TS-vs-Python 写 race（Task #16）
+> - ✅ **Iter F web 持久化 SQLite chat sessions**：4 slice 全部 ship（schema + read/write + 重启恢复 + DELETE + 原子 seq alloc + localStorage 迁移），见 `apps/web/lib/sessions-db/` + `docs/STATUS-iter-F-autonomous-2026-05-15.md`
+>
+> **2026-04-30 校准（保留作历史）／ Preserved as historical baseline:**
 > - ✅ **已实现**：`providers/memory/src/quilin_mem/` — quilin-mem MCP server、working / episodic / semantic / skill 四层、SQLite + FTS5/BM25、KG 子图检索、vector retriever 接口、hybrid retriever + reranker、event log + trace context、ProfileStore / ProfileUpdater、scratchpad、idle_budget + consolidator dry-run、soul schema validator。
 > - ✅ **L3a observer 已激活 / L3a observer is wired into the runtime**：
 >   - Class implementation lives at `providers/memory/src/quilin_mem/observer.py:1404` (`L3aObserver`); deterministic L1/L2 extraction runs every turn, the flash-tier LLM (`deepseek-v4-flash`) is triggered every `frequency` turns (default 10).
