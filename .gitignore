@@ -85,3 +85,18 @@ briefs/
 
 # === Local Claude harness state ===
 .claude/scheduled_tasks.json
+
+# === Next.js stable build artifact (apps/web/.next-stable-3008/) ===
+# next.config.ts redirects `distDir` to .next-stable-3008/ when
+# QUILIN_STABLE_BUILD=1 so the mac-app stable backend (3008) doesn't
+# fight over .next/ with concurrent `pnpm dev`. Build output, never
+# committed.
+.next-stable-3008/
+
+# === Playwright a11y snapshot debug artifacts ===
+# Files produced by `mcp__playwright__browser_snapshot` capture or
+# similar inspectors. Debug-only, never committed.
+snapshot-stream-*.yml
+
+# === Local user data dir ===
+.local/
