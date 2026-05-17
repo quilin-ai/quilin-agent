@@ -1,11 +1,13 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WriteAuthority } from "../safety/write-authority.js";
 import {
 	DEFAULT_REGISTRY_BASE_URL,
+	FALLBACK_REGISTRY_BASE_URL,
 	type RegistrySkillEntry,
+	resolveRegistryBaseUrlFromEnv,
 	type SkillSignatureVerifier,
 	SkillsRegistryClient,
 } from "./registry-client.js";
@@ -529,5 +531,307 @@ describe("SkillsRegistryClient.installSkill", () => {
 		const result = await client.installSkill(buildRequest(targetRoot));
 		expect(result.ok).toBe(true);
 		expect(authorize).toHaveBeenCalledOnce();
+	});
+
+	it("installs into id-hashed subdir to prevent sanitize collisions (SUSPECT-1)", async () => {
+		const targetRoot = await createTempDir();
+		const client = new SkillsRegistryClient({
+			cacheDir: targetRoot,
+			fetchFn: (() => {
+				throw new Error("network not expected");
+			}) as unknown as typeof fetch,
+			writeAuthority: makeAuthority(true),
+		});
+
+		// Two entries whose names collide after sanitize ("my skill" and
+		// "my-skill" both → "my_skill") but with distinct registry ids.
+		const entryA: RegistrySkillEntry = {
+			id: "publisher-a/skill",
+			name: "my skill",
+			description: "",
+			version: "1.0.0",
+			downloadUrl: "https://cdn.agentskills.io/a/SKILL.md",
+		};
+		const entryB: RegistrySkillEntry = {
+			id: "publisher-b/skill",
+			name: "my-skill",
+			description: "",
+			version: "1.0.0",
+			downloadUrl: "https://cdn.agentskills.io/b/SKILL.md",
+		};
+
+		const resA = await client.installSkill({
+			cachePath: "/tmp/cache/a/SKILL.md",
+			body: "# from A",
+			entry: entryA,
+			targetRoot,
+		});
+		const resB = await client.installSkill({
+			cachePath: "/tmp/cache/b/SKILL.md",
+			body: "# from B",
+			entry: entryB,
+			targetRoot,
+		});
+
+		expect(resA.ok).toBe(true);
+		expect(resB.ok).toBe(true);
+		if (resA.ok && resB.ok) {
+			expect(resA.installedPath).not.toBe(resB.installedPath);
+			const writtenA = await readFile(resA.installedPath, "utf8");
+			const writtenB = await readFile(resB.installedPath, "utf8");
+			expect(writtenA).toBe("# from A");
+			expect(writtenB).toBe("# from B");
+		}
+	});
+});
+
+describe("SkillsRegistryClient SSRF guard on downloadUrl (REAL-1)", () => {
+	const ssrfCases: ReadonlyArray<readonly [label: string, url: string]> = [
+		["file://", "file:///etc/passwd"],
+		["AWS IMDS", "http://169.254.169.254/latest/meta-data/"],
+		["localhost db probe", "http://localhost:5432/"],
+		["loopback IPv4", "http://127.0.0.1:8080/SKILL.md"],
+		["RFC1918", "http://10.0.0.1/SKILL.md"],
+		["GCP metadata alias", "http://metadata.google.internal/"],
+	];
+
+	for (const [label, malicious] of ssrfCases) {
+		it(`rejects manifest downloadUrl=${label}`, async () => {
+			const cacheDir = await createTempDir();
+			const fetchFn = vi.fn().mockResolvedValueOnce(
+				jsonResponse({
+					id: "evil",
+					name: "evil",
+					version: "1.0.0",
+					downloadUrl: malicious,
+				}),
+			);
+			const client = new SkillsRegistryClient({
+				cacheDir,
+				fetchFn: fetchFn as unknown as typeof fetch,
+				writeAuthority: makeAuthority(),
+			});
+			await expect(client.pullSkill("evil", "1.0.0")).rejects.toThrow(
+				/rejected downloadUrl/u,
+			);
+			// fetch should have been called once (for the manifest) and never
+			// for the malicious body URL.
+			expect(fetchFn).toHaveBeenCalledOnce();
+		});
+	}
+
+	it("accepts a legitimate https downloadUrl", async () => {
+		const cacheDir = await createTempDir();
+		const fetchFn = vi
+			.fn()
+			.mockResolvedValueOnce(
+				jsonResponse({
+					id: "good",
+					name: "good",
+					version: "1.0.0",
+					downloadUrl: "https://cdn.agentskills.io/good/SKILL.md",
+				}),
+			)
+			.mockResolvedValueOnce(textResponse("# good"));
+		const client = new SkillsRegistryClient({
+			cacheDir,
+			fetchFn: fetchFn as unknown as typeof fetch,
+			writeAuthority: makeAuthority(),
+		});
+		const pulled = await client.pullSkill("good", "1.0.0");
+		expect(pulled.body).toBe("# good");
+		expect(fetchFn).toHaveBeenCalledTimes(2);
+	});
+});
+
+describe("SkillsRegistryClient OOM guards (REAL-2 / REAL-3)", () => {
+	it("REAL-2: pullSkill rejects when body Content-Length exceeds maxBodyBytes", async () => {
+		const cacheDir = await createTempDir();
+		// huge declared length, tiny actual body — we must reject before
+		// reading anything.
+		const bigBodyResponse = new Response("payload", {
+			status: 200,
+			headers: {
+				"content-type": "text/markdown",
+				"content-length": "10000000",
+			},
+		});
+		const fetchFn = vi
+			.fn()
+			.mockResolvedValueOnce(jsonResponse(sampleEntry))
+			.mockResolvedValueOnce(bigBodyResponse);
+		const client = new SkillsRegistryClient({
+			cacheDir,
+			fetchFn: fetchFn as unknown as typeof fetch,
+			writeAuthority: makeAuthority(),
+			maxBodyBytes: 1024,
+		});
+		await expect(client.pullSkill("test-skill", "1.0.0")).rejects.toThrow(
+			/exceeds maxBodyBytes/u,
+		);
+	});
+
+	it("REAL-2: pullSkill rejects when streamed bytes exceed maxBodyBytes (no Content-Length)", async () => {
+		const cacheDir = await createTempDir();
+		const big = "x".repeat(5000);
+		const bodyResponse = new Response(big, {
+			status: 200,
+			headers: { "content-type": "text/markdown" },
+		});
+		const fetchFn = vi
+			.fn()
+			.mockResolvedValueOnce(jsonResponse(sampleEntry))
+			.mockResolvedValueOnce(bodyResponse);
+		const client = new SkillsRegistryClient({
+			cacheDir,
+			fetchFn: fetchFn as unknown as typeof fetch,
+			writeAuthority: makeAuthority(),
+			maxBodyBytes: 100,
+		});
+		await expect(client.pullSkill("test-skill", "1.0.0")).rejects.toThrow(
+			/exceeds maxBodyBytes/u,
+		);
+	});
+
+	it("REAL-3: searchRegistry rejects when payload exceeds maxBodyBytes", async () => {
+		const cacheDir = await createTempDir();
+		// 5 KB of JSON, maxBodyBytes capped at 100.
+		const huge = JSON.stringify({
+			results: Array.from({ length: 200 }, (_, i) => ({
+				id: `s${i}`,
+				name: `name-${i}`,
+				version: "1.0.0",
+				downloadUrl: "https://cdn.example.com/x",
+			})),
+		});
+		const fetchFn = vi.fn(
+			async () =>
+				new Response(huge, {
+					status: 200,
+					headers: { "content-type": "application/json" },
+				}),
+		);
+		const client = new SkillsRegistryClient({
+			cacheDir,
+			fetchFn: fetchFn as unknown as typeof fetch,
+			writeAuthority: makeAuthority(),
+			maxBodyBytes: 100,
+		});
+		await expect(client.searchRegistry("anything")).rejects.toThrow(
+			/search response exceeds maxBodyBytes/u,
+		);
+	});
+
+	it("REAL-2: pullSkill surfaces JSON parse failure on manifest", async () => {
+		const cacheDir = await createTempDir();
+		const fetchFn = vi.fn(
+			async () =>
+				new Response("{ not valid", {
+					status: 200,
+					headers: { "content-type": "application/json" },
+				}),
+		);
+		const client = new SkillsRegistryClient({
+			cacheDir,
+			fetchFn: fetchFn as unknown as typeof fetch,
+			writeAuthority: makeAuthority(),
+		});
+		await expect(client.pullSkill("x", "1.0.0")).rejects.toThrow(
+			/manifest is not valid JSON/u,
+		);
+	});
+
+	it("REAL-3: searchRegistry surfaces JSON parse failure with a stable error", async () => {
+		const cacheDir = await createTempDir();
+		const fetchFn = vi.fn(
+			async () =>
+				new Response("{ not valid json", {
+					status: 200,
+					headers: { "content-type": "application/json" },
+				}),
+		);
+		const client = new SkillsRegistryClient({
+			cacheDir,
+			fetchFn: fetchFn as unknown as typeof fetch,
+			writeAuthority: makeAuthority(),
+		});
+		await expect(client.searchRegistry("x")).rejects.toThrow(/not valid JSON/u);
+	});
+});
+
+describe("resolveRegistryBaseUrlFromEnv (REAL-4)", () => {
+	let stderrWrite: ReturnType<typeof vi.spyOn>;
+
+	beforeEach(() => {
+		// silence the structured warn lines emitted on fallback so the test
+		// output stays clean
+		stderrWrite = vi
+			.spyOn(process.stderr, "write")
+			.mockImplementation(() => true);
+	});
+
+	afterEach(() => {
+		stderrWrite.mockRestore();
+	});
+
+	it("returns the fallback when env var is unset", () => {
+		const result = resolveRegistryBaseUrlFromEnv({});
+		expect(result).toBe(FALLBACK_REGISTRY_BASE_URL);
+	});
+
+	it("accepts a valid https URL", () => {
+		const result = resolveRegistryBaseUrlFromEnv({
+			AGENTSKILLS_REGISTRY_URL: "https://registry.example.com/v1",
+		});
+		expect(result).toBe("https://registry.example.com/v1");
+	});
+
+	it("rejects http:// in strict mode and falls back with a warn line", () => {
+		const result = resolveRegistryBaseUrlFromEnv({
+			AGENTSKILLS_REGISTRY_URL: "http://registry.example.com/v1",
+		});
+		expect(result).toBe(FALLBACK_REGISTRY_BASE_URL);
+		expect(stderrWrite).toHaveBeenCalled();
+		const logged = String(stderrWrite.mock.calls[0]?.[0] ?? "");
+		expect(logged).toContain("env_registry_url_rejected");
+		expect(logged).toContain("disallowed protocol");
+	});
+
+	it("rejects file:// even with the insecure opt-in (still not http/https)", () => {
+		const result = resolveRegistryBaseUrlFromEnv({
+			AGENTSKILLS_REGISTRY_URL: "file:///tmp/registry",
+			AGENTSKILLS_ALLOW_INSECURE: "1",
+		});
+		expect(result).toBe(FALLBACK_REGISTRY_BASE_URL);
+	});
+
+	it("rejects loopback by default (SSRF)", () => {
+		const result = resolveRegistryBaseUrlFromEnv({
+			AGENTSKILLS_REGISTRY_URL: "https://localhost:5432/v1",
+		});
+		expect(result).toBe(FALLBACK_REGISTRY_BASE_URL);
+	});
+
+	it("accepts http + localhost only when AGENTSKILLS_ALLOW_INSECURE=1", () => {
+		const result = resolveRegistryBaseUrlFromEnv({
+			AGENTSKILLS_REGISTRY_URL: "http://localhost:5000/v1",
+			AGENTSKILLS_ALLOW_INSECURE: "1",
+		});
+		expect(result).toBe("http://localhost:5000/v1");
+	});
+
+	it("rejects malformed URLs with a structured warn", () => {
+		const result = resolveRegistryBaseUrlFromEnv({
+			AGENTSKILLS_REGISTRY_URL: "not a url",
+		});
+		expect(result).toBe(FALLBACK_REGISTRY_BASE_URL);
+		const logged = String(stderrWrite.mock.calls[0]?.[0] ?? "");
+		expect(logged).toContain("invalid URL");
+	});
+
+	it("default base url constant resolves at module load", () => {
+		// Sanity check the back-compat re-export still points somewhere
+		// reasonable (either the fallback or a previously-validated env).
+		expect(DEFAULT_REGISTRY_BASE_URL).toMatch(/^https?:\/\//u);
 	});
 });

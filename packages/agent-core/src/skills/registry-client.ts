@@ -29,12 +29,18 @@
  * stays separate so the two marketplaces can evolve independently.
  */
 
+import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type {
 	WriteAuthority,
 	WriteRequest,
 } from "../safety/write-authority.js";
+import {
+	assertSafeUrl,
+	BodyTooLargeError,
+	readBodyWithSizeLimit,
+} from "./url-guard.js";
 
 /**
  * 注册表 skill 条目 / Registry skill entry
@@ -131,8 +137,66 @@ export interface SkillsRegistryClientOptions {
 	readonly maxBodyBytes?: number;
 }
 
-export const DEFAULT_REGISTRY_BASE_URL =
-	process.env.AGENTSKILLS_REGISTRY_URL ?? "https://api.agentskills.io/v1";
+/**
+ * 默认 fallback URL / Default fallback URL
+ *
+ * Used when the env override is missing, malformed, or fails the SSRF /
+ * protocol guard. Kept as a separate constant so tests and callers can
+ * assert the post-guard baseUrl shape.
+ */
+export const FALLBACK_REGISTRY_BASE_URL = "https://api.agentskills.io/v1";
+
+/**
+ * 解析并校验 env 注册表 URL / Resolve + validate env-supplied registry URL
+ *
+ * `AGENTSKILLS_REGISTRY_URL` is set by humans (or worse, accidentally inherited
+ * from CI / shell profile / parent process) — we must not blindly trust it.
+ * Rules:
+ *   - missing env → use FALLBACK_REGISTRY_BASE_URL silently
+ *   - protocol must be https (REAL-4 hardening)
+ *   - hostname must not be RFC1918/loopback/link-local/metadata
+ *   - escape hatch: `AGENTSKILLS_ALLOW_INSECURE=1` allows http + private hosts
+ *     (intended only for local development against a stub registry)
+ *   - any rejection emits a structured warn log to stderr and falls back
+ *
+ * 解析环境变量 AGENTSKILLS_REGISTRY_URL：默认强制 https + 排除内网；
+ * 设 AGENTSKILLS_ALLOW_INSECURE=1 可放行 http + 内网（仅本地开发用）。
+ */
+export function resolveRegistryBaseUrlFromEnv(
+	env: NodeJS.ProcessEnv = process.env,
+): string {
+	const candidate = env.AGENTSKILLS_REGISTRY_URL;
+	if (candidate == null || candidate.trim().length === 0) {
+		return FALLBACK_REGISTRY_BASE_URL;
+	}
+	const insecureOptIn = env.AGENTSKILLS_ALLOW_INSECURE === "1";
+	const result = assertSafeUrl(candidate, {
+		allowedProtocols: insecureOptIn ? ["https:", "http:"] : ["https:"],
+		allowPrivateHosts: insecureOptIn,
+	});
+	if (!result.ok) {
+		// structured JSON warn — keeps the observability logging contract
+		// (one JSON object per line on stderr) for downstream log shippers.
+		process.stderr.write(
+			`${JSON.stringify({
+				level: "warn",
+				module: "skills/registry-client",
+				event: "env_registry_url_rejected",
+				candidate,
+				reason: result.reason,
+				fallback: FALLBACK_REGISTRY_BASE_URL,
+			})}\n`,
+		);
+		return FALLBACK_REGISTRY_BASE_URL;
+	}
+	return candidate;
+}
+
+/**
+ * @deprecated 直接使用 `resolveRegistryBaseUrlFromEnv()` — 该常量在模块加载时
+ *             解析一次，无法响应 env 在测试中临时改变。保留以兼容现有 import。
+ */
+export const DEFAULT_REGISTRY_BASE_URL = resolveRegistryBaseUrlFromEnv();
 
 export const DEFAULT_REGISTRY_MAX_BODY_BYTES = 1024 * 1024;
 
@@ -168,7 +232,7 @@ export class SkillsRegistryClient {
 	constructor(
 		options: SkillsRegistryClientOptions & SkillsRegistryClientInternals,
 	) {
-		this.baseUrl = (options.baseUrl ?? DEFAULT_REGISTRY_BASE_URL).replace(
+		this.baseUrl = (options.baseUrl ?? resolveRegistryBaseUrlFromEnv()).replace(
 			/\/+$/u,
 			"",
 		);
@@ -194,7 +258,8 @@ export class SkillsRegistryClient {
 			return [];
 		}
 		const url = `${this.baseUrl}/skills/search?q=${encodeURIComponent(trimmed)}`;
-		const response = await this.fetchFn(url);
+		const controller = new AbortController();
+		const response = await this.fetchFn(url, { signal: controller.signal });
 		if (response.status === 404) {
 			return [];
 		}
@@ -203,7 +268,32 @@ export class SkillsRegistryClient {
 				`agentskills.io search failed: HTTP ${response.status} for ${url}`,
 			);
 		}
-		const payload = (await response.json()) as unknown;
+		// REAL-3: stream-read with hard size cap. A 1 GB search response
+		// would OOM the agent if we called `.json()` directly.
+		let text: string;
+		try {
+			text = await readBodyWithSizeLimit(
+				response,
+				this.maxBodyBytes,
+				controller,
+			);
+		} catch (error) {
+			if (error instanceof BodyTooLargeError) {
+				throw new Error(
+					`agentskills.io search response exceeds maxBodyBytes (${error.maxBytes}) for ${url}`,
+				);
+			}
+			throw error;
+		}
+		let payload: unknown;
+		try {
+			payload = JSON.parse(text) as unknown;
+		} catch (error) {
+			const msg = error instanceof Error ? error.message : String(error);
+			throw new Error(
+				`agentskills.io search response is not valid JSON for ${url}: ${msg}`,
+			);
+		}
 		return normalizeSearchResults(payload);
 	}
 
@@ -219,13 +309,40 @@ export class SkillsRegistryClient {
 	 */
 	async pullSkill(skillId: string, version: string): Promise<PulledSkill> {
 		const manifestUrl = `${this.baseUrl}/skills/${encodeURIComponent(skillId)}/versions/${encodeURIComponent(version)}`;
-		const manifestResponse = await this.fetchFn(manifestUrl);
+		const manifestController = new AbortController();
+		const manifestResponse = await this.fetchFn(manifestUrl, {
+			signal: manifestController.signal,
+		});
 		if (!manifestResponse.ok) {
 			throw new Error(
 				`agentskills.io pull manifest failed: HTTP ${manifestResponse.status} for ${manifestUrl}`,
 			);
 		}
-		const manifestPayload = (await manifestResponse.json()) as unknown;
+		// Manifest is also untrusted — apply the same size guard before JSON.parse.
+		let manifestText: string;
+		try {
+			manifestText = await readBodyWithSizeLimit(
+				manifestResponse,
+				this.maxBodyBytes,
+				manifestController,
+			);
+		} catch (error) {
+			if (error instanceof BodyTooLargeError) {
+				throw new Error(
+					`agentskills.io manifest exceeds maxBodyBytes (${error.maxBytes}) for ${manifestUrl}`,
+				);
+			}
+			throw error;
+		}
+		let manifestPayload: unknown;
+		try {
+			manifestPayload = JSON.parse(manifestText) as unknown;
+		} catch (error) {
+			const msg = error instanceof Error ? error.message : String(error);
+			throw new Error(
+				`agentskills.io pull manifest is not valid JSON for ${manifestUrl}: ${msg}`,
+			);
+		}
 		const entry = normalizeManifestEntry(manifestPayload, skillId, version);
 		if (entry == null) {
 			throw new Error(
@@ -238,17 +355,44 @@ export class SkillsRegistryClient {
 			);
 		}
 
-		const bodyResponse = await this.fetchFn(entry.downloadUrl);
+		// REAL-1: downloadUrl is server-controlled but the server itself is
+		// untrusted from a defense-in-depth standpoint — an attacker who can
+		// publish a malicious manifest could inject `file:///etc/passwd`,
+		// `http://169.254.169.254/...` (AWS IMDS), or `http://localhost:5432/`
+		// (database probe). Validate before handing the URL to fetch.
+		const downloadGuard = assertSafeUrl(entry.downloadUrl);
+		if (!downloadGuard.ok) {
+			throw new Error(
+				`agentskills.io pull rejected downloadUrl for ${skillId}@${version}: ${downloadGuard.reason}`,
+			);
+		}
+
+		const bodyController = new AbortController();
+		const bodyResponse = await this.fetchFn(entry.downloadUrl, {
+			signal: bodyController.signal,
+		});
 		if (!bodyResponse.ok) {
 			throw new Error(
 				`agentskills.io pull body failed: HTTP ${bodyResponse.status} for ${entry.downloadUrl}`,
 			);
 		}
-		const body = await bodyResponse.text();
-		if (Buffer.byteLength(body, "utf8") > this.maxBodyBytes) {
-			throw new Error(
-				`agentskills.io pull body exceeds maxBodyBytes for ${skillId}@${version}`,
+		// REAL-2: previously we called `.text()` then checked the size —
+		// a 1 GB body would OOM the agent before the check fired. Now we
+		// short-circuit on Content-Length, then stream-read with a hard cap.
+		let body: string;
+		try {
+			body = await readBodyWithSizeLimit(
+				bodyResponse,
+				this.maxBodyBytes,
+				bodyController,
 			);
+		} catch (error) {
+			if (error instanceof BodyTooLargeError) {
+				throw new Error(
+					`agentskills.io pull body exceeds maxBodyBytes (${error.maxBytes}) for ${skillId}@${version}`,
+				);
+			}
+			throw error;
 		}
 
 		const cachePath = join(
@@ -311,9 +455,18 @@ export class SkillsRegistryClient {
 		}
 		/* v8 ignore stop */
 
+		// SUSPECT-1 fix: two entries with names `my skill` and `my-skill` would
+		// both sanitize to `my_skill` and silently overwrite each other (and any
+		// human-installed skill that happened to live at that path). Append a
+		// short hash of the registry skill id so the install path is unique per
+		// entry while staying human-readable for the common case.
+		const idHash = createHash("sha256")
+			.update(request.entry.id)
+			.digest("hex")
+			.slice(0, 8);
 		const installedPath = join(
 			request.targetRoot,
-			sanitizeSegment(request.entry.name),
+			`${sanitizeSegment(request.entry.name)}__${idHash}`,
 			"SKILL.md",
 		);
 		try {
