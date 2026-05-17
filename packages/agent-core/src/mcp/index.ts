@@ -1,10 +1,16 @@
 /**
- * Barrel export for the MCP Stage 2 (Prompts + Elicitation) module.
- * Stage 1 (Resources) lives in a parallel module owned by a separate worktree
- * and must not be touched here.
+ * Barrel for the `mcp/` module. Re-exports the public surface of two
+ * parallel sub-modules:
+ *   - Stage 2 (Prompts + Elicitation): client-side bidirectional MCP
+ *     primitives that let third-party MCP servers push prompts and
+ *     server-initiated elicitation back to the LLM.
+ *   - Stage 3 (server/): Quilin-as-server skeleton that lets external
+ *     MCP clients (Claude Desktop / Cursor / Goose / ...) consume
+ *     quilin's tools and resources.
  *
- * MCP Stage 2（Prompts + Elicitation）模块的 barrel 导出。Stage 1（Resources）
- * 由并行 worktree 单独负责，本目录不得触碰。
+ * `mcp/` 模块的 barrel。导出两个并行子模块的公开 API：Stage 2 客户端
+ * 双向 MCP primitive（Prompts + Elicitation），Stage 3 server 子模块
+ * （Quilin-as-server stdio MCP server 骨架）。
  */
 
 export {
@@ -39,3 +45,4 @@ export {
 	type RenderedPrompt,
 	type RenderedPromptMessage,
 } from "./prompts-client.js";
+export * from "./server/index.js";
