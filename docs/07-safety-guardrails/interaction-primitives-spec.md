@@ -1,12 +1,14 @@
 # Agent 交互 Primitive 设计 / Agent Interaction Primitives Design
 
-> 状态:Design / Pre-implementation gate · Iter F (after web-session-persistence)
+> 状态:✅ **已实施 / Shipped** · Iter F 收尾 2026-05-15/18
+> 实施 commit:`5ec2192`（wire 骨架）+ `44edf95`（UI 组件）+ `7c48bc4`（ask_user_question tool）+ `74e9f1e`（request_approval Path A）+ `b7c0f02`（TUI-native ask/approval tools）+ `43e5f76`+`9b605e6`（Path B server-side gate on shell_exec）+ `83b81d5`（narrate_aside tool）+ `f06d5ad`（iter-close polish:Skill watcher leak / summary XSS truncate / mid-flight invalidate / listener teardown / sync throw / subagent path wrap)
 > 触发来源:用户指令 2026-05-13/14 — 实际使用时发现 agent 说"需要交互式确认"但 web/TUI 没有对应的协议通道
-> 关联待办:`docs/15-introspection/web-ux-backlog.md` UX-3(旁白 channel,与本 spec 共享 wire 设计)、`docs/07-safety-guardrails/README.md` §2.6 WriteAuthority gate(本 spec 把它从 readline-only 升级成跨前端 wire-driven primitive)
+> 关联待办:`docs/15-introspection/web-ux-backlog.md` UX-3(旁白 channel,本 spec 已实现统一 wire);`docs/07-safety-guardrails/README.md` §2.6 WriteAuthority gate(本 spec 已把它从 readline-only 升级成跨前端 wire-driven primitive)
 
-> Status: Design / Pre-implementation gate · Iter F (lands after web-session-persistence)
+> Status: ✅ **Shipped** · Iter F close-out 2026-05-15/18
+> Shipping commits: `5ec2192` (wire skeleton) + `44edf95` (UI components) + `7c48bc4` (ask_user_question tool) + `74e9f1e` (request_approval Path A) + `b7c0f02` (TUI-native ask/approval tools) + `43e5f76`+`9b605e6` (Path B server-side gate on shell_exec) + `83b81d5` (narrate_aside tool) + `f06d5ad` (iter-close polish)
 > Trigger: user directive 2026-05-13/14 — real usage surfaced "agent says 'requires interactive confirmation' but the web/TUI has no wire channel for it"
-> Related backlog: `docs/15-introspection/web-ux-backlog.md` UX-3 (aside channel, shares wire design with this spec); `docs/07-safety-guardrails/README.md` §2.6 WriteAuthority gate (this spec upgrades it from readline-only to a cross-frontend wire-driven primitive)
+> Related: `docs/15-introspection/web-ux-backlog.md` UX-3 (aside channel; unified wire shipped); `docs/07-safety-guardrails/README.md` §2.6 WriteAuthority gate (now wire-driven cross-frontend, no longer readline-only)
 
 ---
 

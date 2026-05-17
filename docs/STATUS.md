@@ -1,10 +1,30 @@
 # 当前状态 / Quilin Agent Status
 
-This status snapshot was updated on 2026-05-08 / 本状态快照更新于 2026-05-08。
+This status snapshot was updated on 2026-05-18 / 本状态快照更新于 2026-05-18。
 
 This file is the only global progress entry point under `docs/`. Component-level current facts live in each `docs/<component>/README.md`. Historical snapshots are traced through git history. Task management and backlog tracking live in Linear; this file keeps only current-state snapshots.
 
 本文件是 `docs/` 下唯一的全局进度入口。组件级当前事实写在各 `docs/<component>/README.md`。历史快照通过 git history 追溯。任务管理与 backlog 统一迁移到 Linear；本文件只保留当前状态快照。
+
+## 2026-05-15/18 Iter F web 收尾 / Iter F web close-out
+
+Iter F web/UX 整轮已完成。详细 ship 清单见 [`docs/STATUS-iter-F-autonomous-2026-05-15.md`](STATUS-iter-F-autonomous-2026-05-15.md)（含 commit hash 表）。本次收尾包含：
+
+Iter F web/UX is fully closed out. Full ship list with commit hashes lives in [`docs/STATUS-iter-F-autonomous-2026-05-15.md`](STATUS-iter-F-autonomous-2026-05-15.md). This close-out covers:
+
+- **Chat 持久化 / Chat persistence**：4 slice 全部完成（SQLite schema + read/write + 重启恢复 + DELETE + 原子 seq 分配 + localStorage 迁移）。
+- **交互 primitives / Interaction primitives**：4 slice 全部完成（`ask_user_question` + `request_approval` Path A + `wrapToolWithApproval` Path B server-side gate（已 wrap `shell_exec`）+ `narrate_aside` 旁白工具 + TUI 原生 readline 集成）。spec 见 `docs/07-safety-guardrails/interaction-primitives-spec.md`（已标 ✅）。
+- **UX-4 KG-based 记忆重做 / KG memory rebuild**：4 slice 全部完成（`kg_extractor.py` LLM 三元组抽取 + 反幻觉/反注入、`memory_backfill_kg` MCP 工具、`/api/memory/graph` endpoint + 知识图谱 reactflow viz、`consolidation_log` SQLite + timeline UI）。plan 见 `docs/03-memory/ux4-kg-rebuild-plan.md`（已标 ✅）。
+- **热重载 / Hot reload**：MCP 服务 `.py` 源码 watcher、SKILL.md watcher、`~/.claude.json` watcher 全部 auto-invalidate tool catalog，且带 mid-flight defer 计数器避免子进程被中途 disconnect。
+- **数据完整性 / Data integrity**：Task #14（user.md TS/Python 写 race 修复）+ Task #15（per-ask 128-bit capability token auth）+ Task #16（跨语言 file lock：Python fcntl + TS proper-lockfile）。
+- **Profile self-evolution**：Task #12/#13 —— agent 自动把会话观察 append 到 user.md / soul.md，user.md 切换为纯 markdown（去 YAML frontmatter）。
+- **UX-5 + UX-6 + 流式 UX**：Profile 文件查看器（user.md/soul.md/QUILIN.md），移动端 nav rail + composer safe-area，per-block streaming state（只有 trailing block 显示「正在输出」）。
+- **Iter-close cross-review polish**：4 轮 cross-review，每轮 2 个 fresh subagent reviewer，共 7 fix（Skill watcher leak、LLM-controlled summary XSS 截断、mid-flight invalidate counter、abort listener accumulation、sync throw handling、subagent path wrap、dead try/catch cleanup）。Round 4 收敛（2 个新 reviewer 都报 0 REAL）。1 个 Round 3 报错（invalidate race）经实证为 false positive，rebuttal 写进 commit `f06d5ad` message。
+- **稳定 3008 后端 / Stable 3008 backend**：`QUILIN_STABLE_BUILD=1` 触发 `distDir: .next-stable-3008/`，让 `pnpm build:stable-3008` 不再 clobber dev 的 `.next/`；同时修了 3 个 typed-routes `<Link href={...}>` build-time 错误。Mac app 测试用。
+
+下一轮顺序（用户 2026-05-18 决策，见 [QUI-46](https://linear.app/quilin-agent/issue/QUI-46) comment）：Iter J 收尾 → Iter F web LOW（[QUI-157](https://linear.app/quilin-agent/issue/QUI-157)）→ Iter F Scale-Out runtime（[QUI-158](https://linear.app/quilin-agent/issue/QUI-158)/[QUI-159](https://linear.app/quilin-agent/issue/QUI-159)/[QUI-160](https://linear.app/quilin-agent/issue/QUI-160)）→ Iter G1 P0 三件套（[QUI-162](https://linear.app/quilin-agent/issue/QUI-162)/[QUI-163](https://linear.app/quilin-agent/issue/QUI-163)/[QUI-164](https://linear.app/quilin-agent/issue/QUI-164)）→ Iter L+0 EDD（[QUI-135](https://linear.app/quilin-agent/issue/QUI-135)）。
+
+Next-iter order (user decision 2026-05-18, see [QUI-46](https://linear.app/quilin-agent/issue/QUI-46) comment): Iter J close-out → Iter F web LOW residual → Iter F Scale-Out runtime → Iter G1 P0 triple → Iter L+0 EDD.
 
 ## 当前焦点 / Current Focus
 
@@ -54,7 +74,10 @@ Linear 已同步这次冻结：`Iter E 基准冲刺 / Benchmark Ascent` project 
 | Iter M Memory | closed | quilin-mem 主体切片完成；L3a observer 仍 blocked/deferred。 | `docs/03-memory/README.md` |
 | Iter D Operability | closed | Observability、config、scratchpad、Rust `mesh-sdk` stub、CI 和 coverage gate。 | `docs/08-observability/README.md` + `crates/mesh-sdk/Cargo.toml` |
 | Iter E Benchmark Ascent | frozen / canceled | Existing code remains in-tree; all unfinished Benchmark planning and implementation work is canceled in Linear. | `docs/14-benchmark-harness/README.md` + `QUI-6` / `QUI-7` / `QUI-8` / `QUI-43` / `QUI-47` / `QUI-70` |
-| Iter F Scale-Out | governed by local runtime evidence | Supervisor、Agent Mesh、memory depth、self-evolution、Conversation Engineering must use local component gates first; no Benchmark code without explicit user request. | `docs/06-multi-agent/README.md` + `docs/11-agent-mesh/README.md` |
+| Iter F0 Frontier Assimilation | closed | 2026-05 前沿调研吸收完毕，可执行的方向已拆到具体 Iter F+ / G / H / I / J 实现 issue。 | Linear `Iter F0：前沿方案吸收` project (completed 2026-05-07) |
+| Iter F web/UX 收尾 | closed | Chat 持久化 + 交互 primitives + UX-4 KG + 热重载 + iter-close polish + stable 3008 build。33+ commit、4 轮 cross-review 收敛 0/0、tsc 0 / vitest 414 全过。 | `docs/STATUS-iter-F-autonomous-2026-05-15.md` + commits `5ec2192`..`9d65c6a` |
+| Iter F Scale-Out runtime | open / 下一轮主攻 | 非阻塞 Supervisor、Agent Mesh runtime、Context production gates 仍是 backlog。 | [QUI-158](https://linear.app/quilin-agent/issue/QUI-158) + [QUI-159](https://linear.app/quilin-agent/issue/QUI-159) + [QUI-160](https://linear.app/quilin-agent/issue/QUI-160) |
+| Iter J 生态与连接 | mostly closed | SandboxRouter 已 Done (QUI-62, 2361 LOC + 59 tests)；MCP 双向化、Skills 生态、Soul Import 等仍 backlog。 | `packages/agent-core/src/tools/sandbox*.ts` + [QUI-62](https://linear.app/quilin-agent/issue/QUI-62) |
 
 | Iter | Status | Current Meaning | Evidence |
 |---|---:|---|---|
@@ -65,7 +88,10 @@ Linear 已同步这次冻结：`Iter E 基准冲刺 / Benchmark Ascent` project 
 | Iter M Memory | closed | Main quilin-mem slices completed; L3a observer remains blocked/deferred. | `docs/03-memory/README.md` |
 | Iter D Operability | closed | Observability, config, scratchpad, Rust `mesh-sdk` stub, CI, and coverage gate. | `docs/08-observability/README.md` + `crates/mesh-sdk/Cargo.toml` |
 | Iter E Benchmark Ascent | frozen / canceled | Existing code remains in-tree; all unfinished Benchmark planning and implementation work is canceled in Linear. | `docs/14-benchmark-harness/README.md` + `QUI-6` / `QUI-7` / `QUI-8` / `QUI-43` / `QUI-47` / `QUI-70` |
-| Iter F Scale-Out | governed by local runtime evidence | Supervisor, Agent Mesh, memory depth, self-evolution, and Conversation Engineering must use local component gates first; no Benchmark code without explicit user request. | `docs/06-multi-agent/README.md` + `docs/11-agent-mesh/README.md` |
+| Iter F0 Frontier Assimilation | closed | 2026-05 frontier research assimilated; actionable directions split into concrete Iter F+/G/H/I/J implementation issues. | Linear `Iter F0：前沿方案吸收` project (completed 2026-05-07) |
+| Iter F web/UX close-out | closed | Chat persistence + interaction primitives + UX-4 KG + hot reload + iter-close polish + stable 3008 build. 33+ commits, 4 cross-review rounds converged 0/0, tsc 0 / 414 vitest pass. | `docs/STATUS-iter-F-autonomous-2026-05-15.md` + commits `5ec2192`..`9d65c6a` |
+| Iter F Scale-Out runtime | open / next focus | Non-blocking supervisor, Agent Mesh runtime, Context production gates remain backlog. | [QUI-158](https://linear.app/quilin-agent/issue/QUI-158) + [QUI-159](https://linear.app/quilin-agent/issue/QUI-159) + [QUI-160](https://linear.app/quilin-agent/issue/QUI-160) |
+| Iter J Ecosystem & Connectivity | mostly closed | SandboxRouter is Done (QUI-62, 2361 LOC + 59 tests); MCP bidirectional, Skills ecosystem, Soul Import etc. remain backlog. | `packages/agent-core/src/tools/sandbox*.ts` + [QUI-62](https://linear.app/quilin-agent/issue/QUI-62) |
 
 ## 基准冻结 / Benchmark Freeze
 
@@ -106,16 +132,16 @@ The cross-review posture is now: benchmark（standardized capability evaluation�
 | [00 Core Loop](00-core-loop/README.md) | 自研 TS loop 体系 1,102 LOC；实时追加输入、`/resume` + `/resume latest` 会话恢复、auto-checkpoint recovery 已实现；hook 体系（onTurnComplete/onIdle/onToolResult/onAssistantMessage）完善。 |
 | [01 LLM Integration](01-llm-integration/README.md) | AI SDK v6 client、`ThinkingMode`、provider-aware options、reasoning/tool stream extraction、cache usage basics 已实现；DeepSeek 全链路完整；Provider live matrix 已实现（API Key/OAuth 凭证状态，脱敏）；Anthropic/OpenAI/Gemini provider 均为 blocked/candidate。 |
 | [02 Context](02-context/README.md) | Prompt/session assembly、token budgeting、temporal awareness、memory bridge、injection scanner、skills catalog/restore wiring、compression、cache stability、Conversation Engineering 6 层架构 + 7 种预设风格已实现。 |
-| [03 Memory](03-memory/README.md) | quilin-mem MCP（断连自动重连）、四层 memory、SQLite/FTS5+Bun 内置后端、KG/vector retrieval hooks、profile store、scratchpad、consolidator auto_schedule、L3a observer（flash 驱动）激活、user.md 自动同步。 |
+| [03 Memory](03-memory/README.md) | quilin-mem MCP（断连自动重连）、四层 memory、SQLite/FTS5+Bun 内置后端、KG/vector retrieval hooks、profile store、scratchpad、consolidator auto_schedule、L3a observer（flash 驱动）激活、user.md 自动同步。**2026-05-15 新增**：UX-4 KG 重做 4 slice 全 ship（`kg_extractor.py` LLM 三元组抽取 + `memory_backfill_kg` MCP + `/api/memory/graph` reactflow viz + `consolidation_log` SQLite + timeline UI），`memory_delete` 工具供 agent 清理重复记忆，profile self-evolution（user.md/soul.md 自动追加观察）+ 纯 markdown 迁移 + 跨语言 file lock（fcntl + proper-lockfile）。 |
 | [04 Planning](04-planning/README.md) | Main-LLM direct planning + audit/strategy contracts 已实现；tiny classifier 不是默认路径。 |
-| [05 Tool](05-tool/README.md) | 10 built-in tools（file_read/write/list、shell_exec（sandbox auto/on/off）、web_fetch、skill_search（remote）、skill_view、skill_manage（merge）、image_describe、video_summarize、audio_transcribe、mcp_search）、MCP bridge、DockerSandbox（auto-detect + executeAuto）。 |
+| [05 Tool](05-tool/README.md) | 10 built-in tools（file_read/write/list、shell_exec（sandbox auto/on/off）、web_fetch、skill_search（remote）、skill_view、skill_manage（merge）、image_describe、video_summarize、audio_transcribe、mcp_search）、MCP bridge、DockerSandbox（auto-detect + executeAuto）。**2026-05-15 新增**：MCP 服务 `.py` 源码 / SKILL.md / `~/.claude.json` 三类 watcher 全部 auto-invalidate tool catalog，且带 mid-flight defer 计数器避免子进程被中途 disconnect；交互 primitives 4 个 LLM-callable 工具（`ask_user_question`、`request_approval` Path A、`narrate_aside`、`wrapToolWithApproval` Path B server-side gate（已 wrap `shell_exec`）；SandboxRouter contracts + DockerSandbox adapter Done (QUI-62)。 |
 | [06 Multi-Agent](06-multi-agent/README.md) | InProcessSupervisorRuntime 已实现：子 Agent 生命周期（append/send/interrupt/pause/resume/cancel）、heartbeat/stale 检测、recovery context 保留、`/agents` REPL 展示；mesh 分布式是后续。 |
-| [07 Safety Guardrails](07-safety-guardrails/README.md) | auto 默认模式（低中风险自动批）、`--yolo` 全自动、四级 WriteAuthority（auto/ask/yolo/read_only）、ActionVerifier、MetaVerifier、secret redaction、SSRF guard。 |
+| [07 Safety Guardrails](07-safety-guardrails/README.md) | auto 默认模式（低中风险自动批）、`--yolo` 全自动、四级 WriteAuthority（auto/ask/yolo/read_only）、ActionVerifier、MetaVerifier、secret redaction、SSRF guard。**2026-05-15 新增**：交互 primitives wire-driven WriteAuthority（升级 readline-only → 跨前端 web/TUI 统一）；Path B server-side gate `wrapToolWithApproval` 已 wrap `shell_exec`，per-session 白名单（high/critical 永不可白名单化）、per-ask 128-bit capability token auth（task #15）、defensive truncate（MAX_SUMMARY=1000, MAX_DETAIL=4000）。spec 见 `docs/07-safety-guardrails/interaction-primitives-spec.md`（已 ✅）。 |
 | [08 Observability](08-observability/README.md) | Span/Metrics/Logs、Prometheus、JSON file exporter、SQLite 持久化 observability DB、Web Dashboard（/dashboard HTML 看板 + Web Chat）、Control Plane API（/snapshot、/sessions、/traces）。 |
 | [09 Deployment Runtime](09-deployment-runtime/README.md) | CLI（`quilin config show/set/service install`）、TOML config cascade、hot reload、first-run welcome、`/resume` + `/resume latest`、`/mcp`、systemd/launchd 开机自启、soul.md/user.md 配置文件。 |
 | [10 Self-Evolution](10-self-evolution/README.md) | Trajectory store、failure analyzer、patch proposal、proposal store（approve/reject/apply）、offline optimizer（runOptimizationCycle）、idle runner（每日配额控制）、content hash 等已实现；完整 trajectory→patch→proposal 闭环已串联到 main loop。 |
 | [11 Agent Mesh](11-agent-mesh/README.md) | Rust `crates/mesh-sdk` stub + CI wiring 已实现；runtime mesh 是 Iter F。 |
-| [13 Skills](13-skills/README.md) | SKILL.md catalog、`skill_view`、CRUD + merge、guard、restore、watcher、`skill_search`（本地+远程 skills.sh）、provenance 签名验证已闭合到 M2。 |
+| [13 Skills](13-skills/README.md) | SKILL.md catalog、`skill_view`、CRUD + merge、guard、restore、watcher、`skill_search`（本地+远程 skills.sh）、provenance 签名验证已闭合到 M2。**2026-05-15 新增**：dev mode 下 SKILL.md 编辑 auto-watch + 自动 invalidate web 端 tool catalog（`QUILIN_SKILL_HOT_RELOAD=off` 可关）；iter-close polish 修复了旧 SkillsManager 监听器在 rebuild 时不释放的内存泄漏（`f06d5ad`）。 |
 | [14 Benchmark Harness](14-benchmark-harness/README.md) | Existing harness code remains in-tree; component is frozen/read-only for future implementation unless the user asks. |
 | [15 Introspection](15-introspection/README.md) | Step 2 设计文档已落地（Iter L+3，QUI-151 总入口）；元思考 / 反思链路尚未实现，spec 作为实施前 review gate。 |
 | [16 Soul Import](16-soul-import/README.md) | Bilingual spec 已落地（2026-05-12）；6 框架扫描 + QUILIN.md 生成器 + body 填充由 [QUI-102](https://linear.app/quilin-agent/issue/QUI-102) 承接，artifact schema 已由 QUI-108 / `soul-profile.ts` 实现（`1d57d08`）。 |

@@ -1,7 +1,12 @@
 # UX-4 KG-based 记忆重做实施计划 / Implementation plan
 
-> 状态 / Status:**Plan(实施前)** · 下一 token 窗口启动
+> 状态 / Status:✅ **全 4 slice 完成 / All 4 slices shipped** (2026-05-15/18)
 > 写于 / Drafted:2026-05-15 autonomous run · 现有基础设施实证后
+> 实施完成 / Shipped:
+> - Slice 1 `kg_extractor.py` — commit `b1e4a6d`
+> - Slice 2 `memory_backfill_kg` MCP — commit `901e989`
+> - Slice 3 `/api/memory/graph` + 知识图谱 tab — commits `6afa74f` + `9abbde8` + Playwright e2e `fc4afe3`
+> - Slice 4 `consolidation_log` SQLite + timeline UI — commits `376beea` (backend) + `8df50c3` (UI)
 > 关联 / Related:`docs/15-introspection/web-ux-backlog.md` UX-4 · `docs/03-memory/profile-pure-markdown-migration.md`(独立)
 
 ---
