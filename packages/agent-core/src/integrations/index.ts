@@ -11,7 +11,9 @@
 
 export type {
 	DetectGitHubAuthOptions,
+	DetectGitHubAuthResult,
 	FetchLike,
+	GitHubAuthContext,
 	GitHubAuthSource,
 	GitHubAuthStatus,
 	GitHubStarsCount,
