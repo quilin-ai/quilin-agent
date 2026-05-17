@@ -18,6 +18,10 @@ import type {
 	Prompt,
 	PromptMessage,
 } from "@modelcontextprotocol/sdk/types.js";
+import {
+	scanExternalContext,
+	type ThreatMatch,
+} from "../context/injection-scanner.js";
 
 /** Default per-call timeout in milliseconds (mirrors `tools/mcp-client.ts`). */
 /** 单次调用默认超时（与 `tools/mcp-client.ts` 保持一致）。 */
@@ -59,6 +63,17 @@ export interface PromptArgumentSummary {
 export interface RenderedPrompt {
 	readonly description?: string;
 	readonly messages: readonly RenderedPromptMessage[];
+	/**
+	 * Threats detected by the injection scanner across the rendered message
+	 * text. Empty array means the server response is clean. Content is NOT
+	 * sanitized here — the upstream ContextAssembler decides whether to keep,
+	 * sanitize, or reject based on its own policy.
+	 *
+	 * 注入扫描器在渲染消息文本中检测到的威胁。空数组表示服务端返回内容是干净
+	 * 的。这里**不**对内容做净化处理 —— 由上层 ContextAssembler 根据自己的
+	 * 策略决定保留 / 净化 / 拒绝。
+	 */
+	readonly threats: readonly ThreatMatch[];
 }
 
 /** Single message in a rendered prompt (text-only — non-text content is dropped). */
@@ -182,7 +197,7 @@ export class PromptsClient {
 			);
 			return {
 				ok: true,
-				value: normalizeRenderedPrompt(result),
+				value: normalizeRenderedPrompt(result, trimmedName),
 			};
 		} catch (error) {
 			return { ok: false, error: extractErrorMessage(error) };
@@ -234,14 +249,33 @@ function normalizePromptSummary(prompt: Prompt): PromptSummary {
 	return summary;
 }
 
-function normalizeRenderedPrompt(result: GetPromptResult): RenderedPrompt {
+function normalizeRenderedPrompt(
+	result: GetPromptResult,
+	promptName: string,
+): RenderedPrompt {
 	const messages = result.messages
 		.map(toRenderedMessage)
 		.filter((m): m is RenderedPromptMessage => m !== null);
-	if (result.description) {
-		return { description: result.description, messages };
+
+	// Run rendered text through the injection scanner. Server-supplied prompt
+	// content is external input and must be screened the same way other
+	// external context sources are. We surface threats but do not mutate the
+	// text — ContextAssembler decides the policy.
+	// 把渲染后的文本送进注入扫描器。服务端提供的 prompt 内容属于外部输入，必须
+	// 与其他外部上下文来源一样过同一道扫描。这里把威胁透出，但不改动文本 ——
+	// 由 ContextAssembler 决策。
+	const threats: ThreatMatch[] = [];
+	for (const message of messages) {
+		const scan = scanExternalContext(message.text, `mcp:prompts:${promptName}`);
+		for (const threat of scan.threats) {
+			threats.push(threat);
+		}
 	}
-	return { messages };
+
+	if (result.description) {
+		return { description: result.description, messages, threats };
+	}
+	return { messages, threats };
 }
 
 function toRenderedMessage(

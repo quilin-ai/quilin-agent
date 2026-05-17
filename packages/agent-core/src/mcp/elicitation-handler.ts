@@ -118,6 +118,48 @@ export interface ElicitationCapableClient {
 export const ELICITATION_DEFAULT_TIMEOUT_MS = 60_000;
 
 /**
+ * URL schemes the URL-mode elicitation handler will hand to the resolver.
+ * Anything else (javascript:, data:, file:, vbscript:, custom schemes, …) is
+ * rejected before the resolver is called.
+ *
+ * URL 模式 elicitation handler 允许透出给 resolver 的协议白名单。其他协议
+ * （javascript:, data:, file:, vbscript:, 自定义 scheme 等）在调用 resolver
+ * 之前就会被拒绝。
+ */
+export const ELICITATION_URL_ALLOWED_SCHEMES: ReadonlySet<string> = new Set([
+	"https:",
+	"http:",
+]);
+
+/**
+ * Maximum nesting depth allowed inside `requestedSchema`. Anything deeper is
+ * treated as a malformed / hostile schema and the request is cancelled.
+ *
+ * `requestedSchema` 允许的最大嵌套深度。超过则视为畸形 / 恶意 schema，请求
+ * 直接 cancel。
+ */
+export const ELICITATION_SCHEMA_MAX_DEPTH = 8;
+
+/**
+ * Maximum total key count across the entire `requestedSchema` tree (own
+ * enumerable keys at every level summed). Caps the field explosion a hostile
+ * server can force the resolver UI to render.
+ *
+ * 整棵 `requestedSchema` 树上允许的累计 key 数量（每层自有可枚举 key 相加）。
+ * 用于上限恶意服务端能强制 resolver UI 渲染的字段数量。
+ */
+export const ELICITATION_SCHEMA_MAX_KEYS = 100;
+
+/**
+ * Maximum length of any single string value embedded in the schema (e.g.
+ * description, default value). Strings beyond this are treated as abuse.
+ *
+ * Schema 中任一字符串字段（如 description、默认值）允许的最大长度。超过则视
+ * 为滥用。
+ */
+export const ELICITATION_SCHEMA_MAX_STRING_LEN = 4_000;
+
+/**
  * Wire a resolver onto a `Client` so server-issued `elicitation/create`
  * requests are answered. Returns the `ElicitResult` shape the SDK expects.
  *
@@ -144,7 +186,15 @@ export function registerElicitationHandler(
 	const resolver = options.resolver;
 
 	client.setRequestHandler(ElicitRequestSchema, async (request) => {
-		const normalized = normalizeRequest(request.params);
+		const normalizationResult = normalizeRequest(request.params);
+		if (!normalizationResult.ok) {
+			// Reject hostile / malformed requests before invoking the resolver
+			// so a misbehaving server can never reach the resolver UI.
+			// 在调用 resolver 之前先拒绝恶意 / 畸形请求，避免恶意服务端到达
+			// resolver UI 层。
+			return { action: "cancel" } as ElicitResult;
+		}
+		const normalized = normalizationResult.request;
 		let response: ElicitationResponse;
 		try {
 			response = await withResolverTimeout(
@@ -160,25 +210,138 @@ export function registerElicitationHandler(
 	});
 }
 
-function normalizeRequest(params: unknown): ElicitationRequest {
+/** Internal result of {@link normalizeRequest}. */
+/** {@link normalizeRequest} 的内部返回值。 */
+type NormalizationResult =
+	| { readonly ok: true; readonly request: ElicitationRequest }
+	| { readonly ok: false; readonly reason: string };
+
+function normalizeRequest(params: unknown): NormalizationResult {
+	if (typeof params !== "object" || params === null) {
+		return { ok: false, reason: "params is not an object" };
+	}
 	const obj = params as Record<string, unknown>;
 	if (obj.mode === "url") {
+		const rawUrl = String(obj.url ?? "");
+		if (!isAllowedElicitationUrl(rawUrl)) {
+			return { ok: false, reason: "url scheme not allowed" };
+		}
 		return {
-			mode: "url",
-			message: String(obj.message ?? ""),
-			elicitationId: String(obj.elicitationId ?? ""),
-			url: String(obj.url ?? ""),
+			ok: true,
+			request: {
+				mode: "url",
+				message: String(obj.message ?? ""),
+				elicitationId: String(obj.elicitationId ?? ""),
+				url: rawUrl,
+			},
 		};
 	}
-	const schema = (obj.requestedSchema ?? {
+	const rawSchema = obj.requestedSchema ?? {
 		type: "object",
 		properties: {},
-	}) as ElicitationSchema;
-	return {
-		mode: "form",
-		message: String(obj.message ?? ""),
-		requestedSchema: schema,
 	};
+	const boundsCheck = validateSchemaBounds(rawSchema, {
+		maxDepth: ELICITATION_SCHEMA_MAX_DEPTH,
+		maxKeys: ELICITATION_SCHEMA_MAX_KEYS,
+		maxStringLen: ELICITATION_SCHEMA_MAX_STRING_LEN,
+	});
+	if (!boundsCheck.ok) {
+		return { ok: false, reason: boundsCheck.reason };
+	}
+	const schema = rawSchema as ElicitationSchema;
+	return {
+		ok: true,
+		request: {
+			mode: "form",
+			message: String(obj.message ?? ""),
+			requestedSchema: schema,
+		},
+	};
+}
+
+/**
+ * Returns true when `rawUrl` parses as a URL whose scheme is in the
+ * elicitation allow-list. Rejects javascript: / data: / file: / vbscript: /
+ * arbitrary custom schemes plus anything that fails URL parsing entirely.
+ *
+ * 当 `rawUrl` 能解析为 URL 且 scheme 在 elicitation 白名单内时返回 true。
+ * 拒绝 javascript: / data: / file: / vbscript: / 任意自定义 scheme，以及任何
+ * 解析失败的字符串。
+ */
+function isAllowedElicitationUrl(rawUrl: string): boolean {
+	if (rawUrl === "") {
+		return false;
+	}
+	let parsed: URL;
+	try {
+		parsed = new URL(rawUrl);
+	} catch {
+		return false;
+	}
+	return ELICITATION_URL_ALLOWED_SCHEMES.has(parsed.protocol);
+}
+
+interface SchemaBoundsOptions {
+	readonly maxDepth: number;
+	readonly maxKeys: number;
+	readonly maxStringLen: number;
+}
+
+type BoundsResult =
+	| { readonly ok: true }
+	| { readonly ok: false; readonly reason: string };
+
+/**
+ * Walk `schema` and reject if it exceeds depth, total-key, or string-length
+ * caps. Pure, non-throwing — returns a discriminated result the caller can
+ * convert into a `cancel` outcome. Counts every own enumerable key in every
+ * nested object (including arrays) toward the cap.
+ *
+ * 遍历 `schema`，若超出深度、总 key 数、或字符串长度上限则拒绝。纯函数、不
+ * 抛错 —— 返回判别结果，调用方可转为 `cancel`。把每一层嵌套对象（含数组）
+ * 上的自有可枚举 key 都计入累计上限。
+ */
+export function validateSchemaBounds(
+	schema: unknown,
+	options: SchemaBoundsOptions,
+): BoundsResult {
+	let keyCount = 0;
+	function visit(node: unknown, depth: number): BoundsResult {
+		if (depth > options.maxDepth) {
+			return { ok: false, reason: "schema exceeds maxDepth" };
+		}
+		if (typeof node === "string") {
+			if (node.length > options.maxStringLen) {
+				return { ok: false, reason: "schema string exceeds maxStringLen" };
+			}
+			return { ok: true };
+		}
+		if (Array.isArray(node)) {
+			for (const item of node) {
+				const r = visit(item, depth + 1);
+				if (!r.ok) return r;
+			}
+			return { ok: true };
+		}
+		if (typeof node === "object" && node !== null) {
+			for (const [key, value] of Object.entries(node)) {
+				keyCount += 1;
+				if (keyCount > options.maxKeys) {
+					return { ok: false, reason: "schema exceeds maxKeys" };
+				}
+				if (key.length > options.maxStringLen) {
+					return { ok: false, reason: "schema key exceeds maxStringLen" };
+				}
+				const r = visit(value, depth + 1);
+				if (!r.ok) return r;
+			}
+			return { ok: true };
+		}
+		// number / boolean / null / undefined — nothing to bound.
+		// number / boolean / null / undefined —— 无需校验上限。
+		return { ok: true };
+	}
+	return visit(schema, 1);
 }
 
 function toSdkResult(
