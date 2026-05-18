@@ -88,6 +88,7 @@ export type InstallSkillResult =
 export type InstallSkillError =
 	| "write_denied"
 	| "signature_invalid"
+	| "verification_error"
 	| "io_failed";
 
 /**
@@ -135,7 +136,22 @@ export interface SkillsRegistryClientOptions {
 	readonly writeAuthority: WriteAuthority;
 	readonly verifySignature?: SkillSignatureVerifier;
 	readonly maxBodyBytes?: number;
+	/**
+	 * 单次 HTTP 请求超时（毫秒）/ Per-request HTTP timeout in ms.
+	 *
+	 * Applied to every fetchFn call (search / manifest / body). Defaults to
+	 * 30 000 ms. Set this lower in tests, higher only when a slow upstream
+	 * registry is expected. The timeout is enforced via the same
+	 * `AbortController` we already hand to `readBodyWithSizeLimit`, so a
+	 * stuck connection AND an oversized body both terminate the request.
+	 *
+	 * 默认 30 秒。每个 fetch 调用都会被包在带 timeout 的 AbortController 里，
+	 * 避免代理 hang 或服务器只回 header 不回 body 时永久阻塞 agent。
+	 */
+	readonly requestTimeoutMs?: number;
 }
+
+export const DEFAULT_REGISTRY_REQUEST_TIMEOUT_MS = 30_000;
 
 /**
  * 默认 fallback URL / Default fallback URL
@@ -227,6 +243,7 @@ export class SkillsRegistryClient {
 	private readonly writeAuthority: WriteAuthority;
 	private readonly verifier?: SkillSignatureVerifier;
 	private readonly maxBodyBytes: number;
+	private readonly requestTimeoutMs: number;
 	private readonly fsOps: FsOps;
 
 	constructor(
@@ -241,7 +258,55 @@ export class SkillsRegistryClient {
 		this.writeAuthority = options.writeAuthority;
 		this.verifier = options.verifySignature;
 		this.maxBodyBytes = options.maxBodyBytes ?? DEFAULT_REGISTRY_MAX_BODY_BYTES;
+		this.requestTimeoutMs =
+			options.requestTimeoutMs ?? DEFAULT_REGISTRY_REQUEST_TIMEOUT_MS;
 		this.fsOps = { ...defaultFsOps, ...options.fsOps };
+	}
+
+	/**
+	 * 受 timeout 保护的 fetch 包装 / Timeout-guarded fetch wrapper.
+	 *
+	 * Applies a timeout to fetchFn itself and returns the same AbortController
+	 * used by `readBodyWithSizeLimit` for OOM defence. A single controller
+	 * lets callers terminate either a hung request or an oversized body through
+	 * the same cancellation path.
+	 *
+	 * fetchFn 自身使用 timeout 保护；同一个 AbortController 也交给
+	 * body size guard 使用，保证 hung fetch 和超大 body 都能被同一路径终止。
+	 */
+	private async fetchWithTimeout(url: string): Promise<{
+		response: Response;
+		controller: AbortController;
+		clearTimeout: () => void;
+	}> {
+		const controller = new AbortController();
+		const timeoutId = setTimeout(() => {
+			// abort with a DOMException when supported so consumers see an
+			// AbortError they can branch on; fall back to argument-less abort
+			// on older runtimes.
+			try {
+				controller.abort(
+					new DOMException(
+						`agentskills.io request exceeded ${this.requestTimeoutMs}ms`,
+						"TimeoutError",
+					),
+				);
+			} catch {
+				/* v8 ignore next -- @preserve DOMException unavailable on legacy runtimes */
+				controller.abort();
+			}
+		}, this.requestTimeoutMs);
+		try {
+			const response = await this.fetchFn(url, { signal: controller.signal });
+			return {
+				response,
+				controller,
+				clearTimeout: () => clearTimeout(timeoutId),
+			};
+		} catch (error) {
+			clearTimeout(timeoutId);
+			throw error;
+		}
 	}
 
 	/**
@@ -258,43 +323,47 @@ export class SkillsRegistryClient {
 			return [];
 		}
 		const url = `${this.baseUrl}/skills/search?q=${encodeURIComponent(trimmed)}`;
-		const controller = new AbortController();
-		const response = await this.fetchFn(url, { signal: controller.signal });
-		if (response.status === 404) {
-			return [];
-		}
-		if (!response.ok) {
-			throw new Error(
-				`agentskills.io search failed: HTTP ${response.status} for ${url}`,
-			);
-		}
-		// REAL-3: stream-read with hard size cap. A 1 GB search response
-		// would OOM the agent if we called `.json()` directly.
-		let text: string;
+		const request = await this.fetchWithTimeout(url);
 		try {
-			text = await readBodyWithSizeLimit(
-				response,
-				this.maxBodyBytes,
-				controller,
-			);
-		} catch (error) {
-			if (error instanceof BodyTooLargeError) {
+			const { response, controller } = request;
+			if (response.status === 404) {
+				return [];
+			}
+			if (!response.ok) {
 				throw new Error(
-					`agentskills.io search response exceeds maxBodyBytes (${error.maxBytes}) for ${url}`,
+					`agentskills.io search failed: HTTP ${response.status} for ${url}`,
 				);
 			}
-			throw error;
+			// REAL-3: stream-read with hard size cap. A 1 GB search response
+			// would OOM the agent if we called `.json()` directly.
+			let text: string;
+			try {
+				text = await readBodyWithSizeLimit(
+					response,
+					this.maxBodyBytes,
+					controller,
+				);
+			} catch (error) {
+				if (error instanceof BodyTooLargeError) {
+					throw new Error(
+						`agentskills.io search response exceeds maxBodyBytes (${error.maxBytes}) for ${url}`,
+					);
+				}
+				throw error;
+			}
+			let payload: unknown;
+			try {
+				payload = JSON.parse(text) as unknown;
+			} catch (error) {
+				const msg = error instanceof Error ? error.message : String(error);
+				throw new Error(
+					`agentskills.io search response is not valid JSON for ${url}: ${msg}`,
+				);
+			}
+			return normalizeSearchResults(payload);
+		} finally {
+			request.clearTimeout();
 		}
-		let payload: unknown;
-		try {
-			payload = JSON.parse(text) as unknown;
-		} catch (error) {
-			const msg = error instanceof Error ? error.message : String(error);
-			throw new Error(
-				`agentskills.io search response is not valid JSON for ${url}: ${msg}`,
-			);
-		}
-		return normalizeSearchResults(payload);
 	}
 
 	/**
@@ -309,30 +378,33 @@ export class SkillsRegistryClient {
 	 */
 	async pullSkill(skillId: string, version: string): Promise<PulledSkill> {
 		const manifestUrl = `${this.baseUrl}/skills/${encodeURIComponent(skillId)}/versions/${encodeURIComponent(version)}`;
-		const manifestController = new AbortController();
-		const manifestResponse = await this.fetchFn(manifestUrl, {
-			signal: manifestController.signal,
-		});
-		if (!manifestResponse.ok) {
-			throw new Error(
-				`agentskills.io pull manifest failed: HTTP ${manifestResponse.status} for ${manifestUrl}`,
-			);
-		}
-		// Manifest is also untrusted — apply the same size guard before JSON.parse.
+		const manifestRequest = await this.fetchWithTimeout(manifestUrl);
 		let manifestText: string;
 		try {
-			manifestText = await readBodyWithSizeLimit(
-				manifestResponse,
-				this.maxBodyBytes,
-				manifestController,
-			);
-		} catch (error) {
-			if (error instanceof BodyTooLargeError) {
+			const { response: manifestResponse, controller: manifestController } =
+				manifestRequest;
+			if (!manifestResponse.ok) {
 				throw new Error(
-					`agentskills.io manifest exceeds maxBodyBytes (${error.maxBytes}) for ${manifestUrl}`,
+					`agentskills.io pull manifest failed: HTTP ${manifestResponse.status} for ${manifestUrl}`,
 				);
 			}
-			throw error;
+			// Manifest is also untrusted — apply the same size guard before JSON.parse.
+			try {
+				manifestText = await readBodyWithSizeLimit(
+					manifestResponse,
+					this.maxBodyBytes,
+					manifestController,
+				);
+			} catch (error) {
+				if (error instanceof BodyTooLargeError) {
+					throw new Error(
+						`agentskills.io manifest exceeds maxBodyBytes (${error.maxBytes}) for ${manifestUrl}`,
+					);
+				}
+				throw error;
+			}
+		} finally {
+			manifestRequest.clearTimeout();
 		}
 		let manifestPayload: unknown;
 		try {
@@ -367,32 +439,35 @@ export class SkillsRegistryClient {
 			);
 		}
 
-		const bodyController = new AbortController();
-		const bodyResponse = await this.fetchFn(entry.downloadUrl, {
-			signal: bodyController.signal,
-		});
-		if (!bodyResponse.ok) {
-			throw new Error(
-				`agentskills.io pull body failed: HTTP ${bodyResponse.status} for ${entry.downloadUrl}`,
-			);
-		}
-		// REAL-2: previously we called `.text()` then checked the size —
-		// a 1 GB body would OOM the agent before the check fired. Now we
-		// short-circuit on Content-Length, then stream-read with a hard cap.
+		const bodyRequest = await this.fetchWithTimeout(entry.downloadUrl);
 		let body: string;
 		try {
-			body = await readBodyWithSizeLimit(
-				bodyResponse,
-				this.maxBodyBytes,
-				bodyController,
-			);
-		} catch (error) {
-			if (error instanceof BodyTooLargeError) {
+			const { response: bodyResponse, controller: bodyController } =
+				bodyRequest;
+			if (!bodyResponse.ok) {
 				throw new Error(
-					`agentskills.io pull body exceeds maxBodyBytes (${error.maxBytes}) for ${skillId}@${version}`,
+					`agentskills.io pull body failed: HTTP ${bodyResponse.status} for ${entry.downloadUrl}`,
 				);
 			}
-			throw error;
+			// REAL-2: previously we called `.text()` then checked the size —
+			// a 1 GB body would OOM the agent before the check fired. Now we
+			// short-circuit on Content-Length, then stream-read with a hard cap.
+			try {
+				body = await readBodyWithSizeLimit(
+					bodyResponse,
+					this.maxBodyBytes,
+					bodyController,
+				);
+			} catch (error) {
+				if (error instanceof BodyTooLargeError) {
+					throw new Error(
+						`agentskills.io pull body exceeds maxBodyBytes (${error.maxBytes}) for ${skillId}@${version}`,
+					);
+				}
+				throw error;
+			}
+		} finally {
+			bodyRequest.clearTimeout();
 		}
 
 		const cachePath = join(
@@ -423,10 +498,27 @@ export class SkillsRegistryClient {
 		request: InstallSkillRequest,
 	): Promise<InstallSkillResult> {
 		if (this.verifier != null) {
-			const verifyResult = await this.verifier.verify({
-				body: request.body,
-				entry: request.entry,
-			});
+			let verifyResult: SignatureVerifyResult;
+			try {
+				verifyResult = await this.verifier.verify({
+					body: request.body,
+					entry: request.entry,
+				});
+			} catch (error) {
+				// REAL-2 (Reviewer A round 1 follow-up): a verifier that throws
+				// (network failure, malformed signature blob, unsupported curve,
+				// HSM transport error, etc.) would previously reject the install
+				// promise and skip the structured InstallSkillResult contract.
+				// Callers expect a result object — surface a structured error
+				// so write paths stay observable and the WriteAuthority gate
+				// never sees an unverified body.
+				const message = error instanceof Error ? error.message : String(error);
+				return {
+					ok: false,
+					error: "verification_error",
+					detail: `skill signature verifier threw: ${message}`,
+				};
+			}
 			if (!verifyResult.valid) {
 				return {
 					ok: false,

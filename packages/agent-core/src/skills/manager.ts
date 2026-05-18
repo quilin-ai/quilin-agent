@@ -598,7 +598,9 @@ export function isWithinRoot(targetPath: string, rootPath: string): boolean {
 
 function tokenizeText(text: string): readonly string[] {
 	const normalized = text.toLowerCase().replaceAll(/[^a-z0-9\s-]/gu, "");
-	const tokens = normalized.split(/[\s-]+/u).filter((token) => token.length > 1);
+	const tokens = normalized
+		.split(/[\s-]+/u)
+		.filter((token) => token.length > 1);
 	return [...new Set(tokens)];
 }
 

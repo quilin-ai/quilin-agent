@@ -88,9 +88,7 @@ export class SkillsRemoteRegistry {
 	 * Normalize raw API search response to RemoteSkillEntry array.
 	 * Handles both array responses and { results: [...] } envelope.
 	 */
-	private normalizeSearchResults(
-		data: unknown,
-	): readonly RemoteSkillEntry[] {
+	private normalizeSearchResults(data: unknown): readonly RemoteSkillEntry[] {
 		if (Array.isArray(data)) {
 			return data
 				.map((item) => this.normalizeManifestEntry(item))
@@ -103,9 +101,7 @@ export class SkillsRemoteRegistry {
 			"results" in data &&
 			Array.isArray((data as Record<string, unknown>).results)
 		) {
-			return (
-				(data as Record<string, unknown>).results as unknown[]
-			)
+			return ((data as Record<string, unknown>).results as unknown[])
 				.map((item) => this.normalizeManifestEntry(item))
 				.filter((entry): entry is RemoteSkillEntry => entry != null);
 		}

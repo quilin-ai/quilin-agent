@@ -495,11 +495,17 @@ export class SkillManager {
 
 		const source = this.skillsManager.findByName(action.sourceName);
 		if (source == null) {
-			return createError("not_found", `source skill not found: ${action.sourceName}`);
+			return createError(
+				"not_found",
+				`source skill not found: ${action.sourceName}`,
+			);
 		}
 		const target = this.skillsManager.findByName(action.targetName);
 		if (target == null) {
-			return createError("not_found", `target skill not found: ${action.targetName}`);
+			return createError(
+				"not_found",
+				`target skill not found: ${action.targetName}`,
+			);
 		}
 
 		const resolvedPath = await this.resolveExistingPath(target.path);
@@ -979,7 +985,9 @@ function buildMergeRequest(
 	const details = [
 		`path=${targetPath}`,
 		`bytes=${Buffer.byteLength(body, "utf8")}`,
-		sensitiveTools.length === 0 ? undefined : `sensitive_tools=${sensitiveTools.join(",")}`,
+		sensitiveTools.length === 0
+			? undefined
+			: `sensitive_tools=${sensitiveTools.join(",")}`,
 		`sourceName=${sourceName}`,
 	].filter((value): value is string => value != null);
 

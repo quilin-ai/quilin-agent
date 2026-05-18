@@ -107,15 +107,10 @@ describe("splitIntoSections", () => {
 	});
 
 	it("drops a heading whose body is whitespace-only", () => {
-		const sections = splitIntoSections(
-			"## First\n\n## Second\nreal content\n",
-		);
+		const sections = splitIntoSections("## First\n\n## Second\nreal content\n");
 		// First heading has whitespace-only content and IS still emitted
 		// because the heading itself is non-empty.
-		expect(sections.map((entry) => entry.heading)).toEqual([
-			"First",
-			"Second",
-		]);
+		expect(sections.map((entry) => entry.heading)).toEqual(["First", "Second"]);
 	});
 });
 
