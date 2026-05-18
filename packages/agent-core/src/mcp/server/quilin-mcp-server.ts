@@ -82,13 +82,30 @@ class UnknownResourceError extends Error {
 		// 截断回显的 URI,避免恶意 peer 把任意 payload 塞进错误消息
 		// (日志注入 / 噪音放大风险)。保留前缀让运维能识别配错的 client;
 		// 完整 URI 从原请求里能拿到,不依赖这条消息。
-		const echoed =
-			uri.length > UNKNOWN_RESOURCE_URI_ECHO_MAX
-				? `${uri.slice(0, UNKNOWN_RESOURCE_URI_ECHO_MAX)}…`
-				: uri;
+		const echoed = compactForErrorEcho(uri, UNKNOWN_RESOURCE_URI_ECHO_MAX);
 		super(`Resource "${echoed}" is not exposed by this Quilin MCP server.`);
 		this.name = "UnknownResourceError";
 	}
+}
+
+function compactForErrorEcho(value: string, maxLength: number): string {
+	let output = "";
+	for (const char of value) {
+		if (output.length + char.length > maxLength) {
+			return `${output}…`;
+		}
+		const code = char.codePointAt(0) ?? 0;
+		output += code <= 0x1f || (code >= 0x7f && code <= 0x9f) ? " " : char;
+	}
+	return output;
+}
+
+type ConnectionState = "disconnected" | "connecting" | "connected" | "closing";
+
+interface PendingConnect {
+	readonly server: Server;
+	readonly transport: Transport;
+	cancelled: boolean;
 }
 
 /**
@@ -114,21 +131,16 @@ export interface QuilinMcpServerOptions {
  * `InMemoryTransport`。
  */
 export class QuilinMcpServer {
-	private readonly server: Server;
+	private server: Server;
 	private readonly toolBridge: ToolBridge;
 	private readonly resourceBridge: ResourceBridge;
-	private connected = false;
+	private connectionState: ConnectionState = "disconnected";
+	private pendingConnect: PendingConnect | undefined;
 
 	constructor(options: QuilinMcpServerOptions = {}) {
 		this.toolBridge = options.toolBridge ?? createMockToolBridge();
 		this.resourceBridge = options.resourceBridge ?? createMockResourceBridge();
-		this.server = new Server(SERVER_INFO, {
-			capabilities: {
-				tools: {},
-				resources: {},
-			},
-		});
-		this.registerHandlers();
+		this.server = this.createSdkServer();
 	}
 
 	/** Attach a transport and start serving requests. Idempotent — calling twice on the same instance throws. */
@@ -140,16 +152,46 @@ export class QuilinMcpServer {
 		//
 		// TOCTOU 防护：在 await 之前同步翻转 flag，两个并发 connect() 不会都
 		// 过 guard。SDK connect reject 时把 flag 还原，调用方可以重试。
-		if (this.connected) {
+		if (this.connectionState !== "disconnected") {
 			throw new Error("QuilinMcpServer is already connected to a transport.");
 		}
-		this.connected = true;
+		this.connectionState = "connecting";
+		const attempt: PendingConnect = {
+			server: this.server,
+			transport,
+			cancelled: false,
+		};
+		this.pendingConnect = attempt;
 		try {
-			await this.server.connect(transport);
+			await attempt.server.connect(transport);
 		} catch (error) {
-			this.connected = false;
+			const isCurrentAttempt = this.isCurrentConnectAttempt(attempt);
+			if (isCurrentAttempt) {
+				this.pendingConnect = undefined;
+				this.connectionState = "disconnected";
+			}
+			await this.closeFailedTransport(attempt.transport);
+			if (isCurrentAttempt) {
+				this.resetSdkServer();
+			}
 			throw error;
 		}
+		if (
+			attempt.cancelled ||
+			this.pendingConnect !== attempt ||
+			this.server !== attempt.server ||
+			this.connectionState !== "connecting"
+		) {
+			const isCurrentAttempt = this.isCurrentConnectAttempt(attempt);
+			if (isCurrentAttempt) {
+				this.pendingConnect = undefined;
+				this.connectionState = "disconnected";
+			}
+			await this.closeFailedTransport(attempt.transport);
+			throw new Error("QuilinMcpServer transport closed during connect.");
+		}
+		this.pendingConnect = undefined;
+		this.connectionState = "connected";
 	}
 
 	/** Close the transport. Safe to call multiple times. */
@@ -163,14 +205,40 @@ export class QuilinMcpServer {
 		// 与 connect() 对称：在 await 之前同步翻转 flag，避免两个并发 close()
 		// 都打到 `server.close()`。SDK close reject 时还原 flag，让调用方可以
 		// 重试；不变式是 "connected 反映最后一次成功的状态"。
-		if (!this.connected) {
+		if (this.connectionState === "disconnected") {
 			return;
 		}
-		this.connected = false;
+		if (this.connectionState === "closing") {
+			return;
+		}
+		if (this.connectionState === "connecting") {
+			const attempt = this.pendingConnect;
+			if (attempt == null) {
+				this.connectionState = "disconnected";
+				this.resetSdkServer();
+				return;
+			}
+			attempt.cancelled = true;
+			this.pendingConnect = undefined;
+			this.connectionState = "disconnected";
+			await this.closeFailedTransport(attempt.transport);
+			if (this.server === attempt.server) {
+				this.resetSdkServer();
+			}
+			return;
+		}
+		const sdkServer = this.server;
+		this.connectionState = "closing";
 		try {
-			await this.server.close();
+			await sdkServer.close();
+			if (this.server === sdkServer) {
+				this.connectionState = "disconnected";
+				this.resetSdkServer();
+			}
 		} catch (error) {
-			this.connected = true;
+			if (this.server === sdkServer) {
+				this.connectionState = "connected";
+			}
 			throw error;
 		}
 	}
@@ -178,15 +246,53 @@ export class QuilinMcpServer {
 	/** Read-only public view of connection state — useful for diagnostics. */
 	/** 连接状态的只读视图，便于诊断。 */
 	get isConnected(): boolean {
-		return this.connected;
+		return this.connectionState === "connected";
 	}
 
-	private registerHandlers(): void {
-		this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
+	private createSdkServer(): Server {
+		const server = new Server(SERVER_INFO, {
+			capabilities: {
+				tools: {},
+				resources: {},
+			},
+		});
+		server.onclose = () => {
+			if (this.server === server) {
+				this.pendingConnect = undefined;
+				this.connectionState = "disconnected";
+				this.resetSdkServer();
+			}
+		};
+		this.registerHandlers(server);
+		return server;
+	}
+
+	private resetSdkServer(): void {
+		this.server = this.createSdkServer();
+	}
+
+	private isCurrentConnectAttempt(attempt: PendingConnect): boolean {
+		return this.pendingConnect === attempt && this.server === attempt.server;
+	}
+
+	private async closeFailedTransport(transport: Transport): Promise<void> {
+		try {
+			await transport.close();
+		} catch {
+			// The original connect error is more useful to the caller. close()
+			// here is best-effort cleanup for partially-started transports.
+			//
+			// 这里保留原始 connect 错误给调用方。close() 只是清理半启动
+			// transport 的 best-effort 动作，失败不覆盖原始错误。
+		}
+	}
+
+	private registerHandlers(server: Server): void {
+		server.setRequestHandler(ListToolsRequestSchema, async () => ({
 			tools: EXPOSED_TOOL_NAMES.map((name) => EXPOSED_TOOL_DESCRIPTORS[name]),
 		}));
 
-		this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
+		server.setRequestHandler(CallToolRequestSchema, async (request) => {
 			const name = request.params.name;
 			if (!isExposedToolName(name)) {
 				return createUnknownToolResult(name);
@@ -224,22 +330,19 @@ export class QuilinMcpServer {
 			return this.toolBridge.callTool(name, validation.args);
 		});
 
-		this.server.setRequestHandler(ListResourcesRequestSchema, async () => ({
+		server.setRequestHandler(ListResourcesRequestSchema, async () => ({
 			resources: EXPOSED_RESOURCE_URIS.map(
 				(uri) => EXPOSED_RESOURCE_DESCRIPTORS[uri],
 			),
 		}));
 
-		this.server.setRequestHandler(
-			ReadResourceRequestSchema,
-			async (request) => {
-				const uri = request.params.uri;
-				if (!isExposedResourceUri(uri)) {
-					throw new UnknownResourceError(uri);
-				}
-				return this.resourceBridge.readResource(uri);
-			},
-		);
+		server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+			const uri = request.params.uri;
+			if (!isExposedResourceUri(uri)) {
+				throw new UnknownResourceError(uri);
+			}
+			return this.resourceBridge.readResource(uri);
+		});
 	}
 }
 

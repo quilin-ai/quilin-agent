@@ -158,6 +158,67 @@ describe("QuilinMcpServer — Stage 3 skeleton", () => {
 		expect(callToolMock).not.toHaveBeenCalled();
 	});
 
+	it("truncates and compacts unknown tool names in error results", async () => {
+		const callToolMock = vi.fn(
+			async (): Promise<CallToolResult> => ({
+				content: [{ type: "text", text: "should-not-be-called" }],
+			}),
+		);
+		const toolBridge: ToolBridge = { callTool: callToolMock };
+		harness = await setupHarness({ toolBridge });
+		const maliciousName = `danger\n${"x".repeat(1_000)}`;
+
+		const result = (await harness.client.callTool({
+			name: maliciousName,
+			arguments: {},
+		})) as CallToolResult;
+
+		expect(result.isError).toBe(true);
+		const text = result.content
+			.filter(
+				(block): block is { type: "text"; text: string } =>
+					block.type === "text",
+			)
+			.map((block) => block.text)
+			.join("\n");
+		expect(text).toMatch(/not exposed/i);
+		expect(text).toContain("danger ");
+		expect(text).not.toContain("\n");
+		expect(text).not.toContain("x".repeat(200));
+		expect(text.length).toBeLessThan(170);
+		expect(callToolMock).not.toHaveBeenCalled();
+	});
+
+	it("compacts C1 control characters in unknown tool names", async () => {
+		const callToolMock = vi.fn(
+			async (): Promise<CallToolResult> => ({
+				content: [{ type: "text", text: "should-not-be-called" }],
+			}),
+		);
+		const toolBridge: ToolBridge = { callTool: callToolMock };
+		harness = await setupHarness({ toolBridge });
+		const csi = String.fromCharCode(0x9b);
+		const nel = String.fromCharCode(0x85);
+
+		const result = (await harness.client.callTool({
+			name: `danger${csi}31mred${nel}next`,
+			arguments: {},
+		})) as CallToolResult;
+
+		expect(result.isError).toBe(true);
+		const text = result.content
+			.filter(
+				(block): block is { type: "text"; text: string } =>
+					block.type === "text",
+			)
+			.map((block) => block.text)
+			.join("\n");
+		expect(text).toMatch(/not exposed/i);
+		expect(text).not.toContain(csi);
+		expect(text).not.toContain(nel);
+		expect(callToolMock).not.toHaveBeenCalled();
+	});
+
 	it("advertises exactly the whitelisted resources via list_resources", async () => {
 		harness = await setupHarness();
 		const result = await harness.client.listResources();
@@ -241,6 +302,180 @@ describe("QuilinMcpServer — Stage 3 skeleton", () => {
 		await server.close();
 		expect(server.isConnected).toBe(false);
 		// Closing again is a safe no-op.
+		await server.close();
+		expect(server.isConnected).toBe(false);
+	});
+
+	it("tracks peer-initiated close and can reconnect with the same bridges", async () => {
+		// The SDK clears its own transport when the peer closes, but our
+		// wrapper must observe that onclose too. Otherwise `isConnected`
+		// remains true and the public connect() guard rejects retries even
+		// though the SDK is already disconnected.
+		//
+		// peer 主动关闭时，SDK 会清掉自己的 transport；外层 wrapper 也必须
+		// 同步这个 onclose。否则 `isConnected` 会卡在 true，public connect()
+		// guard 会拒绝重连，即便 SDK 已经断开。
+		const calls: Array<Record<string, unknown>> = [];
+		const toolBridge: ToolBridge = {
+			callTool: async (_name, args) => {
+				calls.push({ ...args });
+				return { content: [{ type: "text", text: "ok" }] };
+			},
+		};
+		const server = new QuilinMcpServer({ toolBridge });
+		const [firstClientTransport, firstServerTransport] =
+			InMemoryTransport.createLinkedPair();
+		const firstClient = new Client(
+			{ name: "first-client", version: "0.0.1" },
+			{ capabilities: {} },
+		);
+
+		await Promise.all([
+			firstClient.connect(firstClientTransport),
+			server.connect(firstServerTransport),
+		]);
+		expect(server.isConnected).toBe(true);
+
+		await firstClient.close();
+		expect(server.isConnected).toBe(false);
+
+		const [secondClientTransport, secondServerTransport] =
+			InMemoryTransport.createLinkedPair();
+		const secondClient = new Client(
+			{ name: "second-client", version: "0.0.1" },
+			{ capabilities: {} },
+		);
+		await Promise.all([
+			secondClient.connect(secondClientTransport),
+			server.connect(secondServerTransport),
+		]);
+
+		const result = (await secondClient.callTool({
+			name: "memory_recall",
+			arguments: { query: "after peer close" },
+		})) as CallToolResult;
+		expect(result.isError ?? false).toBe(false);
+		expect(calls).toEqual([{ query: "after peer close" }]);
+
+		await secondClient.close();
+	});
+
+	it("does not mark connected when the transport closes during start()", async () => {
+		// Some transports can observe an early peer close while start() is
+		// still running, then resolve after cleanup. The SDK onclose callback
+		// has already reset the wrapper by then, so connect() must not blindly
+		// write `connected` after await returns.
+		//
+		// 有些 transport 会在 start() 还没返回时观察到 peer 提前断开，然后在
+		// 清理后 resolve。此时 SDK onclose callback 已经重置外层 wrapper，
+		// connect() 不能在 await 返回后无条件写回 `connected`。
+		const earlyCloseTransport: Transport = {
+			start: async () => {
+				earlyCloseTransport.onclose?.();
+			},
+			send: async () => {},
+			close: async () => {},
+		};
+		const server = new QuilinMcpServer();
+
+		await expect(server.connect(earlyCloseTransport)).rejects.toThrow(
+			/closed during connect/i,
+		);
+		expect(server.isConnected).toBe(false);
+
+		const [, retryTransport] = InMemoryTransport.createLinkedPair();
+		await server.connect(retryTransport);
+		expect(server.isConnected).toBe(true);
+
+		await server.close();
+	});
+
+	it("close() cancels a pending connect attempt before start resolves", async () => {
+		let resolveStart: (() => void) | undefined;
+		const closeSpy = vi.fn(async () => {});
+		const slowTransport: Transport = {
+			start: async () => {
+				await new Promise<void>((resolve) => {
+					resolveStart = resolve;
+				});
+			},
+			send: async () => {},
+			close: closeSpy,
+		};
+		const server = new QuilinMcpServer();
+		const connectPromise = server.connect(slowTransport);
+
+		await server.close();
+		expect(closeSpy).toHaveBeenCalledTimes(1);
+		expect(server.isConnected).toBe(false);
+
+		resolveStart?.();
+		await expect(connectPromise).rejects.toThrow(/closed during connect/i);
+		expect(server.isConnected).toBe(false);
+
+		const [, retryTransport] = InMemoryTransport.createLinkedPair();
+		await server.connect(retryTransport);
+		expect(server.isConnected).toBe(true);
+
+		await server.close();
+	});
+
+	it("old canceled connect resolving does not overwrite a successful retry", async () => {
+		let resolveStart: (() => void) | undefined;
+		const oldCloseSpy = vi.fn(async () => {});
+		const oldTransport: Transport = {
+			start: async () => {
+				await new Promise<void>((resolve) => {
+					resolveStart = resolve;
+				});
+			},
+			send: async () => {},
+			close: oldCloseSpy,
+		};
+		const server = new QuilinMcpServer();
+		const oldConnectPromise = server.connect(oldTransport);
+
+		await server.close();
+		expect(oldCloseSpy).toHaveBeenCalledTimes(1);
+
+		const [, retryTransport] = InMemoryTransport.createLinkedPair();
+		await server.connect(retryTransport);
+		expect(server.isConnected).toBe(true);
+
+		resolveStart?.();
+		await expect(oldConnectPromise).rejects.toThrow(/closed during connect/i);
+		expect(server.isConnected).toBe(true);
+
+		await server.close();
+		expect(server.isConnected).toBe(false);
+	});
+
+	it("old canceled connect rejecting does not overwrite a successful retry", async () => {
+		let rejectStart: ((error: Error) => void) | undefined;
+		const oldCloseSpy = vi.fn(async () => {});
+		const oldTransport: Transport = {
+			start: async () => {
+				await new Promise<void>((_resolve, reject) => {
+					rejectStart = reject;
+				});
+			},
+			send: async () => {},
+			close: oldCloseSpy,
+		};
+		const server = new QuilinMcpServer();
+		const oldConnectPromise = server.connect(oldTransport);
+
+		await server.close();
+		expect(oldCloseSpy).toHaveBeenCalledTimes(1);
+
+		const [, retryTransport] = InMemoryTransport.createLinkedPair();
+		await server.connect(retryTransport);
+		expect(server.isConnected).toBe(true);
+
+		rejectStart?.(new Error("old-boom"));
+		await expect(oldConnectPromise).rejects.toThrow(/old-boom/);
+		expect(server.isConnected).toBe(true);
+
 		await server.close();
 		expect(server.isConnected).toBe(false);
 	});
@@ -405,6 +640,64 @@ describe("QuilinMcpServer — Stage 3 skeleton", () => {
 		expect(server.isConnected).toBe(false);
 	});
 
+	it("can retry connect() after the SDK connect rejects", async () => {
+		// The MCP SDK stores the transport before calling transport.start().
+		// If start() rejects, merely rolling our boolean flag back is not enough:
+		// the underlying SDK Server would still reject the next connect() as
+		// "already connected". We rebuild the SDK Server on failed connect so
+		// the wrapper's public "disconnected" state is genuinely retryable.
+		//
+		// MCP SDK 会先保存 transport，再调用 transport.start()。如果 start()
+		// reject，只回滚外层 boolean 不够：底层 SDK Server 仍会把下一次 connect()
+		// 拒为 "already connected"。失败时重建 SDK Server，确保外层
+		// "disconnected" 状态真的可重试。
+		const failingTransport: Transport = {
+			start: async () => {
+				throw new Error("boom-start");
+			},
+			send: async () => {},
+			close: async () => {},
+		};
+		const server = new QuilinMcpServer();
+
+		await expect(server.connect(failingTransport)).rejects.toThrow(
+			/boom-start/,
+		);
+		expect(server.isConnected).toBe(false);
+
+		const [, retryTransport] = InMemoryTransport.createLinkedPair();
+		await server.connect(retryTransport);
+		expect(server.isConnected).toBe(true);
+
+		await server.close();
+		expect(server.isConnected).toBe(false);
+	});
+
+	it("closes the failed transport when SDK connect rejects", async () => {
+		// A transport may allocate listeners or sockets before start()
+		// rejects. Since the SDK stores the transport before start(), our
+		// wrapper must close it before replacing the SDK Server.
+		//
+		// transport 可能在 start() reject 前已经分配 listener 或 socket。
+		// SDK 会先保存 transport 再 start，所以外层重建 SDK Server 前必须
+		// 主动 close 这个失败 transport。
+		const closeSpy = vi.fn(async () => {});
+		const failingTransport: Transport = {
+			start: async () => {
+				throw new Error("boom-start");
+			},
+			send: async () => {},
+			close: closeSpy,
+		};
+		const server = new QuilinMcpServer();
+
+		await expect(server.connect(failingTransport)).rejects.toThrow(
+			/boom-start/,
+		);
+		expect(closeSpy).toHaveBeenCalledTimes(1);
+		expect(server.isConnected).toBe(false);
+	});
+
 	it("restores connected=true when the SDK close rejects", async () => {
 		// If SDK close throws, the underlying connection state is ambiguous.
 		// We surface the error and keep `connected = true` so the caller knows
@@ -428,6 +721,29 @@ describe("QuilinMcpServer — Stage 3 skeleton", () => {
 		// caller would mistakenly believe the transport was released.
 		// connected 保持 true，因为 close 没成功；否则调用方会误以为已释放。
 		expect(server.isConnected).toBe(true);
+	});
+
+	it("does not restore connected when close rejects after onclose fired", async () => {
+		const failingAfterOnCloseTransport: Transport = {
+			start: async () => {},
+			send: async () => {},
+			close: async () => {
+				failingAfterOnCloseTransport.onclose?.();
+				throw new Error("boom-after-onclose");
+			},
+		};
+		const server = new QuilinMcpServer();
+		await server.connect(failingAfterOnCloseTransport);
+		expect(server.isConnected).toBe(true);
+
+		await expect(server.close()).rejects.toThrow(/boom-after-onclose/);
+		expect(server.isConnected).toBe(false);
+
+		const [, retryTransport] = InMemoryTransport.createLinkedPair();
+		await server.connect(retryTransport);
+		expect(server.isConnected).toBe(true);
+
+		await server.close();
 	});
 
 	it("SDK rejects array arguments upstream — defensive Array.isArray guard documented in code", async () => {
@@ -621,6 +937,38 @@ describe("QuilinMcpServer — Stage 3 skeleton", () => {
 			expect(callCount()).toBe(0);
 		});
 
+		it("rejects memory_recall when query exceeds maxLength: 4096", async () => {
+			const { bridge, callCount } = makeCountingBridge();
+			harness = await setupHarness({ toolBridge: bridge });
+
+			const result = (await harness.client.callTool({
+				name: "memory_recall",
+				arguments: { query: "q".repeat(4097) },
+			})) as CallToolResult;
+
+			expect(result.isError).toBe(true);
+			const text = extractText(result);
+			expect(text).toMatch(/invalid arguments/i);
+			expect(text).toMatch(/query/i);
+			expect(callCount()).toBe(0);
+		});
+
+		it("rejects skill_search when query exceeds maxLength: 4096", async () => {
+			const { bridge, callCount } = makeCountingBridge();
+			harness = await setupHarness({ toolBridge: bridge });
+
+			const result = (await harness.client.callTool({
+				name: "skill_search",
+				arguments: { query: "s".repeat(4097) },
+			})) as CallToolResult;
+
+			expect(result.isError).toBe(true);
+			const text = extractText(result);
+			expect(text).toMatch(/invalid arguments/i);
+			expect(text).toMatch(/query/i);
+			expect(callCount()).toBe(0);
+		});
+
 		it("rejects web_fetch with non-URL string", async () => {
 			const { bridge, callCount } = makeCountingBridge();
 			harness = await setupHarness({ toolBridge: bridge });
@@ -628,6 +976,60 @@ describe("QuilinMcpServer — Stage 3 skeleton", () => {
 			const result = (await harness.client.callTool({
 				name: "web_fetch",
 				arguments: { url: "not a url" },
+			})) as CallToolResult;
+
+			expect(result.isError).toBe(true);
+			const text = extractText(result);
+			expect(text).toMatch(/invalid arguments/i);
+			expect(text).toMatch(/url/i);
+			expect(callCount()).toBe(0);
+		});
+
+		it("rejects web_fetch with non-http protocols", async () => {
+			const { bridge, callCount } = makeCountingBridge();
+			harness = await setupHarness({ toolBridge: bridge });
+
+			for (const url of [
+				"ftp://example.com/archive.tar",
+				"file:///etc/passwd",
+				"mailto:agent@example.com",
+			]) {
+				const result = (await harness.client.callTool({
+					name: "web_fetch",
+					arguments: { url },
+				})) as CallToolResult;
+
+				expect(result.isError).toBe(true);
+				const text = extractText(result);
+				expect(text).toMatch(/invalid arguments/i);
+				expect(text).toMatch(/http and https/i);
+			}
+			expect(callCount()).toBe(0);
+		});
+
+		it("rejects web_fetch URLs with userinfo before bridge dispatch", async () => {
+			const { bridge, callCount } = makeCountingBridge();
+			harness = await setupHarness({ toolBridge: bridge });
+
+			const result = (await harness.client.callTool({
+				name: "web_fetch",
+				arguments: { url: "https://user:pass@example.com/data" },
+			})) as CallToolResult;
+
+			expect(result.isError).toBe(true);
+			const text = extractText(result);
+			expect(text).toMatch(/invalid arguments/i);
+			expect(text).toMatch(/userinfo/i);
+			expect(callCount()).toBe(0);
+		});
+
+		it("rejects web_fetch when URL exceeds maxLength: 2048", async () => {
+			const { bridge, callCount } = makeCountingBridge();
+			harness = await setupHarness({ toolBridge: bridge });
+
+			const result = (await harness.client.callTool({
+				name: "web_fetch",
+				arguments: { url: `https://example.com/${"u".repeat(2049)}` },
 			})) as CallToolResult;
 
 			expect(result.isError).toBe(true);
@@ -653,6 +1055,30 @@ describe("QuilinMcpServer — Stage 3 skeleton", () => {
 			expect(result.isError).toBe(true);
 			const text = extractText(result);
 			expect(text).toMatch(/invalid arguments/i);
+			expect(callCount()).toBe(0);
+		});
+
+		it("truncates and compacts validation errors for malicious extra keys", async () => {
+			const { bridge, callCount } = makeCountingBridge();
+			harness = await setupHarness({ toolBridge: bridge });
+			const maliciousKey = `extra\n${"x".repeat(1_000)}`;
+
+			const result = (await harness.client.callTool({
+				name: "memory_save",
+				arguments: {
+					kind: "note",
+					content: "valid",
+					[maliciousKey]: "payload",
+				},
+			})) as CallToolResult;
+
+			expect(result.isError).toBe(true);
+			const text = extractText(result);
+			expect(text).toMatch(/invalid arguments/i);
+			expect(text).toMatch(/unrecognized key/i);
+			expect(text).not.toContain("\n");
+			expect(text).not.toContain("x".repeat(300));
+			expect(text.length).toBeLessThan(360);
 			expect(callCount()).toBe(0);
 		});
 
@@ -701,6 +1127,33 @@ describe("QuilinMcpServer — Stage 3 skeleton", () => {
 			expect(result.isError ?? false).toBe(false);
 			expect(calls).toEqual([{ query: "boundary", limit: 50 }]);
 		});
+
+		it("accepts http and https web_fetch URLs", async () => {
+			const calls: Array<Record<string, unknown>> = [];
+			const toolBridge: ToolBridge = {
+				callTool: async (_name, args) => {
+					calls.push({ ...args });
+					return { content: [{ type: "text", text: "ok" }] };
+				},
+			};
+			harness = await setupHarness({ toolBridge });
+
+			for (const url of [
+				"http://example.com/page",
+				"https://example.com/page",
+			]) {
+				const result = (await harness.client.callTool({
+					name: "web_fetch",
+					arguments: { url },
+				})) as CallToolResult;
+				expect(result.isError ?? false).toBe(false);
+			}
+
+			expect(calls).toEqual([
+				{ url: "http://example.com/page" },
+				{ url: "https://example.com/page" },
+			]);
+		});
 	});
 
 	it("truncates long URI in UnknownResourceError message (SUSPECT-1 fix)", async () => {
@@ -730,5 +1183,27 @@ describe("QuilinMcpServer — Stage 3 skeleton", () => {
 		// Conservative upper bound: message length stays well below the
 		// raw input length. (80 prefix + framing < 500.)
 		expect(message.length).toBeLessThan(longUri.length);
+	});
+
+	it("compacts control characters in UnknownResourceError message", async () => {
+		harness = await setupHarness();
+		const csi = String.fromCharCode(0x9b);
+		const nel = String.fromCharCode(0x85);
+		const evilUri = `bogus://line-one\nline-two\r${csi}red${nel}${"B".repeat(200)}`;
+
+		const error = await harness.client.readResource({ uri: evilUri }).then(
+			() => {
+				throw new Error("expected rejection");
+			},
+			(err: unknown) => err as Error,
+		);
+
+		const message = String(error);
+		expect(message).toMatch(/not exposed/i);
+		expect(message).not.toContain("\n");
+		expect(message).not.toContain("\r");
+		expect(message).not.toContain(csi);
+		expect(message).not.toContain(nel);
+		expect(message).not.toContain("B".repeat(120));
 	});
 });

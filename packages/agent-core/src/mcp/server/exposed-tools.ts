@@ -20,6 +20,44 @@
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import { type ZodType, z } from "zod";
 
+const TEXT_FIELD_MAX_LENGTH = 4096;
+const URL_FIELD_MAX_LENGTH = 2048;
+const TOOL_NAME_ECHO_MAX_LENGTH = 80;
+const VALIDATION_ERROR_MAX_LENGTH = 240;
+
+function isAllowedWebFetchUrl(value: string): boolean {
+	try {
+		const url = new URL(value);
+		return (
+			(url.protocol === "http:" || url.protocol === "https:") &&
+			url.username === "" &&
+			url.password === ""
+		);
+	} catch {
+		return false;
+	}
+}
+
+function compactValidationMessage(message: string): string {
+	return compactForErrorEcho(message, VALIDATION_ERROR_MAX_LENGTH, "...");
+}
+
+function compactForErrorEcho(
+	value: string,
+	maxLength: number,
+	ellipsis: string,
+): string {
+	let output = "";
+	for (const char of value) {
+		if (output.length + char.length > maxLength) {
+			return `${output}${ellipsis}`;
+		}
+		const code = char.codePointAt(0) ?? 0;
+		output += code <= 0x1f || (code >= 0x7f && code <= 0x9f) ? " " : char;
+	}
+	return output;
+}
+
 /**
  * Names of tools exposed to peer MCP clients in Stage 3.
  *
@@ -51,7 +89,11 @@ export const EXPOSED_TOOL_DESCRIPTORS: Readonly<Record<ExposedToolName, Tool>> =
 			inputSchema: {
 				type: "object",
 				properties: {
-					query: { type: "string", description: "Natural language query." },
+					query: {
+						type: "string",
+						maxLength: TEXT_FIELD_MAX_LENGTH,
+						description: "Natural language query.",
+					},
 					limit: {
 						type: "integer",
 						minimum: 1,
@@ -78,7 +120,7 @@ export const EXPOSED_TOOL_DESCRIPTORS: Readonly<Record<ExposedToolName, Tool>> =
 					content: {
 						type: "string",
 						minLength: 1,
-						maxLength: 4096,
+						maxLength: TEXT_FIELD_MAX_LENGTH,
 						description: "Observation text (max 4096 chars).",
 					},
 				},
@@ -93,7 +135,11 @@ export const EXPOSED_TOOL_DESCRIPTORS: Readonly<Record<ExposedToolName, Tool>> =
 			inputSchema: {
 				type: "object",
 				properties: {
-					query: { type: "string", description: "Free-text search query." },
+					query: {
+						type: "string",
+						maxLength: TEXT_FIELD_MAX_LENGTH,
+						description: "Free-text search query.",
+					},
 				},
 				required: ["query"],
 				additionalProperties: false,
@@ -118,6 +164,8 @@ export const EXPOSED_TOOL_DESCRIPTORS: Readonly<Record<ExposedToolName, Tool>> =
 					url: {
 						type: "string",
 						format: "uri",
+						pattern: "^[Hh][Tt][Tt][Pp][Ss]?://",
+						maxLength: URL_FIELD_MAX_LENGTH,
 						description: "Absolute http(s) URL to fetch.",
 					},
 				},
@@ -152,24 +200,31 @@ export const EXPOSED_TOOL_INPUT_VALIDATORS: Readonly<
 > = Object.freeze({
 	memory_recall: z
 		.object({
-			query: z.string(),
+			query: z.string().max(TEXT_FIELD_MAX_LENGTH),
 			limit: z.number().int().min(1).max(50).optional(),
 		})
 		.strict(),
 	memory_save: z
 		.object({
 			kind: z.enum(["note", "fact", "preference"]),
-			content: z.string().min(1).max(4096),
+			content: z.string().min(1).max(TEXT_FIELD_MAX_LENGTH),
 		})
 		.strict(),
 	skill_search: z
 		.object({
-			query: z.string(),
+			query: z.string().max(TEXT_FIELD_MAX_LENGTH),
 		})
 		.strict(),
 	web_fetch: z
 		.object({
-			url: z.string().url(),
+			url: z
+				.string()
+				.max(URL_FIELD_MAX_LENGTH)
+				.url()
+				.refine(
+					isAllowedWebFetchUrl,
+					"Only http and https URLs without userinfo are allowed.",
+				),
 		})
 		.strict(),
 });
@@ -207,7 +262,7 @@ export function validateToolArgs(
 	// 内部状态。
 	const lines = result.error.issues.map((issue) => {
 		const path = issue.path.length > 0 ? issue.path.join(".") : "(root)";
-		return `${path}: ${issue.message}`;
+		return compactValidationMessage(`${path}: ${issue.message}`);
 	});
 	return {
 		ok: false,
@@ -287,11 +342,16 @@ export function createMockToolBridge(): ToolBridge {
  * 返回 `isError: true` 而不是抛异常，让 transport 不见异常（MCP 约定）。
  */
 export function createUnknownToolResult(name: string): CallToolResult {
+	const echoedName = compactForErrorEcho(
+		name,
+		TOOL_NAME_ECHO_MAX_LENGTH,
+		"...",
+	);
 	return {
 		content: [
 			{
 				type: "text",
-				text: `Tool "${name}" is not exposed by this Quilin MCP server.`,
+				text: `Tool "${echoedName}" is not exposed by this Quilin MCP server.`,
 			},
 		],
 		isError: true,
