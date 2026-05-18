@@ -120,11 +120,11 @@ TASK_BOARD_FIELD_RE = re.compile(
     re.IGNORECASE,
 )
 TASK_BOARD_TABLE_WORK_RE = re.compile(
-    r"\b(?:Linear\s+Issue|Issue|Task|Todo|Action\s+Item|Work\s+Item)\b|"
+    r"\b(?:Plane\s+Issue|Issue|Task|Todo|Action\s+Item|Work\s+Item)\b|"
     r"议题|任务|待办|行动项|事项",
     re.IGNORECASE,
 )
-TASK_BOARD_TABLE_LINEAR_RE = re.compile(r"^Linear$", re.IGNORECASE)
+TASK_BOARD_TABLE_LINEAR_RE = re.compile(r"^Plane$", re.IGNORECASE)
 TASK_BOARD_TABLE_OWNER_RE = re.compile(
     r"\b(?:Owner|Assignee|DRI|Responsible)\b|负责人|执行人|责任人",
     re.IGNORECASE,
@@ -136,7 +136,7 @@ TASK_BOARD_TABLE_SCHEDULE_RE = re.compile(
 )
 TASK_BOARD_ALLOW_RE = re.compile(
     r"("
-    r"Linear|documentation map|docs navigation|navigation|entry point|current-state snapshot|"
+    r"Plane|documentation map|docs navigation|navigation|entry point|current-state snapshot|"
     r"文档地图|文档导航|入口|当前状态快照|"
     r"不再|不承载|禁止|只保留|source-of-truth|真相源"
     r")",
@@ -457,8 +457,8 @@ def check_evidence_claims(path: Path, root: Path) -> list[Finding]:
                 line=line_no,
                 message_en="Progress or completion claim has no nearby proof.",
                 message_zh="进度或完成声明附近没有实证依据。",
-                fix_en="Add nearby evidence such as a command result, commit hash, test count, Linear ID, pull request link, or exact file path.",
-                fix_zh="在附近补充命令结果、提交哈希、测试数量、Linear 编号、PR 链接或具体文件路径等证据。",
+                fix_en="Add nearby evidence such as a command result, commit hash, test count, Plane ID, pull request link, or exact file path.",
+                fix_zh="在附近补充命令结果、提交哈希、测试数量、Plane 编号、PR 链接或具体文件路径等证据。",
             )
         )
 
@@ -567,16 +567,16 @@ def check_task_board_leakage(path: Path, root: Path) -> list[Finding]:
                 line_no,
                 "Docs heading looks like an active task board.",
                 "docs 标题看起来像活跃任务看板。",
-                "Move active work tracking to Linear and keep docs focused on architecture facts, decisions, and verified state.",
-                "把活跃任务追踪移到 Linear，docs 只保留架构事实、决策和已验证状态。",
+                "Move active work tracking to Plane and keep docs focused on architecture facts, decisions, and verified state.",
+                "把活跃任务追踪移到 Plane，docs 只保留架构事实、决策和已验证状态。",
             )
         if stripped.startswith("|") and is_task_management_table_header(stripped):
             add_task_finding(
                 line_no,
                 "Docs table looks like task management or phase tracking.",
                 "docs 表格看起来像任务管理或阶段追踪。",
-                "Move backlog, owner, due-date, and phase-tracking tables to Linear; keep docs tables limited to navigation or verified current-state snapshots.",
-                "把 backlog、负责人、截止日期和阶段追踪表移到 Linear；docs 表格只保留导航或已验证的当前状态快照。",
+                "Move backlog, owner, due-date, and phase-tracking tables to Plane; keep docs tables limited to navigation or verified current-state snapshots.",
+                "把 backlog、负责人、截止日期和阶段追踪表移到 Plane；docs 表格只保留导航或已验证的当前状态快照。",
             )
             continue
         if stripped.startswith("|") and not allowed_task_tracking_context(stripped):
@@ -590,8 +590,8 @@ def check_task_board_leakage(path: Path, root: Path) -> list[Finding]:
                     line_no,
                     "Docs table looks like task management or phase tracking.",
                     "docs 表格看起来像任务管理或阶段追踪。",
-                    "Move backlog, owner, due-date, and phase-tracking tables to Linear; keep docs tables limited to navigation or verified current-state snapshots.",
-                    "把 backlog、负责人、截止日期和阶段追踪表移到 Linear；docs 表格只保留导航或已验证的当前状态快照。",
+                    "Move backlog, owner, due-date, and phase-tracking tables to Plane; keep docs tables limited to navigation or verified current-state snapshots.",
+                    "把 backlog、负责人、截止日期和阶段追踪表移到 Plane；docs 表格只保留导航或已验证的当前状态快照。",
                 )
         if re.match(r"^[-*+]\s+\[[ xX]\]\s+", stripped):
             field_hits = len(TASK_BOARD_FIELD_RE.findall(stripped))
@@ -600,8 +600,8 @@ def check_task_board_leakage(path: Path, root: Path) -> list[Finding]:
                     line_no,
                     "Docs checklist carries task-board fields.",
                     "docs checklist 带有任务看板字段。",
-                    "Move owner/status/due-date tracking to Linear; keep only durable architecture or verification notes in docs.",
-                    "把负责人、状态和截止日期追踪移到 Linear；docs 只保留长期有效的架构或验证说明。",
+                    "Move owner/status/due-date tracking to Plane; keep only durable architecture or verification notes in docs.",
+                    "把负责人、状态和截止日期追踪移到 Plane；docs 只保留长期有效的架构或验证说明。",
                 )
     return findings
 
@@ -637,8 +637,8 @@ def check_structure(root: Path) -> list[Finding]:
                     line=None,
                     message_en="Old top-level docs directory has returned.",
                     message_zh="旧的 docs 顶层目录重新出现。",
-                    fix_en="Keep tasks/history in Linear or git history; keep current facts in docs/STATUS.md and component README files.",
-                    fix_zh="任务和历史材料放到 Linear 或 git history；当前事实放在 docs/STATUS.md 与组件 README。",
+                    fix_en="Keep tasks/history in Plane or git history; keep current facts in docs/STATUS.md and component README files.",
+                    fix_zh="任务和历史材料放到 Plane 或 git history；当前事实放在 docs/STATUS.md 与组件 README。",
                 )
             )
 

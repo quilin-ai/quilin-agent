@@ -26,21 +26,21 @@ Quilin Agent（麒麟）is a self-evolving Agent framework that tracks **curated
 - **Idle Evolution (opt-in)**: When explicitly enabled, idle-time memory consolidation and browsing can run under a bounded daily token budget. **Default is OFF**; any scaffold write requires human-in-loop review (never auto-apply).
 - **LLM SDK**: Vercel AI SDK v6 (630M+ weekly downloads, 25+ providers) — best-in-class TS LLM abstraction
 - **Runtime**: Bun (TS) + CPython 3.14 (Python); pnpm/uv package managers; just for cross-language orchestration. Cargo/Rust added in Iter D.
-- **Benchmark Scope**: existing benchmark code remains in-tree as historical/current implementation evidence only. Unfinished Benchmark Linear projects/issues are canceled or low priority; do not reopen, replace, or extend them without an explicit user request.
+- **Benchmark Scope**: existing benchmark code remains in-tree as historical/current implementation evidence only. Unfinished Benchmark Plane projects/issues are canceled or low priority; do not reopen, replace, or extend them without an explicit user request.
 
 Active scope = **12 engineering domain specs** (01..11 + 13-skills). Domain 12 (Conversation Engineering) is parked as a research note until the core loop and dependent runtime components have local evidence.
 
-> **任务管理不写在本文件，也不写在 docs 里。** 本文件是项目指南(符号链接为 CLAUDE.md / AGENTS.md,每 session 加载到每个 agent 上下文)。Linear 是任务 / backlog / phase tracking 源；`docs/STATUS.md` 和组件 README 只保留当前状态快照与架构事实，经"状态声明实证纪律"(见 Agent Collaboration 节)验证后写入。
+> **任务管理不写在本文件，也不写在 docs 里。** 本文件是项目指南(符号链接为 CLAUDE.md / AGENTS.md,每 session 加载到每个 agent 上下文)。Plane 是任务 / backlog / phase tracking 源；`docs/STATUS.md` 和组件 README 只保留当前状态快照与架构事实，经"状态声明实证纪律"(见 Agent Collaboration 节)验证后写入。
 
-> **执行记录硬规则 / Execution Logging Rule**：Before the main agent or any subagent starts a non-trivial task, it must confirm or create a Linear issue / project / comment as the task record. Implementation, research, cross-review, idle component exploration, architecture exploration, performance exploration, and competitor issue absorption must be recorded in Linear, not only in chat. Research tasks must also write results into bilingual docs under the relevant component directory, or update the current-state snapshot in an existing component README / `docs/STATUS.md`.
+> **执行记录硬规则 / Execution Logging Rule**：Before the main agent or any subagent starts a non-trivial task, it must confirm or create a Plane issue / project / comment as the task record. Implementation, research, cross-review, idle component exploration, architecture exploration, performance exploration, and competitor issue absorption must be recorded in Plane, not only in chat. Research tasks must also write results into bilingual docs under the relevant component directory, or update the current-state snapshot in an existing component README / `docs/STATUS.md`.
 >
-> 主 agent 或任何 subagent 执行非琐碎任务前，必须先确认或创建 Linear issue / project / comment 作为任务记录。实现、调研、交叉 review、空闲组件深挖、架构探索、性能探索、竞品 issue 吸收都必须写入 Linear；不得只在聊天里口头记录。调研类任务还必须把结果写入相关组件目录下的中英双语 docs，或更新现有组件 README / `docs/STATUS.md` 的当前状态快照。
+> 主 agent 或任何 subagent 执行非琐碎任务前，必须先确认或创建 Plane issue / project / comment 作为任务记录。实现、调研、交叉 review、空闲组件深挖、架构探索、性能探索、竞品 issue 吸收都必须写入 Plane；不得只在聊天里口头记录。调研类任务还必须把结果写入相关组件目录下的中英双语 docs，或更新现有组件 README / `docs/STATUS.md` 的当前状态快照。
 
-> **Linear 免费额度纪律 / Linear Free Plan Budget Rule**：The workspace is on Linear's free plan with a 250-issue cap. Treat issues as scarce: reuse existing issues and comments for sub-tasks, subagent logs, probes, reviews, and idle exploration. Create a new issue only for work that needs independent ownership, status, blockers, or acceptance criteria. At 200 issues, ask the user before bulk creation; at 225 issues, stop creating new issues unless the user explicitly approves.
+> **Plane 配额提示 / Plane Quota Note**：The workspace is on Plane's free plan, capped at 12 users with no issue limit. Single-user workspace has effectively unlimited work items, so the previous 250-issue budget discipline (carried over from Linear) no longer applies. Still treat work items as semantically scarce: reuse for sub-tasks, subagent logs, probes, reviews, and idle exploration — create new ones only when independent ownership, status, blockers, or acceptance criteria are warranted. This is a habit, not a quota.
 >
-> 当前 workspace 使用 Linear 免费版，最多 250 个 issue。必须把 issue 当稀缺资源：子任务、subagent 日志、probe（调研记录）、review（审核记录）和空闲探索优先复用已有 issue 的 comment。只有需要独立负责人、状态、阻塞关系或验收条件的工作才新建 issue。达到 200 个 issue 时，批量创建前必须询问用户；达到 225 个 issue 时，除非用户明确批准，否则停止新建 issue。
+> 当前 workspace 使用 Plane 免费版，上限 12 个 user，**无 issue 数量限制**。单 user workspace 实际上 work item 数量不限，之前从 Linear 沿袭的 250-issue 配额纪律不再适用。但仍把 work item 看作语义上的稀缺资源：子任务、subagent 日志、probe（调研记录）、review（审核记录）和空闲探索优先复用已有 work item 的 comment；只有需要独立负责人、状态、阻塞关系或验收条件的工作才新建。这是习惯，不是配额。
 
-> **文档语言硬规则 / Documentation Language Rule**：所有新增或重写的项目文档必须中英双语、按段落对照。标题优先中文，并在同一标题补英文（例如 `## 架构 / Architecture`）。正文按"英文段落 → 中文段落"成对排列，方便用户逐段对照阅读。Linear project / issue 描述在承担任务文档作用时也遵守同一规则。除非用户明确要求，否则不要新增英文-only 文档。
+> **文档语言硬规则 / Documentation Language Rule**：所有新增或重写的项目文档必须中英双语、按段落对照。标题优先中文，并在同一标题补英文（例如 `## 架构 / Architecture`）。正文按"英文段落 → 中文段落"成对排列，方便用户逐段对照阅读。Plane project / issue 描述在承担任务文档作用时也遵守同一规则。除非用户明确要求，否则不要新增英文-only 文档。
 
 > **术语可读性硬规则 / Terminology Readability Rule**：不要裸写黑话、缩写或内部代号。首次出现时必须带括号注释，说明它是什么、为什么重要；中文优先，英文全称可放括号内。例如写 `BFCL（Berkeley Function Calling Leaderboard，一个测试模型函数/工具调用能力的基准）`，不要只写 `BFCL = Berkeley Function Calling Leaderboard`。类似 `R1`、`E3c1b1`、`adapter`、`worker`、`harness` 这类词，也要在首次出现时用自然语言解释。
 
@@ -49,7 +49,7 @@ Active scope = **12 engineering domain specs** (01..11 + 13-skills). Domain 12 (
 | 文档 | 位置 | 用途 |
 |------|------|------|
 | docs 索引 | `docs/README.md` | docs/ 各子文件夹说明 + 写入/查阅约定 |
-| 任务管理 | Linear `QuiLin Agent` workspace | project / issue / backlog / phase tracking 的唯一入口 |
+| 任务管理 | Plane `Quilin-Agent` project（workspace slug `quilin-agent`） | module / work item / cycle / backlog / phase tracking 的唯一入口 |
 | 全局状态 | `docs/STATUS.md` | 当前 Iter 与组件状态快照 |
 | 协作协议 | `agent-bridge.md` | Claude ↔ Codex 协作**权威源**（任务生命周期、长任务纪律、对称异步 review、commit 权属、降级模式） |
 | 核心架构 | `docs/00-core-loop/README.md` | Core Loop、运行时切分、全局架构约束 |
@@ -179,8 +179,8 @@ quilin-agent/
 - **双在线 + token 充足** → 共同规划。Claude 不当甩手掌柜，开放性 / 时效性问题必须网络搜索（详见 agent-bridge.md §2 / §5.2 / §5.3）
 - **协作请求必须回复**：收到对方的协作消息后，必须通过 AgentBridge 回复，不能单方面沉默
 - **协作语言使用中文**：Agent 之间通过 AgentBridge 的所有对话使用中文，方便用户同步查看协作内容
-- **Linear 先于执行**：主 agent / subagent 做任何非琐碎实现、调研、review、探索前，必须在 Linear 中有 issue、project 或 comment；空闲 subagent 优先从 Linear 队列领取或复用已有 issue comment，只有需要独立验收 / 阻塞关系时才新建 issue
-- **调研必须落档**：调研输出不能只留在聊天或 Linear comment；需要写入相关组件 docs，保持中英双语、按段落对照
+- **Plane 先于执行**：主 agent / subagent 做任何非琐碎实现、调研、review、探索前，必须在 Plane 中有 issue、project 或 comment；空闲 subagent 优先从 Plane 队列领取或复用已有 issue comment，只有需要独立验收 / 阻塞关系时才新建 issue
+- **调研必须落档**：调研输出不能只留在聊天或 Plane comment；需要写入相关组件 docs，保持中英双语、按段落对照
 - **subagent 用于并行**：预期超过 5 分钟且能与其他工作并行的任务用 subagent，让主线程继续推进其他工作。**单任务不派 subagent**：如果只有一个任务在飞、主线程会一直闲等，直接主线程做更快（不绕 worktree → cherry-pick 仪式，少一道 worktree-cwd 误写主仓库的风险）。详见 agent-bridge.md §3.3
 - **谁写代码谁 commit**（详见 agent-bridge.md §8.1）
 - 每个任务结束双方主动提醒用户开新 session（详见 agent-bridge.md §9）
@@ -202,9 +202,9 @@ quilin-agent/
 
 ### Cross Code Review 循环（硬规则 / Hard rule）
 
-**任何新写的代码（无论主 agent 还是 subagent 写）落库前必须走 cross review 循环**。这是 quilin-agent 项目所有代码工作的硬约束，未经此流程不得 commit / push / 更新 Linear 状态。
+**任何新写的代码（无论主 agent 还是 subagent 写）落库前必须走 cross review 循环**。这是 quilin-agent 项目所有代码工作的硬约束，未经此流程不得 commit / push / 更新 Plane 状态。
 
-Any new code (whether written by main agent or subagent) must pass a cross-review loop before landing. This is a hard constraint for all code work in quilin-agent — no `git commit` / `git push` / Linear status change is permitted without this gate.
+Any new code (whether written by main agent or subagent) must pass a cross-review loop before landing. This is a hard constraint for all code work in quilin-agent — no `git commit` / `git push` / Plane status change is permitted without this gate.
 
 **流程 / Procedure**:
 
@@ -218,10 +218,10 @@ Any new code (whether written by main agent or subagent) must pass a cross-revie
 
 **只有 2 个 reviewer 都 clean 后**才允许：
 - `git commit` / `git push`
-- 更新 Linear issue 状态（特别是 In Progress → Done）
+- 更新 Plane issue 状态（特别是 In Progress → Done）
 - worktree subagent 的 commit cherry-pick 进 master
 
-**Why**: DeepSeek 笨蛋模型时期的虚假完成（Linear 标 Done 实际是 stub）+ 7 轮审计才挖出 13 个真 bug 的教训。单 reviewer 易报 false positive 或漏 bug；2 reviewer 交叉审 + 多轮迭代 = 收敛到真实质量底。"测试通过 + tsc EXIT=0" 不等于 ship-ready，必须有显式 review gate。
+**Why**: DeepSeek 笨蛋模型时期的虚假完成（Plane 标 Done 实际是 stub）+ 7 轮审计才挖出 13 个真 bug 的教训。单 reviewer 易报 false positive 或漏 bug；2 reviewer 交叉审 + 多轮迭代 = 收敛到真实质量底。"测试通过 + tsc EXIT=0" 不等于 ship-ready，必须有显式 review gate。
 
 **适用 / Applies to**:
 - Feature commit / fix commit / refactor / 跨文件修改
@@ -231,11 +231,11 @@ Any new code (whether written by main agent or subagent) must pass a cross-revie
 **不适用 / Does not apply**:
 - 纯文档修改（无代码逻辑）
 - 纯 lint format / 单行 typo
-- Memory / Linear 文本更新
+- Memory / Plane 文本更新
 
 **SUSPECT 与 RECOMMEND 的处理**:
 - SUSPECT（reviewer 不 100% 确定）→ **主 agent 必须亲自实证（grep / Read / 跑测试）后判决**，不能口头驳回
-- RECOMMEND（建议性优化，非 bug）→ 不阻塞 cherry-pick，但应记录到 Linear backlog
+- RECOMMEND（建议性优化，非 bug）→ 不阻塞 cherry-pick，但应记录到 Plane backlog
 
 **收敛判定 / Convergence**:
 - 连续两个**新派**的 reviewer 都报 0 真实 issue（false positive 不算）→ 通过

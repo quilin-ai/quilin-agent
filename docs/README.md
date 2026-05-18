@@ -9,7 +9,7 @@ This directory only carries current project facts.
 | 你要看什么 | 入口 |
 |---|---|
 | 全局状态快照 | [STATUS.md](STATUS.md) |
-| 任务管理 / backlog | [Linear: QuiLin Agent](https://linear.app/quilin-agent) |
+| 任务管理 / backlog | [Plane: QuiLin Agent](https://linear.app/quilin-agent) |
 | Runtime split、Core Loop、docs 规则 | [00-core-loop](00-core-loop/README.md) |
 | 某个组件的架构 / 当前事实 | 对应组件 README |
 
@@ -35,7 +35,7 @@ This directory only carries current project facts.
 
 ## 写入规则 / Writing Rules
 
-1. **任务管理只写 Linear。** `docs/` 不再承载 TODO board、backlog 或 phase tracking。
+1. **任务管理只写 Plane。** `docs/` 不再承载 TODO board、backlog 或 phase tracking。
 2. **全局状态快照只写 [STATUS.md](STATUS.md)。**
 3. **组件当前事实只写该组件的 `README.md`。**
 4. 不再保留 `evidence/` 档案目录；历史快照通过 git history 追溯。
@@ -57,7 +57,7 @@ The current structure is fixed as:
 ```text
 docs/
   README.md
-  STATUS.md      # 当前状态快照；任务链接到 Linear
+  STATUS.md      # 当前状态快照；任务链接到 Plane
   <component>/
     README.md      # 当前架构、约束、实现状态
 ```

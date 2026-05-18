@@ -2,9 +2,9 @@
 
 This status snapshot was updated on 2026-05-18 / 本状态快照更新于 2026-05-18。
 
-This file is the only global progress entry point under `docs/`. Component-level current facts live in each `docs/<component>/README.md`. Historical snapshots are traced through git history. Task management and backlog tracking live in Linear; this file keeps only current-state snapshots.
+This file is the only global progress entry point under `docs/`. Component-level current facts live in each `docs/<component>/README.md`. Historical snapshots are traced through git history. Task management and backlog tracking live in Plane; this file keeps only current-state snapshots.
 
-本文件是 `docs/` 下唯一的全局进度入口。组件级当前事实写在各 `docs/<component>/README.md`。历史快照通过 git history 追溯。任务管理与 backlog 统一迁移到 Linear；本文件只保留当前状态快照。
+本文件是 `docs/` 下唯一的全局进度入口。组件级当前事实写在各 `docs/<component>/README.md`。历史快照通过 git history 追溯。任务管理与 backlog 统一迁移到 Plane；本文件只保留当前状态快照。
 
 ## 2026-05-15/18 Iter F web 收尾 / Iter F web close-out
 
@@ -44,7 +44,7 @@ QUI-103 / QUI-104 仅 detection 骨架 ship，整 issue 保持 Backlog 因为 wa
 
 QUI-103 / QUI-104 stay Backlog because only detection skeleton shipped; watcher + LLM analysis + memory-write paths remain pending. Other 4 issues marked Done.
 
-Iter J 完整 ship 后 Iter J 项目下还剩 backlog issue：QUI-62 SandboxRouter（实质已落但 issue 仍是 In Progress，前期 Linear 状态滞后已修；现 Done）、QUI-102 Soul Import（独立大 issue，未碰），以及 QUI-133/166/170 的 follow-up 余项（HTTP transport / A2A federation / Skill signing 都是 Stage 4-5 范围）。
+Iter J 完整 ship 后 Iter J 项目下还剩 backlog issue：QUI-62 SandboxRouter（实质已落但 issue 仍是 In Progress，前期 Plane 状态滞后已修；现 Done）、QUI-102 Soul Import（独立大 issue，未碰），以及 QUI-133/166/170 的 follow-up 余项（HTTP transport / A2A federation / Skill signing 都是 Stage 4-5 范围）。
 
 After Iter J close-out, Iter J project's residual backlog includes: QUI-62 SandboxRouter (substantively shipped earlier, status synced this round), QUI-102 Soul Import (large independent issue, not touched), and QUI-133/166/170 follow-up tails (HTTP transport / A2A federation / Skill signing are Stage 4-5 scope).
 
@@ -81,9 +81,9 @@ Current local evidence from 2026-05-07 commands:
 - `rg --files providers/memory/benchmarks | wc -l` reports 4 memory benchmark harness files.
 - `rg --files providers/memory/benchmarks | wc -l` 报告 4 个 memory benchmark harness 文件。
 
-Linear has been updated to match this freeze: the `Iter E 基准冲刺 / Benchmark Ascent` project is `Canceled` and `Low`; unfinished Benchmark issues `QUI-6`, `QUI-7`, `QUI-8`, `QUI-43`, `QUI-47`, and `QUI-70` are `Canceled` and `Low`. The available Linear MCP exposes cancel/update rather than hard-delete, so cancellation is the active-queue removal mechanism used for this session.
+Plane has been updated to match this freeze: the `Iter E 基准冲刺 / Benchmark Ascent` project is `Canceled` and `Low`; unfinished Benchmark issues `QUI-6`, `QUI-7`, `QUI-8`, `QUI-43`, `QUI-47`, and `QUI-70` are `Canceled` and `Low`. The available Plane MCP exposes cancel/update rather than hard-delete, so cancellation is the active-queue removal mechanism used for this session.
 
-Linear 已同步这次冻结：`Iter E 基准冲刺 / Benchmark Ascent` project 已标记为 `Canceled` 与 `Low`；未完成 Benchmark issue `QUI-6`、`QUI-7`、`QUI-8`、`QUI-43`、`QUI-47`、`QUI-70` 已标记为 `Canceled` 与 `Low`。本 session 可用的 Linear MCP 暴露 cancel/update 而不是 hard-delete，因此本次用取消作为移出活跃队列的机制。
+Plane 已同步这次冻结：`Iter E 基准冲刺 / Benchmark Ascent` project 已标记为 `Canceled` 与 `Low`；未完成 Benchmark issue `QUI-6`、`QUI-7`、`QUI-8`、`QUI-43`、`QUI-47`、`QUI-70` 已标记为 `Canceled` 与 `Low`。本 session 可用的 Plane MCP 暴露 cancel/update 而不是 hard-delete，因此本次用取消作为移出活跃队列的机制。
 
 ## 迭代状态 / Iteration State
 
@@ -95,8 +95,8 @@ Linear 已同步这次冻结：`Iter E 基准冲刺 / Benchmark Ascent` project 
 | Iter C Planning Core | closed | Planning + inference strategy，与 memory 抽离并行完成。 | `docs/04-planning/README.md` |
 | Iter M Memory | closed | quilin-mem 主体切片完成；L3a observer 仍 blocked/deferred。 | `docs/03-memory/README.md` |
 | Iter D Operability | closed | Observability、config、scratchpad、Rust `mesh-sdk` stub、CI 和 coverage gate。 | `docs/08-observability/README.md` + `crates/mesh-sdk/Cargo.toml` |
-| Iter E Benchmark Ascent | frozen / canceled | Existing code remains in-tree; all unfinished Benchmark planning and implementation work is canceled in Linear. | `docs/14-benchmark-harness/README.md` + `QUI-6` / `QUI-7` / `QUI-8` / `QUI-43` / `QUI-47` / `QUI-70` |
-| Iter F0 Frontier Assimilation | closed | 2026-05 前沿调研吸收完毕，可执行的方向已拆到具体 Iter F+ / G / H / I / J 实现 issue。 | Linear `Iter F0：前沿方案吸收` project (completed 2026-05-07) |
+| Iter E Benchmark Ascent | frozen / canceled | Existing code remains in-tree; all unfinished Benchmark planning and implementation work is canceled in Plane. | `docs/14-benchmark-harness/README.md` + `QUI-6` / `QUI-7` / `QUI-8` / `QUI-43` / `QUI-47` / `QUI-70` |
+| Iter F0 Frontier Assimilation | closed | 2026-05 前沿调研吸收完毕，可执行的方向已拆到具体 Iter F+ / G / H / I / J 实现 issue。 | Plane `Iter F0：前沿方案吸收` project (completed 2026-05-07) |
 | Iter F web/UX 收尾 | closed | Chat 持久化 + 交互 primitives + UX-4 KG + 热重载 + iter-close polish + stable 3008 build。33+ commit、4 轮 cross-review 收敛 0/0、tsc 0 / vitest 414 全过。 | `docs/STATUS-iter-F-autonomous-2026-05-15.md` + commits `5ec2192`..`9d65c6a` |
 | Iter F Scale-Out runtime | open / 下一轮主攻 | 非阻塞 Supervisor、Agent Mesh runtime、Context production gates 仍是 backlog。 | [QUI-158](https://linear.app/quilin-agent/issue/QUI-158) + [QUI-159](https://linear.app/quilin-agent/issue/QUI-159) + [QUI-160](https://linear.app/quilin-agent/issue/QUI-160) |
 | Iter J 生态与连接 | 5/5 收尾 2026-05-18 | 本轮目标 5 个 worktree 全 ship（web_browse userinfo / MCP Stage 2 client / progressive disclosure + registry / integrations 骨架 / Quilin-as-server Stage 3 骨架）。18 轮 cross-review，QUI-171 走了 8 轮。SandboxRouter (QUI-62) 早期已 ship。 | 见上方 `2026-05-18 Iter J 收尾` 段落含 commit hash |
@@ -109,8 +109,8 @@ Linear 已同步这次冻结：`Iter E 基准冲刺 / Benchmark Ascent` project 
 | Iter C Planning Core | closed | Planning + inference strategy, completed alongside memory decoupling. | `docs/04-planning/README.md` |
 | Iter M Memory | closed | Main quilin-mem slices completed; L3a observer remains blocked/deferred. | `docs/03-memory/README.md` |
 | Iter D Operability | closed | Observability, config, scratchpad, Rust `mesh-sdk` stub, CI, and coverage gate. | `docs/08-observability/README.md` + `crates/mesh-sdk/Cargo.toml` |
-| Iter E Benchmark Ascent | frozen / canceled | Existing code remains in-tree; all unfinished Benchmark planning and implementation work is canceled in Linear. | `docs/14-benchmark-harness/README.md` + `QUI-6` / `QUI-7` / `QUI-8` / `QUI-43` / `QUI-47` / `QUI-70` |
-| Iter F0 Frontier Assimilation | closed | 2026-05 frontier research assimilated; actionable directions split into concrete Iter F+/G/H/I/J implementation issues. | Linear `Iter F0：前沿方案吸收` project (completed 2026-05-07) |
+| Iter E Benchmark Ascent | frozen / canceled | Existing code remains in-tree; all unfinished Benchmark planning and implementation work is canceled in Plane. | `docs/14-benchmark-harness/README.md` + `QUI-6` / `QUI-7` / `QUI-8` / `QUI-43` / `QUI-47` / `QUI-70` |
+| Iter F0 Frontier Assimilation | closed | 2026-05 frontier research assimilated; actionable directions split into concrete Iter F+/G/H/I/J implementation issues. | Plane `Iter F0：前沿方案吸收` project (completed 2026-05-07) |
 | Iter F web/UX close-out | closed | Chat persistence + interaction primitives + UX-4 KG + hot reload + iter-close polish + stable 3008 build. 33+ commits, 4 cross-review rounds converged 0/0, tsc 0 / 414 vitest pass. | `docs/STATUS-iter-F-autonomous-2026-05-15.md` + commits `5ec2192`..`9d65c6a` |
 | Iter F Scale-Out runtime | open / next focus | Non-blocking supervisor, Agent Mesh runtime, Context production gates remain backlog. | [QUI-158](https://linear.app/quilin-agent/issue/QUI-158) + [QUI-159](https://linear.app/quilin-agent/issue/QUI-159) + [QUI-160](https://linear.app/quilin-agent/issue/QUI-160) |
 | Iter J Ecosystem & Connectivity | 5/5 close-out 2026-05-18 | All 5 targeted worktrees shipped (web_browse userinfo / MCP Stage 2 client / progressive disclosure + registry / integrations detection skeletons / Quilin-as-server Stage 3 skeleton). 18 cross-review rounds total, QUI-171 took 8 rounds. SandboxRouter (QUI-62) shipped earlier. | See `2026-05-18 Iter J 收尾` section above for commit hashes |
@@ -135,9 +135,9 @@ The frozen Benchmark implementation surface is: dataset loading, runner/scorer/s
 
 ## 2026-05-02 组件规划快照 / 2026-05-02 Component Planning Snapshot
 
-The latest Linear migration and component planning sweep produced bilingual deferred-runtime plans across the main component families. The purpose of these files is to define runtime boundaries, trigger gates, and evidence requirements; they are not proof that every runtime path has landed.
+The latest Plane migration and component planning sweep produced bilingual deferred-runtime plans across the main component families. The purpose of these files is to define runtime boundaries, trigger gates, and evidence requirements; they are not proof that every runtime path has landed.
 
-最新一轮 Linear 迁移与组件规划整理，已经为主要组件族产出中英双语 deferred-runtime plans（延后运行时规划）。这些文件的用途是定义运行时边界、触发门槛和证据要求；它们不是所有运行时代码都已落地的证明。
+最新一轮 Plane 迁移与组件规划整理，已经为主要组件族产出中英双语 deferred-runtime plans（延后运行时规划）。这些文件的用途是定义运行时边界、触发门槛和证据要求；它们不是所有运行时代码都已落地的证明。
 
 Current planning artifacts include LLM provider production gates, Context relevance/compression gates, Memory observer and depth gates, Planning production routing gates, Tools runtime gates, Multi-Agent supervisor gates, Safety production threat-model gates, Observability trace/evaluation-data gates, Deployment runtime gates, Self-Evolution trajectory-to-patch gates, Agent Mesh deferred runtime gates, Skills runtime/platformization gates, Conversation Engineering restart gates, and the Iter F launch gate.
 
@@ -170,21 +170,21 @@ The cross-review posture is now: benchmark（standardized capability evaluation�
 
 ## 任务追踪 / Task Tracking
 
-Linear is the task-management source. Docs only keep current-state snapshots and architecture facts.
+Plane is the task-management source. Docs only keep current-state snapshots and architecture facts.
 
-Linear 是任务管理源；docs 只保留状态快照与架构事实。
+Plane 是任务管理源；docs 只保留状态快照与架构事实。
 
-- Frozen Iter E: Linear project [Iter E 基准冲刺 / Benchmark Ascent](https://linear.app/quilin-agent/project/iter-e-benchmark-ascent-110aa1c9aae3) is canceled and low priority.
-- 已冻结 Iter E：Linear project [Iter E 基准冲刺 / Benchmark Ascent](https://linear.app/quilin-agent/project/iter-e-benchmark-ascent-110aa1c9aae3) 已取消并降为低优先级。
-- Runtime scale-out governance: Linear project [Iter F 规模化 / Scale-Out](https://linear.app/quilin-agent/project/iter-f-scale-out-8731e6ced529) remains the broad future lane, with Benchmark code frozen unless requested.
-- Runtime scale-out 治理：Linear project [Iter F 规模化 / Scale-Out](https://linear.app/quilin-agent/project/iter-f-scale-out-8731e6ced529) 仍是宽泛后续通道；除非用户要求，Benchmark 代码冻结。
-- Verification baseline: Linear project [验证基线：前沿证据包 / Verification Baseline: Frontier Evidence Pack](https://linear.app/quilin-agent/project/验证基线前沿证据包-verification-baseline-frontier-evidence-pack-6babd4eb3b39) is low priority while Benchmark lanes are frozen.
-- 验证基线：Linear project [验证基线：前沿证据包 / Verification Baseline: Frontier Evidence Pack](https://linear.app/quilin-agent/project/验证基线前沿证据包-verification-baseline-frontier-evidence-pack-6babd4eb3b39) 在 Benchmark lane 冻结期间为低优先级。
-- Execution logging discipline: Linear [QUI-78](https://linear.app/quilin-agent/issue/QUI-78/流程所有执行空闲探索与交叉-review-必须记录到-linear-require-linear-records-for-execution) requires main-agent and subagent implementation, research, review, and exploration work to be recorded in Linear first; research results must also land in relevant component docs.
-- 执行记录纪律：Linear [QUI-78](https://linear.app/quilin-agent/issue/QUI-78/流程所有执行空闲探索与交叉-review-必须记录到-linear-require-linear-records-for-execution) 要求主 agent / subagent 的实现、调研、review、探索都先记录到 Linear；调研结果还要落到相关组件 docs。
-- Linear free-plan budget discipline: the current Linear free plan allows at most 250 issues; follow-up sub-tasks, subagent logs, probes, and reviews should use comments on existing issues first. Do not bulk-create near 200 issues, and do not create new issues after 225 without explicit user approval.
-- Linear 免费额度纪律：当前 Linear 免费版最多 250 个 issue；后续子任务、subagent 日志、调研记录和 review 优先写到已有 issue 的 comment，达到 200 个 issue 前不做批量新建，达到 225 个 issue 后未经用户明确批准不再新建。
-- Component-level deferred work: Linear project [组件延后工作 / Component Deferred Work](https://linear.app/quilin-agent/project/component-deferred-work-922b3c51ce07)
-- 组件级 deferred work：Linear project [组件延后工作 / Component Deferred Work](https://linear.app/quilin-agent/project/component-deferred-work-922b3c51ce07)
-- Global future roadmap: Linear project [未来规划总览 / Global Roadmap](https://linear.app/quilin-agent/project/未来规划总览-global-roadmap-58896094ed5c)
-- 全局未来规划：Linear project [未来规划总览 / Global Roadmap](https://linear.app/quilin-agent/project/未来规划总览-global-roadmap-58896094ed5c)
+- Frozen Iter E: Plane project [Iter E 基准冲刺 / Benchmark Ascent](https://linear.app/quilin-agent/project/iter-e-benchmark-ascent-110aa1c9aae3) is canceled and low priority.
+- 已冻结 Iter E：Plane project [Iter E 基准冲刺 / Benchmark Ascent](https://linear.app/quilin-agent/project/iter-e-benchmark-ascent-110aa1c9aae3) 已取消并降为低优先级。
+- Runtime scale-out governance: Plane project [Iter F 规模化 / Scale-Out](https://linear.app/quilin-agent/project/iter-f-scale-out-8731e6ced529) remains the broad future lane, with Benchmark code frozen unless requested.
+- Runtime scale-out 治理：Plane project [Iter F 规模化 / Scale-Out](https://linear.app/quilin-agent/project/iter-f-scale-out-8731e6ced529) 仍是宽泛后续通道；除非用户要求，Benchmark 代码冻结。
+- Verification baseline: Plane project [验证基线：前沿证据包 / Verification Baseline: Frontier Evidence Pack](https://linear.app/quilin-agent/project/验证基线前沿证据包-verification-baseline-frontier-evidence-pack-6babd4eb3b39) is low priority while Benchmark lanes are frozen.
+- 验证基线：Plane project [验证基线：前沿证据包 / Verification Baseline: Frontier Evidence Pack](https://linear.app/quilin-agent/project/验证基线前沿证据包-verification-baseline-frontier-evidence-pack-6babd4eb3b39) 在 Benchmark lane 冻结期间为低优先级。
+- Execution logging discipline: Plane [QUI-78](https://linear.app/quilin-agent/issue/QUI-78/流程所有执行空闲探索与交叉-review-必须记录到-linear-require-linear-records-for-execution) requires main-agent and subagent implementation, research, review, and exploration work to be recorded in Plane first; research results must also land in relevant component docs.
+- 执行记录纪律：Plane [QUI-78](https://linear.app/quilin-agent/issue/QUI-78/流程所有执行空闲探索与交叉-review-必须记录到-linear-require-linear-records-for-execution) 要求主 agent / subagent 的实现、调研、review、探索都先记录到 Plane；调研结果还要落到相关组件 docs。
+- Plane free-plan budget discipline: the current Plane free plan allows at most 250 issues; follow-up sub-tasks, subagent logs, probes, and reviews should use comments on existing issues first. Do not bulk-create near 200 issues, and do not create new issues after 225 without explicit user approval.
+- Plane 免费额度纪律：当前 Plane 免费版最多 250 个 issue；后续子任务、subagent 日志、调研记录和 review 优先写到已有 issue 的 comment，达到 200 个 issue 前不做批量新建，达到 225 个 issue 后未经用户明确批准不再新建。
+- Component-level deferred work: Plane project [组件延后工作 / Component Deferred Work](https://linear.app/quilin-agent/project/component-deferred-work-922b3c51ce07)
+- 组件级 deferred work：Plane project [组件延后工作 / Component Deferred Work](https://linear.app/quilin-agent/project/component-deferred-work-922b3c51ce07)
+- Global future roadmap: Plane project [未来规划总览 / Global Roadmap](https://linear.app/quilin-agent/project/未来规划总览-global-roadmap-58896094ed5c)
+- 全局未来规划：Plane project [未来规划总览 / Global Roadmap](https://linear.app/quilin-agent/project/未来规划总览-global-roadmap-58896094ed5c)
