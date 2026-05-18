@@ -11,10 +11,7 @@ import type { ToolResult } from "../types.js";
  * tool.
  */
 export interface StagehandLikePage {
-	goto(
-		url: string,
-		options?: { readonly timeout?: number },
-	): Promise<unknown>;
+	goto(url: string, options?: { readonly timeout?: number }): Promise<unknown>;
 	waitForSelector(
 		selector: string,
 		options?: {
@@ -72,6 +69,10 @@ function createErrorResult(
 		content: JSON.stringify(payload),
 		isError: true,
 	};
+}
+
+function hasUrlUserinfo(url: URL): boolean {
+	return url.username !== "" || url.password !== "";
 }
 
 function summarizeInstruction(instruction: string): string {
@@ -187,6 +188,12 @@ export function createWebBrowseTool(
 			if (!["http:", "https:"].includes(parsedUrl.protocol)) {
 				return createErrorResult("builtin-web-browse", {
 					error: `Only http and https URLs are allowed: ${url}`,
+				});
+			}
+
+			if (hasUrlUserinfo(parsedUrl)) {
+				return createErrorResult("builtin-web-browse", {
+					error: "URL userinfo credentials are not supported.",
 				});
 			}
 

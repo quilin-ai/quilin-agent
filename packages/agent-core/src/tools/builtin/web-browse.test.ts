@@ -71,6 +71,22 @@ describe("createWebBrowseTool", () => {
 		expect(factory).not.toHaveBeenCalled();
 	});
 
+	it("rejects URLs with embedded credentials without launching a browser", async () => {
+		const factory = vi.fn();
+		const tool = createWebBrowseTool({ stagehandFactory: factory });
+
+		const result = await tool.execute({
+			url: "https://user:pass@example.com/",
+			instruction: "read",
+		});
+
+		expect(result.isError).toBe(true);
+		const payload = JSON.parse(result.content) as { error?: string };
+		expect(payload.error).toMatch(/userinfo credentials/);
+		expect(payload.error).not.toContain("user:pass");
+		expect(factory).not.toHaveBeenCalled();
+	});
+
 	it("runs extract mode by default and closes the browser", async () => {
 		const fake = makeFakeStagehand();
 		const factory = vi.fn().mockResolvedValue(asStagehand(fake));
@@ -189,7 +205,10 @@ describe("createWebBrowseTool", () => {
 		});
 
 		expect(seenSummaries).toHaveLength(1);
-		const summary = seenSummaries[0]!;
+		const summary = seenSummaries[0];
+		if (summary == null) {
+			throw new Error("expected confirmation summary");
+		}
 		expect(summary).toContain("example.com");
 		expect(summary).toContain("...");
 		expect(summary.length).toBeLessThan(longInstruction.length + 60);
@@ -207,9 +226,7 @@ describe("createWebBrowseTool", () => {
 		});
 
 		expect(result.isError).toBe(true);
-		expect(JSON.parse(result.content).error).toMatch(
-			/WriteAuthority/,
-		);
+		expect(JSON.parse(result.content).error).toMatch(/WriteAuthority/);
 		expect(factory).not.toHaveBeenCalled();
 	});
 
@@ -229,9 +246,7 @@ describe("createWebBrowseTool", () => {
 		});
 
 		expect(result.isError).toBe(true);
-		expect(JSON.parse(result.content).error).toMatch(
-			/denied|interactive/,
-		);
+		expect(JSON.parse(result.content).error).toMatch(/denied|interactive/);
 		expect(factory).not.toHaveBeenCalled();
 	});
 
