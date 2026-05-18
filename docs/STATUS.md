@@ -26,6 +26,28 @@ Iter F web/UX is fully closed out. Full ship list with commit hashes lives in [`
 
 Next-iter order (user decision 2026-05-18, see [QUI-46](https://linear.app/quilin-agent/issue/QUI-46) comment): Iter J close-out → Iter F web LOW residual → Iter F Scale-Out runtime → Iter G1 P0 triple → Iter L+0 EDD.
 
+## 2026-05-18 Iter J 收尾 / Iter J Ecosystem & Connectivity close-out
+
+Iter J 5/5 全部 ship 到 master。14 个 commit 落地，18 轮 cross-review 收敛（其中 QUI-171 Stage 3 状态机走了 8 轮交叉审）。Anthropic + OpenAI 双 quota fresh reviewer 并行 30+ 次。
+
+Iter J 5/5 fully shipped to master. 14 commits landed, 18 cross-review rounds converged (QUI-171 Stage 3 state machine took 8 rounds). 30+ fresh reviewer subagent invocations across Anthropic + OpenAI quotas.
+
+| Issue | Commits | 内容 / Content |
+|---|---|---|
+| **[QUI-133](https://linear.app/quilin-agent/issue/QUI-133)** web_browse userinfo guard | `f53526f` | `<Link href="https://user:pass@...">` 凭证泄漏 fix + TC-06 e2e deterministic stub |
+| **[QUI-166](https://linear.app/quilin-agent/issue/QUI-166)** MCP Stage 2 Prompts + Elicitation | `46bd315` + `15cd822` + `3625e9c` | client `prompts/list` + `prompts/get` + server-initiated elicitation + injection-scanner + url 白名单 + schema bounds + sha256-16 matchedText fingerprint + frozen array tamper guard |
+| **[QUI-170](https://linear.app/quilin-agent/issue/QUI-170)** progressive disclosure + agentskills registry | `693a160` + `5edde63` + `a5eef44` | Jaccard-like skill chunk surfacing + agentskills.io client + SSRF/OOM guards (`url-guard.ts`) + verifier throw catch + fetchWithTimeout |
+| **[QUI-104](https://linear.app/quilin-agent/issue/QUI-104)/[QUI-103](https://linear.app/quilin-agent/issue/QUI-103)** integrations detection skeletons | `6357bf8` + `7b34e3a` | GitHub Stars + X bookmarks + Obsidian + WeChat parser MVP（WeakMap-private token，无明文泄漏）—— 仅 detection 层，主体 watcher + LLM 分析 + 写记忆未做 |
+| **[QUI-171](https://linear.app/quilin-agent/issue/QUI-171)** Quilin-as-server Stage 3 骨架 | `d2ec82a` + `83100d5` + `d41bc0b` + `51272b0` + `948e8e0` | stdio MCP server（不开 HTTP）暴露 4 工具 + 3 资源 + 白名单 enforcement + zod 入参 validation + 完整连接状态机（connect/close/onclose interleaving / failed transport cleanup / pending connect identity）+ peer 可控错误回显 C0+C1 控制字符过滤 |
+
+QUI-103 / QUI-104 仅 detection 骨架 ship，整 issue 保持 Backlog 因为 watcher 主体 + LLM 分析 + 写记忆未做。其他 4 个 issue 已 Done。
+
+QUI-103 / QUI-104 stay Backlog because only detection skeleton shipped; watcher + LLM analysis + memory-write paths remain pending. Other 4 issues marked Done.
+
+Iter J 完整 ship 后 Iter J 项目下还剩 backlog issue：QUI-62 SandboxRouter（实质已落但 issue 仍是 In Progress，前期 Linear 状态滞后已修；现 Done）、QUI-102 Soul Import（独立大 issue，未碰），以及 QUI-133/166/170 的 follow-up 余项（HTTP transport / A2A federation / Skill signing 都是 Stage 4-5 范围）。
+
+After Iter J close-out, Iter J project's residual backlog includes: QUI-62 SandboxRouter (substantively shipped earlier, status synced this round), QUI-102 Soul Import (large independent issue, not touched), and QUI-133/166/170 follow-up tails (HTTP transport / A2A federation / Skill signing are Stage 4-5 scope).
+
 ## 当前焦点 / Current Focus
 
 Iter E（Benchmark Ascent，基准冲刺）is frozen as of 2026-05-02. Benchmark is now the lowest project priority, and no Iter may add or modify Benchmark code unless the user explicitly asks for Benchmark work.
@@ -77,7 +99,7 @@ Linear 已同步这次冻结：`Iter E 基准冲刺 / Benchmark Ascent` project 
 | Iter F0 Frontier Assimilation | closed | 2026-05 前沿调研吸收完毕，可执行的方向已拆到具体 Iter F+ / G / H / I / J 实现 issue。 | Linear `Iter F0：前沿方案吸收` project (completed 2026-05-07) |
 | Iter F web/UX 收尾 | closed | Chat 持久化 + 交互 primitives + UX-4 KG + 热重载 + iter-close polish + stable 3008 build。33+ commit、4 轮 cross-review 收敛 0/0、tsc 0 / vitest 414 全过。 | `docs/STATUS-iter-F-autonomous-2026-05-15.md` + commits `5ec2192`..`9d65c6a` |
 | Iter F Scale-Out runtime | open / 下一轮主攻 | 非阻塞 Supervisor、Agent Mesh runtime、Context production gates 仍是 backlog。 | [QUI-158](https://linear.app/quilin-agent/issue/QUI-158) + [QUI-159](https://linear.app/quilin-agent/issue/QUI-159) + [QUI-160](https://linear.app/quilin-agent/issue/QUI-160) |
-| Iter J 生态与连接 | mostly closed | SandboxRouter 已 Done (QUI-62, 2361 LOC + 59 tests)；MCP 双向化、Skills 生态、Soul Import 等仍 backlog。 | `packages/agent-core/src/tools/sandbox*.ts` + [QUI-62](https://linear.app/quilin-agent/issue/QUI-62) |
+| Iter J 生态与连接 | 5/5 收尾 2026-05-18 | 本轮目标 5 个 worktree 全 ship（web_browse userinfo / MCP Stage 2 client / progressive disclosure + registry / integrations 骨架 / Quilin-as-server Stage 3 骨架）。18 轮 cross-review，QUI-171 走了 8 轮。SandboxRouter (QUI-62) 早期已 ship。 | 见上方 `2026-05-18 Iter J 收尾` 段落含 commit hash |
 
 | Iter | Status | Current Meaning | Evidence |
 |---|---:|---|---|
@@ -91,7 +113,7 @@ Linear 已同步这次冻结：`Iter E 基准冲刺 / Benchmark Ascent` project 
 | Iter F0 Frontier Assimilation | closed | 2026-05 frontier research assimilated; actionable directions split into concrete Iter F+/G/H/I/J implementation issues. | Linear `Iter F0：前沿方案吸收` project (completed 2026-05-07) |
 | Iter F web/UX close-out | closed | Chat persistence + interaction primitives + UX-4 KG + hot reload + iter-close polish + stable 3008 build. 33+ commits, 4 cross-review rounds converged 0/0, tsc 0 / 414 vitest pass. | `docs/STATUS-iter-F-autonomous-2026-05-15.md` + commits `5ec2192`..`9d65c6a` |
 | Iter F Scale-Out runtime | open / next focus | Non-blocking supervisor, Agent Mesh runtime, Context production gates remain backlog. | [QUI-158](https://linear.app/quilin-agent/issue/QUI-158) + [QUI-159](https://linear.app/quilin-agent/issue/QUI-159) + [QUI-160](https://linear.app/quilin-agent/issue/QUI-160) |
-| Iter J Ecosystem & Connectivity | mostly closed | SandboxRouter is Done (QUI-62, 2361 LOC + 59 tests); MCP bidirectional, Skills ecosystem, Soul Import etc. remain backlog. | `packages/agent-core/src/tools/sandbox*.ts` + [QUI-62](https://linear.app/quilin-agent/issue/QUI-62) |
+| Iter J Ecosystem & Connectivity | 5/5 close-out 2026-05-18 | All 5 targeted worktrees shipped (web_browse userinfo / MCP Stage 2 client / progressive disclosure + registry / integrations detection skeletons / Quilin-as-server Stage 3 skeleton). 18 cross-review rounds total, QUI-171 took 8 rounds. SandboxRouter (QUI-62) shipped earlier. | See `2026-05-18 Iter J 收尾` section above for commit hashes |
 
 ## 基准冻结 / Benchmark Freeze
 

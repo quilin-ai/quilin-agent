@@ -15,6 +15,15 @@
 > - ✅ **跨语言 user.md write lock**：Python fcntl advisory lock (`0c09867`) + TS `proper-lockfile` (`77390c7`)，关闭 TS-vs-Python 写 race（Task #16）
 > - ✅ **Iter F web 持久化 SQLite chat sessions**：4 slice 全部 ship（schema + read/write + 重启恢复 + DELETE + 原子 seq alloc + localStorage 迁移），见 `apps/web/lib/sessions-db/` + `docs/STATUS-iter-F-autonomous-2026-05-15.md`
 >
+> **2026-05-18 新增 / Shipped 2026-05-18 (Iter J)**：
+> - ⚠️ **外部信号源 integration 骨架（仅 detection 层 + parser 骨架，主体未做）**：commits `6357bf8` + `7b34e3a`
+>   - `packages/agent-core/src/integrations/github-stars/detector.ts` —— `detectGitHubAuth()`（读 `~/.config/gh/hosts.yml` 或 `GITHUB_TOKEN`，**token 用 WeakMap 私存，3 个序列化路径 override 防泄漏**）+ `listStarsCount()` 经 `Authorization: Bearer` 调 GitHub API（仅 total count，O(1) 通过 Link header `rel="last"` 解析 + per_page=1 body length 区分 0/1 star）
+>   - `packages/agent-core/src/integrations/x-bookmarks/detector.ts` —— 离线分类器返结构化 reason code（no_credentials / wrong_auth_kind / missing_scope / expired_or_revoked / missing_authenticated_user_id），不发实际请求
+>   - `packages/agent-core/src/integrations/obsidian-watcher/detector.ts` —— 启发式 vault 探测（`.obsidian/` + Markdown 文件）+ 默认候选路径 + `extraPaths` 注入
+>   - `packages/agent-core/src/integrations/wechat-import/{types,parser,profile-stub}.ts` —— wxbackup/wxexporter 格式 JSON parser（容错：unknown type / 缺字段 / 坏 timestamp 进 warnings）+ `UserProfileFromChats` 7 维度接口 + stub 函数返 `[stub]` 占位
+>   - 73 unit tests 全 mock 化（不联网 / 不读真文件）
+>   - **未做（QUI-103/104 仍 Backlog）**：实时 watcher、相关性 summarize、proactive 行动建议、LLM 分析真实化、写 quilin-mem 链路、用户审核 activation flow
+>
 > **2026-04-30 校准（保留作历史）／ Preserved as historical baseline:**
 > - ✅ **已实现**：`providers/memory/src/quilin_mem/` — quilin-mem MCP server、working / episodic / semantic / skill 四层、SQLite + FTS5/BM25、KG 子图检索、vector retriever 接口、hybrid retriever + reranker、event log + trace context、ProfileStore / ProfileUpdater、scratchpad、idle_budget + consolidator dry-run、soul schema validator。
 > - ✅ **L3a observer 已激活 / L3a observer is wired into the runtime**：
