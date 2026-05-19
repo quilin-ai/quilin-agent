@@ -401,6 +401,8 @@ export function peekToolsCatalogState(): ToolsCatalogState {
 
 export function refreshToolsCatalog(): Promise<ToolsCatalog> {
 	return startToolsCatalogBuild();
+}
+
 /**
  * Per-server reconnect: retry connecting to one MCP server without
  * tearing down the rest. Used by `POST /api/mcp/[name]/reconnect`,
