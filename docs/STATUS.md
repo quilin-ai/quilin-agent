@@ -203,6 +203,7 @@ The cross-review posture is now: benchmark（standardized capability evaluation�
 | [14 Benchmark Harness](14-benchmark-harness/README.md) | Existing harness code remains in-tree; component is frozen/read-only for future implementation unless the user asks. |
 | [15 Introspection](15-introspection/README.md) | Step 2 设计文档已落地（Iter L+3，QUI-151 总入口）；元思考 / 反思链路尚未实现，spec 作为实施前 review gate。 |
 | [16 Soul Import](16-soul-import/README.md) | Bilingual spec 已落地（2026-05-12）；6 框架扫描 + QUILIN.md 生成器 + body 填充由 [QUI-102](https://linear.app/quilin-agent/issue/QUI-102) 承接，artifact schema 已由 QUI-108 / `soul-profile.ts` 实现（`1d57d08`）。 |
+| [17 Multi Client](17-multi-client/README.md) | 4 个客户端壳的现状快照（2026-05-20 新增）：**CLI**(`quilin` 命令)~85%、**REPL TUI**(`packages/agent-core/src/repl.ts` + slash 命令 + 交互 primitives 集成) ~80%、**Web**(`apps/web/` Next.js，8 API route + 7 page + Playwright E2E + SQLite chat 持久化 + UX-4 KG viz) ~80%、**Mac App**(独立仓库 `~/repo/quilin-agent-mac-app/`，SwiftUI + UniFFI + `crates/quilin-bridge/`) ~15%。所有壳共享同一个 agent server，通过 stdio MCP / HTTP / SSE / UniFFI FFI 连接。跟踪 [QUI-181](https://plane.so/quilin-agent/projects)。 |
 
 ## 任务追踪 / Task Tracking
 
