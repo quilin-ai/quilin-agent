@@ -1,0 +1,40 @@
+ ✓ src/config/reload-webhook-server.test.ts (31 tests) 5220ms
+     ✓ destroys idle slow-stream sockets via setTimeout  5004ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/tools/mcp-client.test.ts > MCPClientManager > connects to quilin-mem and maps MCP tools into local Tool definitions
+AssertionError: expected [ 'consolidation_log_recent', …(8) ] to deeply equal [ 'consolidation_log_recent', …(7) ]
+
+- Expected
++ Received
+
+@@ -1,9 +1,10 @@
+  [
+    "consolidation_log_recent",
+    "kg_dump_for_viz",
+    "memory_backfill_kg",
++   "memory_delete",
+    "memory_recall",
+    "memory_store",
+    "scratchpad_clear",
+    "scratchpad_read",
+    "scratchpad_write",
+
+ ❯ src/tools/mcp-client.test.ts:515:22
+    513|    // memory_observe is filtered out (internal tool — invoked by the
+    514|    // observer bridge directly, never advertised to the LLM).
+    515|    expect(toolNames).toEqual([
+       |                      ^
+    516|     "consolidation_log_recent",
+    517|     "kg_dump_for_viz",
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed | 184 passed (185)
+      Tests  1 failed | 2747 passed | 1 skipped (2749)
+   Start at  07:25:46
+   Duration  6.14s (transform 8.56s, setup 0ms, import 17.81s, tests 21.83s, environment 11ms)
+
+ ELIFECYCLE  Test failed. See above for more details.

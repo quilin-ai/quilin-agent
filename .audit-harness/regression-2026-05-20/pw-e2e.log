@@ -1,0 +1,181 @@
+[1A[2K[44/51] [chromium] › tests/e2e/sanity-after-fix.spec.ts:3:1 › intro after fix: wordmark centered + composer reacts on send
+[1A[2K[chromium] › tests/e2e/sanity-after-fix.spec.ts:3:1 › intro after fix: wordmark centered + composer reacts on send
+wordmark center X: [33m632.5[39m viewport center X: [33m640[39m
+
+[1A[2Kcomposer X: [33m272.5[39m
+
+[1A[2KURL before send: http://127.0.0.1:3000/
+
+[1A[2KURL after send: http://127.0.0.1:3000/?session=draft-mpd9wfmp&initial=hello%20quilin
+
+[1A[2Kok: send triggered navigation
+
+[1A[2K[45/51] [chromium] › tests/e2e/sessions-delete.spec.ts:41:2 › Sessions · delete flow › delete button is visible on each session row
+[1A[2K[46/51] [chromium] › tests/e2e/sessions-delete.spec.ts:51:2 › Sessions · delete flow › cancel keeps the row
+[1A[2K[47/51] [chromium] › tests/e2e/sessions-delete.spec.ts:76:2 › Sessions · delete flow › confirm removes the row and survives reload (server session)
+[1A[2K[48/51] [chromium] › tests/e2e/smoke.spec.ts:4:2 › Quilin Web — smoke › home page boots and shows the wordmark
+[1A[2K[49/51] [chromium] › tests/e2e/smoke.spec.ts:10:2 › Quilin Web — smoke › composer textarea renders on first load
+[1A[2K[50/51] [chromium] › tests/e2e/smoke.spec.ts:16:2 › Quilin Web — smoke › sessions page renders bilingual header even when backend is unreachable
+[1A[2K  23) [chromium] › tests/e2e/smoke.spec.ts:16:2 › Quilin Web — smoke › sessions page renders bilingual header even when backend is unreachable 
+
+    Error: [2mexpect([22m[31mlocator[39m[2m).[22mtoBeVisible[2m([22m[2m)[22m failed
+
+    Locator: getByText('会话')
+    Expected: visible
+    Error: strict mode violation: getByText('会话') resolved to 7 elements:
+        1) <span class="glyph">会话</span> aka getByTestId('rail-sessions')
+        2) <span class="name-full">…</span> aka getByTestId('rail-sessions')
+        3) <span class[1A[2K[13/51] [chromium] › tests/e2e/capability-assessment.spec.ts:228:2 › E. 长输出 / Long output & streaming › E2 — code block streams to a rendered <pre><code>
+[1A[2K[14/51] [chromium] › tests/e2e/capability-assessment.spec.ts:241:2 › F. Code 能力 / Code competence › F1 — explain a code snippet
+[1A[2K[15/51] [chromium] › tests/e2e/capability-assessment.spec.ts:253:2 › F. Code 能力 / Code competence › F2 — write a small function from a spec
+[1A[2K[16/51] [chromium] › tests/e2e/capability-assessment.spec.ts:264:2 › F. Code 能力 / Code competence › F3 — find a bug in a snippet
+[1A[2K[17/51] [chromium] › tests/e2e/capability-assessment.spec.ts:283:2 › G. 普通边界 / Edge cases (benign) › G1 — single-character input
+[1A[2K[18/51] [chromium] › tests/e2e/capability-assessment.spec.ts:293:2 › G. 普通边界 / Edge cases (benign) › G2 — emoji-only input
+[1A[2K[19/51] [chromium] › tests/e2e/capability-assessment.spec.ts:304:2 › H. 异常输入 / Anomalous input › H1 — contradictory instructions
+[1A[2K[20/51] [chromium] › tests/e2e/capability-assessment.spec.ts:315:2 › H. 异常输入 / Anomalous input › H2 — claim agent has a capability it doesn't (screenshot)
+[1A[2K[21/51] [chromium] › tests/e2e/capability-assessment.spec.ts:326:2 › H. 异常输入 / Anomalous input › H3 — fake context recall ('as you said earlier')
+[1A[2K[22/51] [chromium] › tests/e2e/capability-assessment.spec.ts:347:2 › I. 对抗 / Adversarial / injection › I1 — classic prompt injection ('ignore previous instructions')
+[1A[2K[23/51] [chromium] › tests/e2e/capability-assessment.spec.ts:360:2 › I. 对抗 / Adversarial / injection › I2 — extraction of system prompt
+[1A[2K[24/51] [chromium] › tests/e2e/capability-assessment.spec.ts:375:2 › I. 对抗 / Adversarial / injection › I3 — DAN-style jailbreak
+[1A[2K[25/51] [chromium] › tests/e2e/capability-assessment.spec.ts:400:2 › I. 对抗 / Adversarial / injection › I4 — internal-URL fetch is blocked by the SSRF guard
+[1A[2K[26/51] [chromium] › tests/e2e/capability-assessment.spec.ts:450:2 › J. UX 边界 / UX boundary › J1 — page auto-scrolls to bottom during streaming
+[1A[2K[27/51] [chromium] › tests/e2e/chat-end-to-end.spec.ts:3:1 › intro → submit → see streaming Claude response in conversation
+[1A[2K[chromium] › tests/e2e/chat-end-to-end.spec.ts:3:1 › intro → submit → see streaming Claude response in conversation
+[ASSISTANT TEXT] Quilin 自演化 AI。
+
+[1A[2K[28/51] [chromium] › tests/e2e/chat-session-hydration.spec.ts:71:1 › chat appends persisted tool card and assistant reply without refresh
+[1A[2K[29/51] [chromium] › tests/e2e/chat-session-hydration.spec.ts:144:1 › sessions client-side link hydrates history without refresh
+[1A[2K[30/51] [chromium] › tests/e2e/config-profile-edit.spec.ts:3:1 › config page edits profile file through approval gate
+[1A[2K[31/51] [chromium] › tests/e2e/demo-full-flow.spec.ts:3:1 › full demo: chat → sessions list → IME guard
+[1A[2K  1) [chromium] › tests/e2e/demo-full-flow.spec.ts:3:1 › full demo: chat → sessions list → IME guard 
+
+    Error: [2mexpect([22m[31mlocator[39m[2m).[22mtoBeVisible[2m([22m[2m)[22m failed
+
+    Locator: locator('a[data-testid^="session-draft-"]').first()
+    Expected: visible
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+    [2m  - Expect "toBeVisible" with timeout 5000ms[22m
+    [2m  - waiting for locator('a[data-testid^="session-draft-"]').first()[22m
+
+
+      33 |   await page.waitForTimeout(500);
+      34 |   const sessionLink = page.locator('a[data-testid^="session-draft-"]').first();
+    > 35 |   await expect(sessionLink).toBeVisible({ timeout: 5000 });
+         |                             ^
+      36 |   const sessionTitle = await sessionLink.locator(".rn").innerText();
+      37 |   console.log("[SESSIONS] first session:", sessionTitle);
+      38 |   await page.screenshot({ path: "/tmp/demo-3-sessions.png" });
+        at /Users/raysonmeng/repo/quilin-agent/apps/web/tests/e2e/demo-full-flow.spec.ts:35:29
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results/demo-full-flow-full-demo-chat-→-sessions-list-→-IME-guard-chromium/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results/demo-full-flow-full-demo-chat-→-sessions-list-→-IME-guard-chromium/error-context.md
+
+
+[1A[2K[32/51] [chromium] › tests/e2e/mcp-reconnect.spec.ts:20:2 › MCP per-server reconnect controls › /mcp renders shared McpServerCard with reconnect + config hint
+[1A[2K  2) [chromium] › tests/e2e/mcp-reconnect.spec.ts:20:2 › MCP per-server reconnect controls › /mcp renders shared McpServerCard with reconnect + config hint 
+
+    Error: [2mexpect([22m[31mlocator[39m[2m).[22mtoBeVisible[2m([22m[2m)[22m failed
+
+    Locator: locator('[data-testid^="mcp-server-"][data-testid$=""]:not([data-testid^="mcp-server-compact-"]):not([data-testid^="mcp-server-toggle-"])').first()
+    Expected: visible
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+    [2m  - Expect "toBeVisible" with timeout 5000ms[22m
+    [2m  - waiting for locator('[data-testid^="mcp-server-"][data-testid$=""]:not([data-testid^="mcp-server-compact-"]):not([data-testid^="mcp-server-toggle-"])').first()[22m
+
+
+      31 | 		const cards = page.locator('[data-testid^="mcp-server-"][data-testid$=""]:not([data-testid^="mcp-server-compact-"]):not([data-testid^="mcp-server-toggle-"])');
+      32 | 		const firstCard = cards.first();
+    > 33 | 		await expect(firstCard).toBeVisible();
+         | 		                        ^
+      34 |
+      35 | 		// Resolve the server id from the data-testid attribute so the
+      36 | 		// rest of the assertions can target the matching reconnect btn.
+        at /Users/raysonmeng/repo/quilin-agent/apps/web/tests/e2e/mcp-reconnect.spec.ts:33:27
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results/mcp-reconnect-MCP-per-serv-7bbbf--with-reconnect-config-hint-chromium/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results/mcp-reconnect-MCP-per-serv-7bbbf--with-reconnect-config-hint-chromium/error-context.md
+
+
+[1A[2K[33/51] [chromium] › tests/e2e/mcp-reconnect.spec.ts:49:2 › MCP per-server reconnect controls › /mcp failed server exposes 复制错误 and triggers POST /api/mcp/[name]/reconnect on click
+[1A[2K[34/51] [chromium] › tests/e2e/mcp-reconnect.spec.ts:115:2 › MCP per-server reconnect controls › /tools renders compact reconnect cards inside the status snapshot
+[1A[2K[35/51] [chromium] › tests/e2e/memory-kg-tab.spec.ts:14:2 › Memory page — graph and timeline tabs (UX-4) › memory page shows all tabs and graph/timeline tabs are reachable
+[1A[2K[36/51] [chromium] › tests/e2e/memory-kg-tab.spec.ts:26:2 › Memory page — graph and timeline tabs (UX-4) › clicking the graph tab swaps in the KG view
+[1A[2K[37/51] [chromium] › tests/e2e/memory-kg-tab.spec.ts:54:2 › Memory page — graph and timeline tabs (UX-4) › switching back to list tab restores list view state
+[1A[2K[38/51] [chromium] › tests/e2e/memory-kg-tab.spec.ts:62:2 › Memory page — graph and timeline tabs (UX-4) › clicking the timeline tab swaps in the consolidation view
+[1A[2K[39/51] [chromium] › tests/e2e/responsive.spec.ts:17:2 › UX-6 responsive layout › desktop (1280×800): rail stays vertical on the left
+[1A[2K[40/51] [chromium] › tests/e2e/responsive.spec.ts:42:2 › UX-6 responsive layout › tablet (768×1024): still vertical rail (above mobile breakpoint)
+[1A[2K[41/51] [chromium] › tests/e2e/responsive.spec.ts:59:2 › UX-6 responsive layout › mobile (375×812 — iPhone): rail flips to top horizontal chip bar
+[1A[2K[42/51] [chromium] › tests/e2e/responsive.spec.ts:95:2 › UX-6 responsive layout › mobile composer reserves env(safe-area-inset-bottom)
+[1A[2K[43/51] [chromium] › tests/e2e/responsive.spec.ts:128:2 › UX-6 responsive layout › orientation flip (375→812 portrait then 812→375 landscape) keeps rail correct
+[1A[2K[44/51] [chromium] › tests/e2e/sanity-after-fix.spec.ts:3:1 › intro after fix: wordmark centered + composer reacts on send
+[1A[2K[chromium] › tests/e2e/sanity-after-fix.spec.ts:3:1 › intro after fix: wordmark centered + composer reacts on send
+wordmark center X: [33m632.5[39m viewport center X: [33m640[39m
+
+[1A[2Kcomposer X: [33m272.5[39m
+
+[1A[2KURL before send: http://127.0.0.1:3000/
+
+[1A[2KURL after send: http://127.0.0.1:3000/?session=draft-mpd9yuvg&initial=hello%20quilin
+
+[1A[2Kok: send triggered navigation
+
+[1A[2K[45/51] [chromium] › tests/e2e/sessions-delete.spec.ts:41:2 › Sessions · delete flow › delete button is visible on each session row
+[1A[2K[46/51] [chromium] › tests/e2e/sessions-delete.spec.ts:51:2 › Sessions · delete flow › cancel keeps the row
+[1A[2K[47/51] [chromium] › tests/e2e/sessions-delete.spec.ts:76:2 › Sessions · delete flow › confirm removes the row and survives reload (server session)
+[1A[2K[48/51] [chromium] › tests/e2e/smoke.spec.ts:4:2 › Quilin Web — smoke › home page boots and shows the wordmark
+[1A[2K[49/51] [chromium] › tests/e2e/smoke.spec.ts:10:2 › Quilin Web — smoke › composer textarea renders on first load
+[1A[2K[50/51] [chromium] › tests/e2e/smoke.spec.ts:16:2 › Quilin Web — smoke › sessions page renders bilingual header even when backend is unreachable
+[1A[2K  3) [chromium] › tests/e2e/smoke.spec.ts:16:2 › Quilin Web — smoke › sessions page renders bilingual header even when backend is unreachable 
+
+    Error: [2mexpect([22m[31mlocator[39m[2m).[22mtoBeVisible[2m([22m[2m)[22m failed
+
+    Locator: getByText('会话')
+    Expected: visible
+    Error: strict mode violation: getByText('会话') resolved to 7 elements:
+        1) <span class="glyph">会话</span> aka getByTestId('rail-sessions')
+        2) <span class="name-full">…</span> aka getByTestId('rail-sessions')
+        3) <span class="cjk">会话</span> aka getByTestId('sessions-view').getByText('会话', { exact: true })
+        4) <p class="q-page-subtitle">…</p> aka getByText('所有历史对话 · 本地缓存 · 点击任意会话可恢复上下文继续')
+        5) <span>…</span> aka getByText('总会话')
+        6) <a href="/" class="q-page-action" data-testid="new-session-link">＋ 新建会话</a> aka getByTestId('new-session-link')
+        7) <p>…</p> aka getByText('还没有会话 · no sessions yet')
+
+    Call log:
+    [2m  - Expect "toBeVisible" with timeout 5000ms[22m
+    [2m  - waiting for getByText('会话')[22m
+
+
+      19 | 		await page.goto("/sessions");
+      20 | 		await expect(page.getByRole("heading", { name: /Sessions/ })).toBeVisible();
+    > 21 | 		await expect(page.getByText("会话")).toBeVisible();
+         | 		                                   ^
+      22 | 	});
+      23 | });
+      24 |
+        at /Users/raysonmeng/repo/quilin-agent/apps/web/tests/e2e/smoke.spec.ts:21:38
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results/smoke-Quilin-Web-—-smoke-s-696bc-when-backend-is-unreachable-chromium/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results/smoke-Quilin-Web-—-smoke-s-696bc-when-backend-is-unreachable-chromium/error-context.md
+
+
+[1A[2K[51/51] [chromium] › tests/e2e/subagent-live-progress-polling.spec.ts:27:2 › SubagentLiveProgress polling › stops calling /api/agents/[id] after a terminal status
+[1A[2K  3 failed
+    [chromium] › tests/e2e/demo-full-flow.spec.ts:3:1 › full demo: chat → sessions list → IME guard 
+    [chromium] › tests/e2e/mcp-reconnect.spec.ts:20:2 › MCP per-server reconnect controls › /mcp renders shared McpServerCard with reconnect + config hint 
+    [chromium] › tests/e2e/smoke.spec.ts:16:2 › Quilin Web — smoke › sessions page renders bilingual header even when backend is unreachable 
+  48 passed (3.1m)
