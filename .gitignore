@@ -114,3 +114,15 @@ snapshot-stream-*.yml
 
 # === Local user data dir ===
 .local/
+
+# === Cursor IDE 误写到工作区根目录的 Electron bundle ===
+# Cursor IDE 偶尔会把自己的 Electron bundle 文件（带 hash 后缀的
+# webpack/esbuild 产物）吐到用户工作区根目录，例如：
+#   app-session-<hash>.js
+#   main-<hash>.js
+#   workspace-root-drop-handler-<hash>.js
+# 这是 Cursor 的 bug 或某个 extension 的副作用，跟本项目无关。
+# 仅限根目录匹配（前导 /），不影响 apps/web/ 等子目录正常的 main.js。
+/app-session-*.js
+/main-*.js
+/workspace-root-drop-handler-*.js
