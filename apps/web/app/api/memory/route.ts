@@ -1,21 +1,32 @@
 /**
- * GET /api/memory
+ * GET /api/memory       — list every stored memory record, grouped by tier.
+ * DELETE /api/memory    — batch-delete by `?ids=a,b,c` (comma-separated id list).
  *
- * Read-side view of `quilin-mem` MCP memory. Calls the
+ * Read-side view of `quilin-mem` MCP memory. GET calls the
  * `quilin-mem/memory_recall` tool with an empty query to fetch every
  * stored record, groups by tier (working / episodic / semantic / skill),
  * and returns the structured list for the /memory page.
  *
+ * DELETE provides the operator-facing "select N rows, click 删除选中"
+ * cleanup path. Each id is forwarded to the `quilin-mem/memory_delete`
+ * tool, which soft-deletes (sets `deleted=1`, removes from FTS) so the
+ * row is gone from future recalls but still on disk for audit.
+ *
  * Why this lives in a separate web route instead of being a generic
  * "call any MCP tool" passthrough: the LLM is the one who decides when
  * to call MCP tools; this route is *not* an open dispatcher. It's a
- * single read endpoint specifically for the operator's memory dashboard.
+ * single read+delete endpoint specifically for the operator's memory
+ * dashboard.
  *
- * 调 quilin-mem MCP 的 memory_recall 把全部记忆拉出来,按 tier 分组返回。
- * 仅作只读 dashboard 用,不是通用 MCP 转发口。
+ * 调 quilin-mem MCP 的 memory_recall 把全部记忆拉出来,按 tier 分组返回；
+ * DELETE 把选中的 id 逐个交给 memory_delete 软删除。仅作 dashboard 用,
+ * 不是通用 MCP 转发口。
  */
 
 import { getToolsCatalog } from "@/lib/tools-loader";
+
+/** Hard cap to prevent a single DELETE call from running unbounded MCP traffic. */
+const MAX_BATCH_DELETE = 500;
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -171,6 +182,120 @@ export async function GET(): Promise<Response> {
 		console.log(`[/api/memory] failed: ${msg}`);
 		return Response.json(
 			{ ok: false, error: { code: "memory_load_failed", message: msg } },
+			{ status: 500, headers: { "cache-control": "no-store" } },
+		);
+	}
+}
+
+/**
+ * Result of a single id's delete attempt. `ok` is true if the
+ * underlying `memory_delete` MCP call resolved without `isError`;
+ * idempotent no-ops (deleting an id that doesn't exist) still count
+ * as `ok: true` because the tool itself treats them that way.
+ */
+export interface BatchDeleteItem {
+	readonly id: string;
+	readonly ok: boolean;
+	readonly error: string | null;
+}
+
+function parseIdsParam(raw: string | null): {
+	ids: readonly string[];
+	error: string | null;
+} {
+	if (raw == null || raw.length === 0) {
+		return { ids: [], error: "missing required query param `ids`" };
+	}
+	const ids = raw
+		.split(",")
+		.map((s) => s.trim())
+		.filter((s) => s.length > 0);
+	if (ids.length === 0) {
+		return { ids: [], error: "`ids` resolved to an empty list" };
+	}
+	if (ids.length > MAX_BATCH_DELETE) {
+		return {
+			ids: [],
+			error: `batch delete exceeds limit of ${MAX_BATCH_DELETE} ids per request`,
+		};
+	}
+	// De-duplicate so the same id isn't deleted twice (still idempotent
+	// on the MCP side, but no need to thrash the wire for it).
+	const deduped: string[] = [];
+	const seen = new Set<string>();
+	for (const id of ids) {
+		if (seen.has(id)) continue;
+		seen.add(id);
+		deduped.push(id);
+	}
+	return { ids: deduped, error: null };
+}
+
+export async function DELETE(request: Request): Promise<Response> {
+	try {
+		const url = new URL(request.url);
+		const { ids, error: parseError } = parseIdsParam(url.searchParams.get("ids"));
+		if (parseError != null) {
+			return Response.json(
+				{ ok: false, error: { code: "invalid_query", message: parseError } },
+				{ status: 400, headers: { "cache-control": "no-store" } },
+			);
+		}
+
+		const catalog = await getToolsCatalog();
+		const deleteTool = catalog.rawTools.find((t) => t.name === "quilin-mem/memory_delete");
+		if (deleteTool == null) {
+			return Response.json(
+				{
+					ok: false,
+					error: {
+						code: "memory_delete_unavailable",
+						message: "quilin-mem MCP server is not connected; memory_delete tool unavailable.",
+					},
+				},
+				{ status: 503, headers: { "cache-control": "no-store" } },
+			);
+		}
+
+		// Serial execution: most batches are small (a handful to a few
+		// dozen), and the MCP transport doesn't benefit meaningfully
+		// from concurrency for a SQLite-backed store. Going serial keeps
+		// error reporting straightforward and avoids storming the MCP
+		// stdio pipe.
+		const results: BatchDeleteItem[] = [];
+		for (const id of ids) {
+			try {
+				const out = await deleteTool.execute({ memory_id: id });
+				if (out.isError) {
+					results.push({ id, ok: false, error: out.error?.message ?? out.content });
+				} else {
+					results.push({ id, ok: true, error: null });
+				}
+			} catch (e) {
+				const msg = e instanceof Error ? e.message : String(e);
+				results.push({ id, ok: false, error: msg });
+			}
+		}
+
+		const okCount = results.filter((r) => r.ok).length;
+		const failedCount = results.length - okCount;
+		return Response.json(
+			{
+				ok: true,
+				data: {
+					requested: ids.length,
+					deleted: okCount,
+					failed: failedCount,
+					results,
+				},
+			},
+			{ headers: { "cache-control": "no-store" } },
+		);
+	} catch (e) {
+		const msg = e instanceof Error ? e.message : String(e);
+		console.log(`[/api/memory DELETE] failed: ${msg}`);
+		return Response.json(
+			{ ok: false, error: { code: "memory_delete_failed", message: msg } },
 			{ status: 500, headers: { "cache-control": "no-store" } },
 		);
 	}

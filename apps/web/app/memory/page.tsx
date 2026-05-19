@@ -53,6 +53,50 @@ function formatTimestamp(iso: string | null): string {
 	}
 }
 
+interface DedupeGroupPreview {
+	readonly tier: string;
+	readonly content: string;
+	readonly keepId: string;
+	readonly deleteIds: readonly string[];
+}
+
+interface DedupePreview {
+	readonly groups: readonly DedupeGroupPreview[];
+	readonly totalDelete: number;
+	readonly totalKeep: number;
+}
+
+interface DedupeResponse {
+	readonly ok: true;
+	readonly data: {
+		readonly executed: boolean;
+		readonly plan: DedupePreview;
+		readonly totalDelete?: number;
+		readonly totalKeep?: number;
+		readonly deleted?: number;
+		readonly failed?: number;
+	};
+}
+
+interface DedupeErrorResponse {
+	readonly ok: false;
+	readonly error: { readonly code: string; readonly message: string };
+}
+
+interface BatchDeleteResponse {
+	readonly ok: true;
+	readonly data: {
+		readonly requested: number;
+		readonly deleted: number;
+		readonly failed: number;
+	};
+}
+
+interface BatchDeleteErrorResponse {
+	readonly ok: false;
+	readonly error: { readonly code: string; readonly message: string };
+}
+
 export default function MemoryPage() {
 	const [memory, setMemory] = useState<MemoryResponse["data"] | null>(null);
 	const [error, setError] = useState<string | null>(null);
@@ -61,6 +105,13 @@ export default function MemoryPage() {
 	const [tierFilter, setTierFilter] = useState<string>("all");
 	const [expandedId, setExpandedId] = useState<string | null>(null);
 	const [view, setView] = useState<"list" | "graph" | "timeline">("list");
+	// Selection lives outside the records loop so it survives re-renders;
+	// using a Set gives us O(1) membership checks for the checkbox state.
+	const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
+	const [pendingAction, setPendingAction] = useState<string | null>(null);
+	const [actionMessage, setActionMessage] = useState<string | null>(null);
+	const [dedupePreview, setDedupePreview] = useState<DedupePreview | null>(null);
+	const [confirmDelete, setConfirmDelete] = useState(false);
 
 	const loadMemory = useCallback(async () => {
 		setLoading(true);
@@ -73,6 +124,15 @@ export default function MemoryPage() {
 				setMemory(null);
 			} else {
 				setMemory(json.data);
+				// Drop any stale selections that referred to records that
+				// no longer exist after the reload.
+				setSelectedIds((prev) => {
+					if (prev.size === 0) return prev;
+					const idSet = new Set(json.data.records.map((r) => r.id));
+					const next = new Set<string>();
+					for (const id of prev) if (idSet.has(id)) next.add(id);
+					return next;
+				});
 			}
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
@@ -113,6 +173,132 @@ export default function MemoryPage() {
 		}
 		return out;
 	}, [memory, visibleTiers, filter, tierFilter]);
+
+	const visibleIds = useMemo(() => {
+		const ids: string[] = [];
+		for (const records of visibleRecords.values()) {
+			for (const r of records) ids.push(r.id);
+		}
+		return ids;
+	}, [visibleRecords]);
+
+	const allVisibleSelected = useMemo(() => {
+		if (visibleIds.length === 0) return false;
+		return visibleIds.every((id) => selectedIds.has(id));
+	}, [visibleIds, selectedIds]);
+
+	const toggleSelection = useCallback((id: string) => {
+		setSelectedIds((prev) => {
+			const next = new Set(prev);
+			if (next.has(id)) next.delete(id);
+			else next.add(id);
+			return next;
+		});
+	}, []);
+
+	const clearSelection = useCallback(() => {
+		setSelectedIds(new Set());
+	}, []);
+
+	const selectAllVisible = useCallback(() => {
+		setSelectedIds((prev) => {
+			// If everything visible is already selected, clear them; otherwise
+			// extend the selection to include every visible id.
+			if (visibleIds.length === 0) return prev;
+			const allSelected = visibleIds.every((id) => prev.has(id));
+			if (allSelected) {
+				const next = new Set(prev);
+				for (const id of visibleIds) next.delete(id);
+				return next;
+			}
+			const next = new Set(prev);
+			for (const id of visibleIds) next.add(id);
+			return next;
+		});
+	}, [visibleIds]);
+
+	const handleBatchDelete = useCallback(async () => {
+		if (selectedIds.size === 0) return;
+		setPendingAction("delete");
+		setActionMessage(null);
+		try {
+			const ids = Array.from(selectedIds);
+			const res = await fetch(`/api/memory?ids=${encodeURIComponent(ids.join(","))}`, {
+				method: "DELETE",
+				cache: "no-store",
+			});
+			const json = (await res.json()) as BatchDeleteResponse | BatchDeleteErrorResponse;
+			if (!json.ok) {
+				setActionMessage(`删除失败 · ${json.error.message}`);
+			} else {
+				setActionMessage(
+					`已删除 ${json.data.deleted} 条${json.data.failed > 0 ? ` · 失败 ${json.data.failed} 条` : ""}`,
+				);
+				setSelectedIds(new Set());
+				setConfirmDelete(false);
+				await loadMemory();
+			}
+		} catch (e) {
+			setActionMessage(`删除失败 · ${e instanceof Error ? e.message : String(e)}`);
+		} finally {
+			setPendingAction(null);
+		}
+	}, [selectedIds, loadMemory]);
+
+	const handleDedupePreview = useCallback(async () => {
+		setPendingAction("dedupe-preview");
+		setActionMessage(null);
+		try {
+			const res = await fetch("/api/memory/dedupe", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ execute: false }),
+				cache: "no-store",
+			});
+			const json = (await res.json()) as DedupeResponse | DedupeErrorResponse;
+			if (!json.ok) {
+				setActionMessage(`去重预览失败 · ${json.error.message}`);
+				setDedupePreview(null);
+			} else {
+				setDedupePreview(json.data.plan);
+			}
+		} catch (e) {
+			setActionMessage(`去重预览失败 · ${e instanceof Error ? e.message : String(e)}`);
+			setDedupePreview(null);
+		} finally {
+			setPendingAction(null);
+		}
+	}, []);
+
+	const handleDedupeExecute = useCallback(async () => {
+		setPendingAction("dedupe-execute");
+		setActionMessage(null);
+		try {
+			const res = await fetch("/api/memory/dedupe", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ execute: true }),
+				cache: "no-store",
+			});
+			const json = (await res.json()) as DedupeResponse | DedupeErrorResponse;
+			if (!json.ok) {
+				setActionMessage(`去重失败 · ${json.error.message}`);
+			} else {
+				setActionMessage(
+					`去重完成 · 删除 ${json.data.deleted ?? 0} 条${
+						(json.data.failed ?? 0) > 0 ? ` · 失败 ${json.data.failed} 条` : ""
+					}`,
+				);
+				setDedupePreview(null);
+				setSelectedIds(new Set());
+				await loadMemory();
+			}
+		} catch (e) {
+			setActionMessage(`去重失败 · ${e instanceof Error ? e.message : String(e)}`);
+		} finally {
+			setPendingAction(null);
+		}
+	}, [loadMemory]);
 
 	return (
 		<>
@@ -331,6 +517,137 @@ export default function MemoryPage() {
 								})}
 							</div>
 
+							{/* Sticky action bar — shows up the moment the user picks
+								anything, so they don't have to hunt for a button after
+								selecting. Keeps the affordance discoverable without
+								eating header space when nothing's selected. */}
+							{selectedIds.size > 0 ? (
+								<div
+									data-testid="memory-action-bar"
+									style={{
+										position: "sticky",
+										top: 0,
+										zIndex: 10,
+										background: "var(--bg-elev)",
+										border: "1px solid var(--accent-vermillion)",
+										padding: "8px 12px",
+										marginBottom: 12,
+										display: "flex",
+										gap: 8,
+										alignItems: "center",
+										flexWrap: "wrap",
+									}}
+								>
+									<span
+										style={{
+											fontFamily: '"Noto Sans SC", sans-serif',
+											fontSize: 12,
+											color: "var(--fg)",
+										}}
+									>
+										已选 <strong data-testid="memory-selected-count">{selectedIds.size}</strong> 条
+									</span>
+									<button
+										type="button"
+										onClick={() => setConfirmDelete(true)}
+										disabled={pendingAction != null}
+										data-testid="memory-batch-delete"
+										style={{
+											padding: "5px 10px",
+											border: "1px solid var(--accent-vermillion)",
+											background: "var(--accent-vermillion)",
+											color: "var(--bg)",
+											fontFamily: '"Noto Sans SC", sans-serif',
+											fontSize: 11,
+											cursor: pendingAction != null ? "not-allowed" : "pointer",
+											opacity: pendingAction != null ? 0.6 : 1,
+										}}
+									>
+										删除选中
+									</button>
+									<button
+										type="button"
+										onClick={clearSelection}
+										disabled={pendingAction != null}
+										data-testid="memory-clear-selection"
+										style={{
+											padding: "5px 10px",
+											border: "1px solid var(--border)",
+											background: "transparent",
+											color: "var(--fg-muted)",
+											fontFamily: '"Noto Sans SC", sans-serif',
+											fontSize: 11,
+											cursor: pendingAction != null ? "not-allowed" : "pointer",
+										}}
+									>
+										取消选中
+									</button>
+								</div>
+							) : null}
+
+							{/* Selection / dedupe toolbar lives below the filter row so
+								it's always discoverable, not just after selection. */}
+							<div
+								style={{
+									display: "flex",
+									gap: 8,
+									alignItems: "center",
+									marginBottom: 12,
+									flexWrap: "wrap",
+								}}
+							>
+								<label
+									style={{
+										display: "inline-flex",
+										gap: 6,
+										alignItems: "center",
+										fontFamily: '"JetBrains Mono", monospace',
+										fontSize: 11,
+										color: "var(--fg-muted)",
+										cursor: visibleIds.length === 0 ? "not-allowed" : "pointer",
+									}}
+								>
+									<input
+										type="checkbox"
+										checked={allVisibleSelected}
+										onChange={selectAllVisible}
+										disabled={visibleIds.length === 0 || pendingAction != null}
+										data-testid="memory-select-all"
+									/>
+									全选当前
+								</label>
+								<button
+									type="button"
+									onClick={() => void handleDedupePreview()}
+									disabled={pendingAction != null || memory == null}
+									data-testid="memory-dedupe-button"
+									style={{
+										padding: "5px 10px",
+										border: "1px solid var(--accent-vermillion)",
+										background: "transparent",
+										color: "var(--accent-vermillion)",
+										fontFamily: '"Noto Sans SC", sans-serif',
+										fontSize: 11,
+										cursor: pendingAction != null ? "not-allowed" : "pointer",
+										opacity: pendingAction != null ? 0.6 : 1,
+									}}
+								>
+									一键去重
+								</button>
+								{actionMessage != null ? (
+									<span
+										data-testid="memory-action-message"
+										style={{
+											fontFamily: '"JetBrains Mono", monospace',
+											fontSize: 11,
+											color: "var(--fg-muted)",
+										}}
+									>
+										{actionMessage}
+									</span>
+								) : null}
+							</div>
+
 							{visibleRecords.size === 0 ? (
 								<p style={{ color: "var(--fg-muted)", marginTop: 16 }}>
 									没有匹配的记忆 · no matches
@@ -350,67 +667,338 @@ export default function MemoryPage() {
 												!expanded && record.content.length > 220
 													? `${record.content.slice(0, 220)}…`
 													: record.content;
+											const checked = selectedIds.has(record.id);
 											return (
-												<button
+												<div
 													key={record.id}
-													type="button"
-													onClick={() => setExpandedId(expanded ? null : record.id)}
-													className="q-resource-row"
 													data-testid={`memory-${record.id}`}
+													className="q-resource-row"
 													style={{
-														textAlign: "left",
-														width: "100%",
 														background: expanded ? "var(--bg-elev)" : "transparent",
-														border: "none",
 														borderBottom: "1px solid var(--border)",
-														cursor: "pointer",
 														padding: "10px 12px",
-														display: "block",
+														display: "flex",
+														gap: 10,
+														alignItems: "flex-start",
 													}}
 												>
-													<div
-														style={{
-															whiteSpace: "pre-wrap",
-															color: "var(--fg)",
-															fontSize: 12,
-															lineHeight: 1.6,
+													<input
+														type="checkbox"
+														checked={checked}
+														onChange={(e) => {
+															e.stopPropagation();
+															toggleSelection(record.id);
 														}}
-													>
-														{contentToShow}
-													</div>
-													<div
+														onClick={(e) => e.stopPropagation()}
+														data-testid={`memory-checkbox-${record.id}`}
+														aria-label={`选中 ${record.id.slice(0, 8)}`}
+														style={{ marginTop: 2, flexShrink: 0 }}
+													/>
+													<button
+														type="button"
+														onClick={() => setExpandedId(expanded ? null : record.id)}
 														style={{
-															marginTop: 6,
-															fontFamily: '"JetBrains Mono", monospace',
-															fontSize: 10,
-															color: "var(--fg-muted)",
+															flex: 1,
+															textAlign: "left",
+															background: "transparent",
+															border: "none",
+															padding: 0,
+															cursor: "pointer",
+															display: "block",
 														}}
+														aria-expanded={expanded}
+														aria-label={`查看记忆 ${record.id.slice(0, 8)}`}
 													>
-														{formatTimestamp(record.createdAt)} · id={record.id.slice(0, 8)}
-													</div>
-													{expanded && record.metadata != null ? (
-														<pre
+														<div
 															style={{
-																marginTop: 8,
-																padding: "6px 8px",
-																border: "1px solid var(--border)",
+																whiteSpace: "pre-wrap",
+																color: "var(--fg)",
+																fontSize: 12,
+																lineHeight: 1.6,
+															}}
+														>
+															{contentToShow}
+														</div>
+														<div
+															style={{
+																marginTop: 6,
 																fontFamily: '"JetBrains Mono", monospace',
 																fontSize: 10,
 																color: "var(--fg-muted)",
-																lineHeight: 1.5,
-																whiteSpace: "pre-wrap",
-																wordBreak: "break-word",
 															}}
 														>
-															{JSON.stringify(record.metadata, null, 2)}
-														</pre>
-													) : null}
-												</button>
+															{formatTimestamp(record.createdAt)} · id={record.id.slice(0, 8)}
+														</div>
+														{expanded && record.metadata != null ? (
+															<pre
+																style={{
+																	marginTop: 8,
+																	padding: "6px 8px",
+																	border: "1px solid var(--border)",
+																	fontFamily: '"JetBrains Mono", monospace',
+																	fontSize: 10,
+																	color: "var(--fg-muted)",
+																	lineHeight: 1.5,
+																	whiteSpace: "pre-wrap",
+																	wordBreak: "break-word",
+																}}
+															>
+																{JSON.stringify(record.metadata, null, 2)}
+															</pre>
+														) : null}
+													</button>
+												</div>
 											);
 										})}
 									</div>
 								))
 							)}
+
+							{confirmDelete ? (
+								<div
+									data-testid="memory-confirm-delete"
+									role="dialog"
+									aria-modal="true"
+									aria-label="确认删除选中记忆"
+									style={{
+										position: "fixed",
+										inset: 0,
+										background: "rgba(0,0,0,0.5)",
+										display: "flex",
+										alignItems: "center",
+										justifyContent: "center",
+										zIndex: 100,
+									}}
+								>
+									<div
+										style={{
+											background: "var(--bg)",
+											border: "1px solid var(--accent-vermillion)",
+											padding: "20px 24px",
+											maxWidth: 480,
+											minWidth: 320,
+										}}
+									>
+										<h2
+											style={{
+												margin: 0,
+												marginBottom: 12,
+												fontFamily: '"Noto Sans SC", sans-serif',
+												fontSize: 16,
+												color: "var(--fg)",
+											}}
+										>
+											确认删除
+										</h2>
+										<p
+											style={{
+												color: "var(--fg-muted)",
+												fontFamily: '"Noto Sans SC", sans-serif',
+												fontSize: 13,
+												lineHeight: 1.6,
+											}}
+										>
+											将永久删除 <strong>{selectedIds.size}</strong> 条记忆, 此操作不可撤销。
+										</p>
+										<div
+											style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}
+										>
+											<button
+												type="button"
+												onClick={() => setConfirmDelete(false)}
+												disabled={pendingAction != null}
+												data-testid="memory-confirm-delete-cancel"
+												style={{
+													padding: "6px 12px",
+													border: "1px solid var(--border)",
+													background: "transparent",
+													color: "var(--fg-muted)",
+													fontFamily: '"Noto Sans SC", sans-serif',
+													fontSize: 12,
+													cursor: "pointer",
+												}}
+											>
+												取消
+											</button>
+											<button
+												type="button"
+												onClick={() => void handleBatchDelete()}
+												disabled={pendingAction != null}
+												data-testid="memory-confirm-delete-confirm"
+												style={{
+													padding: "6px 12px",
+													border: "1px solid var(--accent-vermillion)",
+													background: "var(--accent-vermillion)",
+													color: "var(--bg)",
+													fontFamily: '"Noto Sans SC", sans-serif',
+													fontSize: 12,
+													cursor: "pointer",
+												}}
+											>
+												{pendingAction === "delete" ? "删除中…" : "确认删除"}
+											</button>
+										</div>
+									</div>
+								</div>
+							) : null}
+
+							{dedupePreview != null ? (
+								<div
+									data-testid="memory-dedupe-preview"
+									role="dialog"
+									aria-modal="true"
+									aria-label="去重预览"
+									style={{
+										position: "fixed",
+										inset: 0,
+										background: "rgba(0,0,0,0.5)",
+										display: "flex",
+										alignItems: "center",
+										justifyContent: "center",
+										zIndex: 100,
+									}}
+								>
+									<div
+										style={{
+											background: "var(--bg)",
+											border: "1px solid var(--accent-vermillion)",
+											padding: "20px 24px",
+											maxWidth: 640,
+											minWidth: 360,
+											maxHeight: "80vh",
+											overflowY: "auto",
+										}}
+									>
+										<h2
+											style={{
+												margin: 0,
+												marginBottom: 12,
+												fontFamily: '"Noto Sans SC", sans-serif',
+												fontSize: 16,
+												color: "var(--fg)",
+											}}
+										>
+											去重预览
+										</h2>
+										<p
+											style={{
+												color: "var(--fg-muted)",
+												fontFamily: '"Noto Sans SC", sans-serif',
+												fontSize: 13,
+												lineHeight: 1.6,
+											}}
+										>
+											按精确字符串匹配将删除{" "}
+											<strong data-testid="memory-dedupe-delete-count">
+												{dedupePreview.totalDelete}
+											</strong>{" "}
+											条, 保留{" "}
+											<strong data-testid="memory-dedupe-keep-count">
+												{dedupePreview.totalKeep}
+											</strong>{" "}
+											条 (每组保留最早一条)。
+										</p>
+										{dedupePreview.groups.length === 0 ? (
+											<p
+												style={{
+													color: "var(--fg-muted)",
+													fontFamily: '"Noto Sans SC", sans-serif',
+													fontSize: 12,
+												}}
+											>
+												没有发现完全重复的条目。
+											</p>
+										) : (
+											<ul
+												style={{
+													listStyle: "none",
+													padding: 0,
+													margin: "12px 0",
+													maxHeight: 320,
+													overflowY: "auto",
+												}}
+											>
+												{dedupePreview.groups.slice(0, 20).map((group) => (
+													<li
+														key={`${group.tier}::${group.keepId}`}
+														style={{
+															padding: "6px 0",
+															borderBottom: "1px solid var(--border)",
+															fontSize: 11,
+															color: "var(--fg-muted)",
+															fontFamily: '"JetBrains Mono", monospace',
+														}}
+													>
+														<div style={{ color: "var(--fg)", marginBottom: 2 }}>
+															{group.content.length > 80
+																? `${group.content.slice(0, 80)}…`
+																: group.content}
+														</div>
+														<div>
+															tier={group.tier} · 删除 {group.deleteIds.length} 条 · 保留{" "}
+															{group.keepId.slice(0, 8)}
+														</div>
+													</li>
+												))}
+												{dedupePreview.groups.length > 20 ? (
+													<li
+														style={{
+															padding: "6px 0",
+															fontSize: 11,
+															color: "var(--fg-muted)",
+														}}
+													>
+														…还有 {dedupePreview.groups.length - 20} 组未显示
+													</li>
+												) : null}
+											</ul>
+										)}
+										<div
+											style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}
+										>
+											<button
+												type="button"
+												onClick={() => setDedupePreview(null)}
+												disabled={pendingAction != null}
+												data-testid="memory-dedupe-cancel"
+												style={{
+													padding: "6px 12px",
+													border: "1px solid var(--border)",
+													background: "transparent",
+													color: "var(--fg-muted)",
+													fontFamily: '"Noto Sans SC", sans-serif',
+													fontSize: 12,
+													cursor: "pointer",
+												}}
+											>
+												取消
+											</button>
+											<button
+												type="button"
+												onClick={() => void handleDedupeExecute()}
+												disabled={pendingAction != null || dedupePreview.totalDelete === 0}
+												data-testid="memory-dedupe-confirm"
+												style={{
+													padding: "6px 12px",
+													border: "1px solid var(--accent-vermillion)",
+													background: "var(--accent-vermillion)",
+													color: "var(--bg)",
+													fontFamily: '"Noto Sans SC", sans-serif',
+													fontSize: 12,
+													cursor:
+														pendingAction != null || dedupePreview.totalDelete === 0
+															? "not-allowed"
+															: "pointer",
+													opacity:
+														pendingAction != null || dedupePreview.totalDelete === 0 ? 0.5 : 1,
+												}}
+											>
+												{pendingAction === "dedupe-execute" ? "去重中…" : "确认去重"}
+											</button>
+										</div>
+									</div>
+								</div>
+							) : null}
 						</>
 					)}
 				</section>
