@@ -4,20 +4,18 @@ import { useCallback, useEffect, useState } from "react";
 import { Streamdown } from "streamdown";
 
 /**
- * UX-5 read-only viewer for user.md / soul.md / QUILIN.md.
+ * UX-5 viewer + editor for user.md / soul.md / QUILIN.md.
  *
  * Renders three collapsible cards, each fetching its target file via
  * GET `/api/profile-files?which=...` on first expansion. Streamdown
  * handles bilingual markdown including code fences.
  *
- * Edit path is intentionally out of scope here — UX-5 ships the viewer
- * first; editing UX comes after the interaction primitives spec lands
- * (approval gate + ask channel), since profile-file writes are
- * CRITICAL operations per `docs/07-safety-guardrails/README.md`.
+ * Editing is now gated through a local approval step before PATCHing
+ * `/api/profile-files`, because profile-file writes are CRITICAL
+ * operations per `docs/07-safety-guardrails/README.md`.
  *
- * UX-5 只读 viewer:三张可折叠卡片,展开时按需 fetch 文件内容,Streamdown
- * 渲染。编辑路径暂未实现 —— 等交互 primitives(approval gate)落地后再做,
- * 因为写 profile 文件按 07-safety §2.6 是 CRITICAL 操作。
+ * UX-5 viewer/editor:三张可折叠卡片,展开时按需 fetch 文件内容,Streamdown
+ * 渲染。编辑保存前会弹出 approval gate,再 PATCH 回服务端。
  */
 
 type Which = "user" | "soul" | "project";
@@ -29,6 +27,17 @@ interface ProfileFile {
 	readonly content: string | null;
 	readonly size: number;
 	readonly modifiedAt: string | null;
+}
+
+interface ProfileFileSaveOk {
+	readonly ok: true;
+	readonly data: ProfileFile;
+}
+
+interface ProfileFileSaveError {
+	readonly ok?: false;
+	readonly error?: string;
+	readonly code?: string;
 }
 
 /**
@@ -86,7 +95,10 @@ function parseFrontmatter(content: string): ParsedFrontmatter {
 	}
 
 	const yamlLines = lines.slice(yamlStart, yamlEnd);
-	const body = lines.slice(yamlEnd + 1).join("\n").replace(/^\n+/, "");
+	const body = lines
+		.slice(yamlEnd + 1)
+		.join("\n")
+		.replace(/^\n+/, "");
 
 	const entries: Array<{ key: string; value: string }> = [];
 	let currentKey: string | null = null;
@@ -186,6 +198,12 @@ function ProfileFileCard({
 	const [data, setData] = useState<ProfileFile | null>(null);
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	const [editing, setEditing] = useState(false);
+	const [draft, setDraft] = useState("");
+	const [approvalOpen, setApprovalOpen] = useState(false);
+	const [saving, setSaving] = useState(false);
+	const [saveNotice, setSaveNotice] = useState<string | null>(null);
+	const [saveError, setSaveError] = useState<string | null>(null);
 
 	const fetchFile = useCallback(async () => {
 		setLoading(true);
@@ -198,6 +216,7 @@ function ProfileFileCard({
 			}
 			const body = (await res.json()) as ProfileFile;
 			setData(body);
+			setDraft(body.content ?? "");
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
 		} finally {
@@ -210,6 +229,57 @@ function ProfileFileCard({
 			void fetchFile();
 		}
 	}, [open, data, loading, error, fetchFile]);
+
+	const beginEdit = useCallback(() => {
+		setDraft(data?.content ?? "");
+		setEditing(true);
+		setApprovalOpen(false);
+		setSaveNotice(null);
+		setSaveError(null);
+	}, [data]);
+
+	const cancelEdit = useCallback(() => {
+		setDraft(data?.content ?? "");
+		setEditing(false);
+		setApprovalOpen(false);
+		setSaveError(null);
+	}, [data]);
+
+	const saveFile = useCallback(async () => {
+		if (data == null) return;
+		setSaving(true);
+		setSaveError(null);
+		setSaveNotice(null);
+		try {
+			const res = await fetch("/api/profile-files", {
+				method: "PATCH",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({
+					which,
+					content: draft,
+					baseModifiedAt: data.modifiedAt,
+					confirmed: true,
+				}),
+			});
+			const body = (await res.json().catch(() => ({}))) as ProfileFileSaveOk | ProfileFileSaveError;
+			if (!res.ok || body.ok !== true) {
+				const msg =
+					"error" in body && typeof body.error === "string" ? body.error : `HTTP ${res.status}`;
+				throw new Error(msg);
+			}
+			setData(body.data);
+			setDraft(body.data.content ?? "");
+			setEditing(false);
+			setApprovalOpen(false);
+			setSaveNotice("已保存 · WriteAuthority 已批准并写入磁盘");
+		} catch (e) {
+			setSaveError(e instanceof Error ? e.message : String(e));
+		} finally {
+			setSaving(false);
+		}
+	}, [which, draft, data]);
+
+	const dirty = data != null && draft !== (data.content ?? "");
 
 	return (
 		<div
@@ -295,93 +365,250 @@ function ProfileFileCard({
 						<p style={{ color: "var(--fg-muted)", marginTop: 12 }}>加载中 · loading…</p>
 					) : error != null ? (
 						<p style={{ color: "var(--destructive)", marginTop: 12 }}>读取失败:{error}</p>
-					) : data?.exists === false ? (
-						<p style={{ color: "var(--fg-muted)", marginTop: 12 }}>
-							文件不存在 · 路径:<code style={{ fontSize: 11 }}>{data.path}</code>
-						</p>
-					) : data?.content != null ? (
-						(() => {
-							const { entries, body } = parseFrontmatter(data.content);
-							return (
-								<div
-									className="q-streamdown"
-									data-testid={`profile-content-${which}`}
-									style={{ marginTop: 12 }}
+					) : data != null ? (
+						<>
+							<div
+								style={{
+									display: "flex",
+									gap: 8,
+									flexWrap: "wrap",
+									alignItems: "center",
+									marginTop: 12,
+									marginBottom: 12,
+								}}
+							>
+								<span
+									style={{
+										flex: "1 1 220px",
+										minWidth: 0,
+										color: "var(--fg-muted)",
+										fontFamily: '"JetBrains Mono", monospace',
+										fontSize: 10,
+										overflowWrap: "anywhere",
+									}}
 								>
-									{entries.length > 0 ? (
-										<div
+									{data.exists ? data.path : `将创建 · ${data.path}`}
+								</span>
+								{editing ? (
+									<>
+										<button
+											type="button"
+											onClick={cancelEdit}
+											disabled={saving}
 											style={{
-												marginBottom: 14,
-												padding: "8px 12px",
-												borderLeft: "2px solid var(--accent-vermillion)",
-												background: "var(--bg)",
+												padding: "6px 10px",
+												border: "1px solid var(--border)",
+												background: "transparent",
+												color: "var(--fg-muted)",
+												cursor: saving ? "not-allowed" : "pointer",
+											}}
+										>
+											取消
+										</button>
+										<button
+											type="button"
+											onClick={() => setApprovalOpen(true)}
+											disabled={!dirty || saving}
+											data-testid={`profile-save-${which}`}
+											style={{
+												padding: "6px 10px",
+												border: "1px solid var(--accent-vermillion)",
+												background: dirty ? "var(--accent-vermillion)" : "transparent",
+												color: dirty ? "var(--bg)" : "var(--fg-muted)",
+												cursor: dirty && !saving ? "pointer" : "not-allowed",
+											}}
+										>
+											保存
+										</button>
+									</>
+								) : (
+									<button
+										type="button"
+										onClick={beginEdit}
+										data-testid={`profile-edit-${which}`}
+										style={{
+											padding: "6px 10px",
+											border: "1px solid var(--accent-vermillion)",
+											background: "transparent",
+											color: "var(--accent-vermillion)",
+											cursor: "pointer",
+										}}
+									>
+										编辑
+									</button>
+								)}
+							</div>
+							{saveNotice != null ? (
+								<p style={{ color: "var(--accent-vermillion)", marginTop: 0 }}>{saveNotice}</p>
+							) : null}
+							{saveError != null ? (
+								<p style={{ color: "var(--destructive)", marginTop: 0 }}>保存失败:{saveError}</p>
+							) : null}
+							{editing ? (
+								<>
+									<textarea
+										value={draft}
+										onChange={(e) => setDraft(e.target.value)}
+										data-testid={`profile-editor-${which}`}
+										style={{
+											width: "100%",
+											minHeight: 280,
+											resize: "vertical",
+											padding: 12,
+											border: "1px solid var(--border)",
+											borderRadius: 4,
+											background: "var(--bg)",
+											color: "var(--fg)",
+											fontFamily: '"JetBrains Mono", monospace',
+											fontSize: 12,
+											lineHeight: 1.7,
+										}}
+									/>
+									{approvalOpen ? (
+										<div
+											data-testid={`profile-approval-${which}`}
+											style={{
+												marginTop: 10,
+												padding: 12,
+												border: "1px solid var(--destructive)",
+												borderLeft: "3px solid var(--destructive)",
 												borderRadius: 4,
+												background: "var(--bg-soft)",
 											}}
 										>
 											<div
 												style={{
-													fontFamily: '"JetBrains Mono", monospace',
-													fontSize: 10,
-													color: "var(--fg-muted)",
-													letterSpacing: "0.05em",
-													marginBottom: 6,
-													textTransform: "uppercase",
-												}}
-											>
-												schema · frontmatter
-											</div>
-											<table
-												style={{
-													borderCollapse: "collapse",
-													width: "100%",
+													fontFamily: '"Noto Sans SC", sans-serif',
 													fontSize: 12,
+													color: "var(--fg)",
+													marginBottom: 8,
 												}}
 											>
-												<tbody>
-													{entries.map((e) => (
-														<tr key={e.key}>
-															<td
-																style={{
-																	padding: "2px 12px 2px 0",
-																	color: "var(--fg-muted)",
-																	fontFamily: '"JetBrains Mono", monospace',
-																	verticalAlign: "top",
-																	whiteSpace: "nowrap",
-																}}
-															>
-																{e.key}
-															</td>
-															<td
-																style={{
-																	padding: "2px 0",
-																	fontFamily: '"Noto Sans SC", sans-serif',
-																	color: "var(--fg)",
-																	wordBreak: "break-word",
-																}}
-															>
-																{e.value || (
-																	<span style={{ color: "var(--fg-subtle)" }}>—</span>
-																)}
-															</td>
-														</tr>
-													))}
-												</tbody>
-											</table>
+												WriteAuthority(写入授权中心)需要确认 CRITICAL 写入: {data.path}
+											</div>
+											<div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+												<button
+													type="button"
+													onClick={() => void saveFile()}
+													disabled={saving}
+													data-testid={`profile-approve-${which}`}
+													style={{
+														padding: "6px 12px",
+														border: "none",
+														background: "var(--accent-vermillion)",
+														color: "var(--bg)",
+														cursor: saving ? "not-allowed" : "pointer",
+													}}
+												>
+													{saving ? "写入中" : "批准并写入"}
+												</button>
+												<button
+													type="button"
+													onClick={() => setApprovalOpen(false)}
+													disabled={saving}
+													style={{
+														padding: "6px 12px",
+														border: "1px solid var(--border)",
+														background: "transparent",
+														color: "var(--fg-muted)",
+														cursor: saving ? "not-allowed" : "pointer",
+													}}
+												>
+													返回编辑
+												</button>
+											</div>
 										</div>
 									) : null}
-									{body.length > 0 ? (
-										<Streamdown>{body}</Streamdown>
-									) : entries.length === 0 ? (
-										// Neither frontmatter nor body — show raw to be helpful.
-										<Streamdown>{data.content}</Streamdown>
-									) : (
-										<p style={{ color: "var(--fg-subtle)", fontSize: 12, fontStyle: "italic" }}>
-											frontmatter 之外暂无正文 · no body content yet
-										</p>
-									)}
-								</div>
-							);
-						})()
+								</>
+							) : data.exists === false ? (
+								<p style={{ color: "var(--fg-muted)", marginTop: 12 }}>
+									文件不存在 · 点击编辑可创建
+								</p>
+							) : data.content != null ? (
+								(() => {
+									const { entries, body } = parseFrontmatter(data.content);
+									return (
+										<div
+											className="q-streamdown"
+											data-testid={`profile-content-${which}`}
+											style={{ marginTop: 12 }}
+										>
+											{entries.length > 0 ? (
+												<div
+													style={{
+														marginBottom: 14,
+														padding: "8px 12px",
+														borderLeft: "2px solid var(--accent-vermillion)",
+														background: "var(--bg)",
+														borderRadius: 4,
+													}}
+												>
+													<div
+														style={{
+															fontFamily: '"JetBrains Mono", monospace',
+															fontSize: 10,
+															color: "var(--fg-muted)",
+															letterSpacing: "0.05em",
+															marginBottom: 6,
+															textTransform: "uppercase",
+														}}
+													>
+														schema · frontmatter
+													</div>
+													<table
+														style={{
+															borderCollapse: "collapse",
+															width: "100%",
+															fontSize: 12,
+														}}
+													>
+														<tbody>
+															{entries.map((e) => (
+																<tr key={e.key}>
+																	<td
+																		style={{
+																			padding: "2px 12px 2px 0",
+																			color: "var(--fg-muted)",
+																			fontFamily: '"JetBrains Mono", monospace',
+																			verticalAlign: "top",
+																			whiteSpace: "nowrap",
+																		}}
+																	>
+																		{e.key}
+																	</td>
+																	<td
+																		style={{
+																			padding: "2px 0",
+																			fontFamily: '"Noto Sans SC", sans-serif',
+																			color: "var(--fg)",
+																			wordBreak: "break-word",
+																		}}
+																	>
+																		{e.value || (
+																			<span style={{ color: "var(--fg-subtle)" }}>—</span>
+																		)}
+																	</td>
+																</tr>
+															))}
+														</tbody>
+													</table>
+												</div>
+											) : null}
+											{body.length > 0 ? (
+												<Streamdown>{body}</Streamdown>
+											) : entries.length === 0 ? (
+												// Neither frontmatter nor body — show raw to be helpful.
+												<Streamdown>{data.content}</Streamdown>
+											) : (
+												<p style={{ color: "var(--fg-subtle)", fontSize: 12, fontStyle: "italic" }}>
+													frontmatter 之外暂无正文 · no body content yet
+												</p>
+											)}
+										</div>
+									);
+								})()
+							) : null}
+						</>
 					) : null}
 				</div>
 			) : null}
@@ -433,7 +660,7 @@ export function ProfileFilesSection() {
 					color: "var(--fg-subtle)",
 				}}
 			>
-				只读 viewer · read-only · 编辑路径等交互 primitives(approval gate)落地后开放
+				可查看并编辑三份 profile 文件;保存前由 WriteAuthority(写入授权中心)确认 CRITICAL 写入
 			</p>
 			{FILES.map((f) => (
 				<ProfileFileCard key={f.which} {...f} />

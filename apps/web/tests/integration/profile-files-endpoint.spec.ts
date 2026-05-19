@@ -101,9 +101,7 @@ describe("UX-5 — GET /api/profile-files", () => {
 	it("400 on traversal attempt in `which`", async () => {
 		// Even with explicit `../etc/passwd` injected, the Zod enum kicks it back.
 		const { GET } = await import("@/app/api/profile-files/route");
-		const res = await GET(
-			new Request("http://localhost/api/profile-files?which=../../etc/passwd"),
-		);
+		const res = await GET(new Request("http://localhost/api/profile-files?which=../../etc/passwd"));
 		expect(res.status).toBe(400);
 	});
 
@@ -120,5 +118,78 @@ describe("UX-5 — GET /api/profile-files", () => {
 		expect(userRes.path).not.toBe(soulRes.path);
 		expect(userRes.content).toBe("user file");
 		expect(soulRes.content).toBe("soul file");
+	});
+});
+
+describe("UX-5 — PATCH /api/profile-files", () => {
+	it("requires WriteAuthority confirmation before writing", async () => {
+		const file = join(testHome, ".quilin", "user.md");
+		writeFileSync(file, "original", "utf8");
+		const { GET, PATCH } = await import("@/app/api/profile-files/route");
+		const current = await GET(new Request("http://localhost/api/profile-files?which=user"));
+		const before = await current.json();
+		const denied = await PATCH(
+			new Request("http://localhost/api/profile-files", {
+				method: "PATCH",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({
+					which: "user",
+					content: "updated",
+					baseModifiedAt: before.modifiedAt,
+					confirmed: false,
+				}),
+			}),
+		);
+		expect(denied.status).toBe(403);
+		const after = await GET(new Request("http://localhost/api/profile-files?which=user"));
+		const afterBody = await after.json();
+		expect(afterBody.content).toBe("original");
+	});
+
+	it("writes content when confirmation is provided", async () => {
+		const { GET, PATCH } = await import("@/app/api/profile-files/route");
+		const create = await PATCH(
+			new Request("http://localhost/api/profile-files", {
+				method: "PATCH",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({
+					which: "soul",
+					content: "# Soul\n\n- calm\n- direct\n",
+					confirmed: true,
+				}),
+			}),
+		);
+		expect(create.status).toBe(200);
+		const createBody = await create.json();
+		expect(createBody.ok).toBe(true);
+		expect(createBody.data.exists).toBe(true);
+		expect(createBody.data.content).toContain("calm");
+
+		const readBack = await GET(new Request("http://localhost/api/profile-files?which=soul"));
+		const readBackBody = await readBack.json();
+		expect(readBackBody.content).toContain("direct");
+	});
+
+	it("returns 409 on stale baseModifiedAt", async () => {
+		const file = join(testHome, ".quilin", "user.md");
+		writeFileSync(file, "first", "utf8");
+		const { GET, PATCH } = await import("@/app/api/profile-files/route");
+		const snap = await GET(new Request("http://localhost/api/profile-files?which=user"));
+		const snapBody = await snap.json();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		writeFileSync(file, "second", "utf8");
+		const res = await PATCH(
+			new Request("http://localhost/api/profile-files", {
+				method: "PATCH",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({
+					which: "user",
+					content: "third",
+					baseModifiedAt: snapBody.modifiedAt,
+					confirmed: true,
+				}),
+			}),
+		);
+		expect(res.status).toBe(409);
 	});
 });
