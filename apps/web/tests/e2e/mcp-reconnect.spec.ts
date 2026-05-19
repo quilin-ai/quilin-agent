@@ -28,7 +28,12 @@ test.describe("MCP per-server reconnect controls", () => {
 		);
 
 		// At least one card should be rendered. Pick the first.
-		const cards = page.locator('[data-testid^="mcp-server-"][data-testid$=""]:not([data-testid^="mcp-server-compact-"]):not([data-testid^="mcp-server-toggle-"])');
+		// Subagent B 报告 (QUI-182, 2026-05-20): `[data-testid$=""]` 是非法 CSS
+		// (空 suffix 在浏览器规范下匹配 0 元素),功能本身工作只是 spec broken。
+		// 改成只用 :not(...) 排除 compact / toggle / reconnect / copy / error 子 testid。
+		const cards = page.locator(
+			'[data-testid^="mcp-server-"]:not([data-testid^="mcp-server-compact-"]):not([data-testid^="mcp-server-toggle-"]):not([data-testid^="mcp-reconnect-"]):not([data-testid^="mcp-copy-error-"]):not([data-testid^="mcp-error-"])',
+		);
 		const firstCard = cards.first();
 		await expect(firstCard).toBeVisible();
 
