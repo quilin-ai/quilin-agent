@@ -516,6 +516,7 @@ describe.sequential("MCPClientManager", () => {
 				"consolidation_log_recent",
 				"kg_dump_for_viz",
 				"memory_backfill_kg",
+				"memory_delete",
 				"memory_recall",
 				"memory_store",
 				"scratchpad_clear",
