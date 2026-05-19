@@ -1,0 +1,16 @@
+[package]
+name = "quilin-bridge"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+uniffi = { version = "0.28", features = ["cli"] }
+anyhow = "1.0"
+once_cell = "1.19"
+thiserror = "1.0"
+
+[build-dependencies]
+uniffi = { version = "0.28", features = ["build"] }
