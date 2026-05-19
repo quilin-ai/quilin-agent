@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+import { McpServerCard, type McpServerCardData } from "@/components/McpServerCard";
 import { AppHeader } from "@/components/shell/AppHeader";
 import { RailStrip } from "@/components/shell/RailStrip";
 import { Wordmark } from "@/components/shell/Wordmark";
@@ -47,23 +48,22 @@ interface McpError {
 	readonly error: { readonly code: string; readonly message: string };
 }
 
-function statusColor(status: McpServerView["status"]): string {
-	if (status === "connected") return "var(--accent-vermillion)";
-	if (status === "failed") return "var(--fg-muted)";
-	return "var(--fg-muted)";
-}
-
-function statusLabel(status: McpServerView["status"]): string {
-	if (status === "connected") return "✓ 已连接";
-	if (status === "failed") return "✗ 失败";
-	return "⊘ 跳过";
+function toCardData(server: McpServerView): McpServerCardData {
+	return {
+		id: server.id,
+		transport: server.transport,
+		status: server.status,
+		toolCount: server.toolCount,
+		error: server.error,
+		configured: server.configured,
+		tools: server.tools,
+	};
 }
 
 export default function McpPage() {
 	const [catalog, setCatalog] = useState<McpResponse["data"] | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [loading, setLoading] = useState(true);
-	const [expandedId, setExpandedId] = useState<string | null>(null);
 
 	const loadCatalog = useCallback(async (refresh = false) => {
 		setLoading(true);
@@ -159,176 +159,14 @@ export default function McpPage() {
 						</p>
 					) : (
 						<div style={{ marginTop: 20 }}>
-							{catalog.servers.map((server) => {
-								const expanded = expandedId === server.id;
-								return (
-									<div
-										key={server.id}
-										style={{
-											borderBottom: "1px solid var(--border)",
-											marginBottom: 8,
-											paddingBottom: 8,
-											minWidth: 0,
-											overflow: "hidden",
-										}}
-									>
-										<button
-											type="button"
-											onClick={() => setExpandedId(expanded ? null : server.id)}
-											className="q-resource-row"
-											data-testid={`mcp-server-${server.id}`}
-											style={{
-												textAlign: "left",
-												width: "100%",
-												minWidth: 0,
-												maxWidth: "100%",
-												background: expanded ? "var(--bg-elev)" : "transparent",
-												border: "none",
-												cursor: "pointer",
-												padding: "10px 12px",
-												display: "block",
-												overflow: "hidden",
-												overflowWrap: "anywhere",
-												wordBreak: "break-word",
-											}}
-										>
-											<div
-												style={{
-													display: "flex",
-													gap: 12,
-													alignItems: "baseline",
-													flexWrap: "wrap",
-													minWidth: 0,
-												}}
-											>
-												<span
-													style={{
-														fontFamily: '"JetBrains Mono", monospace',
-														fontSize: 13,
-														color: "var(--fg)",
-														fontWeight: 600,
-														minWidth: 0,
-														maxWidth: "100%",
-														overflowWrap: "anywhere",
-														wordBreak: "break-word",
-													}}
-												>
-													{server.id}
-												</span>
-												<span
-													style={{
-														fontFamily: '"JetBrains Mono", monospace',
-														fontSize: 10,
-														color: "var(--fg-muted)",
-														padding: "1px 6px",
-														border: "1px solid var(--border)",
-													}}
-												>
-													{server.transport}
-												</span>
-												<span
-													style={{
-														fontFamily: '"JetBrains Mono", monospace',
-														fontSize: 11,
-														color: statusColor(server.status),
-													}}
-												>
-													{statusLabel(server.status)}
-												</span>
-												{server.status === "connected" ? (
-													<span
-														style={{
-															fontSize: 11,
-															color: "var(--fg-muted)",
-														}}
-													>
-														{server.toolCount} 个工具
-													</span>
-												) : null}
-											</div>
-											{server.error != null ? (
-												<div
-													style={{
-														marginTop: 6,
-														padding: "6px 8px",
-														fontFamily: '"JetBrains Mono", monospace',
-														fontSize: 10,
-														color: "var(--fg-muted)",
-														background: "transparent",
-														borderLeft: "2px solid var(--border)",
-														minWidth: 0,
-														maxWidth: "100%",
-														overflowWrap: "anywhere",
-														wordBreak: "break-all",
-														whiteSpace: "pre-wrap",
-													}}
-												>
-													{server.error}
-												</div>
-											) : null}
-											{expanded ? (
-												<div
-													style={{
-														marginTop: 10,
-														padding: "8px 10px",
-														border: "1px solid var(--border)",
-														fontFamily: '"JetBrains Mono", monospace',
-														fontSize: 10,
-														color: "var(--fg-muted)",
-														lineHeight: 1.7,
-														minWidth: 0,
-														maxWidth: "100%",
-														overflowWrap: "anywhere",
-														wordBreak: "break-all",
-													}}
-												>
-													<div style={{ marginBottom: 8, opacity: 0.7 }}>configuration:</div>
-													{server.configured.url != null ? (
-														<div>
-															<span style={{ color: "var(--fg)" }}>url:</span>{" "}
-															{server.configured.url}
-															{server.configured.hasHeaders ? " · headers: yes" : ""}
-														</div>
-													) : null}
-													{server.configured.command != null ? (
-														<div>
-															<span style={{ color: "var(--fg)" }}>command:</span>{" "}
-															{server.configured.command} {(server.configured.args ?? []).join(" ")}
-														</div>
-													) : null}
-													{server.configured.cwd != null ? (
-														<div>
-															<span style={{ color: "var(--fg)" }}>cwd:</span>{" "}
-															{server.configured.cwd}
-														</div>
-													) : null}
-													{server.tools.length > 0 ? (
-														<>
-															<div style={{ marginTop: 10, marginBottom: 4, opacity: 0.7 }}>
-																exposed tools:
-															</div>
-															{server.tools.map((tool) => (
-																<div key={tool.publicName} style={{ marginBottom: 4 }}>
-																	<span style={{ color: "var(--fg)" }}>{tool.originalName}</span>
-																	{tool.publicName !== tool.originalName ? (
-																		<span style={{ opacity: 0.5 }}>
-																			{" → "}
-																			{tool.publicName}
-																		</span>
-																	) : null}
-																	<div style={{ paddingLeft: 16, opacity: 0.7 }}>
-																		{tool.description}
-																	</div>
-																</div>
-															))}
-														</>
-													) : null}
-												</div>
-											) : null}
-										</button>
-									</div>
-								);
-							})}
+							{catalog.servers.map((server) => (
+								<McpServerCard
+									key={server.id}
+									server={toCardData(server)}
+									variant="full"
+									onReconnected={() => void loadCatalog(false)}
+								/>
+							))}
 						</div>
 					)}
 				</section>

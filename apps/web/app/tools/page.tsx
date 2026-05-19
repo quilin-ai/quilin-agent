@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { McpServerCard, type McpServerCardData } from "@/components/McpServerCard";
 import { AppHeader } from "@/components/shell/AppHeader";
 import { RailStrip } from "@/components/shell/RailStrip";
 import { Wordmark } from "@/components/shell/Wordmark";
@@ -237,6 +238,7 @@ export default function ToolsPage() {
 
 							{catalog.mcpServerStatus.length > 0 ? (
 								<div
+									data-testid="tools-mcp-status"
 									style={{
 										marginTop: 8,
 										marginBottom: 16,
@@ -245,56 +247,28 @@ export default function ToolsPage() {
 										fontSize: 11,
 										fontFamily: '"JetBrains Mono", monospace',
 										color: "var(--fg-muted)",
-										minWidth: 0,
-										maxWidth: "100%",
-										overflow: "hidden",
-										overflowWrap: "anywhere",
-										wordBreak: "break-all",
 									}}
 								>
 									<div style={{ marginBottom: 4 }}>
 										MCP 服务器连接情况(失败的不会出现在工具列表里):
 									</div>
-									{catalog.mcpServerStatus.map((s) => (
-										<div
-											key={s.id}
-											style={{
-												display: "flex",
-												gap: 12,
-												flexWrap: "wrap",
-												minWidth: 0,
-											}}
-										>
-											<span
-												style={{
-													minWidth: 0,
-													overflowWrap: "anywhere",
-													wordBreak: "break-all",
-												}}
-											>
-												{s.id}
-											</span>
-											<span style={{ minWidth: 0 }}>{s.transport}</span>
-											{s.error == null ? (
-												<span style={{ color: "var(--accent-vermillion)" }}>
-													✓ {s.toolCount} tools
-												</span>
-											) : (
-												<span
-													style={{
-														color: "var(--fg-muted)",
-														flex: "1 1 100%",
-														minWidth: 0,
-														overflowWrap: "anywhere",
-														wordBreak: "break-all",
-														whiteSpace: "pre-wrap",
-													}}
-												>
-													✗ {s.error}
-												</span>
-											)}
-										</div>
-									))}
+									{catalog.mcpServerStatus.map((s) => {
+										const cardData: McpServerCardData = {
+											id: s.id,
+											transport: s.transport,
+											status: s.error == null ? "connected" : "failed",
+											toolCount: s.toolCount,
+											error: s.error,
+										};
+										return (
+											<McpServerCard
+												key={s.id}
+												server={cardData}
+												variant="compact"
+												onReconnected={() => void loadCatalog()}
+											/>
+										);
+									})}
 								</div>
 							) : null}
 
@@ -328,17 +302,12 @@ export default function ToolsPage() {
 														style={{
 															textAlign: "left",
 															width: "100%",
-															minWidth: 0,
-															maxWidth: "100%",
 															background: expanded ? "var(--bg-elev)" : "transparent",
 															border: "none",
 															borderBottom: "1px solid var(--border)",
 															cursor: "pointer",
 															padding: "10px 12px",
 															display: "block",
-															overflow: "hidden",
-															overflowWrap: "anywhere",
-															wordBreak: "break-word",
 														}}
 													>
 														<div
@@ -347,7 +316,6 @@ export default function ToolsPage() {
 																gap: 10,
 																alignItems: "baseline",
 																flexWrap: "wrap",
-																minWidth: 0,
 															}}
 														>
 															<span
@@ -356,10 +324,6 @@ export default function ToolsPage() {
 																	fontSize: 12,
 																	color: "var(--fg)",
 																	fontWeight: 600,
-																	minWidth: 0,
-																	maxWidth: "100%",
-																	overflowWrap: "anywhere",
-																	wordBreak: "break-word",
 																}}
 															>
 																{tool.publicName}
@@ -370,10 +334,6 @@ export default function ToolsPage() {
 																		fontFamily: '"JetBrains Mono", monospace',
 																		fontSize: 10,
 																		color: "var(--fg-muted)",
-																		minWidth: 0,
-																		maxWidth: "100%",
-																		overflowWrap: "anywhere",
-																		wordBreak: "break-word",
 																	}}
 																>
 																	({tool.originalName})
@@ -381,13 +341,10 @@ export default function ToolsPage() {
 															) : null}
 															<span
 																style={{
-																	flex: "1 1 100%",
-																	minWidth: 0,
+																	flex: 1,
 																	color: "var(--fg-muted)",
 																	fontSize: 11,
 																	lineHeight: 1.5,
-																	overflowWrap: "anywhere",
-																	wordBreak: "break-word",
 																}}
 															>
 																{tool.description}
@@ -404,10 +361,6 @@ export default function ToolsPage() {
 																	fontSize: 10,
 																	color: "var(--fg-muted)",
 																	lineHeight: 1.7,
-																	minWidth: 0,
-																	maxWidth: "100%",
-																	overflowWrap: "anywhere",
-																	wordBreak: "break-all",
 																}}
 															>
 																<div style={{ marginBottom: 4, opacity: 0.7 }}>

@@ -109,7 +109,18 @@ declare global {
 	 * commits that add MCP tools) take effect without a full dev server
 	 * restart.
 	 */
-	var __quilin_mcp_registry__: { disconnectAll: () => Promise<void> } | undefined;
+	var __quilin_mcp_registry__:
+		| {
+				disconnectAll: () => Promise<void>;
+				register: (entry: {
+					readonly id: string;
+					readonly config: unknown;
+					readonly namespace: string;
+				}) => Promise<readonly unknown[]>;
+				unregister: (serverId: string) => Promise<void>;
+				getAllTools: () => readonly unknown[];
+		  }
+		| undefined;
 }
 
 interface SkillsManagerForCreateBuiltins {
@@ -390,6 +401,163 @@ export function peekToolsCatalogState(): ToolsCatalogState {
 
 export function refreshToolsCatalog(): Promise<ToolsCatalog> {
 	return startToolsCatalogBuild();
+/**
+ * Per-server reconnect: retry connecting to one MCP server without
+ * tearing down the rest. Used by `POST /api/mcp/[name]/reconnect`,
+ * wired to the "↻ 重连" button on /mcp + /tools.
+ *
+ * Why surgical (not `invalidateToolsCatalog()`): refreshing the whole
+ * catalog disconnects every healthy stdio subprocess too, which is
+ * disruptive when only one server is misbehaving (e.g. plane lost its
+ * OAuth token but the other 10 servers are fine).
+ *
+ * Flow:
+ *   1. Ensure the catalog is built so a live registry exists.
+ *   2. Re-read `~/.claude.json` so config edits between attempts are
+ *      picked up (user might fix headers / command and click reconnect).
+ *   3. Call `registry.register(...)` for just this id. Per registry.ts
+ *      `register` semantics: replaces any existing connection cleanly.
+ *      Throws on connect failure.
+ *   4. Rebuild the cached catalog's `entries` / `mcpResults` / `adapted`
+ *      in place so the next `/api/mcp` + `/api/tools` GET sees fresh
+ *      tool list and updated error message.
+ *
+ * Returns `{ status: "connected", toolCount }` on success or
+ * `{ status: "failed", error }` on connect failure. We swallow the
+ * thrown error here (rather than re-throwing) because the most common
+ * cause is "the token is still expired" and the UI wants to render the
+ * new error message, not crash on a 500.
+ *
+ * 针对单个 MCP server 的重连:不断开其它健康连接,只重试给定 id。重读
+ * ~/.claude.json 让用户改配置→点重连立刻生效。失败不抛 500,把新的错
+ * 误文案返回给 UI 渲染。
+ */
+export async function reconnectMcpServer(
+	id: string,
+): Promise<
+	| { readonly status: "connected"; readonly toolCount: number }
+	| { readonly status: "failed"; readonly error: string }
+	| { readonly status: "unknown_id"; readonly error: string }
+> {
+	// Build path resolution kept identical to /api/mcp GET so the
+	// dashboard-facing id matches what we look up in the config map.
+	const { readMcpConfig } = await import("@/lib/mcp-loader");
+	const config = readMcpConfig();
+	const raw = config[id];
+	if (raw == null) {
+		return {
+			status: "unknown_id",
+			error: `unknown MCP server id: ${id}`,
+		};
+	}
+
+	// Ensure catalog (and live registry) exist. Fresh dashboard hits
+	// /mcp first, but a direct POST to the reconnect API before any
+	// GET could race; this awaits the build.
+	await getToolsCatalog();
+	const registry = globalThis.__quilin_mcp_registry__;
+	if (registry == null) {
+		return {
+			status: "failed",
+			error: "MCP registry not initialized",
+		};
+	}
+
+	const transport: "stdio" | "http" = raw.type === "http" ? "http" : "stdio";
+	const serverConfig =
+		transport === "http"
+			? {
+					type: "http" as const,
+					url: raw.url ?? "",
+					...(raw.headers == null ? {} : { headers: raw.headers }),
+				}
+			: {
+					command: raw.command ?? "",
+					args: raw.args ?? [],
+					...(raw.cwd == null ? {} : { cwd: raw.cwd }),
+				};
+
+	let toolCount = 0;
+	let connectError: string | null = null;
+	try {
+		const tools = await registry.register({
+			id,
+			config: serverConfig,
+			namespace: id,
+		});
+		toolCount = tools.length;
+		console.log(`[MCP] reconnected ${id} (${transport}): ${toolCount} tools`);
+	} catch (e) {
+		connectError = e instanceof Error ? e.message : String(e);
+		// `register` on failure already calls `client.disconnect()` and
+		// does NOT mutate registry state, so previous tools for this id
+		// (if any) remain. We still surface the new error message to the
+		// UI by patching mcpResults below.
+		console.log(`[MCP] reconnect FAILED ${id} (${transport}): ${connectError}`);
+	}
+
+	// Rebuild the cached catalog in place so subsequent `/api/mcp` +
+	// `/api/tools` GETs reflect the new state without rebuilding the
+	// whole registry. We re-fetch the agent-core module and re-adapt
+	// the full tool set; cheap compared to spawning subprocesses.
+	const cached = globalThis.__quilin_tools_catalog__;
+	if (cached != null) {
+		// Update the single mcpResults entry for this id, preserving all
+		// other server entries.
+		const oldResults = cached.mcpResults;
+		const newResultEntry: (typeof oldResults)[number] = {
+			id,
+			transport,
+			toolCount: connectError == null ? toolCount : 0,
+			error: connectError,
+		};
+		const hadEntry = oldResults.some((r) => r.id === id);
+		const newResults: typeof oldResults = hadEntry
+			? oldResults.map((r) => (r.id === id ? newResultEntry : r))
+			: [...oldResults, newResultEntry];
+
+		// Rebuild `entries` from the live registry's current tools.
+		// Builtin tools come from previously-cached `rawTools` minus the
+		// MCP-namespaced subset; we can rebuild by union: builtins =
+		// rawTools that don't contain "/" in their name; mcp = whatever
+		// the registry now reports.
+		const currentMcpTools = registry.getAllTools() as readonly AgentCoreToolMetadata[];
+		const currentMcpNames = new Set<string>();
+		for (const t of currentMcpTools) {
+			if (t.name.includes("/")) currentMcpNames.add(t.name);
+		}
+		const previousBuiltins = cached.rawTools.filter((t) => !t.name.includes("/"));
+		const previousMcpTools = currentMcpTools;
+		const allTools = [...previousBuiltins, ...previousMcpTools];
+
+		const newEntries: ToolEntry[] = allTools.map((t) => {
+			const { source, mcpServer } = classifyTool(t.name);
+			return {
+				publicName: sanitizeToolNameForOpenAI(t.name),
+				originalName: t.name,
+				description: t.description,
+				source,
+				mcpServer,
+				inputShape: sniffInputShape(t.parameters),
+			};
+		});
+
+		const newAdapted = adaptToolsForAiSdk(
+			allTools as unknown as Parameters<typeof adaptToolsForAiSdk>[0],
+		);
+
+		globalThis.__quilin_tools_catalog__ = {
+			entries: newEntries,
+			mcpResults: newResults,
+			adapted: newAdapted,
+			rawTools: allTools as unknown as readonly AgentCoreToolExecutable[],
+		};
+	}
+
+	if (connectError != null) {
+		return { status: "failed", error: connectError };
+	}
+	return { status: "connected", toolCount };
 }
 
 export async function getToolsCatalog(): Promise<ToolsCatalog> {
@@ -455,10 +623,12 @@ async function buildToolsCatalog(): Promise<ToolsCatalog> {
 		mcpTools = registry.getAllTools() as readonly AgentCoreToolMetadata[];
 		mcpResults = results;
 		// Park the live registry on globalThis so `invalidateToolsCatalog()`
-		// can call `disconnectAll()` on it before the next build cycle.
-		globalThis.__quilin_mcp_registry__ = registry as unknown as {
-			disconnectAll: () => Promise<void>;
-		};
+		// can call `disconnectAll()` on it before the next build cycle, and
+		// so per-server reconnect (POST /api/mcp/[name]/reconnect) can call
+		// `register()` / `unregister()` without rebuilding the whole catalog.
+		globalThis.__quilin_mcp_registry__ = registry as unknown as NonNullable<
+			typeof globalThis.__quilin_mcp_registry__
+		>;
 		const ok = results.filter((r) => r.error == null).length;
 		console.log(
 			`[TOOLS] catalog ready: ${builtins.length} builtin + ${mcpTools.length} mcp tools (${ok}/${results.length} servers)`,
