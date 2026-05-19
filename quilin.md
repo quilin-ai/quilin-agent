@@ -115,7 +115,7 @@ quilin-agent/
 └── readme.md
 ```
 
-## 14 Active Engineering Domains
+## 15 Active Engineering Domains
 
 | # | Domain | Key Design | Spec |
 |---|--------|-----------|------|
@@ -133,6 +133,7 @@ quilin-agent/
 | 13 | Skills | SKILL.md + frontmatter, catalog + on-demand load, path/size safety, M0/M1/M2+ phased | [13](docs/13-skills/README.md) |
 | 15 | Introspection | Meta-cognition: trace-anchored reflection feeding back into the next plan, with controlled user-facing rhythm | [15](docs/15-introspection/README.md) |
 | 16 | Soul Import | Install-time scan of 6 agent frameworks → seed global `~/.quilin/{soul,user}.md` body + per-project `QUILIN.md`; all writes CRITICAL | [16](docs/16-soul-import/README.md) |
+| 17 | Multi Client | 4 delivery surfaces sharing one agent server: CLI (`quilin`) / REPL TUI (`packages/agent-core/src/repl.ts`) / Web (`apps/web/` Next.js) / Mac App (`~/repo/quilin-agent-mac-app/` + `crates/quilin-bridge/` UniFFI) | [17](docs/17-multi-client/README.md) |
 
 ### Parked (sub-module)
 
