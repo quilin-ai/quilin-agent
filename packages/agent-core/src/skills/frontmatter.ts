@@ -64,6 +64,7 @@ function normalizeString(
 	value: unknown,
 	fieldName: string,
 	required: boolean,
+	allowScalarCoerce = false,
 ): string | undefined {
 	if (value == null) {
 		if (required) {
@@ -71,6 +72,25 @@ function normalizeString(
 		}
 
 		return undefined;
+	}
+
+	// QUI-182 漏项 SA-1 A1 容错 fix (Reviewer A 报告):
+	// 旧手写 parser 把所有 scalar 当字符串(包括 `description: 1.0`、
+	// `version: 1.0`、`description: true`)。yaml package 按 YAML 1.2
+	// 把 unquoted 1.0 解析为 number、true 解析为 boolean,导致这里抛
+	// "must be a string"。
+	//
+	// 容错只对自由文本字段开(description / version),不对有结构约束
+	// 的字段(name 必须 kebab-case)开,避免误把 `name: 123` 当合法名字。
+	if (allowScalarCoerce && (typeof value === "number" || typeof value === "boolean")) {
+		const coerced = String(value).trim();
+		if (coerced.length === 0) {
+			if (required) {
+				throw new Error(`Skill frontmatter requires ${fieldName}`);
+			}
+			return undefined;
+		}
+		return coerced;
 	}
 
 	if (typeof value !== "string") {
@@ -191,7 +211,8 @@ export function parseSkillFrontmatter(
 	input: SkillFrontmatterInput,
 ): SkillFrontmatter {
 	const name = normalizeString(input.name, "name", true);
-	const description = normalizeString(input.description, "description", true);
+	// description 是自由文本,开 number/boolean scalar 容错(QUI-182 SA-1 A1)
+	const description = normalizeString(input.description, "description", true, true);
 	const metadata = getNestedRecord(input.metadata, "metadata");
 	const quilinMetadata = getNestedRecord(metadata?.quilin, "metadata.quilin");
 
@@ -260,7 +281,8 @@ export function parseSkillFrontmatter(
 		requiresTools,
 		requiresToolsets,
 		platforms,
-		version: normalizeString(input.version, "version", false),
+		// version 常见手写 `version: 1.0` (number),开 scalar coerce 容错
+		version: normalizeString(input.version, "version", false, true),
 		dependencies,
 		userInvocable: normalizeBoolean(input.userInvocable, true),
 		disableModelInvocation: normalizeBoolean(
