@@ -49,6 +49,15 @@ export interface SubagentLiveProgressProps {
 }
 
 const POLL_INTERVAL_MS = 1000;
+const MAX_RETRY_INTERVAL_MS = 8000;
+
+function isPollingStatus(status: LiveStatus): boolean {
+	return status === "running" || status === "pending";
+}
+
+function retryDelayMs(retryCount: number): number {
+	return Math.min(POLL_INTERVAL_MS * 2 ** Math.min(retryCount, 3), MAX_RETRY_INTERVAL_MS);
+}
 
 function statusBadge(status: LiveStatus): { label: string; tone: string } {
 	switch (status) {
@@ -89,18 +98,37 @@ export function SubagentLiveProgress({
 	const [snapshot, setSnapshot] = useState<AgentSnapshot | null>(null);
 	const [detailAvailable, setDetailAvailable] = useState(false);
 	const [expanded, setExpanded] = useState(false);
-	const cancelledRef = useRef(false);
 	const previewRef = useRef<HTMLDivElement | null>(null);
 
 	useEffect(() => {
-		cancelledRef.current = false;
+		let disposed = false;
 		setDetailAvailable(false);
+		setSnapshot(null);
 		let timer: ReturnType<typeof setTimeout> | null = null;
+		let retryCount = 0;
+		let controller: AbortController | null = null;
+
+		const clearTimer = (): void => {
+			if (timer == null) return;
+			clearTimeout(timer);
+			timer = null;
+		};
+
+		const scheduleNext = (delayMs: number): void => {
+			if (disposed) return;
+			clearTimer();
+			timer = setTimeout(() => void tick(), delayMs);
+		};
 
 		const tick = async (): Promise<void> => {
+			controller?.abort();
+			controller = new AbortController();
 			try {
-				const res = await fetch(`/api/agents/${agentId}`, { cache: "no-store" });
-				if (cancelledRef.current) return;
+				const res = await fetch(`/api/agents/${agentId}`, {
+					cache: "no-store",
+					signal: controller.signal,
+				});
+				if (disposed) return;
 				if (res.status === 404) {
 					// Registry doesn't have a live snapshot — either the
 					// subagent finished and its session evicted, or the
@@ -122,20 +150,22 @@ export function SubagentLiveProgress({
 					return;
 				}
 				if (!res.ok) {
-					// Non-404 server error (5xx). One retry after backoff;
-					// previous behaviour silently stopped polling. Round 4
-					// RECOMMEND #1 from cross-review.
-					if (!cancelledRef.current) {
-						timer = setTimeout(() => void tick(), POLL_INTERVAL_MS * 2);
-					}
+					// Non-404 server errors are transient for dev/HMR and
+					// reconnecting AgentService. Retry with bounded backoff
+					// instead of hammering the API once per second forever.
+					scheduleNext(retryDelayMs(retryCount));
+					retryCount += 1;
 					return;
 				}
 				const body = (await res.json()) as AgentDetailResponse;
-				if (cancelledRef.current) return;
+				if (disposed) return;
 				if (!body.ok || body.data == null) {
 					setDetailAvailable(false);
+					scheduleNext(retryDelayMs(retryCount));
+					retryCount += 1;
 					return;
 				}
+				retryCount = 0;
 				const next: AgentSnapshot = {
 					displayName: body.data.displayName,
 					task: body.data.task,
@@ -144,26 +174,27 @@ export function SubagentLiveProgress({
 					elapsedMs: body.data.elapsedMs,
 					usage: body.data.usage ?? null,
 				};
-				if (next.status !== "running" && next.status !== "pending") {
+				if (!isPollingStatus(next.status)) {
 					setExpanded(false);
 				}
 				setDetailAvailable(true);
 				setSnapshot(next);
-				if (next.status === "running" || next.status === "pending") {
-					timer = setTimeout(() => void tick(), POLL_INTERVAL_MS);
+				if (isPollingStatus(next.status)) {
+					scheduleNext(POLL_INTERVAL_MS);
 				}
-			} catch {
+			} catch (error) {
 				/* ignore transient errors; retry on next tick */
-				if (!cancelledRef.current) {
-					timer = setTimeout(() => void tick(), POLL_INTERVAL_MS);
-				}
+				if (disposed || (error instanceof Error && error.name === "AbortError")) return;
+				scheduleNext(retryDelayMs(retryCount));
+				retryCount += 1;
 			}
 		};
 
 		void tick();
 		return () => {
-			cancelledRef.current = true;
-			if (timer != null) clearTimeout(timer);
+			disposed = true;
+			clearTimer();
+			controller?.abort();
 		};
 	}, [agentId, displayName, task]);
 
@@ -175,7 +206,7 @@ export function SubagentLiveProgress({
 		snapshot?.displayName?.trim() || displayName?.trim() || deriveAgentDisplayName(liveTask);
 	const elapsed = snapshot?.elapsedMs ?? 0;
 	const usage = snapshot?.usage ?? null;
-	const isLive = status === "running" || status === "pending";
+	const isLive = isPollingStatus(status);
 	// Cast to `Route` because typedRoutes (enabled in next.config.ts) can't
 	// infer dynamic `?session=...&from=...` query strings; the path itself
 	// is "/" which IS a known route. Build-time error: TS2322 'string' is

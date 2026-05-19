@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { SubagentLiveProgress } from "@/components/chat/SubagentLiveProgress";
@@ -277,8 +277,32 @@ describe("Button", () => {
 
 describe("SubagentLiveProgress", () => {
 	afterEach(() => {
+		vi.useRealTimers();
 		vi.unstubAllGlobals();
 	});
+
+	function liveProgressPayload(status: "pending" | "running" | "completed" | "failed" | "cancelled") {
+		return {
+			ok: true,
+			data: {
+				displayName: "玄学出海研究",
+				task: "调研一下玄学出海这个赛道",
+				status,
+				streamedText:
+					status === "running" || status === "pending" ? "仍在整理资料" : "最终摘要已经完成",
+				elapsedMs: 1234,
+				usage: null,
+			},
+		};
+	}
+
+	async function flushEffects(): Promise<void> {
+		await act(async () => {
+			await Promise.resolve();
+			await Promise.resolve();
+			await Promise.resolve();
+		});
+	}
 
 	it("collapses completed snapshots to the header row", async () => {
 		vi.stubGlobal(
@@ -387,5 +411,111 @@ describe("SubagentLiveProgress", () => {
 		expect(container.querySelector(".q-subagent-live")?.getAttribute("data-expanded")).toBe(
 			"false",
 		);
+	});
+
+	it("stops polling once the subagent reaches a terminal status", async () => {
+		vi.useFakeTimers();
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValueOnce(Response.json(liveProgressPayload("running")))
+			.mockResolvedValueOnce(Response.json(liveProgressPayload("completed")));
+		vi.stubGlobal("fetch", fetchMock);
+
+		render(
+			<SubagentLiveProgress
+				agentId="subagent-a1b2c3d4"
+				displayName="玄学出海研究"
+				task="调研一下玄学出海这个赛道"
+			/>,
+		);
+
+		await flushEffects();
+		expect(screen.getByText("运行中 · running")).toBeInTheDocument();
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(1000);
+		});
+
+		await flushEffects();
+		expect(screen.getByText("已完成 · completed")).toBeInTheDocument();
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(5000);
+		});
+
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		fireEvent.click(screen.getByRole("button", { name: "展开" }));
+		expect(screen.getByText("最终摘要已经完成")).toBeInTheDocument();
+	});
+
+	it("aborts in-flight polling requests when the component unmounts", async () => {
+		let signal: AbortSignal | null = null;
+		const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
+			signal = init?.signal ?? null;
+			return new Promise<Response>(() => {
+				/* intentionally unresolved */
+			});
+		});
+		vi.stubGlobal("fetch", fetchMock);
+
+		const { unmount } = render(
+			<SubagentLiveProgress
+				agentId="subagent-a1b2c3d4"
+				displayName="玄学出海研究"
+				task="调研一下玄学出海这个赛道"
+			/>,
+		);
+
+		await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+		expect((signal as AbortSignal | null)?.aborted).toBe(false);
+
+		unmount();
+
+		expect((signal as AbortSignal | null)?.aborted).toBe(true);
+	});
+
+	it("backs off repeated network errors instead of polling every second forever", async () => {
+		vi.useFakeTimers();
+		const fetchMock = vi
+			.fn()
+			.mockRejectedValueOnce(new Error("network down"))
+			.mockRejectedValueOnce(new Error("still down"))
+			.mockResolvedValueOnce(Response.json(liveProgressPayload("completed")));
+		vi.stubGlobal("fetch", fetchMock);
+
+		render(
+			<SubagentLiveProgress
+				agentId="subagent-a1b2c3d4"
+				displayName="玄学出海研究"
+				task="调研一下玄学出海这个赛道"
+			/>,
+		);
+
+		await flushEffects();
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(999);
+		});
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(1);
+		});
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(1999);
+		});
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(1);
+		});
+		await flushEffects();
+		expect(screen.getByText("已完成 · completed")).toBeInTheDocument();
+		expect(fetchMock).toHaveBeenCalledTimes(3);
 	});
 });

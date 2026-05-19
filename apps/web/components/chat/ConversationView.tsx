@@ -47,6 +47,20 @@ interface QueuedUserMessage {
 	readonly text: string;
 }
 
+interface HydratedSessionState {
+	readonly sessionId: string;
+	readonly hydrated: boolean;
+	readonly messages?: readonly UIMessage[];
+}
+
+interface SessionMessagesResponse {
+	readonly messages?: ReadonlyArray<{
+		readonly id: string;
+		readonly role: string;
+		readonly parts: readonly unknown[];
+	}>;
+}
+
 function extractSpawnedSubagent(
 	p: RawPart,
 ): { readonly agentId: string; readonly displayName: string; readonly task: string } | null {
@@ -80,6 +94,71 @@ function isSubagentId(id: string): boolean {
 	return id.startsWith("subagent-");
 }
 
+async function fetchPersistedSessionMessages(
+	sessionId: string,
+): Promise<readonly UIMessage[] | null> {
+	const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
+		cache: "no-store",
+	});
+	if (!res.ok) return null;
+	const body = (await res.json()) as SessionMessagesResponse;
+	const fetched = body.messages;
+	if (!Array.isArray(fetched) || fetched.length === 0) return null;
+	return fetched.map((m) => ({
+		id: m.id,
+		role: m.role,
+		parts: m.parts,
+	})) as readonly UIMessage[];
+}
+
+function hasRenderableAssistant(messages: readonly UIMessage[]): boolean {
+	return messages.some((message) => {
+		if (message.role !== "assistant") return false;
+		const parts = (message.parts ?? []) as readonly RawPart[];
+		return parts.some((part) => {
+			if (part.type === "text") return typeof part.text === "string" && part.text.length > 0;
+			return part.type.startsWith("tool-") || part.type === "dynamic-tool";
+		});
+	});
+}
+
+function transcriptWeight(messages: readonly UIMessage[]): number {
+	let score = messages.length * 1000;
+	for (const message of messages) {
+		for (const part of (message.parts ?? []) as readonly RawPart[]) {
+			score += 10;
+			if (part.type === "text" && typeof part.text === "string") score += part.text.length;
+			if (part.type.startsWith("tool-") || part.type === "dynamic-tool") {
+				score += part.state === "output-available" || part.state === "output-error" ? 100 : 20;
+				if (part.output !== undefined) score += 50;
+				if (part.errorText) score += 50;
+			}
+		}
+	}
+	return score;
+}
+
+function transcriptSignature(messages: readonly UIMessage[]): string {
+	return JSON.stringify(
+		messages.map((message) => ({
+			id: message.id,
+			role: message.role,
+			parts: message.parts ?? [],
+		})),
+	);
+}
+
+function shouldUsePersistedMessages(
+	current: readonly UIMessage[],
+	persisted: readonly UIMessage[],
+): boolean {
+	if (persisted.length === 0) return false;
+	if (transcriptSignature(current) === transcriptSignature(persisted)) return false;
+	if (current.length === 0) return true;
+	if (hasRenderableAssistant(persisted) && !hasRenderableAssistant(current)) return true;
+	return transcriptWeight(persisted) >= transcriptWeight(current);
+}
+
 /**
  * Client-side conversation view backed by AI SDK v6 `useChat`.
  *
@@ -93,18 +172,14 @@ export function ConversationView({
 	initialMessage,
 	parentSessionId,
 }: ConversationViewProps) {
-	const [hydrated, setHydrated] = useState(false);
-	const [storedMessages, setStoredMessages] = useState<readonly UIMessage[] | undefined>(undefined);
+	const [sessionState, setSessionState] = useState<HydratedSessionState>({
+		sessionId,
+		hydrated: false,
+	});
 
 	useEffect(() => {
 		if (isSubagentId(sessionId)) {
-			setHydrated(true);
-			return;
-		}
-		const stored = loadSession(sessionId);
-		if (stored != null && stored.messages.length > 0) {
-			setStoredMessages(stored.messages);
-			setHydrated(true);
+			setSessionState({ sessionId, hydrated: true });
 			return;
 		}
 		// Slice 3 restart recovery: localStorage doesn't have this session
@@ -115,45 +190,36 @@ export function ConversationView({
 		// Slice 3 重启恢复:本地缓存没有该 session(清缓存 / 跨浏览器 / 首次访问)→
 		// fallback 到服务端 `/api/sessions/[id]`,从 SQLite 持久化恢复历史。
 		let cancelled = false;
+		setSessionState({ sessionId, hydrated: false });
 		(async () => {
+			const stored = loadSession(sessionId);
 			try {
-				const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
-					cache: "no-store",
-				});
-				if (!res.ok || cancelled) {
-					setHydrated(true);
+				const fetched = await fetchPersistedSessionMessages(sessionId);
+				if (cancelled) return;
+				if (fetched != null) {
+					setSessionState({ sessionId, hydrated: true, messages: fetched });
 					return;
 				}
-				const body = (await res.json()) as {
-					readonly messages?: ReadonlyArray<{
-						readonly id: string;
-						readonly role: string;
-						readonly parts: readonly unknown[];
-					}>;
-				};
-				const fetched = body.messages;
-				if (cancelled) return;
-				if (Array.isArray(fetched) && fetched.length > 0) {
-					setStoredMessages(
-						fetched.map((m) => ({
-							id: m.id,
-							role: m.role,
-							parts: m.parts,
-						})) as readonly UIMessage[],
-					);
+				if (stored != null && stored.messages.length > 0) {
+					setSessionState({ sessionId, hydrated: true, messages: stored.messages });
+					return;
 				}
 			} catch {
-				// network failure / API down — fall through to fresh-start UI
-			} finally {
-				if (!cancelled) setHydrated(true);
+				// network failure / API down — fall back to browser-local cache
+				if (cancelled) return;
+				if (stored != null && stored.messages.length > 0) {
+					setSessionState({ sessionId, hydrated: true, messages: stored.messages });
+					return;
+				}
 			}
+			if (!cancelled) setSessionState({ sessionId, hydrated: true });
 		})();
 		return () => {
 			cancelled = true;
 		};
 	}, [sessionId]);
 
-	if (!hydrated) {
+	if (!sessionState.hydrated || sessionState.sessionId !== sessionId) {
 		// Same shape on server + first client render → no hydration mismatch
 		return (
 			<main className="q-workspace">
@@ -170,9 +236,10 @@ export function ConversationView({
 
 	return (
 		<ChatBody
+			key={sessionId}
 			sessionId={sessionId}
 			initialMessage={initialMessage}
-			storedMessages={storedMessages}
+			storedMessages={sessionState.messages}
 		/>
 	);
 }
@@ -240,12 +307,21 @@ function ChatBody({
 			}),
 		[],
 	);
-	const { messages, sendMessage, status, resumeStream } = useChat({
+	const syncPersistedMessagesRef = useRef<(reason: string) => Promise<void>>(async () => {});
+	const { messages, setMessages, sendMessage, status, resumeStream, stop } = useChat({
 		id: sessionId,
 		messages: storedMessages ? [...storedMessages] : undefined,
 		transport,
+		onFinish: () => {
+			void syncPersistedMessagesRef.current("finish");
+		},
+		onError: () => {
+			void syncPersistedMessagesRef.current("error");
+		},
 	});
-	const streaming = status === "submitted" || status === "streaming";
+	const rawStreaming = status === "submitted" || status === "streaming";
+	const [serverTerminal, setServerTerminal] = useState(false);
+	const streaming = rawStreaming && !serverTerminal;
 	const activeRunRef = useRef(streaming);
 	const queuedIdRef = useRef(0);
 	const [queuedSends, setQueuedSends] = useState<readonly QueuedUserMessage[]>([]);
@@ -253,6 +329,81 @@ function ChatBody({
 	useEffect(() => {
 		activeRunRef.current = streaming;
 	}, [streaming]);
+
+	const syncPersistedMessages = useCallback(
+		async (_reason: string): Promise<void> => {
+			try {
+				const fetched = await fetchPersistedSessionMessages(sessionId);
+				if (fetched == null) return;
+				setMessages((current) => {
+					if (!shouldUsePersistedMessages(current, fetched)) return current;
+					return [...fetched];
+				});
+				saveSession({ id: sessionId, messages: fetched });
+			} catch {
+				// Persistence sync is a recovery path; keep the live stream UI if it fails.
+			}
+		},
+		[sessionId, setMessages],
+	);
+
+	useEffect(() => {
+		syncPersistedMessagesRef.current = syncPersistedMessages;
+	}, [syncPersistedMessages]);
+
+	useEffect(() => {
+		if (status !== "ready" && status !== "error") return;
+		void syncPersistedMessages(`status:${status}`);
+	}, [status, syncPersistedMessages]);
+
+	useEffect(() => {
+		if (!rawStreaming || serverTerminal) return;
+		let cancelled = false;
+		const poll = async (): Promise<void> => {
+			try {
+				const res = await fetch(`/api/chat/status?session=${encodeURIComponent(sessionId)}`, {
+					cache: "no-store",
+				});
+				if (!res.ok || cancelled) return;
+				const body = (await res.json()) as {
+					readonly ok: boolean;
+					readonly data?: {
+						readonly exists: boolean;
+						readonly status: string | null;
+						readonly epoch?: string;
+					};
+				};
+				if (!body.ok || body.data == null || cancelled) return;
+				if (typeof body.data.epoch === "string" && body.data.epoch.length > 0) {
+					writePersistedEpoch(body.data.epoch);
+				}
+				if (
+					body.data.exists &&
+					(body.data.status === "completed" ||
+						body.data.status === "failed" ||
+						body.data.status === "cancelled")
+				) {
+					await syncPersistedMessages(`server:${body.data.status}`);
+					if (cancelled) return;
+					activeRunRef.current = false;
+					setServerTerminal(true);
+					void stop().catch(() => {
+						/* active stream may already be closed */
+					});
+				}
+			} catch {
+				/* best-effort watchdog */
+			}
+		};
+		void poll();
+		const handle = window.setInterval(() => {
+			void poll();
+		}, 1500);
+		return () => {
+			cancelled = true;
+			window.clearInterval(handle);
+		};
+	}, [rawStreaming, serverTerminal, sessionId, stop, syncPersistedMessages]);
 
 	// Mount hook:
 	//   1. Probe `/api/chat/status` to learn the server's current epoch
