@@ -15,7 +15,7 @@
  */
 
 import { readMcpConfig } from "@/lib/mcp-loader";
-import { getToolsCatalog, invalidateToolsCatalog } from "@/lib/tools-loader";
+import { peekToolsCatalogState, refreshToolsCatalog } from "@/lib/tools-loader";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -66,6 +66,21 @@ interface ServerToolSummary {
 	readonly description: string;
 }
 
+interface McpCatalogCounts {
+	readonly total: number;
+	readonly connected: number;
+	readonly failed: number;
+	readonly skipped: number;
+	readonly totalTools: number;
+}
+
+interface McpServerResult {
+	readonly id: string;
+	readonly transport: "stdio" | "http";
+	readonly toolCount: number;
+	readonly error: string | null;
+}
+
 export interface McpServerView {
 	readonly id: string;
 	readonly transport: "stdio" | "http";
@@ -82,37 +97,47 @@ export interface McpServerView {
 	readonly tools: readonly ServerToolSummary[];
 }
 
+interface McpCatalogData {
+	readonly servers: readonly McpServerView[];
+	readonly counts: McpCatalogCounts;
+	readonly refreshing: boolean;
+	readonly stale: boolean;
+	readonly refreshedAt: string | null;
+	readonly refreshError: string | null;
+}
+
+interface McpOkEnvelope {
+	readonly ok: true;
+	readonly data: McpCatalogData;
+}
+
 export async function GET(req: Request): Promise<Response> {
 	try {
 		const config = readMcpConfig();
-		// `?refresh=1` (or `?refresh=true`) tears down active MCP stdio
-		// subprocesses and forces a full catalog rebuild on the next
-		// `getToolsCatalog()` call. Wired to the "↻ 重新加载" button on
-		// /mcp so the operator can pick up MCP tool additions
-		// (`@server.tool` decorators in providers/memory/src/quilin_mem)
-		// without restarting `pnpm dev`. Without this flag, the cached
-		// catalog stays sticky and new tools never appear.
 		const refreshParam = new URL(req.url).searchParams.get("refresh");
-		if (refreshParam === "1" || refreshParam === "true") {
-			await invalidateToolsCatalog();
+		const initialState = peekToolsCatalogState();
+		if (refreshParam === "1" || refreshParam === "true" || initialState.catalog == null) {
+			void refreshToolsCatalog();
 		}
-		const catalog = await getToolsCatalog();
+		const catalogState = peekToolsCatalogState();
+		const catalog = catalogState.catalog;
 
 		const toolsByServer = new Map<string, ServerToolSummary[]>();
-		for (const entry of catalog.entries) {
-			if (entry.source !== "mcp" || entry.mcpServer == null) continue;
-			const bucket = toolsByServer.get(entry.mcpServer) ?? [];
-			bucket.push({
-				publicName: entry.publicName,
-				originalName: entry.originalName,
-				description: entry.description,
-			});
-			toolsByServer.set(entry.mcpServer, bucket);
-		}
-
-		const resultById = new Map<string, (typeof catalog.mcpResults)[number]>();
-		for (const r of catalog.mcpResults) {
-			resultById.set(r.id, r);
+		const resultById = new Map<string, McpServerResult>();
+		if (catalog != null) {
+			for (const entry of catalog.entries) {
+				if (entry.source !== "mcp" || entry.mcpServer == null) continue;
+				const bucket = toolsByServer.get(entry.mcpServer) ?? [];
+				bucket.push({
+					publicName: entry.publicName,
+					originalName: entry.originalName,
+					description: entry.description,
+				});
+				toolsByServer.set(entry.mcpServer, bucket);
+			}
+			for (const r of catalog.mcpResults) {
+				resultById.set(r.id, r);
+			}
 		}
 
 		const servers: readonly McpServerView[] = Object.entries(config).map(([id, raw]) => {
@@ -120,7 +145,8 @@ export async function GET(req: Request): Promise<Response> {
 			const result = resultById.get(id);
 			const tools = toolsByServer.get(id) ?? [];
 			let status: McpServerView["status"];
-			if (result == null) status = "skipped";
+			if (catalog == null) status = "skipped";
+			else if (result == null) status = "skipped";
 			else if (result.error == null) status = "connected";
 			else status = "failed";
 
@@ -141,22 +167,35 @@ export async function GET(req: Request): Promise<Response> {
 			};
 		});
 
-		return Response.json(
-			{
-				ok: true,
-				data: {
-					servers,
-					counts: {
+		const counts: McpCatalogCounts =
+			catalog == null
+				? {
+						total: servers.length,
+						connected: 0,
+						failed: 0,
+						skipped: servers.length,
+						totalTools: 0,
+					}
+				: {
 						total: servers.length,
 						connected: servers.filter((s) => s.status === "connected").length,
 						failed: servers.filter((s) => s.status === "failed").length,
 						skipped: servers.filter((s) => s.status === "skipped").length,
 						totalTools: catalog.entries.filter((e) => e.source === "mcp").length,
-					},
-				},
+					};
+
+		const body: McpOkEnvelope = {
+			ok: true,
+			data: {
+				servers,
+				counts,
+				refreshing: catalogState.refreshing,
+				stale: catalogState.stale,
+				refreshedAt: catalogState.refreshedAt,
+				refreshError: catalogState.refreshError,
 			},
-			{ headers: { "cache-control": "no-store" } },
-		);
+		};
+		return Response.json(body, { headers: { "cache-control": "no-store" } });
 	} catch (e) {
 		const msg = e instanceof Error ? e.message : String(e);
 		console.log(`[/api/mcp] failed: ${msg}`);

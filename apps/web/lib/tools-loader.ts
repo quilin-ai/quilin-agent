@@ -74,6 +74,14 @@ export interface ToolsCatalog {
 	readonly rawTools: readonly AgentCoreToolExecutable[];
 }
 
+export interface ToolsCatalogState {
+	readonly catalog: ToolsCatalog | null;
+	readonly refreshing: boolean;
+	readonly stale: boolean;
+	readonly refreshedAt: string | null;
+	readonly refreshError: string | null;
+}
+
 interface AutoReloadWatcher {
 	readonly close: () => void;
 }
@@ -92,6 +100,8 @@ declare global {
 	 * the work.
 	 */
 	var __quilin_tools_catalog_inflight__: Promise<ToolsCatalog> | undefined;
+	var __quilin_tools_catalog_refreshed_at__: string | undefined;
+	var __quilin_tools_catalog_refresh_error__: string | undefined;
 	/**
 	 * Active MCPRegistry instance. Stored separately so `invalidateToolsCatalog`
 	 * can call `disconnectAll()` on it to terminate stdio subprocesses
@@ -365,6 +375,23 @@ export async function invalidateToolsCatalog(): Promise<void> {
 	}
 }
 
+export function peekToolsCatalogState(): ToolsCatalogState {
+	const catalog = globalThis.__quilin_tools_catalog__ ?? null;
+	const refreshing = globalThis.__quilin_tools_catalog_inflight__ != null;
+	const refreshError = globalThis.__quilin_tools_catalog_refresh_error__ ?? null;
+	return {
+		catalog,
+		refreshing,
+		stale: catalog != null && (refreshing || refreshError != null),
+		refreshedAt: globalThis.__quilin_tools_catalog_refreshed_at__ ?? null,
+		refreshError,
+	};
+}
+
+export function refreshToolsCatalog(): Promise<ToolsCatalog> {
+	return startToolsCatalogBuild();
+}
+
 export async function getToolsCatalog(): Promise<ToolsCatalog> {
 	const cached = globalThis.__quilin_tools_catalog__;
 	// Hot-reload during dev can leave a cache from a previous catalog
@@ -373,25 +400,27 @@ export async function getToolsCatalog(): Promise<ToolsCatalog> {
 	if (cached != null && cached.rawTools != null) {
 		return cached;
 	}
-	// Coalesce concurrent first-hit callers onto a single in-flight
-	// build so we don't spawn duplicate MCP registries (one stdio
-	// subprocess per server, per duplicate registry).
+	return startToolsCatalogBuild();
+}
+
+function startToolsCatalogBuild(): Promise<ToolsCatalog> {
 	const inflight = globalThis.__quilin_tools_catalog_inflight__;
 	if (inflight != null) {
 		return inflight;
 	}
 	const buildPromise = buildToolsCatalog();
 	globalThis.__quilin_tools_catalog_inflight__ = buildPromise;
-	try {
-		const catalog = await buildPromise;
-		return catalog;
-	} finally {
-		// Clear the in-flight handle regardless of outcome. On success
-		// the cache is populated; on failure the next caller retries.
-		if (globalThis.__quilin_tools_catalog_inflight__ === buildPromise) {
-			globalThis.__quilin_tools_catalog_inflight__ = undefined;
-		}
-	}
+	void buildPromise
+		.catch((e) => {
+			globalThis.__quilin_tools_catalog_refresh_error__ =
+				e instanceof Error ? e.message : String(e);
+		})
+		.finally(() => {
+			if (globalThis.__quilin_tools_catalog_inflight__ === buildPromise) {
+				globalThis.__quilin_tools_catalog_inflight__ = undefined;
+			}
+		});
+	return buildPromise;
 }
 
 async function buildToolsCatalog(): Promise<ToolsCatalog> {
@@ -418,6 +447,7 @@ async function buildToolsCatalog(): Promise<ToolsCatalog> {
 
 	let mcpTools: readonly AgentCoreToolMetadata[] = [];
 	let mcpResults: readonly MCPServerResult[] = [];
+	const previousRegistry = globalThis.__quilin_mcp_registry__;
 	try {
 		const { registry, results } = await loadMcpRegistry(
 			mod as unknown as Parameters<typeof loadMcpRegistry>[0],
@@ -464,6 +494,17 @@ async function buildToolsCatalog(): Promise<ToolsCatalog> {
 		rawTools: allTools as unknown as readonly AgentCoreToolExecutable[],
 	};
 	globalThis.__quilin_tools_catalog__ = catalog;
+	globalThis.__quilin_tools_catalog_refreshed_at__ = new Date().toISOString();
+	globalThis.__quilin_tools_catalog_refresh_error__ = undefined;
+	const nextRegistry = globalThis.__quilin_mcp_registry__;
+	if (previousRegistry != null && previousRegistry !== nextRegistry) {
+		try {
+			await previousRegistry.disconnectAll();
+		} catch {
+			// Disconnecting the old registry is best-effort. If teardown
+			// fails the new registry is already live, so we keep going.
+		}
+	}
 	// First-build moment is the right place to attach the auto-watcher:
 	// we know paths exist, dev server is up, and the user has just
 	// kicked the catalog into life. `ensureMcpSourceWatcher` is
