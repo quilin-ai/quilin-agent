@@ -168,6 +168,8 @@ export default function McpPage() {
 											borderBottom: "1px solid var(--border)",
 											marginBottom: 8,
 											paddingBottom: 8,
+											minWidth: 0,
+											overflow: "hidden",
 										}}
 									>
 										<button
@@ -178,11 +180,16 @@ export default function McpPage() {
 											style={{
 												textAlign: "left",
 												width: "100%",
+												minWidth: 0,
+												maxWidth: "100%",
 												background: expanded ? "var(--bg-elev)" : "transparent",
 												border: "none",
 												cursor: "pointer",
 												padding: "10px 12px",
 												display: "block",
+												overflow: "hidden",
+												overflowWrap: "anywhere",
+												wordBreak: "break-word",
 											}}
 										>
 											<div
@@ -191,6 +198,7 @@ export default function McpPage() {
 													gap: 12,
 													alignItems: "baseline",
 													flexWrap: "wrap",
+													minWidth: 0,
 												}}
 											>
 												<span
@@ -199,7 +207,10 @@ export default function McpPage() {
 														fontSize: 13,
 														color: "var(--fg)",
 														fontWeight: 600,
-														minWidth: 180,
+														minWidth: 0,
+														maxWidth: "100%",
+														overflowWrap: "anywhere",
+														wordBreak: "break-word",
 													}}
 												>
 													{server.id}
@@ -245,7 +256,11 @@ export default function McpPage() {
 														color: "var(--fg-muted)",
 														background: "transparent",
 														borderLeft: "2px solid var(--border)",
-														wordBreak: "break-word",
+														minWidth: 0,
+														maxWidth: "100%",
+														overflowWrap: "anywhere",
+														wordBreak: "break-all",
+														whiteSpace: "pre-wrap",
 													}}
 												>
 													{server.error}
@@ -261,6 +276,10 @@ export default function McpPage() {
 														fontSize: 10,
 														color: "var(--fg-muted)",
 														lineHeight: 1.7,
+														minWidth: 0,
+														maxWidth: "100%",
+														overflowWrap: "anywhere",
+														wordBreak: "break-all",
 													}}
 												>
 													<div style={{ marginBottom: 8, opacity: 0.7 }}>configuration:</div>
