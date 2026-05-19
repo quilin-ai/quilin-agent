@@ -45,8 +45,10 @@ impl ProcessSupervisor {
         // macOS app 启动时 PATH 很精简，手动补充常见的包管理器路径
         let base_path = std::env::var("PATH").unwrap_or_default();
         let extended_path = format!(
-            "{}:{}/.bun/bin:/usr/local/bin:/opt/homebrew/bin",
+            "{}:{}/.bun/bin:{}/.local/bin:{}/.cargo/bin:/usr/local/bin:/opt/homebrew/bin",
             base_path,
+            std::env::var("HOME").unwrap_or_default(),
+            std::env::var("HOME").unwrap_or_default(),
             std::env::var("HOME").unwrap_or_default()
         );
 
