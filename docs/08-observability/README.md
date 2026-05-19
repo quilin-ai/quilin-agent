@@ -1,9 +1,9 @@
 # 可观测性工程（Observability Engineering）
 
-> **实现状态（2026-04-30 校准）**
-> - ✅ **已实现**：JSON structured logger、`packages/agent-core/src/observability/` in-memory span provider、loop span instrumentation、JSON file span exporter、trace/log context、Python quilin-mem event_log traceparent ingest + retrieval event dual-emit、benchmark cost/result wire integration。
-> - 🚧 **部分实现 / 延期**：OTel-compatible schema 与 exporter 基础已落地，但不是完整 OpenTelemetry SDK 接入；WebUI Dashboard 未实现。
-> - Linear 后续项：[QUI-20](https://linear.app/quilin-agent/issue/QUI-20/08-observability-metrics-exporter-dashboard-and-trace-backend)。
+> **实现状态（2026-05-20 校准）**
+> - ✅ **已实现**：JSON structured logger、`packages/agent-core/src/observability/` in-memory span provider、loop span instrumentation、JSON file span exporter、trace/log context、Python quilin-mem event_log traceparent ingest + retrieval event dual-emit、benchmark cost/result wire integration、SQLite 持久化 observability DB、Control Plane API（`/snapshot` / `/sessions` / `/traces`）、**WebUI Dashboard 7 个面板全部接通真实数据源**（tasks / memory / tools 通过 `dashboardRuntimeRefs` 晚绑定到 REPL 内的 `MCPRegistry` / `SupervisorRuntimeControlPlane` / `LocalMemoryBackend`，见 §2.1.1 与 `packages/agent-core/src/observability/dashboard-runtime-providers.ts`）。
+> - 🚧 **部分实现 / 延期**：OTel-compatible schema 与 exporter 基础已落地，但不是完整 OpenTelemetry SDK 接入（无 OTLP 导出 / 无 Langfuse 后端）；IM 通道主动进度推送仍为设计。
+> - Plane 后续项：[QUI-20](https://plane.so/quilin-agent/projects)（metrics exporter / dashboard / trace backend 完整化）、[QUI-173](https://plane.so/quilin-agent/projects)（OTel GenAI conventions + Langfuse self-host + NAPI-RS）。
 
 > 本文档是 Quilin Agent 工程规格系列的第 8 篇，定义可观测性层的设计方案、参考来源与验证标准。可观测性是横切所有层的基础能力，为追踪、指标和日志提供统一基础设施。
 >

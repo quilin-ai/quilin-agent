@@ -81,6 +81,42 @@ Current local evidence from 2026-05-07 commands:
 - `rg --files providers/memory/benchmarks | wc -l` reports 4 memory benchmark harness files.
 - `rg --files providers/memory/benchmarks | wc -l` 报告 4 个 memory benchmark harness 文件。
 
+### 2026-05-20 实证刷新 / 2026-05-20 Evidence Refresh
+
+After Iter F web close-out (2026-05-15) and Iter J 5/5 close-out (2026-05-18), the working tree at commit `dfe85ad` (2026-05-18 19:45) shows the following deltas relative to the 2026-05-07 snapshot:
+
+经过 Iter F web 收尾（2026-05-15）与 Iter J 5/5 收尾（2026-05-18），当前工作树（commit `dfe85ad`，2026-05-18 19:45）相对 2026-05-07 快照的差异如下：
+
+- `rg --files packages/agent-core/src -g '*.ts' | wc -l` reports **405** TypeScript source files (up from 258, +57%).
+- `rg --files packages/agent-core/src -g '*.ts' | wc -l` 报告 **405** 个 TypeScript 源文件（原 258 个，+57%）。
+- `rg --files packages/agent-core -g '*.test.ts' | wc -l` reports **186** test files (up from 129, +44%).
+- `rg --files packages/agent-core -g '*.test.ts' | wc -l` 报告 **186** 个测试文件（原 129 个，+44%）。
+- `wc -l packages/agent-core/src/loop.ts + loop-tool-calls.ts + loop-types.ts` reports **1,198** LOC (517 + 565 + 116, up from 1,102).
+- `wc -l packages/agent-core/src/loop.ts + loop-tool-calls.ts + loop-types.ts` 报告 **1,198** LOC（517 + 565 + 116，原 1,102）。
+- `rg --files providers/memory/src providers/memory/tests -g '*.py' | wc -l` reports **62** Python files (up from 55).
+- `rg --files providers/memory/src providers/memory/tests -g '*.py' | wc -l` 报告 **62** 个 Python 文件（原 55 个）。
+- `rg --files crates -g '*.rs' -g 'Cargo.toml' | wc -l` reports **7** entries: `mesh-sdk` (3) + new **`quilin-bridge`** (4: `Cargo.toml`, `src/lib.rs`, `src/supervisor.rs`, `src/bin/uniffi-bindgen.rs`). The Mac-native bridge is currently `untracked` in git; tracking issue is [QUI-179](https://plane.so/quilin-agent/projects).
+- `rg --files crates -g '*.rs' -g 'Cargo.toml' | wc -l` 报告 **7** 个条目：`mesh-sdk`（3）+ 新增 **`quilin-bridge`**（4 个文件：`Cargo.toml`、`src/lib.rs`、`src/supervisor.rs`、`src/bin/uniffi-bindgen.rs`）。Mac 原生桥目前在 git 中是 `untracked` 状态，跟踪 issue 为 [QUI-179](https://plane.so/quilin-agent/projects)。
+- `git log --since='30 days ago' --oneline | wc -l` reports **538** commits in the last 30 days.
+- `git log --since='30 days ago' --oneline | wc -l` 报告过去 30 天共 **538** 个 commit。
+- `benchmarks/` and `providers/memory/benchmarks/` file counts are unchanged (62 + 4), consistent with the Benchmark freeze.
+- `benchmarks/` 与 `providers/memory/benchmarks/` 文件数量保持不变（62 + 4），与基准冻结一致。
+
+The growth concentrates in Iter F web (chat persistence + interaction primitives + UX-4 KG rebuild + hot reload) and Iter J (MCP Stage 2 + progressive disclosure + integrations detection + Quilin-as-server Stage 3 skeleton). The `<200 LOC` Core Loop contract is now formally broken; loop体系 spans 1,198 LOC across 3 files.
+
+增长集中在 Iter F web（聊天持久化 + 交互 primitives + UX-4 KG 重做 + 热重载）与 Iter J（MCP Stage 2 + 渐进披露 + integrations detection + Quilin-as-server Stage 3 骨架）。`<200 LOC` Core Loop 契约正式被打破；整个 loop 体系横跨 3 个文件，共 1,198 LOC。
+
+Planning artifacts not previously indexed in this STATUS or in component READMEs:
+
+之前未在本 STATUS 与组件 README 中索引的规划产物：
+
+- `docs/research/2026-05-13-sota-survey/` — 2026-05 SOTA 调研集合（前沿 agent 项目对照）。Git 状态：`untracked`。
+- `docs/research/2026-05-13-sota-survey/` — 2026-05 SOTA research collection (frontier agent project comparison). Git status: `untracked`.
+- `docs/research/2026-05-18-quilin-as-server/` — Quilin 作为 MCP server 的 Stage 3 设计调研，对应 QUI-171。Git 状态：已 tracked，但尚未在 STATUS 中索引。
+- `docs/research/2026-05-18-quilin-as-server/` — Quilin-as-MCP-server Stage 3 design research, paired with QUI-171. Git status: tracked, but not previously indexed in STATUS.
+- `crates/quilin-bridge/` — **Mac 客户端连接 agent server 的 Rust↔Swift 桥**（UniFFI 0.28 生成 Swift 绑定），编译成 `libquilin_bridge.dylib` 后链接进独立仓库 `~/repo/quilin-agent-mac-app`（Mac UI 壳，开发中）。Mac 客户端在架构上和 web 客户端等价：都是壳，都连同一个 quilin-agent server。当前 git 中尚未提交：`Cargo.toml` 已加 `quilin-bridge` 进 workspace `members`（未提交修改），`Cargo.lock` 已多 ~670 行 UniFFI 依赖链（未提交修改），`crates/quilin-bridge/` 源码目录尚未 `git add`。方向已收敛为正式入库（不是实验），由 [QUI-179](https://plane.so/quilin-agent/projects) 跟踪 commit 时机与 09 Deployment Runtime 文档章节安排。
+- `crates/quilin-bridge/` — **Rust↔Swift bridge connecting the Mac client to the agent server** (UniFFI 0.28 generates the Swift binding), compiled to `libquilin_bridge.dylib` and linked into the separate repo `~/repo/quilin-agent-mac-app` (Mac UI shell, in development). The Mac client is architecturally peer with the web client: both are thin shells connecting to the same quilin-agent server. Not yet committed to git: `Cargo.toml` has `quilin-bridge` added to workspace `members` (uncommitted change), `Cargo.lock` has ~670 lines of UniFFI dependency chain (uncommitted change), `crates/quilin-bridge/` source tree is not yet `git add`-ed. Direction has converged to formal inclusion (not exploration); [QUI-179](https://plane.so/quilin-agent/projects) tracks commit timing and the 09 Deployment Runtime documentation section.
+
 Plane has been updated to match this freeze: the `Iter E 基准冲刺 / Benchmark Ascent` project is `Canceled` and `Low`; unfinished Benchmark issues `QUI-6`, `QUI-7`, `QUI-8`, `QUI-43`, `QUI-47`, and `QUI-70` are `Canceled` and `Low`. The available Plane MCP exposes cancel/update rather than hard-delete, so cancellation is the active-queue removal mechanism used for this session.
 
 Plane 已同步这次冻结：`Iter E 基准冲刺 / Benchmark Ascent` project 已标记为 `Canceled` 与 `Low`；未完成 Benchmark issue `QUI-6`、`QUI-7`、`QUI-8`、`QUI-43`、`QUI-47`、`QUI-70` 已标记为 `Canceled` 与 `Low`。本 session 可用的 Plane MCP 暴露 cancel/update 而不是 hard-delete，因此本次用取消作为移出活跃队列的机制。
@@ -151,7 +187,7 @@ The cross-review posture is now: benchmark（standardized capability evaluation�
 
 | 组件 | 状态 |
 |---|---|
-| [00 Core Loop](00-core-loop/README.md) | 自研 TS loop 体系 1,102 LOC；实时追加输入、`/resume` + `/resume latest` 会话恢复、auto-checkpoint recovery 已实现；hook 体系（onTurnComplete/onIdle/onToolResult/onAssistantMessage）完善。 |
+| [00 Core Loop](00-core-loop/README.md) | 自研 TS loop 体系 1,198 LOC（`loop.ts` 517 + `loop-tool-calls.ts` 565 + `loop-types.ts` 116，2026-05-20 实证）；实时追加输入、`/resume` + `/resume latest` 会话恢复、auto-checkpoint recovery 已实现；hook 体系（onTurnComplete/onIdle/onToolResult/onAssistantMessage）完善。 |
 | [01 LLM Integration](01-llm-integration/README.md) | AI SDK v6 client、`ThinkingMode`、provider-aware options、reasoning/tool stream extraction、cache usage basics 已实现；DeepSeek 全链路完整；Provider live matrix 已实现（API Key/OAuth 凭证状态，脱敏）；Anthropic/OpenAI/Gemini provider 均为 blocked/candidate。 |
 | [02 Context](02-context/README.md) | Prompt/session assembly、token budgeting、temporal awareness、memory bridge、injection scanner、skills catalog/restore wiring、compression、cache stability、Conversation Engineering 6 层架构 + 7 种预设风格已实现。 |
 | [03 Memory](03-memory/README.md) | quilin-mem MCP（断连自动重连）、四层 memory、SQLite/FTS5+Bun 内置后端、KG/vector retrieval hooks、profile store、scratchpad、consolidator auto_schedule、L3a observer（flash 驱动）激活、user.md 自动同步。**2026-05-15 新增**：UX-4 KG 重做 4 slice 全 ship（`kg_extractor.py` LLM 三元组抽取 + `memory_backfill_kg` MCP + `/api/memory/graph` reactflow viz + `consolidation_log` SQLite + timeline UI），`memory_delete` 工具供 agent 清理重复记忆，profile self-evolution（user.md/soul.md 自动追加观察）+ 纯 markdown 迁移 + 跨语言 file lock（fcntl + proper-lockfile）。 |
@@ -161,7 +197,7 @@ The cross-review posture is now: benchmark（standardized capability evaluation�
 | [07 Safety Guardrails](07-safety-guardrails/README.md) | auto 默认模式（低中风险自动批）、`--yolo` 全自动、四级 WriteAuthority（auto/ask/yolo/read_only）、ActionVerifier、MetaVerifier、secret redaction、SSRF guard。**2026-05-15 新增**：交互 primitives wire-driven WriteAuthority（升级 readline-only → 跨前端 web/TUI 统一）；Path B server-side gate `wrapToolWithApproval` 已 wrap `shell_exec`，per-session 白名单（high/critical 永不可白名单化）、per-ask 128-bit capability token auth（task #15）、defensive truncate（MAX_SUMMARY=1000, MAX_DETAIL=4000）。spec 见 `docs/07-safety-guardrails/interaction-primitives-spec.md`（已 ✅）。 |
 | [08 Observability](08-observability/README.md) | Span/Metrics/Logs、Prometheus、JSON file exporter、SQLite 持久化 observability DB、Web Dashboard（/dashboard HTML 看板 + Web Chat）、Control Plane API（/snapshot、/sessions、/traces）。 |
 | [09 Deployment Runtime](09-deployment-runtime/README.md) | CLI（`quilin config show/set/service install`）、TOML config cascade、hot reload、first-run welcome、`/resume` + `/resume latest`、`/mcp`、systemd/launchd 开机自启、soul.md/user.md 配置文件。 |
-| [10 Self-Evolution](10-self-evolution/README.md) | Trajectory store、failure analyzer、patch proposal、proposal store（approve/reject/apply）、offline optimizer（runOptimizationCycle）、idle runner（每日配额控制）、content hash 等已实现；完整 trajectory→patch→proposal 闭环已串联到 main loop。 |
+| [10 Self-Evolution](10-self-evolution/README.md) | `self-evolution/` 14 个 TS 文件已落地（trajectory-store / failure-analyzer / patch-proposal / proposal-store / offline-optimizer / sanitize / jsonl-path / hash），`skill_manage` + WriteAuthority、ProfileStore/Updater、idle runner（每日配额控制）已就绪；🚧 Offline Optimizer 仍为 `local-noop`，**完整 trajectory→patch→人工审核闭环尚未串通**（基础设施已就绪，人工审核环节待接，见 QUI-12 / QUI-94），idle_evolution 运行时激活待验证。以 docs/10-self-evolution/README.md 自评为准。 |
 | [11 Agent Mesh](11-agent-mesh/README.md) | Rust `crates/mesh-sdk` stub + CI wiring 已实现；runtime mesh 是 Iter F。 |
 | [13 Skills](13-skills/README.md) | SKILL.md catalog、`skill_view`、CRUD + merge、guard、restore、watcher、`skill_search`（本地+远程 skills.sh）、provenance 签名验证已闭合到 M2。**2026-05-15 新增**：dev mode 下 SKILL.md 编辑 auto-watch + 自动 invalidate web 端 tool catalog（`QUILIN_SKILL_HOT_RELOAD=off` 可关）；iter-close polish 修复了旧 SkillsManager 监听器在 rebuild 时不释放的内存泄漏（`f06d5ad`）。 |
 | [14 Benchmark Harness](14-benchmark-harness/README.md) | Existing harness code remains in-tree; component is frozen/read-only for future implementation unless the user asks. |
