@@ -1,13 +1,17 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { AppHeader } from "@/components/shell/AppHeader";
 import { RailStrip } from "@/components/shell/RailStrip";
 import { Wordmark } from "@/components/shell/Wordmark";
 import { formatRelativeTime } from "@/lib/format";
-import { listSessions, type PersistedSession } from "@/lib/session-store";
+import {
+	deleteSession as deleteLocalSession,
+	listSessions,
+	type PersistedSession,
+} from "@/lib/session-store";
 
 /**
  * Unified session row used by the list UI. Merges:
@@ -43,6 +47,11 @@ interface SessionsApiResponse {
 	readonly persistenceEnabled: boolean;
 }
 
+interface ToastState {
+	readonly kind: "info" | "error";
+	readonly text: string;
+}
+
 function persistedToRow(s: PersistedSession): SessionRow {
 	return {
 		id: s.id,
@@ -75,10 +84,17 @@ function mergeRows(
 	return [...merged.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
+function truncateTitle(title: string, max = 30): string {
+	if (title.length <= max) return title;
+	return `${title.slice(0, max)}…`;
+}
+
 export default function SessionsPage() {
 	const [rows, setRows] = useState<readonly SessionRow[]>([]);
 	const [hydrated, setHydrated] = useState(false);
 	const [persistenceOn, setPersistenceOn] = useState<boolean | null>(null);
+	const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+	const [toast, setToast] = useState<ToastState | null>(null);
 
 	useEffect(() => {
 		const local = listSessions();
@@ -98,6 +114,65 @@ export default function SessionsPage() {
 			}
 		})();
 	}, []);
+
+	// Auto-dismiss toast after 4s.
+	useEffect(() => {
+		if (toast == null) return;
+		const handle = setTimeout(() => setToast(null), 4000);
+		return () => clearTimeout(handle);
+	}, [toast]);
+
+	const handleDelete = useCallback(
+		async (row: SessionRow, event: React.MouseEvent<HTMLButtonElement>) => {
+			event.preventDefault();
+			event.stopPropagation();
+			if (pendingDeleteId != null) return; // guard against double-click
+
+			const confirmed = window.confirm(
+				`确定删除会话「${truncateTitle(row.title)}」吗?此操作不可撤销。\n\nDelete this session? This cannot be undone.`,
+			);
+			if (!confirmed) return;
+
+			setPendingDeleteId(row.id);
+			// Snapshot for rollback.
+			const snapshot = rows;
+			// Optimistic update: remove from UI immediately.
+			setRows((current) => current.filter((r) => r.id !== row.id));
+
+			// Always evict the local cache so the row doesn't reappear on next mount.
+			try {
+				deleteLocalSession(row.id);
+			} catch {
+				// localStorage may be unavailable (SSR / private mode); non-fatal.
+			}
+
+			if (row.source === "local") {
+				setToast({ kind: "info", text: `已删除本地会话「${truncateTitle(row.title)}」` });
+				setPendingDeleteId(null);
+				return;
+			}
+
+			try {
+				const res = await fetch(`/api/sessions/${encodeURIComponent(row.id)}`, {
+					method: "DELETE",
+				});
+				if (!res.ok && res.status !== 404) {
+					throw new Error(`DELETE failed: ${res.status}`);
+				}
+				setToast({ kind: "info", text: `已删除会话「${truncateTitle(row.title)}」` });
+			} catch (e) {
+				// Rollback the UI.
+				setRows(snapshot);
+				setToast({
+					kind: "error",
+					text: `删除失败 · delete failed: ${e instanceof Error ? e.message : String(e)}`,
+				});
+			} finally {
+				setPendingDeleteId(null);
+			}
+		},
+		[pendingDeleteId, rows],
+	);
 
 	const totalMessages = rows.reduce((sum, r) => sum + r.messageCount, 0);
 
@@ -149,6 +224,25 @@ export default function SessionsPage() {
 						</div>
 					</div>
 
+					{toast != null && (
+						<div
+							data-testid="sessions-toast"
+							role="status"
+							style={{
+								marginTop: 12,
+								padding: "8px 12px",
+								fontFamily: '"JetBrains Mono", monospace',
+								fontSize: 11,
+								letterSpacing: "0.04em",
+								border: `1px solid ${toast.kind === "error" ? "var(--destructive)" : "var(--border)"}`,
+								color: toast.kind === "error" ? "var(--destructive)" : "var(--fg-muted)",
+								background: "var(--bg)",
+							}}
+						>
+							{toast.text}
+						</div>
+					)}
+
 					{!hydrated ? (
 						<p style={{ color: "var(--fg-muted)", marginTop: 24 }}>加载中 · loading…</p>
 					) : rows.length === 0 ? (
@@ -167,24 +261,50 @@ export default function SessionsPage() {
 								<span className="cn">最近 · recent</span>
 								<span className="right">{rows.length} sessions</span>
 							</div>
-							{rows.map((row) => (
-								<Link
-									key={row.id}
-									href={{ pathname: "/", query: { session: row.id } }}
-									className="q-resource-row"
-									data-testid={`session-${row.id}`}
-									data-source={row.source}
-								>
-									<span className="rn">
-										{row.title}
-										<span className="desc">{row.preview}</span>
-									</span>
-									<span className="rm">{formatRelativeTime(row.updatedAt)}</span>
-									<span className="rs on">
-										{row.messageCount} 条 · {row.source === "server" ? "云端" : "本地"}
-									</span>
-								</Link>
-							))}
+							{rows.map((row) => {
+								const isDeleting = pendingDeleteId === row.id;
+								return (
+									<div
+										key={row.id}
+										className="q-resource-row q-session-row"
+										data-testid={`session-${row.id}`}
+										data-source={row.source}
+										style={{ opacity: isDeleting ? 0.5 : 1 }}
+									>
+										<Link
+											href={{ pathname: "/", query: { session: row.id } }}
+											className="q-session-link"
+											data-testid={`session-link-${row.id}`}
+											style={{
+												display: "contents",
+												color: "inherit",
+												textDecoration: "none",
+											}}
+										>
+											<span className="rn">
+												{row.title}
+												<span className="desc">{row.preview}</span>
+											</span>
+											<span className="rm">{formatRelativeTime(row.updatedAt)}</span>
+											<span className="rs on">
+												{row.messageCount} 条 · {row.source === "server" ? "云端" : "本地"}
+											</span>
+										</Link>
+										<button
+											type="button"
+											className="q-session-delete-btn"
+											data-testid={`session-delete-${row.id}`}
+											aria-label={`删除会话 ${row.title}`}
+											disabled={isDeleting}
+											onClick={(e) => {
+												void handleDelete(row, e);
+											}}
+										>
+											{isDeleting ? "删除中…" : "🗑 删除"}
+										</button>
+									</div>
+								);
+							})}
 						</div>
 					)}
 				</section>
