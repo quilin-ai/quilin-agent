@@ -264,6 +264,21 @@ export async function DELETE(request: Request): Promise<Response> {
 		// stdio pipe.
 		const results: BatchDeleteItem[] = [];
 		for (const id of ids) {
+			// audit 漏项 #5 fix (QUI-182): GET 路径给没 explicit id 的 record 合成
+			// `synth:${tier}:${index}:${fnvHash}` 形式 id 给 UI 列表用,但 quilin-mem
+			// MCP 不认这种合成 id。之前直接传过去会 isError = true 但 client 拿到
+			// 的错误信息("memory not found")让人误以为 DB 出问题。这里 pre-check
+			// 给出明确文案,UI 显示"自动合成 id 不能批量删,先用 memory_save
+			// 注入真实 id 再操作"。
+			if (id.startsWith("synth:")) {
+				results.push({
+					id,
+					ok: false,
+					error:
+						"无法删除自动合成 id 的记录(synth:*)。这类 record 来自旧版 MCP, 没有 explicit memory_id, 需要 quilin-mem 端先 backfill 才能删。",
+				});
+				continue;
+			}
 			try {
 				const out = await deleteTool.execute({ memory_id: id });
 				if (out.isError) {
