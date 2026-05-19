@@ -1,3 +1,4 @@
+import { parse as parseYaml, YAMLParseError } from "yaml";
 import type {
 	SkillDependencyMetadata,
 	SkillFrontmatter,
@@ -11,7 +12,6 @@ interface ParsedSkillMarkdown {
 
 type SkillFrontmatterInput = Record<string, unknown>;
 type NestedObject = Record<string, unknown>;
-type YamlContainer = NestedObject | unknown[];
 
 const MAX_NAME_LENGTH = 64;
 const MAX_DESCRIPTION_LENGTH = 1024;
@@ -23,129 +23,38 @@ const TRUST_VALUES = new Set<SkillTrustLevel>([
 	"agent-created",
 ]);
 
-function parseScalar(rawValue: string): unknown {
-	const trimmed = rawValue.trim();
-	if (trimmed === "true") {
-		return true;
-	}
-
-	if (trimmed === "false") {
-		return false;
-	}
-
-	if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
-		const inner = trimmed.slice(1, -1).trim();
-		if (inner === "") {
-			return [];
-		}
-
-		return inner
-			.split(",")
-			.map((item) => item.trim())
-			.filter((item) => item.length > 0)
-			.map((item) => item.replace(/^['"]|['"]$/g, ""));
-	}
-
-	return trimmed.replace(/^['"]|['"]$/g, "");
-}
-
-function inferBlockContainer(
-	lines: readonly string[],
-	index: number,
-	indent: number,
-): YamlContainer {
-	for (let nextIndex = index + 1; nextIndex < lines.length; nextIndex += 1) {
-		const nextLine = lines[nextIndex] ?? "";
-		const trimmed = nextLine.trim();
-		if (trimmed === "" || trimmed.startsWith("#")) {
-			continue;
-		}
-
-		const nextIndent = nextLine.length - nextLine.trimStart().length;
-		if (nextIndent <= indent) {
-			throw new Error(
-				`Skill frontmatter line ${index + 1} must be followed by an indented block`,
-			);
-		}
-
-		return trimmed.startsWith("- ") ? [] : {};
-	}
-
-	throw new Error(
-		`Skill frontmatter line ${index + 1} must be followed by an indented block`,
+function isPlainObject(value: unknown): value is NestedObject {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		!Array.isArray(value) &&
+		Object.getPrototypeOf(value) === Object.prototype
 	);
 }
 
-function parseYamlLike(yamlText: string): SkillFrontmatterInput {
-	const parsed: SkillFrontmatterInput = {};
-	const lines = yamlText.split(/\r?\n/);
-	const stack: Array<{ indent: number; value: YamlContainer }> = [
-		{ indent: -1, value: parsed },
-	];
-
-	for (let index = 0; index < lines.length; index += 1) {
-		const line = lines[index] ?? "";
-		const trimmed = line.trim();
-		if (trimmed === "" || trimmed.startsWith("#")) {
-			continue;
+function parseFrontmatterYaml(yamlText: string): SkillFrontmatterInput {
+	let parsed: unknown;
+	try {
+		parsed = parseYaml(yamlText, {
+			// Preserve scalar types (booleans, numbers) but keep them YAML 1.2
+			// compatible — block scalars (|, >) are supported by default.
+			strict: false,
+		});
+	} catch (error) {
+		if (error instanceof YAMLParseError) {
+			throw new Error(`Skill frontmatter is malformed: ${error.message}`);
 		}
+		throw error;
+	}
 
-		const indent = line.length - line.trimStart().length;
+	if (parsed == null) {
+		return {};
+	}
 
-		while (stack.length > 1 && indent <= stack[stack.length - 1]?.indent) {
-			stack.pop();
-		}
-
-		const parent = stack[stack.length - 1]?.value;
-		if (parent == null) {
-			throw new Error("Skill frontmatter nesting is malformed");
-		}
-
-		if (trimmed.startsWith("- ")) {
-			if (!Array.isArray(parent)) {
-				throw new Error(
-					`Skill frontmatter line ${index + 1} has an array item outside an array field`,
-				);
-			}
-			const item = trimmed.slice(2).trim();
-			if (item.length === 0) {
-				throw new Error(
-					`Skill frontmatter line ${index + 1} has an empty array item`,
-				);
-			}
-			if (/^[a-zA-Z0-9_-]+:\s/.test(item)) {
-				throw new Error(
-					`Skill frontmatter line ${index + 1} cannot define key/value data inside a scalar array`,
-				);
-			}
-			parent.push(parseScalar(item));
-			continue;
-		}
-
-		const separatorIndex = line.indexOf(":");
-		if (separatorIndex <= 0) {
-			throw new Error(
-				`Skill frontmatter line ${index + 1} is malformed; expected key: value`,
-			);
-		}
-
-		if (Array.isArray(parent)) {
-			throw new Error(
-				`Skill frontmatter line ${index + 1} cannot define key/value data inside an array`,
-			);
-		}
-
-		const key = line.slice(0, separatorIndex).trim();
-		const rawValue = line.slice(separatorIndex + 1);
-
-		if (rawValue.trim() === "") {
-			const nested = inferBlockContainer(lines, index, indent);
-			parent[key] = nested;
-			stack.push({ indent, value: nested });
-			continue;
-		}
-
-		parent[key] = parseScalar(rawValue);
+	if (!isPlainObject(parsed)) {
+		throw new Error(
+			"Skill frontmatter must be a YAML mapping at the top level",
+		);
 	}
 
 	return parsed;
@@ -373,7 +282,7 @@ export function parseSkillMarkdown(markdown: string): ParsedSkillMarkdown {
 	}
 
 	const [, yamlText, body] = match;
-	const rawFrontmatter = parseYamlLike(yamlText);
+	const rawFrontmatter = parseFrontmatterYaml(yamlText);
 	const frontmatter = parseSkillFrontmatter(rawFrontmatter);
 
 	return {

@@ -419,6 +419,62 @@ disableModelInvocation: false
 		}
 	});
 
+	it("parses literal (|) block scalars for description", () => {
+		const parsed = parseSkillMarkdown(`---
+name: block-literal
+description: |
+  Multi-line description
+  spanning several lines
+  with literal newlines preserved.
+---
+# Body
+`);
+
+		expect(parsed.frontmatter.description).toBe(
+			"Multi-line description\nspanning several lines\nwith literal newlines preserved.",
+		);
+	});
+
+	it("parses folded (>) block scalars for description", () => {
+		const parsed = parseSkillMarkdown(`---
+name: block-folded
+description: >
+  Folded description that
+  spans several source lines
+  but collapses into one logical paragraph.
+---
+# Body
+`);
+
+		// YAML folded style collapses single newlines into spaces.
+		expect(parsed.frontmatter.description).toContain(
+			"Folded description that spans several source lines",
+		);
+		expect(parsed.frontmatter.description).not.toContain(
+			"that\nspans",
+		);
+	});
+
+	it("parses chomped folded (>-) block scalars used by ECC-style skills", () => {
+		const parsed = parseSkillMarkdown(`---
+name: blueprint
+description: >-
+  Turn a one-line objective into a step-by-step construction plan for
+  multi-session, multi-agent engineering projects. Each step has a
+  self-contained context brief so a fresh agent can execute it cold.
+origin: community
+---
+# Blueprint
+`);
+
+		expect(parsed.frontmatter.name).toBe("blueprint");
+		expect(parsed.frontmatter.description).toMatch(
+			/^Turn a one-line objective into a step-by-step construction plan/,
+		);
+		// "-" chomping should strip trailing newline.
+		expect(parsed.frontmatter.description.endsWith("\n")).toBe(false);
+	});
+
 	it("rejects markdown without frontmatter block", () => {
 		expect(() => parseSkillMarkdown("# no frontmatter")).toThrow(
 			"SKILL.md must start with YAML frontmatter",
@@ -443,7 +499,7 @@ not a key value line
 ---
 Body
 `),
-		).toThrow("expected key: value");
+		).toThrow(/Skill frontmatter is malformed/);
 
 		expect(() =>
 			parseSkillMarkdown(`---
@@ -453,7 +509,7 @@ description: Bad array placement
 ---
 Body
 `),
-		).toThrow("array item outside an array field");
+		).toThrow(/Skill frontmatter is malformed/);
 
 		expect(() =>
 			parseSkillMarkdown(`---
@@ -464,7 +520,7 @@ allowedTools:
 ---
 Body
 `),
-		).toThrow("expected key: value");
+		).toThrow("allowedTools must be an array");
 
 		expect(() =>
 			parseSkillMarkdown(`---
@@ -476,6 +532,6 @@ allowedTools:
 ---
 Body
 `),
-		).toThrow("key/value data inside an array");
+		).toThrow(/Skill frontmatter is malformed/);
 	});
 });
