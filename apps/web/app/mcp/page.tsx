@@ -40,6 +40,15 @@ interface McpResponse {
 			readonly skipped: number;
 			readonly totalTools: number;
 		};
+		// Lazy snapshot state (SC-3 + audit #1 漏项 fix, QUI-182):
+		// /api/mcp returns the last successful snapshot immediately and
+		// kicks off a background warm. UI must consume these flags to tell
+		// the user "data may be stale, refreshing now" instead of showing
+		// stale numbers silently.
+		readonly refreshing: boolean;
+		readonly stale: boolean;
+		readonly refreshedAt: string | null;
+		readonly refreshError: string | null;
 	};
 }
 
@@ -125,6 +134,34 @@ export default function McpPage() {
 									<span>
 										<strong>{catalog.counts.totalTools}</strong>个工具
 									</span>
+									{catalog.refreshing ? (
+										<span
+											style={{ color: "var(--accent-blue, #2b6cb0)", fontStyle: "italic" }}
+											title="后端 lazy snapshot 正在后台刷新,稍后会自动显示最新数据"
+										>
+											↻ 正在后台刷新…
+										</span>
+									) : null}
+									{catalog.refreshError ? (
+										<span
+											style={{ color: "var(--accent-vermillion)" }}
+											title={catalog.refreshError}
+										>
+											⚠ 刷新出错(hover 查看)
+										</span>
+									) : null}
+									{catalog.stale && !catalog.refreshing ? (
+										<span
+											style={{ color: "var(--fg-muted)", fontStyle: "italic" }}
+											title={
+												catalog.refreshedAt
+													? `数据上次刷新: ${catalog.refreshedAt}`
+													: "数据可能过时"
+											}
+										>
+											数据可能过时
+										</span>
+									) : null}
 								</>
 							)}
 							<button
