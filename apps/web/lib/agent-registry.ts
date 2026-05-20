@@ -9,6 +9,7 @@ import { agentDisplayName } from "@/lib/agent-display-name";
 
 export type AgentKind = "main" | "subagent";
 export type AgentStatus = "pending" | "running" | "blocked" | "completed" | "failed" | "cancelled";
+export type MainSessionStatus = "idle" | "running" | "completed" | "failed";
 
 export interface AgentToolEvent {
 	readonly kind: "call" | "result" | "error";
@@ -55,6 +56,18 @@ export interface AgentSummary {
 
 function nowIso(): string {
 	return new Date().toISOString();
+}
+
+export function agentStatusFromMainSession(status: MainSessionStatus): AgentStatus {
+	switch (status) {
+		case "running":
+			return "running";
+		case "failed":
+			return "failed";
+		case "idle":
+		case "completed":
+			return "completed";
+	}
 }
 
 class InMemoryAgentRegistry {
