@@ -761,6 +761,67 @@ function ChatBody({
 		[forceScrollToBottom, enqueueSend],
 	);
 
+	// QUI-183 P3 queue operations:delete / move up / move down / pin top / edit /
+	// reorder。所有操作走 setQueuedSends functional updater(pure,无副作用),
+	// QueueArea 接收 callback 触发 state 变更。Drain effect 持续按队头送出,所以
+	// reorder 立即改变下一条要发的消息。
+	const onDeleteQueued = useCallback((id: string) => {
+		setQueuedSends((prev) => prev.filter((q) => q.id !== id));
+	}, []);
+	const onMoveQueuedUp = useCallback((id: string) => {
+		setQueuedSends((prev) => {
+			const idx = prev.findIndex((q) => q.id === id);
+			if (idx <= 0) return prev;
+			const a = prev[idx - 1];
+			const b = prev[idx];
+			if (a == null || b == null) return prev;
+			const next = prev.slice();
+			next[idx - 1] = b;
+			next[idx] = a;
+			return next;
+		});
+	}, []);
+	const onMoveQueuedDown = useCallback((id: string) => {
+		setQueuedSends((prev) => {
+			const idx = prev.findIndex((q) => q.id === id);
+			if (idx < 0 || idx >= prev.length - 1) return prev;
+			const a = prev[idx];
+			const b = prev[idx + 1];
+			if (a == null || b == null) return prev;
+			const next = prev.slice();
+			next[idx] = b;
+			next[idx + 1] = a;
+			return next;
+		});
+	}, []);
+	const onPinQueuedTop = useCallback((id: string) => {
+		setQueuedSends((prev) => {
+			const idx = prev.findIndex((q) => q.id === id);
+			if (idx <= 0) return prev;
+			const target = prev[idx];
+			if (target == null) return prev;
+			const rest = prev.filter((_, i) => i !== idx);
+			return [target, ...rest];
+		});
+	}, []);
+	const onEditQueued = useCallback((id: string, newText: string) => {
+		const trimmed = newText.trim();
+		if (trimmed.length === 0) return;
+		setQueuedSends((prev) => prev.map((q) => (q.id === id ? { ...q, text: trimmed } : q)));
+	}, []);
+	const onReorderQueued = useCallback((fromId: string, toId: string) => {
+		setQueuedSends((prev) => {
+			const fromIdx = prev.findIndex((q) => q.id === fromId);
+			const toIdx = prev.findIndex((q) => q.id === toId);
+			if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return prev;
+			const next = prev.slice();
+			const [moved] = next.splice(fromIdx, 1);
+			if (moved == null) return prev;
+			next.splice(toIdx, 0, moved);
+			return next;
+		});
+	}, []);
+
 	// QUI-183 P2 frontend:user-initiated stop。
 	// 流程:
 	//   1. useChat.stop()  — 断浏览器 SSE 流(useChat 内部翻 status="ready")
@@ -820,10 +881,16 @@ function ChatBody({
 					style={{ height: 1, scrollMarginBottom: "120px" }}
 				/>
 			</section>
-			{/* QUI-183 P1: queue 渲染区放在 Composer 上方,P3 接入 onDelete /
-			   onPinTop / onMoveUp / onMoveDown / onEdit 真实回调;P1 暂不传 → 按钮
-			   显示为 disabled placeholder。 */}
-			<QueueArea queued={queuedSends as readonly QueuedUserMessageView[]} />
+			{/* QUI-183 P3:queue 操作 callback 接入 QueueArea。 */}
+			<QueueArea
+				queued={queuedSends as readonly QueuedUserMessageView[]}
+				onDelete={onDeleteQueued}
+				onMoveUp={onMoveQueuedUp}
+				onMoveDown={onMoveQueuedDown}
+				onPinTop={onPinQueuedTop}
+				onEdit={onEditQueued}
+				onReorder={onReorderQueued}
+			/>
 			<Composer
 				agents={[]}
 				currentAgentId="main"

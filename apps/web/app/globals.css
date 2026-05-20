@@ -1482,6 +1482,31 @@ main.q-workspace.no-composer {
 	color: var(--destructive);
 	border-color: var(--destructive);
 }
+/* QUI-183 P3:edit textarea + drag visual feedback */
+.q-queue-area-row[data-dragging="true"] {
+	opacity: 0.4;
+}
+.q-queue-area-row[data-drag-over="true"] {
+	border-color: var(--accent-vermillion);
+	background: var(--bg-elev);
+}
+.q-queue-area-row-edit {
+	flex: 1;
+	min-width: 0;
+	background: var(--bg-elev);
+	border: 1px solid var(--accent-vermillion);
+	color: var(--fg);
+	font-family: inherit;
+	font-size: inherit;
+	padding: 2px 6px;
+	resize: vertical;
+	min-height: 24px;
+	max-height: 96px;
+	outline: none;
+}
+.q-queue-area-row-edit:focus {
+	border-color: var(--fg);
+}
 
 /* composer */
 footer.q-composer {
