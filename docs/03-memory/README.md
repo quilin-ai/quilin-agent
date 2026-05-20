@@ -1,5 +1,36 @@
 # 记忆工程（Memory Engineering）
 
+> **2026-05-21 v2 落地进度 / Perfect Memory System v2 Shipping Progress**
+>
+> **第一周 milestone 5/5 ✅ 全 ship + 第二周 1/4 ✅ ship + QUI-195/188 cross-review 收敛中**
+>
+> | Commit | 工单 | 范围 |
+> |---|---|---|
+> | `ab1f758` | QUI-192 + QUI-194 | 完整性评测 + 安全检索门 + 7 调研 docs |
+> | `414eb62` | QUI-189 + QUI-193 | 批量 LLM 整理 + 证据+版本链+时光回溯 |
+> | `767f52a` | QUI-22 | L3a working→episodic 自动升级 |
+> | `cf93af6` | QUI-198 | 操作步骤流水线 trajectory + skill_proposer |
+> | `150c955` | Playwright fix | memory-crud-and-dedupe e2e 12/12 PASS |
+> | `953fb7b` | docs/STATUS | 落地进度同步 |
+> | `b5b0f08` | QUI-196/197/199 spec | 主线预写 implementation spec |
+>
+> **累计:7 commit / 11500+ 行 / 95%+ coverage / 35+ reviewer subagent / 24+ REAL fix**
+>
+> **进行中**:
+> - ⏳ QUI-195 破坏防护(Codex 主线,Reviewer K 0 REAL,最后 fresh × 0 REAL × 2 收敛)
+> - ⏳ QUI-188 quilin-daemon(Codex subagent Erdos 完成 8 测试,等 QUI-195 合 commit)
+>
+> **计划中**(Codex subagent 待启):
+> - 📋 QUI-196 多客户端 + 项目范围(spec `v2-qui196-multi-client-spec.md`)
+> - 📋 QUI-197 重要性多维(spec `v2-qui197-importance-multi-dim-spec.md`)
+> - 📋 QUI-199 前瞻 + 证据可视化(spec `v2-qui199-prospective-viz-spec.md`)
+> - 📋 QUI-200 SafetyLessonStore SQLite-backed(QUI-194 follow-up)
+>
+> **实测速度**:第一周 5/5 milestone 6 小时完成(原估 9-10 联合日,~10-15x 加速)。
+> 加速来源:Claude × Codex 双主线 + 2-4 subagent 并行 + 严格 cross-review 无返工。
+>
+> ---
+
 > **2026-05-21 v2 Roadmap / Perfect Memory System v2**
 >
 > 用户原话："我要做一个能打爆所有竞品的记忆系统"。完成 14 个竞品仓库 + 24 篇论文 + 9 个评测榜调研，Claude × Codex 双视角协商产出 unified roadmap。
