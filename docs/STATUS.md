@@ -6,6 +6,38 @@ This file is the only global progress entry point under `docs/`. Component-level
 
 本文件是 `docs/` 下唯一的全局进度入口。组件级当前事实写在各 `docs/<component>/README.md`。历史快照通过 git history 追溯。任务管理与 backlog 统一迁移到 Plane；本文件只保留当前状态快照。
 
+## 2026-05-21 完美记忆系统 v2 落地进度 / Perfect Memory System v2 Shipping Progress
+
+实测速度修正:第一周 5/5 milestone 6 小时完成(原估 9-10 联合日),实际加速 **~10-15x**。原因:4 agent 并行(Claude 主线 + Codex 主线 + 各自 subagent)+ 严格 cross-review 无返工。
+
+Speed correction (measured): Week 1 5/5 milestones shipped in 6 hours (estimated 9-10 joint-days), actual **~10-15x speedup**. Cause: 4-agent parallelism (Claude main + Codex main + their subagents) + strict cross-review with zero rework.
+
+**已 ship(2026-05-21)**:
+
+| Commit | 工单 | 范围 | LOC |
+|---|---|---|---|
+| `ab1f758` | QUI-192 + QUI-194 + 7 调研 docs | 完整性评测 + 安全检索门 + 1880 行调研 | 5126 |
+| `414eb62` | QUI-189 + QUI-193 | 批量 LLM 整理 + 证据+版本链+时光回溯(8 字段 + 3 侧表) | 3062 |
+| `767f52a` | QUI-22 | L3a working→episodic 自动升级(18 测试) | 1123 |
+| `cf93af6` | QUI-198 | 操作步骤流水线 trajectory_compressor + skill_proposer(46 测试) | 1904 |
+| `150c955` | Playwright fix | memory-crud-and-dedupe e2e 4 个 test code bug | 6 |
+| **累计** | **6 工单** | 4 commit / 7000+ 行 / 95%+ coverage | **11221** |
+
+**进行中**:
+- ⏳ QUI-195 破坏防护(72h 软删 + 撤销 + 影响预览 + 历史快照事件流) — Codex 主线,已修 10 个 REAL,Reviewer I 找最新 legacy migration REAL 修中
+- ⏳ QUI-188 quilin-daemon 持久后台服务 — Codex subagent 完成 8 测试,等 QUI-195 合 commit
+
+**计划中**:
+- 📋 QUI-196 多客户端 + 项目范围(第二周,等 QUI-195 schema)
+- 📋 QUI-197 重要性多维 + 类型 + 过期感知(第三周,等 QUI-195 schema)
+- 📋 QUI-199 前瞻 + 证据可视化 + 资源指针(第四周)
+- 📋 QUI-200 SafetyLessonStore SQLite-backed(QUI-194 follow-up)
+
+**Cross-review 投入**:
+- 累计派出 **35+ reviewer subagent**(跨 6 个已 ship 工单 + QUI-195/188 进行中)
+- 累计修过 **24+ REAL**(QUI-193 8 轮 12 REAL / QUI-195 10 轮 10 REAL / QUI-189 3 REAL / QUI-194 2 REAL / QUI-198 3 REAL / QUI-22 3 REAL)
+- 严格执行硬规则:**连续 2 fresh × 0 REAL × 2** 才 commit
+
 ## 2026-05-21 完美记忆系统 v2 调研 + Roadmap / Perfect Memory System v2 Roadmap
 
 用户原话："我要做一个能打爆所有竞品的记忆系统"。完成 **14 个竞品仓库**（mem0/letta/zep/mempalace/agentmemory/MemMachine/EverOS/gbrain/TencentDB/claude-mem/hermes-agent/codex/openclaw/claude-code）+ **24 篇论文** + **9 个评测榜**调研，Claude × Codex 双视角协商产出 unified roadmap。
