@@ -440,9 +440,12 @@ function ChatBody({
 					if (cancelled) return;
 					releaseActiveRun(`server:${body.data.status}`);
 					setServerTerminal(true);
-					void stop().catch(() => {
-						/* active stream may already be closed */
-					});
+					// Do not call useChat.stop() from the watchdog. This
+					// effect can complete with a stale `rawStreaming=false`
+					// closure just as the next queued send starts; calling
+					// stop() there aborts the new browser stream, which makes
+					// the server pump finish with text=0/steps=0. User
+					// initiated stop is still handled by onStop below.
 				}
 			} catch {
 				/* best-effort watchdog */
@@ -460,7 +463,6 @@ function ChatBody({
 		rawStreaming,
 		serverTerminal,
 		sessionId,
-		stop,
 		syncPersistedMessages,
 		releaseActiveRun,
 		queuedSends.length,
