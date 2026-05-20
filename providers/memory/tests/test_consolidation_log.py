@@ -32,12 +32,14 @@ def test_append_and_list_round_trips_proposal_shape(tmp_path: Path) -> None:
         assert entry.task == "test.task.alpha"
         assert entry.dry_run is True  # propose() always emits dry_run=True
         assert entry.budget_decision == proposal.budget.decision
-        # 3 default actions baked into _proposal_actions.
-        assert len(entry.actions) == 3
+        # QUI-187 cross-review Reviewer F REAL (2026-05-20):recompress_verbatim
+        # placeholder 已从 _proposal_actions 移除(避免经 to_wire_dict 默认 fallback
+        # 错标 kind="reflect-insight",docs/03-memory line 274 verbatim 差分再压缩
+        # 仍在 Literal union 中等真实实现)。
+        assert len(entry.actions) == 2
         assert {a["kind"] for a in entry.actions} == {
             "reflect",
             "prune_kg",
-            "recompress_verbatim",
         }
         assert entry.writes_performed == 0
         assert entry.schema_version == CONSOLIDATION_LOG_SCHEMA_VERSION

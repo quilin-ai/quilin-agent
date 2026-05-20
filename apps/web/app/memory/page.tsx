@@ -53,28 +53,49 @@ function formatTimestamp(iso: string | null): string {
 	}
 }
 
-interface DedupeGroupPreview {
+/**
+ * QUI-187(2026-05-20):升级到 Consolidator 三类提案 wire。
+ *
+ * Three kinds of proposals returned by `memory_consolidate_plan`:
+ *   - dedupe          → 同 QUI-185,去重(keep + delete)
+ *   - kg-prune        → 知识图谱过期关系剪枝(deleteIds = edge ids)
+ *   - reflect-insight → reflect 抽取语义 insight(insertContent + memoryIds 来源)
+ *
+ * Each kind 在 UI 上用不同颜色 / icon 区分,方便用户一眼看清"删什么、留什么、新增什么"。
+ */
+type ProposalKind = "dedupe" | "kg-prune" | "reflect-insight";
+type ConsolidateStrategy = "exact" | "embedding" | "llm";
+
+interface ConsolidateProposal {
+	readonly kind: ProposalKind;
 	readonly tier: string;
-	readonly content: string;
-	readonly keepId: string;
+	readonly keepId?: string;
 	readonly deleteIds: readonly string[];
+	readonly insertContent?: string;
+	readonly reason: string;
+	readonly strategy?: ConsolidateStrategy;
+	readonly score?: number;
+	readonly memoryIds: readonly string[];
 }
 
-interface DedupePreview {
-	readonly groups: readonly DedupeGroupPreview[];
+interface ConsolidatePreview {
+	readonly proposals: readonly ConsolidateProposal[];
 	readonly totalDelete: number;
 	readonly totalKeep: number;
+	readonly totalInsert: number;
 }
 
 interface DedupeResponse {
 	readonly ok: true;
 	readonly data: {
 		readonly executed: boolean;
-		readonly plan: DedupePreview;
+		readonly plan: ConsolidatePreview;
 		readonly totalDelete?: number;
 		readonly totalKeep?: number;
+		readonly totalInsert?: number;
 		readonly deleted?: number;
 		readonly failed?: number;
+		readonly skippedInsert?: number;
 	};
 }
 
@@ -110,7 +131,7 @@ export default function MemoryPage() {
 	const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
 	const [pendingAction, setPendingAction] = useState<string | null>(null);
 	const [actionMessage, setActionMessage] = useState<string | null>(null);
-	const [dedupePreview, setDedupePreview] = useState<DedupePreview | null>(null);
+	const [dedupePreview, setDedupePreview] = useState<ConsolidatePreview | null>(null);
 	const [confirmDelete, setConfirmDelete] = useState(false);
 
 	const loadMemory = useCallback(async () => {
@@ -257,13 +278,13 @@ export default function MemoryPage() {
 			});
 			const json = (await res.json()) as DedupeResponse | DedupeErrorResponse;
 			if (!json.ok) {
-				setActionMessage(`去重预览失败 · ${json.error.message}`);
+				setActionMessage(`智能整理预览失败 · ${json.error.message}`);
 				setDedupePreview(null);
 			} else {
 				setDedupePreview(json.data.plan);
 			}
 		} catch (e) {
-			setActionMessage(`去重预览失败 · ${e instanceof Error ? e.message : String(e)}`);
+			setActionMessage(`智能整理预览失败 · ${e instanceof Error ? e.message : String(e)}`);
 			setDedupePreview(null);
 		} finally {
 			setPendingAction(null);
@@ -282,19 +303,21 @@ export default function MemoryPage() {
 			});
 			const json = (await res.json()) as DedupeResponse | DedupeErrorResponse;
 			if (!json.ok) {
-				setActionMessage(`去重失败 · ${json.error.message}`);
+				setActionMessage(`智能整理失败 · ${json.error.message}`);
 			} else {
-				setActionMessage(
-					`去重完成 · 删除 ${json.data.deleted ?? 0} 条${
-						(json.data.failed ?? 0) > 0 ? ` · 失败 ${json.data.failed} 条` : ""
-					}`,
-				);
+				// reflect-insight 类 proposal 的 insertContent 暂时跳过(后端 memory_insert
+				// MCP tool 还没接入,留 follow-up issue),消息里显式告知用户。
+				const skipped = json.data.skippedInsert ?? 0;
+				const parts = [`已删除 ${json.data.deleted ?? 0} 条`];
+				if ((json.data.failed ?? 0) > 0) parts.push(`失败 ${json.data.failed} 条`);
+				if (skipped > 0) parts.push(`新增 insight ${skipped} 条已跳过(后端待接入)`);
+				setActionMessage(`智能整理完成 · ${parts.join(" · ")}`);
 				setDedupePreview(null);
 				setSelectedIds(new Set());
 				await loadMemory();
 			}
 		} catch (e) {
-			setActionMessage(`去重失败 · ${e instanceof Error ? e.message : String(e)}`);
+			setActionMessage(`智能整理失败 · ${e instanceof Error ? e.message : String(e)}`);
 		} finally {
 			setPendingAction(null);
 		}
@@ -632,7 +655,7 @@ export default function MemoryPage() {
 										opacity: pendingAction != null ? 0.6 : 1,
 									}}
 								>
-									一键去重
+									✨ 智能整理
 								</button>
 								{actionMessage != null ? (
 									<span
@@ -843,166 +866,287 @@ export default function MemoryPage() {
 							) : null}
 
 							{dedupePreview != null ? (
-								<div
-									data-testid="memory-dedupe-preview"
-									role="dialog"
-									aria-modal="true"
-									aria-label="去重预览"
-									style={{
-										position: "fixed",
-										inset: 0,
-										background: "rgba(0,0,0,0.5)",
-										display: "flex",
-										alignItems: "center",
-										justifyContent: "center",
-										zIndex: 100,
-									}}
-								>
-									<div
-										style={{
-											background: "var(--bg)",
-											border: "1px solid var(--accent-vermillion)",
-											padding: "20px 24px",
-											maxWidth: 640,
-											minWidth: 360,
-											maxHeight: "80vh",
-											overflowY: "auto",
-										}}
-									>
-										<h2
-											style={{
-												margin: 0,
-												marginBottom: 12,
-												fontFamily: '"Noto Sans SC", sans-serif',
-												fontSize: 16,
-												color: "var(--fg)",
-											}}
-										>
-											去重预览
-										</h2>
-										<p
-											style={{
-												color: "var(--fg-muted)",
-												fontFamily: '"Noto Sans SC", sans-serif',
-												fontSize: 13,
-												lineHeight: 1.6,
-											}}
-										>
-											按精确字符串匹配将删除{" "}
-											<strong data-testid="memory-dedupe-delete-count">
-												{dedupePreview.totalDelete}
-											</strong>{" "}
-											条, 保留{" "}
-											<strong data-testid="memory-dedupe-keep-count">
-												{dedupePreview.totalKeep}
-											</strong>{" "}
-											条 (每组保留最早一条)。
-										</p>
-										{dedupePreview.groups.length === 0 ? (
-											<p
-												style={{
-													color: "var(--fg-muted)",
-													fontFamily: '"Noto Sans SC", sans-serif',
-													fontSize: 12,
-												}}
-											>
-												没有发现完全重复的条目。
-											</p>
-										) : (
-											<ul
-												style={{
-													listStyle: "none",
-													padding: 0,
-													margin: "12px 0",
-													maxHeight: 320,
-													overflowY: "auto",
-												}}
-											>
-												{dedupePreview.groups.slice(0, 20).map((group) => (
-													<li
-														key={`${group.tier}::${group.keepId}`}
-														style={{
-															padding: "6px 0",
-															borderBottom: "1px solid var(--border)",
-															fontSize: 11,
-															color: "var(--fg-muted)",
-															fontFamily: '"JetBrains Mono", monospace',
-														}}
-													>
-														<div style={{ color: "var(--fg)", marginBottom: 2 }}>
-															{group.content.length > 80
-																? `${group.content.slice(0, 80)}…`
-																: group.content}
-														</div>
-														<div>
-															tier={group.tier} · 删除 {group.deleteIds.length} 条 · 保留{" "}
-															{group.keepId.slice(0, 8)}
-														</div>
-													</li>
-												))}
-												{dedupePreview.groups.length > 20 ? (
-													<li
-														style={{
-															padding: "6px 0",
-															fontSize: 11,
-															color: "var(--fg-muted)",
-														}}
-													>
-														…还有 {dedupePreview.groups.length - 20} 组未显示
-													</li>
-												) : null}
-											</ul>
-										)}
-										<div
-											style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}
-										>
-											<button
-												type="button"
-												onClick={() => setDedupePreview(null)}
-												disabled={pendingAction != null}
-												data-testid="memory-dedupe-cancel"
-												style={{
-													padding: "6px 12px",
-													border: "1px solid var(--border)",
-													background: "transparent",
-													color: "var(--fg-muted)",
-													fontFamily: '"Noto Sans SC", sans-serif',
-													fontSize: 12,
-													cursor: "pointer",
-												}}
-											>
-												取消
-											</button>
-											<button
-												type="button"
-												onClick={() => void handleDedupeExecute()}
-												disabled={pendingAction != null || dedupePreview.totalDelete === 0}
-												data-testid="memory-dedupe-confirm"
-												style={{
-													padding: "6px 12px",
-													border: "1px solid var(--accent-vermillion)",
-													background: "var(--accent-vermillion)",
-													color: "var(--bg)",
-													fontFamily: '"Noto Sans SC", sans-serif',
-													fontSize: 12,
-													cursor:
-														pendingAction != null || dedupePreview.totalDelete === 0
-															? "not-allowed"
-															: "pointer",
-													opacity:
-														pendingAction != null || dedupePreview.totalDelete === 0 ? 0.5 : 1,
-												}}
-											>
-												{pendingAction === "dedupe-execute" ? "去重中…" : "确认去重"}
-											</button>
-										</div>
-									</div>
-								</div>
+								<ConsolidatePreviewModal
+									preview={dedupePreview}
+									pendingAction={pendingAction}
+									onCancel={() => setDedupePreview(null)}
+									onConfirm={() => void handleDedupeExecute()}
+								/>
 							) : null}
 						</>
 					)}
 				</section>
 			</main>
 		</>
+	);
+}
+
+/**
+ * 三类提案的视觉风格 / Visual palette for the three proposal kinds.
+ *
+ * 选色逻辑:
+ *   - dedupe          → 绿色 🗑  → 减法、清理废品
+ *   - kg-prune        → 橙色 ✂   → 剪除过期连接,警示意味
+ *   - reflect-insight → 蓝色 ✨   → 加法、新增智慧
+ *
+ * 颜色直接走 hex(非 token),因为现在还没在 globals.css 里建 success/warning/info
+ * 三色 token;QUI-187 follow-up 可以把这套色阶迁到 CSS 变量。
+ */
+const KIND_STYLES: Record<
+	ProposalKind,
+	{ readonly icon: string; readonly color: string; readonly label: string }
+> = {
+	dedupe: { icon: "🗑", color: "#2da44e", label: "去重" },
+	"kg-prune": { icon: "✂", color: "#cf7e1f", label: "图谱剪枝" },
+	"reflect-insight": { icon: "✨", color: "#3a8dde", label: "语义抽取" },
+};
+
+interface ConsolidatePreviewModalProps {
+	readonly preview: ConsolidatePreview;
+	readonly pendingAction: string | null;
+	readonly onCancel: () => void;
+	readonly onConfirm: () => void;
+}
+
+/**
+ * 智能整理 preview modal — 渲染 Consolidator 返的三类 proposal。
+ *
+ * 每个 proposal 用 kind 对应的颜色 + icon 标识,然后展开 reason / strategy /
+ * 影响 id 列表。最多展示 20 条,超出折叠提示。Confirm 调 dedupe execute
+ * (后端用同一个 plan 删 deleteIds);reflect-insight insert 暂时跳过(后端
+ * memory_insert tool 还没接入)。
+ */
+function ConsolidatePreviewModal({
+	preview,
+	pendingAction,
+	onCancel,
+	onConfirm,
+}: ConsolidatePreviewModalProps) {
+	const hasAnyDelete = preview.totalDelete > 0;
+	const visibleProposals = preview.proposals.slice(0, 20);
+	const overflow = preview.proposals.length - visibleProposals.length;
+	return (
+		<div
+			data-testid="memory-dedupe-preview"
+			role="dialog"
+			aria-modal="true"
+			aria-label="智能整理预览"
+			style={{
+				position: "fixed",
+				inset: 0,
+				background: "rgba(0,0,0,0.5)",
+				display: "flex",
+				alignItems: "center",
+				justifyContent: "center",
+				zIndex: 100,
+			}}
+		>
+			<div
+				style={{
+					background: "var(--bg)",
+					border: "1px solid var(--accent-vermillion)",
+					padding: "20px 24px",
+					maxWidth: 680,
+					minWidth: 360,
+					maxHeight: "80vh",
+					overflowY: "auto",
+				}}
+			>
+				<h2
+					style={{
+						margin: 0,
+						marginBottom: 12,
+						fontFamily: '"Noto Sans SC", sans-serif',
+						fontSize: 16,
+						color: "var(--fg)",
+					}}
+				>
+					✨ 智能整理预览
+				</h2>
+				<p
+					style={{
+						color: "var(--fg-muted)",
+						fontFamily: '"Noto Sans SC", sans-serif',
+						fontSize: 13,
+						lineHeight: 1.6,
+					}}
+				>
+					将删除 <strong data-testid="memory-dedupe-delete-count">{preview.totalDelete}</strong> 条
+					· 保留 <strong data-testid="memory-dedupe-keep-count">{preview.totalKeep}</strong> 条 ·
+					新增 <strong data-testid="memory-dedupe-insert-count">{preview.totalInsert}</strong> 条
+					insight
+					{preview.totalInsert > 0 ? "(后端 insert 待接入,confirm 后会跳过)" : ""}
+				</p>
+				{preview.proposals.length === 0 ? (
+					<p
+						style={{
+							color: "var(--fg-muted)",
+							fontFamily: '"Noto Sans SC", sans-serif',
+							fontSize: 12,
+						}}
+					>
+						没有发现需要整理的条目。
+					</p>
+				) : (
+					<ul
+						data-testid="memory-dedupe-proposals"
+						style={{
+							listStyle: "none",
+							padding: 0,
+							margin: "12px 0",
+							maxHeight: 360,
+							overflowY: "auto",
+						}}
+					>
+						{visibleProposals.map((proposal, idx) => {
+							const style = KIND_STYLES[proposal.kind];
+							// Compose a stable key — keepId / first deleteId / insert hash fallback.
+							const key = proposal.keepId ?? proposal.deleteIds[0] ?? `${proposal.kind}-${idx}`;
+							return (
+								<li
+									key={key}
+									data-testid={`memory-dedupe-proposal-${proposal.kind}`}
+									style={{
+										padding: "8px 0 10px",
+										borderBottom: "1px solid var(--border)",
+										fontSize: 11,
+										color: "var(--fg-muted)",
+										fontFamily: '"JetBrains Mono", monospace',
+									}}
+								>
+									<div
+										style={{
+											display: "flex",
+											gap: 8,
+											alignItems: "center",
+											marginBottom: 4,
+										}}
+									>
+										<span
+											style={{
+												display: "inline-flex",
+												alignItems: "center",
+												gap: 4,
+												padding: "2px 8px",
+												border: `1px solid ${style.color}`,
+												color: style.color,
+												fontSize: 10,
+												fontFamily: '"Noto Sans SC", sans-serif',
+												borderRadius: 2,
+											}}
+										>
+											<span aria-hidden="true">{style.icon}</span>
+											<span>{style.label}</span>
+										</span>
+										<span style={{ color: "var(--fg-muted)", fontSize: 10 }}>
+											tier={proposal.tier}
+											{proposal.strategy != null ? ` · strategy=${proposal.strategy}` : ""}
+											{proposal.score != null ? ` · score=${proposal.score.toFixed(2)}` : ""}
+										</span>
+									</div>
+									{proposal.reason.length > 0 ? (
+										<div
+											style={{
+												color: "var(--fg)",
+												marginBottom: 4,
+												fontFamily: '"Noto Sans SC", sans-serif',
+												fontSize: 12,
+												lineHeight: 1.5,
+											}}
+										>
+											{proposal.reason}
+										</div>
+									) : null}
+									{proposal.kind === "reflect-insight" && proposal.insertContent != null ? (
+										<div
+											style={{
+												color: style.color,
+												padding: "4px 8px",
+												border: `1px dashed ${style.color}`,
+												marginBottom: 4,
+												fontFamily: '"Noto Sans SC", sans-serif',
+												fontSize: 11,
+												lineHeight: 1.5,
+											}}
+										>
+											新 insight: {proposal.insertContent}
+										</div>
+									) : null}
+									<div>
+										{proposal.keepId != null ? (
+											<>
+												保留{" "}
+												<span style={{ color: "var(--fg)" }}>{proposal.keepId.slice(0, 8)}</span>
+												{" · "}
+											</>
+										) : null}
+										{proposal.deleteIds.length > 0 ? (
+											<>
+												{proposal.kind === "kg-prune" ? "剪除边" : "删除"}{" "}
+												{proposal.deleteIds.length} 条
+											</>
+										) : null}
+										{proposal.memoryIds.length > 0 ? (
+											<>
+												{proposal.deleteIds.length > 0 || proposal.keepId != null ? " · " : ""}
+												来源 {proposal.memoryIds.length} 条
+											</>
+										) : null}
+									</div>
+								</li>
+							);
+						})}
+						{overflow > 0 ? (
+							<li
+								style={{
+									padding: "6px 0",
+									fontSize: 11,
+									color: "var(--fg-muted)",
+								}}
+							>
+								…还有 {overflow} 条提案未显示
+							</li>
+						) : null}
+					</ul>
+				)}
+				<div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>
+					<button
+						type="button"
+						onClick={onCancel}
+						disabled={pendingAction != null}
+						data-testid="memory-dedupe-cancel"
+						style={{
+							padding: "6px 12px",
+							border: "1px solid var(--border)",
+							background: "transparent",
+							color: "var(--fg-muted)",
+							fontFamily: '"Noto Sans SC", sans-serif',
+							fontSize: 12,
+							cursor: "pointer",
+						}}
+					>
+						取消
+					</button>
+					<button
+						type="button"
+						onClick={onConfirm}
+						disabled={pendingAction != null || !hasAnyDelete}
+						data-testid="memory-dedupe-confirm"
+						style={{
+							padding: "6px 12px",
+							border: "1px solid var(--accent-vermillion)",
+							background: "var(--accent-vermillion)",
+							color: "var(--bg)",
+							fontFamily: '"Noto Sans SC", sans-serif',
+							fontSize: 12,
+							cursor: pendingAction != null || !hasAnyDelete ? "not-allowed" : "pointer",
+							opacity: pendingAction != null || !hasAnyDelete ? 0.5 : 1,
+						}}
+					>
+						{pendingAction === "dedupe-execute" ? "整理中…" : "执行整理"}
+					</button>
+				</div>
+			</div>
+		</div>
 	);
 }

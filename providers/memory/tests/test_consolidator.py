@@ -30,10 +30,14 @@ def test_default_consolidator_proposes_dry_run_actions_without_writes() -> None:
     assert proposal.dry_run is True
     assert proposal.budget.decision == "denied"
     assert proposal.writes_performed == 0
+    # QUI-187 cross-review Reviewer F REAL (2026-05-20):recompress_verbatim
+    # placeholder 已从 _proposal_actions 移除(它经 to_wire_dict 默认 fallback
+    # 错标 kind="reflect-insight" 导致 UI 误导)。docs/03-memory line 274 设计的
+    # verbatim 差分再压缩仍在 ConsolidationActionKind Literal union 中,等真实
+    # 实现路径接入时再恢复此 placeholder action。
     assert [action.kind for action in proposal.actions] == [
         "reflect",
         "prune_kg",
-        "recompress_verbatim",
     ]
     assert all(action.dry_run for action in proposal.actions)
     assert all(not action.writes_semantic for action in proposal.actions)
@@ -174,14 +178,17 @@ def test_update_recall_weights_produces_expected_deltas_per_action() -> None:
     proposal = c.propose(task="test", now=datetime(2026, 5, 1, tzinfo=UTC))
     updates = c._update_recall_weights(proposal)
 
-    # Verify all three consolidation actions map to weight updates
+    # Verify all consolidation actions map to weight updates
+    # QUI-187 Reviewer F REAL fix: recompress_verbatim placeholder 已移除
     action_kinds = {action.kind for action in proposal.actions}
-    assert action_kinds == {"reflect", "prune_kg", "recompress_verbatim"}
+    assert action_kinds == {"reflect", "prune_kg"}
 
     updated_keys = {update.source_prior_key for update in updates}
     assert "kg_subgraph" in updated_keys
     assert "direct_recall" in updated_keys
-    assert "bm25_fts" in updated_keys
+    # QUI-187 Reviewer F REAL fix:bm25_fts 是 recompress_verbatim placeholder 对应
+    # 的 weight update key,我已移除 placeholder,此 key 不再产生。
+    assert "bm25_fts" not in updated_keys
 
     # Each update has valid prior_delta (non-zero)
     for update in updates:

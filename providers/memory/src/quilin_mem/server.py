@@ -11,6 +11,7 @@ from typing import Any
 from mcp.server.fastmcp import Context, FastMCP
 
 from .consolidation_log import ConsolidationLogStore
+from .consolidator import ConsolidationStrategy, Consolidator
 from .event_log import TraceContext, parse_traceparent
 from .kg import TemporalKnowledgeGraph
 from .kg_backfill import backfill_kg_from_memory
@@ -322,6 +323,25 @@ async def _memory_store_with_store(
         _raise_memory_operation_error("memory_store", exc)
 
     return json.dumps({"id": record.id, **_trace_payload(trace_context)})
+
+
+async def _memory_consolidate_plan_with_store(
+    store: QuilinMemStore,
+    *,
+    strategy: ConsolidationStrategy = "all",
+    tier: MemoryTier | None = None,
+    trace_context: TraceContext | None = None,
+) -> str:
+    try:
+        proposal = Consolidator(store=store).propose(
+            strategy=strategy,
+            tier=tier,
+            task="quilin_mem.memory_consolidate_plan",
+        )
+    except Exception as exc:
+        _raise_memory_operation_error("memory_consolidate_plan", exc)
+
+    return json.dumps({**proposal.to_wire_dict(), **_trace_payload(trace_context)})
 
 
 def _trace_payload(trace_context: TraceContext | None) -> dict[str, str]:
@@ -796,6 +816,28 @@ def create_server(
         store = await resolve_store(ctx=None)
         await store.delete(memory_id)
         return json.dumps({"ok": True, "memory_id": memory_id})
+
+    @server.tool(name="memory_consolidate_plan")
+    async def memory_consolidate_plan_tool(
+        strategy: ConsolidationStrategy = "all",
+        tier: MemoryTier | None = None,
+        ctx: Context[object, Any, object] | None = None,
+    ) -> str:
+        """Preview memory consolidation proposals without mutating storage.
+
+        Strategies: ``dedupe`` groups duplicate records, ``reflect``
+        proposes semantic insights from episodic memory, ``kg-prune``
+        previews stale temporal edge cleanup, and ``all`` combines them.
+        It returns a preview only; callers must confirm and execute writes
+        through WriteAuthority-gated tools.
+        """
+        parent_trace = _trace_context_from_context(ctx)
+        return await _memory_consolidate_plan_with_store(
+            await resolve_store(ctx),
+            strategy=strategy,
+            tier=tier,
+            trace_context=_child_trace_context(parent_trace),
+        )
 
     @server.tool(name="scratchpad_write")
     async def scratchpad_write_tool(
