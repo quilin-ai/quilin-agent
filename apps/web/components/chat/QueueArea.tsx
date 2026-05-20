@@ -216,6 +216,13 @@ function QueueAreaRow({
 						value={draft}
 						onChange={(ev) => setDraft(ev.target.value)}
 						onKeyDown={(ev) => {
+							// IME guard:中日 IME 选词按 Enter 是确认候选词,不该提前 saveEdit。
+							// 与 Composer.tsx onKey 同 pattern。QUI-183 iter cross-review
+							// Reviewer A 提的 REAL #1 (2026-05-20)。
+							const ne = ev.nativeEvent as KeyboardEvent & {
+								readonly isComposing?: boolean;
+							};
+							if (ne.isComposing === true || ev.keyCode === 229) return;
 							if (ev.key === "Enter" && !ev.shiftKey) {
 								ev.preventDefault();
 								saveEdit();

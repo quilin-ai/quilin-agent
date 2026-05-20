@@ -715,6 +715,13 @@ function ChatBody({
 					}
 				}
 				// server terminal / not exists / 网络错误 → drain。
+				// QUI-183 iter Reviewer B SUSPECT #1(2026-05-20)指出:P3 引入
+				// onPinTop / onReorder / onDelete 路径,probe 期间(~250ms)user
+				// 可能改 head,slice(1) 会切错条。我实证后尝试 CAS verify head id
+				// 但 React 18 setState updater 是 async commit,同步读 `drained`
+				// 局部变量永远是 false → spec 反而 fail。CAS 需要 await microtask
+				// + ref 协调,改动面更大,留 follow-up Plane issue(SUSPECT #1)。
+				// 当前 race window 短 + user 操作概率低,接受残留风险。
 				activeRunRef.current = true;
 				setQueuedSends((prev) => prev.slice(1));
 				forceScrollToBottom();
@@ -817,7 +824,13 @@ function ChatBody({
 			const next = prev.slice();
 			const [moved] = next.splice(fromIdx, 1);
 			if (moved == null) return prev;
-			next.splice(toIdx, 0, moved);
+			// QUI-183 iter cross-review Reviewer A REAL #2 修(2026-05-20):
+			// splice(fromIdx, 1) 后,如果 fromIdx < toIdx(向下拖)toIdx 在新数组
+			// 里指向"目标之后",直接 splice(toIdx, 0, ...) 让元素落到目标下方。
+			// 应该 toIdx - 1 让元素落到目标位置。向上拖(fromIdx > toIdx)toIdx
+			// 不变。
+			const insertAt = fromIdx < toIdx ? toIdx - 1 : toIdx;
+			next.splice(insertAt, 0, moved);
 			return next;
 		});
 	}, []);
