@@ -720,7 +720,7 @@ function ChatBody({
 				// 可能改 head,slice(1) 会切错条。我实证后尝试 CAS verify head id
 				// 但 React 18 setState updater 是 async commit,同步读 `drained`
 				// 局部变量永远是 false → spec 反而 fail。CAS 需要 await microtask
-				// + ref 协调,改动面更大,留 follow-up Plane issue(SUSPECT #1)。
+				// + ref 协调,改动面更大,留 follow-up:**QUI-184**。
 				// 当前 race window 短 + user 操作概率低,接受残留风险。
 				activeRunRef.current = true;
 				setQueuedSends((prev) => prev.slice(1));
