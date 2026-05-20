@@ -117,17 +117,21 @@ test.describe("MCP per-server reconnect controls", () => {
 		await expect(reconnectBtn).toContainText(/重连/);
 	});
 
-	test("/tools renders compact reconnect cards inside the status snapshot", async ({ page }) => {
+	test("/tools no longer renders MCP server status snapshot (moved to /mcp page)", async ({
+		page,
+	}) => {
+		// QUI-183 sibling tweak (2026-05-20):/tools 只展示本地 builtin / inline,
+		// MCP server status 卡片整段已抽到独立 /mcp 页面。这条 spec 从"应当渲染"
+		// 翻为"不应当渲染",防回归。
 		await page.goto("/tools");
-		await expect(page.getByTestId("tools-view")).toBeVisible();
-		// Status snapshot is present once the catalog loads.
-		await expect(page.getByTestId("tools-mcp-status")).toBeVisible({ timeout: 15_000 });
+		await expect(page.getByTestId("tools-view")).toBeVisible({ timeout: 15_000 });
+		// 等 catalog 加载完(/tools 主区出现 filter input 视为 catalog 已 ready)
+		await expect(page.getByTestId("tools-filter")).toBeVisible({ timeout: 15_000 });
 
+		// MCP server status 区不应再出现
+		await expect(page.getByTestId("tools-mcp-status")).toHaveCount(0);
+		// 也不该有任何 compact MCP server card
 		const compactCards = page.locator('[data-testid^="mcp-server-compact-"]');
-		await expect(compactCards.first()).toBeVisible();
-		const firstTestId = (await compactCards.first().getAttribute("data-testid"))!;
-		const serverId = firstTestId.replace(/^mcp-server-compact-/, "");
-
-		await expect(page.getByTestId(`mcp-reconnect-${serverId}`)).toBeVisible();
+		await expect(compactCards).toHaveCount(0);
 	});
 });

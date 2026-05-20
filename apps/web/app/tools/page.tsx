@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { McpServerCard, type McpServerCardData } from "@/components/McpServerCard";
 import { AppHeader } from "@/components/shell/AppHeader";
 import { RailStrip } from "@/components/shell/RailStrip";
 import { Wordmark } from "@/components/shell/Wordmark";
@@ -11,8 +10,10 @@ interface ToolEntry {
 	readonly publicName: string;
 	readonly originalName: string;
 	readonly description: string;
+	// QUI-183 sibling tweak (2026-05-20): /tools 页只关心本地 builtin / inline,
+	// MCP 工具与 server 状态已迁到 /mcp 专属页面。API 仍可能返回 "mcp",前端
+	// 在 visibleTools 里直接过滤掉,UI 不再渲染 MCP 行 / filter / 副标题文案。
 	readonly source: "builtin" | "inline" | "mcp";
-	readonly mcpServer: string | null;
 	readonly inputShape: Record<string, string> | null;
 }
 
@@ -26,13 +27,6 @@ interface ToolsResponse {
 			readonly inline: number;
 			readonly mcp: number;
 		};
-		readonly byMcpServer: Record<string, number>;
-		readonly mcpServerStatus: ReadonlyArray<{
-			readonly id: string;
-			readonly transport: "stdio" | "http";
-			readonly toolCount: number;
-			readonly error: string | null;
-		}>;
 	};
 }
 
@@ -41,7 +35,7 @@ interface ToolsError {
 	readonly error: { readonly code: string; readonly message: string };
 }
 
-type SourceFilter = "all" | "builtin" | "inline" | "mcp";
+type SourceFilter = "all" | "builtin" | "inline";
 
 export default function ToolsPage() {
 	const [catalog, setCatalog] = useState<ToolsResponse["data"] | null>(null);
@@ -78,13 +72,14 @@ export default function ToolsPage() {
 		if (catalog == null) return [];
 		const needle = filter.trim().toLowerCase();
 		return catalog.tools.filter((t) => {
+			// QUI-183 sibling tweak: 整页过滤掉 MCP tools(独立 /mcp 页面承载)。
+			if (t.source === "mcp") return false;
 			if (sourceFilter !== "all" && t.source !== sourceFilter) return false;
 			if (needle.length === 0) return true;
 			return (
 				t.publicName.toLowerCase().includes(needle) ||
 				t.originalName.toLowerCase().includes(needle) ||
-				t.description.toLowerCase().includes(needle) ||
-				(t.mcpServer?.toLowerCase().includes(needle) ?? false)
+				t.description.toLowerCase().includes(needle)
 			);
 		});
 	}, [catalog, filter, sourceFilter]);
@@ -92,9 +87,9 @@ export default function ToolsPage() {
 	const groupedTools = useMemo(() => {
 		const groups: Record<string, ToolEntry[]> = {};
 		for (const t of visibleTools) {
-			const key = t.source === "mcp" ? `mcp:${t.mcpServer ?? "(unknown)"}` : t.source;
-			if (groups[key] == null) groups[key] = [];
-			groups[key].push(t);
+			const bucket = groups[t.source] ?? [];
+			bucket.push(t);
+			groups[t.source] = bucket;
 		}
 		return groups;
 	}, [visibleTools]);
@@ -122,13 +117,14 @@ export default function ToolsPage() {
 							Tools<span className="cjk">工具</span>
 						</h1>
 						<p className="q-page-subtitle">
-							当前 Agent 进程实际加载的全部工具 · Builtin / Inline / MCP namespace
+							当前 Agent 进程实际加载的本地工具 · Builtin / Inline(MCP 工具与 server 状态见 /mcp
+							页面)
 						</p>
 						<div className="q-page-stats">
 							{catalog == null ? null : (
 								<>
 									<span>
-										<strong>{catalog.counts.total}</strong>个工具
+										<strong>{catalog.counts.builtin + catalog.counts.inline}</strong>个本地工具
 									</span>
 									<span>
 										<strong>{catalog.counts.builtin}</strong>内置
@@ -138,9 +134,6 @@ export default function ToolsPage() {
 											<strong>{catalog.counts.inline}</strong>web-only
 										</span>
 									) : null}
-									<span>
-										<strong>{catalog.counts.mcp}</strong>MCP
-									</span>
 								</>
 							)}
 							<button
@@ -196,16 +189,14 @@ export default function ToolsPage() {
 										fontSize: 12,
 									}}
 								/>
-								{(["all", "builtin", "inline", "mcp"] as const).map((src) => {
+								{(["all", "builtin", "inline"] as const).map((src) => {
 									const active = sourceFilter === src;
 									const count =
 										src === "all"
-											? catalog.counts.total
+											? catalog.counts.builtin + catalog.counts.inline
 											: src === "builtin"
 												? catalog.counts.builtin
-												: src === "inline"
-													? catalog.counts.inline
-													: catalog.counts.mcp;
+												: catalog.counts.inline;
 									if (src !== "all" && count === 0) return null;
 									return (
 										<button
@@ -223,54 +214,12 @@ export default function ToolsPage() {
 												cursor: "pointer",
 											}}
 										>
-											{src === "all"
-												? "全部"
-												: src === "builtin"
-													? "内置"
-													: src === "inline"
-														? "Web only"
-														: "MCP"}
+											{src === "all" ? "全部" : src === "builtin" ? "内置" : "Web only"}
 											<span style={{ marginLeft: 6, opacity: 0.6 }}>{count}</span>
 										</button>
 									);
 								})}
 							</div>
-
-							{catalog.mcpServerStatus.length > 0 ? (
-								<div
-									data-testid="tools-mcp-status"
-									style={{
-										marginTop: 8,
-										marginBottom: 16,
-										padding: "8px 12px",
-										border: "1px solid var(--border)",
-										fontSize: 11,
-										fontFamily: '"JetBrains Mono", monospace',
-										color: "var(--fg-muted)",
-									}}
-								>
-									<div style={{ marginBottom: 4 }}>
-										MCP 服务器连接情况(失败的不会出现在工具列表里):
-									</div>
-									{catalog.mcpServerStatus.map((s) => {
-										const cardData: McpServerCardData = {
-											id: s.id,
-											transport: s.transport,
-											status: s.error == null ? "connected" : "failed",
-											toolCount: s.toolCount,
-											error: s.error,
-										};
-										return (
-											<McpServerCard
-												key={s.id}
-												server={cardData}
-												variant="compact"
-												onReconnected={() => void loadCatalog()}
-											/>
-										);
-									})}
-								</div>
-							) : null}
 
 							<div>
 								{visibleTools.length === 0 ? (
