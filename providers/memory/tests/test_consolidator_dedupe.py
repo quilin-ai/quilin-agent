@@ -331,6 +331,34 @@ async def test_reflect_strategy_with_empty_store_returns_no_reflections() -> Non
     assert proposal.reflections == ()
 
 
+async def test_cross_tier_fetch_only_returns_current_visible_records() -> None:
+    async with QuilinMemStore(db_path=":memory:") as store:
+        old = await store.store(
+            "Old visible fact",
+            tier="semantic",
+            metadata=dict(SEMANTIC_METADATA),
+        )
+        await store.supersede_memory(
+            old.id,
+            MemoryItem(
+                id="latest-visible",
+                content="Latest visible fact",
+                layer="semantic",
+                metadata=dict(SEMANTIC_METADATA),
+                created_at=old.created_at + timedelta(minutes=1),
+            ),
+        )
+        expired = await store.store("Expired hidden fact", tier="working")
+        store._conn.execute(  # type: ignore[attr-defined]
+            "UPDATE memory_records SET forget_after = ? WHERE id = ?",
+            ((datetime.now(UTC) - timedelta(days=1)).isoformat(), expired.id),
+        )
+
+        records = Consolidator(store=store)._fetch_all_active_records()
+
+    assert [record.id for record in records] == ["latest-visible"]
+
+
 async def test_reflect_strategy_uses_store_episodic_records_when_budget_allows() -> None:
     base = datetime(2026, 5, 20, tzinfo=UTC)
     budget = IdleBudgetProvider(enabled=True, token_budget=10_000)

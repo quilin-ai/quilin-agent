@@ -797,7 +797,7 @@ class Consolidator:
                     f"SELECT {record_columns()} FROM memory_records "
                     "WHERE deleted = 0 "
                     "AND is_latest = 1 "
-                    "AND (forget_after IS NULL OR forget_after > ?) "
+                    "AND (forget_after IS NULL OR forget_after > ? OR recovered_at IS NOT NULL) "
                     "ORDER BY rowid ASC",
                     (datetime.now(UTC).isoformat(),),
                 ).fetchall()

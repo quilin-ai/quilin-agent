@@ -54,6 +54,30 @@ class MemoryVersionInfo:
     strength: float
 
 
+@dataclass(frozen=True, slots=True)
+class DestructiveImpactPreview:
+    memory_id: str
+    exists: bool
+    currently_visible: bool
+    would_archive: bool
+    affected_records: int
+    recoverable: bool
+    recommended_action: str
+    archived_at: datetime | None = None
+
+    def to_wire_dict(self) -> dict[str, object]:
+        return {
+            "memory_id": self.memory_id,
+            "exists": self.exists,
+            "currently_visible": self.currently_visible,
+            "would_archive": self.would_archive,
+            "affected_records": self.affected_records,
+            "recoverable": self.recoverable,
+            "recommended_action": self.recommended_action,
+            "archived_at": self.archived_at.isoformat() if self.archived_at else None,
+        }
+
+
 def stable_hash(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 

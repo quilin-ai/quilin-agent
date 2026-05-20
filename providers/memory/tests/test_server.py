@@ -923,6 +923,7 @@ async def test_consolidation_log_recent_tool_returns_empty_when_no_entries(
 ) -> None:
     """Fresh server with no prior consolidation activity → entries=[] + total=0."""
     import json
+
     result = _decode_call_tool_result(
         await server.call_tool("consolidation_log_recent", {"limit": 10})  # type: ignore[attr-defined]
     )
@@ -939,6 +940,7 @@ async def test_kg_dump_for_viz_tool_returns_empty_payload_when_kg_unseeded(
 ) -> None:
     """Fresh server with no KG edges → nodes=[] + edges=[]."""
     import json
+
     result = _decode_call_tool_result(
         await server.call_tool("kg_dump_for_viz", {"limit": 100})  # type: ignore[attr-defined]
     )
@@ -990,3 +992,43 @@ async def test_memory_delete_idempotent_on_unknown_id(server: object) -> None:
     )
     payload = json.loads(result) if isinstance(result, str) else result
     assert payload.get("ok") is True
+
+
+async def test_destructive_tools_use_lifespan_context_store(monkeypatch: object) -> None:
+    """delete/preview/recover must use the same ctx store as memory_store."""
+    store = QuilinMemStore(db_path=":memory:")
+    server = create_server()
+    context = _RawContext(None, lifespan_context={"store": store})
+    monkeypatch.setattr(server, "get_context", lambda: context)  # type: ignore[attr-defined]
+
+    async with store:
+        result = _decode_call_tool_result(
+            await server.call_tool(  # type: ignore[attr-defined]
+                "memory_store",
+                {"content": "lifespan destructive fact", "tier": "episodic"},
+            )
+        )
+        memory_id = result["id"]
+
+        preview = _decode_call_tool_result(
+            await server.call_tool(  # type: ignore[attr-defined]
+                "memory_delete_preview",
+                {"memory_id": memory_id},
+            )
+        )
+        assert preview["would_archive"] is True
+
+        await server.call_tool(  # type: ignore[attr-defined]
+            "memory_delete",
+            {"memory_id": memory_id},
+        )
+        assert await store.get(memory_id) is None
+
+        recovered = _decode_call_tool_result(
+            await server.call_tool(  # type: ignore[attr-defined]
+                "memory_recover",
+                {"memory_id": memory_id},
+            )
+        )
+        assert recovered["recovered"] is True
+        assert await store.get(memory_id) is not None

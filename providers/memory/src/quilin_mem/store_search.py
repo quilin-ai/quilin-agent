@@ -291,7 +291,10 @@ def _active_visibility_clause(
         return "", ()
 
     prefix = f"{alias}." if alias else ""
-    return f"AND ({prefix}forget_after IS NULL OR {prefix}forget_after > ?)", (active_at,)
+    return (
+        f"AND ({prefix}forget_after IS NULL OR {prefix}forget_after > ? "
+        f"OR {prefix}recovered_at IS NOT NULL)"
+    ), (active_at,)
 
 
 def _limit_clause(limit: int | None) -> str:

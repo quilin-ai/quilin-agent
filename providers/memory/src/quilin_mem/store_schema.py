@@ -34,6 +34,8 @@ def ensure_store_schema(
             last_accessed TEXT NOT NULL,
             access_count INTEGER NOT NULL DEFAULT 0,
             importance_score REAL NOT NULL DEFAULT 0.5,
+            archived_at TEXT,
+            recovered_at TEXT,
             deleted INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1))
         )
         """
@@ -106,6 +108,14 @@ def _ensure_memory_record_columns(
         (
             "deleted",
             "ALTER TABLE memory_records ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "archived_at",
+            "ALTER TABLE memory_records ADD COLUMN archived_at TEXT",
+        ),
+        (
+            "recovered_at",
+            "ALTER TABLE memory_records ADD COLUMN recovered_at TEXT",
         ),
         (
             "version",
@@ -217,6 +227,16 @@ def _ensure_memory_record_columns(
         UPDATE memory_records
         SET strength = 1.0
         WHERE strength IS NULL
+        """
+    )
+    conn.execute(
+        """
+        UPDATE memory_records
+        SET archived_at = forget_after
+        WHERE deleted = 1
+          AND archived_at IS NULL
+          AND forget_after IS NOT NULL
+          AND trim(forget_after) != ''
         """
     )
 

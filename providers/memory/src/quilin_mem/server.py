@@ -858,10 +858,32 @@ def create_server(
         Returns:
             JSON string `{"ok": true, "memory_id": <id>}`.
         """
-        del ctx  # not used
-        store = await resolve_store(ctx=None)
+        store = await resolve_store(ctx)
         await store.delete(memory_id)
         return json.dumps({"ok": True, "memory_id": memory_id})
+
+    @server.tool(name="memory_delete_preview")
+    async def memory_delete_preview_tool(
+        memory_id: str,
+        ctx: Context[object, Any, object] | None = None,
+    ) -> str:
+        """Preview the impact of archiving one memory record without mutating storage."""
+        store = await resolve_store(ctx)
+        preview = await store.preview_delete(memory_id)
+        return json.dumps(preview.to_wire_dict(), ensure_ascii=False)
+
+    @server.tool(name="memory_recover")
+    async def memory_recover_tool(
+        memory_id: str,
+        ctx: Context[object, Any, object] | None = None,
+    ) -> str:
+        """Recover a recently archived memory record within the soft-delete window."""
+        store = await resolve_store(ctx)
+        recovered = await store.recover_memory(memory_id)
+        return json.dumps(
+            {"ok": True, "memory_id": memory_id, "recovered": recovered},
+            ensure_ascii=False,
+        )
 
     @server.tool(name="memory_consolidate_plan")
     async def memory_consolidate_plan_tool(

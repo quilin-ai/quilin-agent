@@ -5,7 +5,7 @@ import json
 import os
 import sqlite3
 import threading
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
@@ -25,6 +25,7 @@ from .store_serialization import row_to_record as _row_to_record
 from .store_serialization import validate_memory_tier as _validate_memory_tier
 from .store_validation import validate_semantic_ingestion_contract
 from .store_versioning import (
+    DestructiveImpactPreview,
     MemoryObservation,
     MemorySnapshot,
     MemorySource,
@@ -50,6 +51,7 @@ from .types import (
 FTS_SCHEMA_COMPONENT = _FTS_SCHEMA_COMPONENT
 FTS_SCHEMA_VERSION = _FTS_SCHEMA_VERSION
 HISTORY_SNAPSHOT_LABEL_PREFIX = "__history__:"
+DEFAULT_RECOVERY_WINDOW = timedelta(days=7)
 
 
 @runtime_checkable
@@ -68,6 +70,15 @@ class MemoryStore(Protocol):
     async def update(self, memory_id: str, content: str) -> None: ...
 
     async def delete(self, memory_id: str) -> None: ...
+
+    async def preview_delete(self, memory_id: str) -> DestructiveImpactPreview: ...
+
+    async def recover_memory(
+        self,
+        memory_id: str,
+        *,
+        recovery_window: timedelta = DEFAULT_RECOVERY_WINDOW,
+    ) -> bool: ...
 
     async def list_by_layer(
         self,
@@ -250,7 +261,7 @@ class QuilinMemStore:
                 WHERE id = ?
                   AND deleted = 0
                   AND is_latest = 1
-                  AND (forget_after IS NULL OR forget_after > ?)
+                  AND (forget_after IS NULL OR forget_after > ? OR recovered_at IS NOT NULL)
                 """,
                 (memory_id, active_at.isoformat()),
             ).fetchone()
@@ -337,15 +348,134 @@ class QuilinMemStore:
                 self._conn.execute(
                     """
                     UPDATE memory_records
-                    SET deleted = 1, forget_after = ?
+                    SET deleted = 1, archived_at = ?, forget_after = ?, recovered_at = NULL
                     WHERE id = ? AND deleted = 0 AND is_latest = 1
                     """,
-                    (deleted_at.isoformat(), memory_id),
+                    (deleted_at.isoformat(), deleted_at.isoformat(), memory_id),
                 )
                 self._conn.execute(
                     "DELETE FROM memory_records_fts WHERE id = ?",
                     (memory_id,),
                 )
+
+    async def preview_delete(self, memory_id: str) -> DestructiveImpactPreview:
+        return await asyncio.to_thread(self._preview_delete_sync, memory_id)
+
+    def _preview_delete_sync(self, memory_id: str) -> DestructiveImpactPreview:
+        with self._lock:
+            now = _utcnow()
+            row = self._conn.execute(
+                """
+                SELECT id, deleted, is_latest, forget_after, archived_at, recovered_at
+                FROM memory_records
+                WHERE id = ?
+                """,
+                (memory_id,),
+            ).fetchone()
+
+        if row is None:
+            return DestructiveImpactPreview(
+                memory_id=memory_id,
+                exists=False,
+                currently_visible=False,
+                would_archive=False,
+                affected_records=0,
+                recoverable=False,
+                recommended_action="no_record",
+            )
+
+        forget_after = (
+            datetime.fromisoformat(str(row["forget_after"])) if row["forget_after"] else None
+        )
+        archived_at = (
+            datetime.fromisoformat(str(row["archived_at"])) if row["archived_at"] else None
+        )
+        recovered_at = (
+            datetime.fromisoformat(str(row["recovered_at"])) if row["recovered_at"] else None
+        )
+        currently_visible = (
+            int(row["deleted"]) == 0
+            and int(row["is_latest"]) == 1
+            and (forget_after is None or forget_after > now or recovered_at is not None)
+        )
+        recoverable = (
+            currently_visible
+            or int(row["deleted"]) == 1
+            and int(row["is_latest"]) == 1
+            and archived_at is not None
+            and archived_at + DEFAULT_RECOVERY_WINDOW >= now
+        )
+        return DestructiveImpactPreview(
+            memory_id=memory_id,
+            exists=True,
+            currently_visible=currently_visible,
+            would_archive=currently_visible,
+            affected_records=1 if currently_visible else 0,
+            recoverable=recoverable,
+            recommended_action=(
+                "archive_then_recover_if_needed" if currently_visible else "no_current_record"
+            ),
+            archived_at=archived_at,
+        )
+
+    async def recover_memory(
+        self,
+        memory_id: str,
+        *,
+        recovery_window: timedelta = DEFAULT_RECOVERY_WINDOW,
+    ) -> bool:
+        return await asyncio.to_thread(
+            self._recover_memory_sync,
+            memory_id,
+            recovery_window,
+        )
+
+    def _recover_memory_sync(self, memory_id: str, recovery_window: timedelta) -> bool:
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            with self._conn:
+                row = self._conn.execute(
+                    f"""
+                    SELECT {record_columns()}, deleted, is_latest, archived_at
+                    FROM memory_records
+                    WHERE id = ?
+                    """,
+                    (memory_id,),
+                ).fetchone()
+                if row is None or int(row["deleted"]) == 0:
+                    return False
+                if int(row["is_latest"]) != 1:
+                    return False
+                if not row["archived_at"]:
+                    return False
+
+                archived_at = datetime.fromisoformat(str(row["archived_at"]))
+                if archived_at + recovery_window < _utcnow():
+                    raise ValueError(f"recovery window expired for memory record: {memory_id}")
+
+                recovered_at = _utcnow()
+                self._record_history_snapshot_locked(
+                    memory_id=memory_id,
+                    record=_row_to_record(row, now=_utcnow),
+                    label_kind="recover",
+                    snapshot_at=recovered_at,
+                )
+                self._conn.execute(
+                    """
+                    UPDATE memory_records
+                    SET deleted = 0, recovered_at = ?
+                    WHERE id = ? AND deleted = 1 AND is_latest = 1
+                    """,
+                    (recovered_at.isoformat(), memory_id),
+                )
+                self._conn.execute(
+                    """
+                    INSERT OR REPLACE INTO memory_records_fts (id, content, keywords)
+                    VALUES (?, ?, ?)
+                    """,
+                    (memory_id, row["content"], _build_keywords(row["content"])),
+                )
+                return True
 
     async def list_by_layer(
         self,
@@ -371,7 +501,7 @@ class QuilinMemStore:
                 WHERE tier = ?
                   AND deleted = 0
                   AND is_latest = 1
-                  AND (forget_after IS NULL OR forget_after > ?)
+                  AND (forget_after IS NULL OR forget_after > ? OR recovered_at IS NOT NULL)
                 ORDER BY rowid ASC
                 LIMIT ? OFFSET ?
                 """,
@@ -388,7 +518,7 @@ class QuilinMemStore:
         predicates = [
             "deleted = 0",
             "is_latest = 1",
-            "(forget_after IS NULL OR forget_after > ?)",
+            "(forget_after IS NULL OR forget_after > ? OR recovered_at IS NOT NULL)",
         ]
         params: list[object] = [now.isoformat()]
         if filters:
@@ -451,7 +581,7 @@ class QuilinMemStore:
                     WHERE tier = ?
                       AND deleted = 0
                       AND is_latest = 1
-                      AND (forget_after IS NULL OR forget_after > ?)
+                      AND (forget_after IS NULL OR forget_after > ? OR recovered_at IS NOT NULL)
                     """,
                     (resolved_layer, clear_at.isoformat()),
                 ).fetchall()
@@ -466,13 +596,18 @@ class QuilinMemStore:
                 cursor = self._conn.execute(
                     """
                     UPDATE memory_records
-                    SET deleted = 1, forget_after = ?
+                    SET deleted = 1, archived_at = ?, forget_after = ?, recovered_at = NULL
                     WHERE tier = ?
                       AND deleted = 0
                       AND is_latest = 1
-                      AND (forget_after IS NULL OR forget_after > ?)
+                      AND (forget_after IS NULL OR forget_after > ? OR recovered_at IS NOT NULL)
                     """,
-                    (clear_at.isoformat(), resolved_layer, clear_at.isoformat()),
+                    (
+                        clear_at.isoformat(),
+                        clear_at.isoformat(),
+                        resolved_layer,
+                        clear_at.isoformat(),
+                    ),
                 )
                 self._conn.execute(
                     """
@@ -780,7 +915,7 @@ class QuilinMemStore:
             with self._conn:
                 existing = self._conn.execute(
                     """
-                    SELECT version, is_latest, created_at, forget_after
+                    SELECT version, is_latest, created_at, forget_after, recovered_at
                     FROM memory_records
                     WHERE id = ? AND deleted = 0
                     """,
@@ -795,7 +930,11 @@ class QuilinMemStore:
                     if existing["forget_after"]
                     else None
                 )
-                if existing_forget_after is not None and existing_forget_after <= _utcnow():
+                if (
+                    existing_forget_after is not None
+                    and existing_forget_after <= _utcnow()
+                    and not existing["recovered_at"]
+                ):
                     raise ValueError(f"cannot supersede expired memory record: {memory_id}")
                 parent_created_at = datetime.fromisoformat(str(existing["created_at"]))
                 if replacement.created_at <= parent_created_at:
@@ -855,7 +994,7 @@ class QuilinMemStore:
             f"""
             SELECT {record_columns()}, version, parent_id, supersedes_json,
                    is_latest, source_event_id, evidence_hash, forget_after, strength,
-                   deleted
+                   archived_at, recovered_at, deleted
             FROM memory_records
             WHERE created_at <= ?
             ORDER BY rowid ASC
@@ -874,9 +1013,18 @@ class QuilinMemStore:
         for row in rows:
             if row["id"] in superseded_ids:
                 continue
+            if self._is_archived_at_locked(str(row["id"]), at):
+                continue
 
             forget_after = row_to_version_info(row).forget_after
-            if forget_after is not None and forget_after <= at:
+            recovered_at = None
+            if "recovered_at" in tuple(row.keys()) and row["recovered_at"]:
+                recovered_at = datetime.fromisoformat(str(row["recovered_at"]))
+            if (
+                forget_after is not None
+                and forget_after <= at
+                and (recovered_at is None or recovered_at > at)
+            ):
                 continue
             if int(row["deleted"]) == 1 and forget_after is None:
                 continue
@@ -885,6 +1033,32 @@ class QuilinMemStore:
             records.append(historical_record or _row_to_record(row, now=_utcnow))
 
         return records
+
+    def _is_archived_at_locked(self, memory_id: str, at: datetime) -> bool:
+        rows = self._conn.execute(
+            """
+            SELECT label
+            FROM memory_snapshot
+            WHERE label IN (?, ?, ?)
+              AND snapshot_at <= ?
+            ORDER BY snapshot_at ASC, rowid ASC
+            """,
+            (
+                f"{HISTORY_SNAPSHOT_LABEL_PREFIX}delete:{memory_id}",
+                f"{HISTORY_SNAPSHOT_LABEL_PREFIX}clear:{memory_id}",
+                f"{HISTORY_SNAPSHOT_LABEL_PREFIX}recover:{memory_id}",
+                at.isoformat(),
+            ),
+        ).fetchall()
+        archived = False
+        for row in rows:
+            label = str(row["label"])
+            if label.startswith(f"{HISTORY_SNAPSHOT_LABEL_PREFIX}recover:"):
+                archived = False
+            else:
+                archived = True
+
+        return archived
 
     def _record_history_snapshot_locked(
         self,
