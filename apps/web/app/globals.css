@@ -1371,6 +1371,118 @@ main.q-workspace.no-composer {
 	color: var(--bg);
 }
 
+/* QUI-183 P1: queue area — 排队消息编辑区,固定在 Composer 上方,
+   语义上是"待执行的指令列表"(可编辑、可重排、可删除),不是会话内容。
+   Composer 在 bottom:24px height ~96px,QueueArea 放 bottom:~128px 之上。 */
+.q-queue-area {
+	position: fixed;
+	bottom: 128px;
+	left: 50%;
+	transform: translateX(-50%);
+	width: calc(100% - 48px);
+	max-width: var(--col-width);
+	max-height: 32vh;
+	overflow-y: auto;
+	background: var(--bg-floating);
+	backdrop-filter: blur(12px);
+	-webkit-backdrop-filter: blur(12px);
+	border: 1px solid var(--border);
+	box-shadow: var(--shadow-soft);
+	padding: 8px 12px;
+	z-index: 19;
+	transition: border-color 180ms ease-out;
+	font-family: "JetBrains Mono", monospace;
+	font-size: 12px;
+}
+.q-queue-area-header {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 12px;
+	padding-bottom: 6px;
+	margin-bottom: 4px;
+	border-bottom: 1px solid var(--border);
+	color: var(--fg-muted);
+	font-size: 11px;
+	letter-spacing: 0.04em;
+}
+.q-queue-area-count strong {
+	color: var(--fg);
+	font-weight: 600;
+}
+.q-queue-area-hint {
+	font-size: 10px;
+	color: var(--fg-subtle);
+}
+.q-queue-area-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+.q-queue-area-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 4px 6px;
+	border: 1px solid transparent;
+	transition: border-color 120ms ease-out, background 120ms ease-out;
+}
+.q-queue-area-row:hover {
+	border-color: var(--border);
+	background: var(--bg-elev);
+}
+.q-queue-area-row-marker {
+	color: var(--fg-subtle);
+	font-size: 11px;
+	letter-spacing: 0.04em;
+	flex-shrink: 0;
+	min-width: 28px;
+}
+.q-queue-area-row-text {
+	flex: 1;
+	min-width: 0;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	color: var(--fg);
+}
+.q-queue-area-row-actions {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	flex-shrink: 0;
+}
+.q-queue-area-row-action {
+	width: 22px;
+	height: 22px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	background: transparent;
+	border: 1px solid transparent;
+	color: var(--fg-muted);
+	font-family: inherit;
+	font-size: 12px;
+	cursor: pointer;
+	padding: 0;
+	line-height: 1;
+}
+.q-queue-area-row-action:hover:not(:disabled) {
+	border-color: var(--border);
+	color: var(--fg);
+}
+.q-queue-area-row-action:disabled {
+	opacity: 0.3;
+	cursor: not-allowed;
+}
+.q-queue-area-row-action-danger:hover:not(:disabled) {
+	color: var(--destructive);
+	border-color: var(--destructive);
+}
+
 /* composer */
 footer.q-composer {
 	position: fixed;

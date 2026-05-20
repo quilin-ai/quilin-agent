@@ -9,6 +9,7 @@ import { Streamdown } from "streamdown";
 import { AsidePart, type AsidePartData } from "@/components/chat/AsidePart";
 import { InlineApproval, type InlineApprovalData } from "@/components/chat/InlineApproval";
 import { InlineQuestion, type InlineQuestionData } from "@/components/chat/InlineQuestion";
+import { QueueArea, type QueuedUserMessageView } from "@/components/chat/QueueArea";
 import { SubagentDetailView } from "@/components/chat/SubagentDetailView";
 import { SubagentLiveProgress } from "@/components/chat/SubagentLiveProgress";
 import { Process } from "@/components/conversation/Process";
@@ -776,9 +777,8 @@ function ChatBody({
 						streaming={streaming && idx === messages.length - 1 && m.role === "assistant"}
 					/>
 				))}
-				{queuedSends.map((queued, idx) => (
-					<QueuedUserTurn key={queued.id} message={queued} position={idx + 1} />
-				))}
+				{/* QUI-183 P1: 排队消息不再渲染在会话流内,改由 Composer 上方的
+				   QueueArea 组件承载(语义上是"待执行的指令列表",不是会话内容)。 */}
 				{/* Bottom sentinel for auto-scroll. The document scrolls (not q-view),
 				    so we anchor scrollIntoView() to this empty element at the end. */}
 				{/* Scroll anchor — `scroll-margin-bottom` keeps the *last
@@ -794,6 +794,10 @@ function ChatBody({
 					style={{ height: 1, scrollMarginBottom: "120px" }}
 				/>
 			</section>
+			{/* QUI-183 P1: queue 渲染区放在 Composer 上方,P3 接入 onDelete /
+			   onPinTop / onMoveUp / onMoveDown / onEdit 真实回调;P1 暂不传 → 按钮
+			   显示为 disabled placeholder。 */}
+			<QueueArea queued={queuedSends as readonly QueuedUserMessageView[]} />
 			<Composer
 				agents={[]}
 				currentAgentId="main"
@@ -804,28 +808,6 @@ function ChatBody({
 				sendBusyLabel={queuedSends.length > 0 ? `排队中 · ${queuedSends.length} 待发` : "思考中…"}
 			/>
 		</main>
-	);
-}
-
-function QueuedUserTurn({
-	message,
-	position,
-}: {
-	readonly message: QueuedUserMessage;
-	readonly position: number;
-}): React.ReactElement {
-	return (
-		<article className="q-turn" data-role="user" data-state="queued">
-			<div className="q-turn-label">
-				<span>you</span>
-				<span className="dot">·</span>
-				<span className="cjk-tag">你</span>
-				<span className="q-queued-badge">已排队 · queued {position}</span>
-			</div>
-			<div className="q-turn-body">
-				<p style={{ whiteSpace: "pre-wrap" }}>{message.text}</p>
-			</div>
-		</article>
 	);
 }
 

@@ -105,8 +105,14 @@ describe("ConversationView queued sends", () => {
 		fireEvent.click(screen.getByTestId("composer-send"));
 
 		expect(sendMessage).not.toHaveBeenCalled();
-		expect(screen.getByText("第二轮问题")).toBeInTheDocument();
-		expect(screen.getByText(/已排队 · queued 1/)).toBeInTheDocument();
+		// QUI-183 P1:排队消息从会话流抽到 Composer 上方 QueueArea 组件,
+		// 旧 q-queued-badge "已排队 · queued N" 被新 header "{N}条待发 · queued" +
+		// 行 marker "↳ N" 替代。test 改为断言 QueueArea section 出现 + 包含文本。
+		const queueArea = screen.getByTestId("queue-area");
+		expect(queueArea).toBeInTheDocument();
+		expect(queueArea.textContent ?? "").toContain("第二轮问题");
+		expect(queueArea.textContent ?? "").toContain("1");
+		expect(queueArea.textContent ?? "").toMatch(/queued/i);
 
 		chatState.status = "ready";
 		rerender(<ConversationView sessionId="queue-test-session" />);
