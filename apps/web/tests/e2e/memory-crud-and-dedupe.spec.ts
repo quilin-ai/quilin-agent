@@ -152,7 +152,7 @@ class FakeMemoryStore {
  * on UI assertions rather than wire bookkeeping.
  */
 async function installMemoryRoutes(page: Page, store: FakeMemoryStore): Promise<void> {
-	await page.route("**/api/memory", async (route: Route) => {
+	await page.route(/\/api\/memory($|\?)/, async (route: Route) => {
 		const request = route.request();
 		const method = request.method();
 		if (method === "GET") {
@@ -319,7 +319,7 @@ test.describe("Memory · CRUD + dedupe (mocked)", () => {
 		await installMemoryRoutes(page, store);
 
 		await page.route("**/api/memory/dedupe", async (route: Route) => {
-			const body = await route.request().postDataJSON().catch(() => ({}));
+			const body = (route.request().postDataJSON() ?? {}) as Record<string, unknown>;
 			// Preview path — execute=false (or undefined).
 			if (body?.execute !== true) {
 				await route.fulfill({
@@ -363,7 +363,7 @@ test.describe("Memory · CRUD + dedupe (mocked)", () => {
 		await installMemoryRoutes(page, store);
 
 		await page.route("**/api/memory/dedupe", async (route: Route) => {
-			const body = await route.request().postDataJSON().catch(() => ({}));
+			const body = (route.request().postDataJSON() ?? {}) as Record<string, unknown>;
 			if (body?.execute === true) {
 				// Mirror executePlan: dedupe deleteIds removed from store, kg-prune
 				// edge ids reported deleted but don't actually live in the record
