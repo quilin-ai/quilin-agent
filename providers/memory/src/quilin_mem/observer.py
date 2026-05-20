@@ -1539,11 +1539,17 @@ class L3aObserver:
             pass  # profile update is best-effort
 
 
-def _call_deepseek_api(base_url: str, api_key: str, payload: bytes) -> str:
+def _call_deepseek_api(
+    base_url: str, api_key: str, payload: bytes, *, timeout: float = 30.0
+) -> str:
     """Synchronous HTTP POST to DeepSeek chat completions endpoint.
 
     Extracted as a module-level function so tests can replace it via the
     ``_llm_caller`` injection point on ``L3aObserver``.
+
+    QUI-189 Reviewer 2 REAL #3 fix:加 ``timeout`` 参数让 callers(尤其是 batch judge,
+    需要 60s 而不是默认 30s — 否则 MCP tool 30s timeout 会比 LLM HTTP timeout 先到)
+    可以显式覆盖。默认仍 30s 保持现有 callers 行为不变。
     """
     req = Request(
         base_url,
@@ -1554,7 +1560,7 @@ def _call_deepseek_api(base_url: str, api_key: str, payload: bytes) -> str:
         },
         method="POST",
     )
-    with urlopen(req, timeout=30) as resp:
+    with urlopen(req, timeout=timeout) as resp:
         body = resp.read().decode("utf-8")
     data = json.loads(body)
     return data["choices"][0]["message"]["content"]

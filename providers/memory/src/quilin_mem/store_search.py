@@ -31,15 +31,33 @@ def candidate_rows(
     query: str,
     layer_filter: MemoryLayer | None,
     limit: int | None = None,
+    active_at: str | None = None,
 ) -> list[sqlite3.Row]:
     if not query:
-        return _all_rows(conn, layer_filter=layer_filter, limit=limit)
+        return _all_rows(
+            conn,
+            layer_filter=layer_filter,
+            limit=limit,
+            active_at=active_at,
+        )
 
-    rows = recall_with_fts(conn, query=query, layer_filter=layer_filter, limit=limit)
+    rows = recall_with_fts(
+        conn,
+        query=query,
+        layer_filter=layer_filter,
+        limit=limit,
+        active_at=active_at,
+    )
     if rows:
         return rows
 
-    return _like_rows(conn, query=query, layer_filter=layer_filter, limit=limit)
+    return _like_rows(
+        conn,
+        query=query,
+        layer_filter=layer_filter,
+        limit=limit,
+        active_at=active_at,
+    )
 
 
 def recall_with_fts(
@@ -48,23 +66,28 @@ def recall_with_fts(
     query: str,
     layer_filter: MemoryLayer | None,
     limit: int | None = None,
+    active_at: str | None = None,
 ) -> list[sqlite3.Row]:
     match_query = build_match_query(query)
     if match_query is None:
         return []
 
     limit_clause = _limit_clause(limit)
+    active_predicate, active_params = _active_visibility_clause("mr", active_at)
     if layer_filter is None:
         return conn.execute(
             f"""
             SELECT {record_columns("mr")}
             FROM memory_records_fts fts
             JOIN memory_records mr ON mr.id = fts.id
-            WHERE memory_records_fts MATCH ? AND mr.deleted = 0
+            WHERE memory_records_fts MATCH ?
+              AND mr.deleted = 0
+              AND mr.is_latest = 1
+              {active_predicate}
             ORDER BY bm25(memory_records_fts), mr.rowid ASC
             {limit_clause}
             """,
-            (match_query,),
+            (match_query, *active_params),
         ).fetchall()
 
     return conn.execute(
@@ -74,11 +97,13 @@ def recall_with_fts(
         JOIN memory_records mr ON mr.id = fts.id
         WHERE memory_records_fts MATCH ?
           AND mr.deleted = 0
+          AND mr.is_latest = 1
+          {active_predicate}
           AND mr.tier = ?
         ORDER BY bm25(memory_records_fts), mr.rowid ASC
         {limit_clause}
         """,
-        (match_query, layer_filter),
+        (match_query, *active_params, layer_filter),
     ).fetchall()
 
 
@@ -93,14 +118,14 @@ def rebuild_fts_index(
         INSERT INTO memory_records_fts (id, content, keywords)
         SELECT id, content, ''
         FROM memory_records
-        WHERE deleted = 0
+        WHERE deleted = 0 AND is_latest = 1
         """
     )
     rows = conn.execute(
         """
         SELECT id, content
         FROM memory_records
-        WHERE deleted = 0
+        WHERE deleted = 0 AND is_latest = 1
         ORDER BY rowid ASC
         """
     ).fetchall()
@@ -185,28 +210,34 @@ def _all_rows(
     *,
     layer_filter: MemoryLayer | None,
     limit: int | None = None,
+    active_at: str | None = None,
 ) -> list[sqlite3.Row]:
     limit_clause = _limit_clause(limit)
+    active_predicate, active_params = _active_visibility_clause(None, active_at)
     if layer_filter is None:
         return conn.execute(
             f"""
             SELECT {record_columns()}
             FROM memory_records
-            WHERE deleted = 0
+            WHERE deleted = 0 AND is_latest = 1
+              {active_predicate}
             ORDER BY rowid ASC
             {limit_clause}
-            """
+            """,
+            active_params,
         ).fetchall()
 
     return conn.execute(
         f"""
         SELECT {record_columns()}
         FROM memory_records
-        WHERE deleted = 0 AND tier = ?
+        WHERE deleted = 0 AND is_latest = 1
+          {active_predicate}
+          AND tier = ?
         ORDER BY rowid ASC
         {limit_clause}
         """,
-        (layer_filter,),
+        (*active_params, layer_filter),
     ).fetchall()
 
 
@@ -216,31 +247,51 @@ def _like_rows(
     query: str,
     layer_filter: MemoryLayer | None,
     limit: int | None = None,
+    active_at: str | None = None,
 ) -> list[sqlite3.Row]:
     like_query = f"%{query.lower()}%"
     limit_clause = _limit_clause(limit)
+    active_predicate, active_params = _active_visibility_clause(None, active_at)
     if layer_filter is None:
         return conn.execute(
             f"""
             SELECT {record_columns()}
             FROM memory_records
-            WHERE deleted = 0 AND lower(content) LIKE ?
+            WHERE deleted = 0
+              AND is_latest = 1
+              {active_predicate}
+              AND lower(content) LIKE ?
             ORDER BY rowid ASC
             {limit_clause}
             """,
-            (like_query,),
+            (*active_params, like_query),
         ).fetchall()
 
     return conn.execute(
         f"""
         SELECT {record_columns()}
         FROM memory_records
-        WHERE deleted = 0 AND tier = ? AND lower(content) LIKE ?
+        WHERE deleted = 0
+          AND is_latest = 1
+          {active_predicate}
+          AND tier = ?
+          AND lower(content) LIKE ?
         ORDER BY rowid ASC
         {limit_clause}
         """,
-        (layer_filter, like_query),
+        (*active_params, layer_filter, like_query),
     ).fetchall()
+
+
+def _active_visibility_clause(
+    alias: str | None,
+    active_at: str | None,
+) -> tuple[str, tuple[str, ...]]:
+    if active_at is None:
+        return "", ()
+
+    prefix = f"{alias}." if alias else ""
+    return f"AND ({prefix}forget_after IS NULL OR {prefix}forget_after > ?)", (active_at,)
 
 
 def _limit_clause(limit: int | None) -> str:

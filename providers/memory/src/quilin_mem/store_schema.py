@@ -57,6 +57,7 @@ def ensure_store_schema(
         )
         """
     )
+    _ensure_versioning_tables(conn)
     _ensure_fts_schema(conn, rebuild_fts_index=rebuild_fts_index)
     conn.commit()
 
@@ -105,6 +106,38 @@ def _ensure_memory_record_columns(
         (
             "deleted",
             "ALTER TABLE memory_records ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "version",
+            "ALTER TABLE memory_records ADD COLUMN version INTEGER NOT NULL DEFAULT 1",
+        ),
+        (
+            "parent_id",
+            "ALTER TABLE memory_records ADD COLUMN parent_id TEXT",
+        ),
+        (
+            "supersedes_json",
+            "ALTER TABLE memory_records ADD COLUMN supersedes_json TEXT",
+        ),
+        (
+            "is_latest",
+            "ALTER TABLE memory_records ADD COLUMN is_latest INTEGER NOT NULL DEFAULT 1",
+        ),
+        (
+            "source_event_id",
+            "ALTER TABLE memory_records ADD COLUMN source_event_id TEXT",
+        ),
+        (
+            "evidence_hash",
+            "ALTER TABLE memory_records ADD COLUMN evidence_hash TEXT",
+        ),
+        (
+            "forget_after",
+            "ALTER TABLE memory_records ADD COLUMN forget_after TEXT",
+        ),
+        (
+            "strength",
+            "ALTER TABLE memory_records ADD COLUMN strength REAL NOT NULL DEFAULT 1.0",
         ),
     )
     for column_name, statement in additions:
@@ -165,6 +198,88 @@ def _ensure_memory_record_columns(
         WHERE deleted IS NULL
         """
     )
+    conn.execute(
+        """
+        UPDATE memory_records
+        SET version = 1
+        WHERE version IS NULL OR version < 1
+        """
+    )
+    conn.execute(
+        """
+        UPDATE memory_records
+        SET is_latest = 1
+        WHERE is_latest IS NULL
+        """
+    )
+    conn.execute(
+        """
+        UPDATE memory_records
+        SET strength = 1.0
+        WHERE strength IS NULL
+        """
+    )
+
+
+def _ensure_versioning_tables(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS memory_observations (
+            id TEXT PRIMARY KEY,
+            source_event_id TEXT,
+            content TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            observed_at TEXT NOT NULL,
+            actor_id TEXT,
+            role TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS memory_sources (
+            id TEXT PRIMARY KEY,
+            memory_record_id TEXT NOT NULL,
+            observation_id TEXT NOT NULL,
+            source_type TEXT NOT NULL DEFAULT 'observation',
+            source_uri TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_memory_sources_record
+        ON memory_sources(memory_record_id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_memory_sources_observation
+        ON memory_sources(observation_id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS memory_snapshot (
+            id TEXT PRIMARY KEY,
+            label TEXT,
+            snapshot_at TEXT NOT NULL,
+            memory_ids_json TEXT NOT NULL,
+            records_json TEXT,
+            signature_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    snapshot_columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(memory_snapshot)").fetchall()
+    }
+    if "records_json" not in snapshot_columns:
+        conn.execute("ALTER TABLE memory_snapshot ADD COLUMN records_json TEXT")
 
 
 def _ensure_fts_schema(

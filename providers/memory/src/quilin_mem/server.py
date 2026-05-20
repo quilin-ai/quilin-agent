@@ -355,19 +355,29 @@ async def _memory_consolidate_plan_with_store(
     充足 token budget,允许 dedupe 完整跑(embedding + LLM judge)。
     实际写入(execute=True 路径)仍走 WriteAuthority gate。
     """
-    from .consolidator import _DeepseekConsolidationJudge
+    from .consolidator import (
+        _DeepseekBatchJudge,
+        _DeepseekConsolidationJudge,
+        _env_flag_disabled,
+    )
     from .idle_budget import IdleBudgetProvider as _IdleBudgetProvider
 
     budget_provider = _IdleBudgetProvider(enabled=True, token_budget=1_000_000)
-    # 注入 LLM judge(deepseek-v4-flash 便宜模型),识别"老孟→孟哥/小明→小花"
-    # 这类 entity 演化(hash embedding 无法识别)。无 API key 时 judge 自动
-    # fallback "distinct",dedupe 退化为 exact-only。
+    # QUI-189 batch LLM judge — 默认启用 1 次 batch call 替代 per-pair LLM
+    # judge,9 条记忆场景 5s 内完成 vs 之前 ~90s 超 MCP timeout。
+    # env `QUILIN_DEDUPE_BATCH_ENABLED=false` opt-out 退回 per-pair 路径。
+    # 注入 per-pair judge 作为 batch 失败时的 fallback(LLM JSON invalid /
+    # API error / timeout / 无 key)。
     dedupe_judge = _DeepseekConsolidationJudge().judge
+    batch_judge = None
+    if not _env_flag_disabled("QUILIN_DEDUPE_BATCH_ENABLED"):
+        batch_judge = _DeepseekBatchJudge().judge_batch
     try:
         proposal = Consolidator(
             budget_provider=budget_provider,
             store=store,
             dedupe_judge=dedupe_judge,
+            batch_judge=batch_judge,
         ).propose(
             strategy=strategy,
             tier=tier,

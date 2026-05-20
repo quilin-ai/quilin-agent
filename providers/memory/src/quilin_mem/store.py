@@ -24,6 +24,21 @@ from .store_serialization import deserialize_metadata as _deserialize_metadata
 from .store_serialization import row_to_record as _row_to_record
 from .store_serialization import validate_memory_tier as _validate_memory_tier
 from .store_validation import validate_semantic_ingestion_contract
+from .store_versioning import (
+    MemoryObservation,
+    MemorySnapshot,
+    MemorySource,
+    MemoryVersionInfo,
+    coerce_metadata,
+    dumps_json,
+    new_id,
+    row_to_observation,
+    row_to_snapshot,
+    row_to_source,
+    row_to_version_info,
+    stable_hash,
+    values_for_json,
+)
 from .types import (
     MemoryItem,
     MemoryLayer,
@@ -34,6 +49,7 @@ from .types import (
 
 FTS_SCHEMA_COMPONENT = _FTS_SCHEMA_COMPONENT
 FTS_SCHEMA_VERSION = _FTS_SCHEMA_VERSION
+HISTORY_SNAPSHOT_LABEL_PREFIX = "__history__:"
 
 
 @runtime_checkable
@@ -152,6 +168,9 @@ class QuilinMemStore:
             with self._conn:
                 self._conn.execute("DELETE FROM memory_records")
                 self._conn.execute("DELETE FROM memory_records_fts")
+                self._conn.execute("DELETE FROM memory_sources")
+                self._conn.execute("DELETE FROM memory_observations")
+                self._conn.execute("DELETE FROM memory_snapshot")
 
     async def close(self) -> None:
         await asyncio.to_thread(self._close_sync)
@@ -200,11 +219,13 @@ class QuilinMemStore:
     ) -> list[MemoryItem]:
         effective_limit = max(limit, 0)
         with self._lock:
+            now = _utcnow()
             rows = candidate_rows(
                 self._conn,
                 query=query,
                 layer_filter=layer_filter(filters),
                 limit=_candidate_limit(limit, filters),
+                active_at=now.isoformat(),
             )
             items = [_row_to_record(row, now=_utcnow) for row in rows]
             filtered = [item for item in items if matches_filters(item, filters)]
@@ -221,13 +242,17 @@ class QuilinMemStore:
 
     def _get_sync(self, memory_id: str) -> MemoryItem | None:
         with self._lock:
+            active_at = _utcnow()
             row = self._conn.execute(
                 f"""
                 SELECT {record_columns()}
                 FROM memory_records
-                WHERE id = ? AND deleted = 0
+                WHERE id = ?
+                  AND deleted = 0
+                  AND is_latest = 1
+                  AND (forget_after IS NULL OR forget_after > ?)
                 """,
-                (memory_id,),
+                (memory_id, active_at.isoformat()),
             ).fetchone()
             if row is None:
                 return None
@@ -242,30 +267,36 @@ class QuilinMemStore:
 
     def _update_sync(self, memory_id: str, content: str) -> None:
         with self._lock:
-            row = self._conn.execute(
-                """
-                SELECT tier, content_type, metadata_json
-                FROM memory_records
-                WHERE id = ? AND deleted = 0
-                """,
-                (memory_id,),
-            ).fetchone()
-            if row is None:
-                return
-
-            validate_semantic_ingestion_contract(
-                layer=validate_memory_layer(row["tier"]),
-                content_type=row["content_type"],
-                metadata=_deserialize_metadata(row["metadata_json"]),
-                content=content,
-            )
             self._conn.execute("BEGIN IMMEDIATE")
             with self._conn:
+                row = self._conn.execute(
+                    f"""
+                    SELECT {record_columns()}
+                    FROM memory_records
+                    WHERE id = ? AND deleted = 0 AND is_latest = 1
+                    """,
+                    (memory_id,),
+                ).fetchone()
+                if row is None:
+                    return
+
+                validate_semantic_ingestion_contract(
+                    layer=validate_memory_layer(row["tier"]),
+                    content_type=row["content_type"],
+                    metadata=_deserialize_metadata(row["metadata_json"]),
+                    content=content,
+                )
+                self._record_history_snapshot_locked(
+                    memory_id=memory_id,
+                    record=_row_to_record(row, now=_utcnow),
+                    label_kind="update",
+                    snapshot_at=_utcnow(),
+                )
                 self._conn.execute(
                     """
                     UPDATE memory_records
                     SET content = ?, embedding_json = NULL
-                    WHERE id = ? AND deleted = 0
+                    WHERE id = ? AND deleted = 0 AND is_latest = 1
                     """,
                     (content, memory_id),
                 )
@@ -285,13 +316,31 @@ class QuilinMemStore:
         with self._lock:
             self._conn.execute("BEGIN IMMEDIATE")
             with self._conn:
+                row = self._conn.execute(
+                    f"""
+                    SELECT {record_columns()}
+                    FROM memory_records
+                    WHERE id = ? AND deleted = 0 AND is_latest = 1
+                    """,
+                    (memory_id,),
+                ).fetchone()
+                if row is None:
+                    return
+
+                deleted_at = _utcnow()
+                self._record_history_snapshot_locked(
+                    memory_id=memory_id,
+                    record=_row_to_record(row, now=_utcnow),
+                    label_kind="delete",
+                    snapshot_at=deleted_at,
+                )
                 self._conn.execute(
                     """
                     UPDATE memory_records
-                    SET deleted = 1
-                    WHERE id = ? AND deleted = 0
+                    SET deleted = 1, forget_after = ?
+                    WHERE id = ? AND deleted = 0 AND is_latest = 1
                     """,
-                    (memory_id,),
+                    (deleted_at.isoformat(), memory_id),
                 )
                 self._conn.execute(
                     "DELETE FROM memory_records_fts WHERE id = ?",
@@ -314,15 +363,19 @@ class QuilinMemStore:
     ) -> list[MemoryItem]:
         resolved_layer = validate_memory_layer(layer)
         with self._lock:
+            now = _utcnow()
             rows = self._conn.execute(
                 f"""
                 SELECT {record_columns()}
                 FROM memory_records
-                WHERE tier = ? AND deleted = 0
+                WHERE tier = ?
+                  AND deleted = 0
+                  AND is_latest = 1
+                  AND (forget_after IS NULL OR forget_after > ?)
                 ORDER BY rowid ASC
                 LIMIT ? OFFSET ?
                 """,
-                (resolved_layer, max(limit, 0), max(offset, 0)),
+                (resolved_layer, now.isoformat(), max(limit, 0), max(offset, 0)),
             ).fetchall()
 
         return [_row_to_record(row, now=_utcnow) for row in rows]
@@ -331,8 +384,13 @@ class QuilinMemStore:
         return await asyncio.to_thread(self._count_sync, filters)
 
     def _count_sync(self, filters: dict[str, Any] | None = None) -> int:
-        predicates = ["deleted = 0"]
-        params: list[object] = []
+        now = _utcnow()
+        predicates = [
+            "deleted = 0",
+            "is_latest = 1",
+            "(forget_after IS NULL OR forget_after > ?)",
+        ]
+        params: list[object] = [now.isoformat()]
         if filters:
             resolved_layer_filter = layer_filter(filters)
             if resolved_layer_filter is not None:
@@ -385,13 +443,36 @@ class QuilinMemStore:
         with self._lock:
             self._conn.execute("BEGIN IMMEDIATE")
             with self._conn:
+                clear_at = _utcnow()
+                rows = self._conn.execute(
+                    f"""
+                    SELECT {record_columns()}
+                    FROM memory_records
+                    WHERE tier = ?
+                      AND deleted = 0
+                      AND is_latest = 1
+                      AND (forget_after IS NULL OR forget_after > ?)
+                    """,
+                    (resolved_layer, clear_at.isoformat()),
+                ).fetchall()
+                for row in rows:
+                    memory_id = row["id"]
+                    self._record_history_snapshot_locked(
+                        memory_id=memory_id,
+                        record=_row_to_record(row, now=_utcnow),
+                        label_kind="clear",
+                        snapshot_at=clear_at,
+                    )
                 cursor = self._conn.execute(
                     """
                     UPDATE memory_records
-                    SET deleted = 1
-                    WHERE tier = ? AND deleted = 0
+                    SET deleted = 1, forget_after = ?
+                    WHERE tier = ?
+                      AND deleted = 0
+                      AND is_latest = 1
+                      AND (forget_after IS NULL OR forget_after > ?)
                     """,
-                    (resolved_layer,),
+                    (clear_at.isoformat(), resolved_layer, clear_at.isoformat()),
                 )
                 self._conn.execute(
                     """
@@ -399,7 +480,7 @@ class QuilinMemStore:
                     WHERE id IN (
                         SELECT id
                         FROM memory_records
-                        WHERE tier = ? AND deleted = 1
+                    WHERE tier = ? AND deleted = 1
                     )
                     """,
                     (resolved_layer,),
@@ -412,7 +493,12 @@ class QuilinMemStore:
 
     def _recall_sync(self, query: str) -> list[MemoryRecord]:
         with self._lock:
-            rows = candidate_rows(self._conn, query=query, layer_filter=None)
+            rows = candidate_rows(
+                self._conn,
+                query=query,
+                layer_filter=None,
+                active_at=_utcnow().isoformat(),
+            )
 
         return [_row_to_record(row, now=_utcnow) for row in rows]
 
@@ -472,6 +558,504 @@ class QuilinMemStore:
                 insert_memory(self._conn, record, build_keywords=_build_keywords)
 
         return record
+
+    async def record_observation(
+        self,
+        *,
+        content: str,
+        source_event_id: str | None = None,
+        observed_at: datetime | None = None,
+        actor_id: str | None = None,
+        role: str | None = None,
+        metadata: dict[str, object] | None = None,
+    ) -> MemoryObservation:
+        return await asyncio.to_thread(
+            self._record_observation_sync,
+            content,
+            source_event_id,
+            observed_at,
+            actor_id,
+            role,
+            metadata,
+        )
+
+    def _record_observation_sync(
+        self,
+        content: str,
+        source_event_id: str | None,
+        observed_at: datetime | None,
+        actor_id: str | None,
+        role: str | None,
+        metadata: dict[str, object] | None,
+    ) -> MemoryObservation:
+        observation_id = new_id()
+        timestamp = observed_at or _utcnow()
+        created_at = _utcnow()
+        content_hash = stable_hash(content)
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            with self._conn:
+                self._conn.execute(
+                    """
+                    INSERT INTO memory_observations (
+                        id,
+                        source_event_id,
+                        content,
+                        content_hash,
+                        observed_at,
+                        actor_id,
+                        role,
+                        metadata_json,
+                        created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        observation_id,
+                        source_event_id,
+                        content,
+                        content_hash,
+                        timestamp.isoformat(),
+                        actor_id,
+                        role,
+                        coerce_metadata(metadata),
+                        created_at.isoformat(),
+                    ),
+                )
+                row = self._conn.execute(
+                    """
+                    SELECT id, source_event_id, content, content_hash, observed_at,
+                           actor_id, role, metadata_json
+                    FROM memory_observations
+                    WHERE id = ?
+                    """,
+                    (observation_id,),
+                ).fetchone()
+
+        return row_to_observation(row)
+
+    async def link_memory_source(
+        self,
+        *,
+        memory_id: str,
+        observation_id: str,
+        source_type: str = "observation",
+        source_uri: str | None = None,
+        metadata: dict[str, object] | None = None,
+    ) -> MemorySource:
+        return await asyncio.to_thread(
+            self._link_memory_source_sync,
+            memory_id,
+            observation_id,
+            source_type,
+            source_uri,
+            metadata,
+        )
+
+    def _link_memory_source_sync(
+        self,
+        memory_id: str,
+        observation_id: str,
+        source_type: str,
+        source_uri: str | None,
+        metadata: dict[str, object] | None,
+    ) -> MemorySource:
+        source_id = new_id()
+        created_at = _utcnow()
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            with self._conn:
+                memory_exists = self._conn.execute(
+                    """
+                    SELECT 1
+                    FROM memory_records
+                    WHERE id = ?
+                    """,
+                    (memory_id,),
+                ).fetchone()
+                if memory_exists is None:
+                    raise KeyError(f"memory record not found: {memory_id}")
+
+                observation_exists = self._conn.execute(
+                    """
+                    SELECT 1
+                    FROM memory_observations
+                    WHERE id = ?
+                    """,
+                    (observation_id,),
+                ).fetchone()
+                if observation_exists is None:
+                    raise KeyError(f"memory observation not found: {observation_id}")
+
+                self._conn.execute(
+                    """
+                    INSERT INTO memory_sources (
+                        id,
+                        memory_record_id,
+                        observation_id,
+                        source_type,
+                        source_uri,
+                        metadata_json,
+                        created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        source_id,
+                        memory_id,
+                        observation_id,
+                        source_type,
+                        source_uri,
+                        coerce_metadata(metadata),
+                        created_at.isoformat(),
+                    ),
+                )
+                row = self._conn.execute(
+                    """
+                    SELECT id, memory_record_id, observation_id, source_type,
+                           source_uri, metadata_json, created_at
+                    FROM memory_sources
+                    WHERE id = ?
+                    """,
+                    (source_id,),
+                ).fetchone()
+
+        return row_to_source(row)
+
+    async def get_memory_sources(self, memory_id: str) -> list[MemorySource]:
+        return await asyncio.to_thread(self._get_memory_sources_sync, memory_id)
+
+    def _get_memory_sources_sync(self, memory_id: str) -> list[MemorySource]:
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT id, memory_record_id, observation_id, source_type,
+                       source_uri, metadata_json, created_at
+                FROM memory_sources
+                WHERE memory_record_id = ?
+                ORDER BY rowid ASC
+                """,
+                (memory_id,),
+            ).fetchall()
+
+        return [row_to_source(row) for row in rows]
+
+    async def supersede_memory(
+        self,
+        memory_id: str,
+        replacement: MemoryItem,
+        *,
+        source_event_id: str | None = None,
+        evidence_hash: str | None = None,
+        forget_after: datetime | None = None,
+        strength: float = 1.0,
+    ) -> str:
+        return await asyncio.to_thread(
+            self._supersede_memory_sync,
+            memory_id,
+            replacement,
+            source_event_id,
+            evidence_hash,
+            forget_after,
+            strength,
+        )
+
+    def _supersede_memory_sync(
+        self,
+        memory_id: str,
+        replacement: MemoryItem,
+        source_event_id: str | None,
+        evidence_hash: str | None,
+        forget_after: datetime | None,
+        strength: float,
+    ) -> str:
+        validate_semantic_ingestion_contract(
+            layer=replacement.layer,
+            content_type=replacement.content_type,
+            metadata=dict(replacement.metadata),
+            content=replacement.content,
+        )
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            with self._conn:
+                existing = self._conn.execute(
+                    """
+                    SELECT version, is_latest, created_at, forget_after
+                    FROM memory_records
+                    WHERE id = ? AND deleted = 0
+                    """,
+                    (memory_id,),
+                ).fetchone()
+                if existing is None:
+                    raise KeyError(f"memory record not found: {memory_id}")
+                if int(existing["is_latest"]) != 1:
+                    raise ValueError(f"cannot supersede non-latest memory record: {memory_id}")
+                existing_forget_after = (
+                    datetime.fromisoformat(str(existing["forget_after"]))
+                    if existing["forget_after"]
+                    else None
+                )
+                if existing_forget_after is not None and existing_forget_after <= _utcnow():
+                    raise ValueError(f"cannot supersede expired memory record: {memory_id}")
+                parent_created_at = datetime.fromisoformat(str(existing["created_at"]))
+                if replacement.created_at <= parent_created_at:
+                    raise ValueError("replacement.created_at must be after parent created_at")
+
+                self._conn.execute(
+                    """
+                    UPDATE memory_records
+                    SET is_latest = 0
+                    WHERE id = ? AND deleted = 0
+                    """,
+                    (memory_id,),
+                )
+                insert_memory(
+                    self._conn,
+                    replacement,
+                    build_keywords=_build_keywords,
+                    version=int(existing["version"]) + 1,
+                    parent_id=memory_id,
+                    supersedes=[memory_id],
+                    source_event_id=source_event_id,
+                    evidence_hash=evidence_hash,
+                    forget_after=forget_after,
+                    strength=strength,
+                )
+
+        return replacement.id
+
+    async def get_version_info(self, memory_id: str) -> MemoryVersionInfo:
+        return await asyncio.to_thread(self._get_version_info_sync, memory_id)
+
+    def _get_version_info_sync(self, memory_id: str) -> MemoryVersionInfo:
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT id, version, parent_id, supersedes_json, is_latest,
+                       source_event_id, evidence_hash, forget_after, strength
+                FROM memory_records
+                WHERE id = ?
+                """,
+                (memory_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"memory record not found: {memory_id}")
+
+        return row_to_version_info(row)
+
+    async def checkout_at(self, at: datetime) -> list[MemoryItem]:
+        return await asyncio.to_thread(self._checkout_at_sync, at)
+
+    def _checkout_at_sync(self, at: datetime) -> list[MemoryItem]:
+        with self._lock:
+            return self._checkout_at_locked(at)
+
+    def _checkout_at_locked(self, at: datetime) -> list[MemoryItem]:
+        rows = self._conn.execute(
+            f"""
+            SELECT {record_columns()}, version, parent_id, supersedes_json,
+                   is_latest, source_event_id, evidence_hash, forget_after, strength,
+                   deleted
+            FROM memory_records
+            WHERE created_at <= ?
+            ORDER BY rowid ASC
+            """,
+            (at.isoformat(),),
+        ).fetchall()
+        historical_records = self._history_records_after_locked(at)
+        superseded_ids: set[str] = set()
+        for row in rows:
+            parent_id = row["parent_id"]
+            if parent_id:
+                superseded_ids.add(str(parent_id))
+            superseded_ids.update(json.loads(row["supersedes_json"] or "[]"))
+
+        records: list[MemoryItem] = []
+        for row in rows:
+            if row["id"] in superseded_ids:
+                continue
+
+            forget_after = row_to_version_info(row).forget_after
+            if forget_after is not None and forget_after <= at:
+                continue
+            if int(row["deleted"]) == 1 and forget_after is None:
+                continue
+
+            historical_record = historical_records.get(row["id"])
+            records.append(historical_record or _row_to_record(row, now=_utcnow))
+
+        return records
+
+    def _record_history_snapshot_locked(
+        self,
+        *,
+        memory_id: str,
+        record: MemoryItem,
+        label_kind: str,
+        snapshot_at: datetime,
+    ) -> None:
+        records_json = dumps_json([record.to_wire_dict()])
+        self._conn.execute(
+            """
+            INSERT INTO memory_snapshot (
+                id,
+                label,
+                snapshot_at,
+                memory_ids_json,
+                records_json,
+                signature_hash,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                new_id(),
+                f"{HISTORY_SNAPSHOT_LABEL_PREFIX}{label_kind}:{memory_id}",
+                snapshot_at.isoformat(),
+                values_for_json([memory_id]),
+                records_json,
+                stable_hash(records_json),
+                snapshot_at.isoformat(),
+            ),
+        )
+
+    def _history_records_after_locked(self, at: datetime) -> dict[str, MemoryItem]:
+        rows = self._conn.execute(
+            """
+            SELECT records_json
+            FROM memory_snapshot
+            WHERE label LIKE ? AND snapshot_at > ?
+            ORDER BY snapshot_at ASC, rowid ASC
+            """,
+            (f"{HISTORY_SNAPSHOT_LABEL_PREFIX}%", at.isoformat()),
+        ).fetchall()
+        historical_records: dict[str, MemoryItem] = {}
+        for row in rows:
+            loaded = json.loads(row["records_json"] or "[]")
+            if not isinstance(loaded, list):
+                continue
+
+            for raw_record in loaded:
+                if not isinstance(raw_record, dict):
+                    continue
+
+                record = MemoryItem.from_dict(raw_record)
+                historical_records.setdefault(record.id, record)
+
+        return historical_records
+
+    async def create_snapshot(
+        self,
+        *,
+        label: str | None = None,
+        at: datetime | None = None,
+    ) -> MemorySnapshot:
+        return await asyncio.to_thread(self._create_snapshot_sync, label, at)
+
+    def _create_snapshot_sync(self, label: str | None, at: datetime | None) -> MemorySnapshot:
+        snapshot_id = new_id()
+        snapshot_at = at or _utcnow()
+        created_at = _utcnow()
+        with self._lock:
+            records = self._checkout_at_locked(snapshot_at)
+            memory_ids = [record.id for record in records]
+            records_json = dumps_json([record.to_wire_dict() for record in records])
+            signature_hash = stable_hash(records_json)
+            self._conn.execute("BEGIN IMMEDIATE")
+            with self._conn:
+                self._conn.execute(
+                    """
+                    INSERT INTO memory_snapshot (
+                        id,
+                        label,
+                        snapshot_at,
+                        memory_ids_json,
+                        records_json,
+                        signature_hash,
+                        created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        snapshot_id,
+                        label,
+                        snapshot_at.isoformat(),
+                        values_for_json(memory_ids),
+                        records_json,
+                        signature_hash,
+                        created_at.isoformat(),
+                    ),
+                )
+                row = self._conn.execute(
+                    """
+                    SELECT id, label, snapshot_at, memory_ids_json,
+                           signature_hash, created_at
+                    FROM memory_snapshot
+                    WHERE id = ?
+                    """,
+                    (snapshot_id,),
+                ).fetchone()
+
+        return row_to_snapshot(row)
+
+    async def checkout_snapshot(self, snapshot_id: str) -> list[MemoryItem]:
+        return await asyncio.to_thread(self._checkout_snapshot_sync, snapshot_id)
+
+    def _checkout_snapshot_sync(self, snapshot_id: str) -> list[MemoryItem]:
+        with self._lock:
+            snapshot_row = self._conn.execute(
+                """
+                SELECT id, label, snapshot_at, memory_ids_json,
+                       records_json, signature_hash, created_at
+                FROM memory_snapshot
+                WHERE id = ?
+                """,
+                (snapshot_id,),
+            ).fetchone()
+            if snapshot_row is None:
+                raise KeyError(f"memory snapshot not found: {snapshot_id}")
+
+            records_json = snapshot_row["records_json"]
+            if records_json:
+                loaded = json.loads(records_json)
+                if isinstance(loaded, list):
+                    return [
+                        self._snapshot_record_from_dict(record)
+                        for record in loaded
+                        if isinstance(record, dict)
+                    ]
+
+            snapshot = row_to_snapshot(snapshot_row)
+            if not snapshot.memory_ids:
+                return []
+
+            rows_by_id = {
+                row["id"]: row
+                for row in self._conn.execute(
+                    f"""
+                    SELECT {record_columns()}
+                    FROM memory_records
+                    WHERE id IN ({",".join("?" for _ in snapshot.memory_ids)})
+                    """,
+                    snapshot.memory_ids,
+                ).fetchall()
+            }
+
+        return [
+            _row_to_record(rows_by_id[memory_id], now=_utcnow)
+            for memory_id in snapshot.memory_ids
+            if memory_id in rows_by_id
+        ]
+
+    @staticmethod
+    def _snapshot_record_from_dict(payload: dict[str, object]) -> MemoryItem:
+        raw_layer = payload.get("layer", payload.get("tier"))
+        if raw_layer == "short":
+            payload = {**payload, "layer": "working", "tier": "working"}
+        elif raw_layer == "long":
+            payload = {**payload, "layer": "semantic", "tier": "semantic"}
+
+        return MemoryItem.from_dict(payload)
 
     def _rebuild_fts_index(self) -> None:
         rebuild_fts_index(self._conn, build_keywords_func=_build_keywords)
