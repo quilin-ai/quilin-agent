@@ -69,6 +69,9 @@ export function readMcpConfig(): Record<string, RawMcpServerEntry> {
 	const memoryProviderCwd = resolve(workspaceRoot, "providers/memory");
 	const webProviderCwd = resolve(workspaceRoot, "providers/web");
 	if (existsSync(memoryProviderCwd) && merged["quilin-mem"] == null) {
+		// QUI-187 follow-up (2026-05-20):quilin-mem 需要 DEEPSEEK_API_KEY 跑 LLM
+		// dedupe judge。`createMCPSpawnEnv` 已加 LLM env 白名单(见
+		// packages/agent-core/src/tools/mcp-client.ts),subprocess 会自动拿到。
 		merged["quilin-mem"] = {
 			type: "stdio",
 			command: "uv",

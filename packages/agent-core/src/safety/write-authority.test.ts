@@ -95,6 +95,11 @@ describe("WriteAuthority", () => {
 				request: createRequest({ origin: "idle", riskLevel: "low" }),
 				expected: "deny",
 			},
+			{
+				mode: "auto-all",
+				request: createRequest({ origin: "install", riskLevel: "critical" }),
+				expected: "confirm",
+			},
 		];
 
 		for (const testCase of cases) {

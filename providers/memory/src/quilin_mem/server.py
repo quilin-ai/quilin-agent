@@ -332,11 +332,36 @@ async def _memory_consolidate_plan_with_store(
     tier: MemoryTier | None = None,
     trace_context: TraceContext | None = None,
 ) -> str:
+    """Run user-triggered consolidation preview.
+
+    QUI-187 Reviewer F follow-up (2026-05-20):用户在 web 手动点"智能整理"是
+    explicit user-triggered preview,**不是 idle-time reflection**。默认
+    IdleBudgetProvider(enabled=False)让所有 expensive soft dedupe 永远 denied,
+    9 条明显语义重复的记忆"0 条整理"是 user-facing bug。
+
+    user-triggered preview 不该被 idle_budget gate(idle_budget 设计是给后台周期性
+    reflection 用的,见 docs/03-memory line 269-275)。这里注入 enabled=True +
+    充足 token budget,允许 dedupe 完整跑(embedding + LLM judge)。
+    实际写入(execute=True 路径)仍走 WriteAuthority gate。
+    """
+    from .consolidator import _DeepseekConsolidationJudge
+    from .idle_budget import IdleBudgetProvider as _IdleBudgetProvider
+
+    budget_provider = _IdleBudgetProvider(enabled=True, token_budget=1_000_000)
+    # 注入 LLM judge(deepseek-v4-flash 便宜模型),识别"老孟→孟哥/小明→小花"
+    # 这类 entity 演化(hash embedding 无法识别)。无 API key 时 judge 自动
+    # fallback "distinct",dedupe 退化为 exact-only。
+    dedupe_judge = _DeepseekConsolidationJudge().judge
     try:
-        proposal = Consolidator(store=store).propose(
+        proposal = Consolidator(
+            budget_provider=budget_provider,
+            store=store,
+            dedupe_judge=dedupe_judge,
+        ).propose(
             strategy=strategy,
             tier=tier,
             task="quilin_mem.memory_consolidate_plan",
+            estimated_tokens=1024,
         )
     except Exception as exc:
         _raise_memory_operation_error("memory_consolidate_plan", exc)

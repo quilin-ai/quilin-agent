@@ -13,7 +13,7 @@ function createAssembler() {
 
 	return new ContextAssembler(builder, new TokenBudgetAllocator(), {
 		modelId: "deepseek-chat",
-		modelWindow: 2_048,
+		modelWindow: 4_096,
 		availableTools: ["memory_recall", "memory_store"],
 	});
 }
@@ -24,7 +24,7 @@ describe("ContextAssembler", () => {
 		const result = assembler.assembleContext("test", {}, [], []);
 
 		expect(result.prompt.staticPrefix).toContain("Quilin Agent");
-		expect(result.budgetBreakdown.totalBudget).toBe(2_048);
+		expect(result.budgetBreakdown.totalBudget).toBe(4_096);
 		expect(result.contextSources).toEqual([]);
 	});
 

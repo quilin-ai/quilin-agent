@@ -2,7 +2,7 @@ import { logger } from "../logger.js";
 
 export type WriteRiskLevel = "low" | "medium" | "high" | "critical";
 
-export type WriteOrigin = "user" | "agent" | "idle";
+export type WriteOrigin = "user" | "agent" | "idle" | "install";
 
 export type AuthorityMode =
 	| "ask"
@@ -67,12 +67,15 @@ export class WriteAuthority {
 	}
 
 	decide(request: WriteRequest): WriteDecision {
-		if (this.mode === "auto-all") {
-			return { kind: "allow" };
-		}
-
 		if (this.mode === "deny-all") {
 			return { kind: "deny", reason: "write authority disabled" };
+		}
+
+		if (request.origin === "install") {
+			return {
+				kind: "confirm",
+				prompt: createConfirmPrompt(request),
+			};
 		}
 
 		if (request.origin === "idle" && this.mode === "ask") {
@@ -87,6 +90,10 @@ export class WriteAuthority {
 				kind: "confirm",
 				prompt: createConfirmPrompt(request),
 			};
+		}
+
+		if (this.mode === "auto-all") {
+			return { kind: "allow" };
 		}
 
 		if (this.mode === "ask") {

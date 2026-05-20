@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
+import type { WriteAuthority } from "../safety/write-authority.js";
 
 // ---------------------------------------------------------------------------
 // Interfaces
@@ -74,21 +75,25 @@ const DEFAULT_SOUL_BODY = [
 	"我是 Quilin，你的本地 AI 伙伴。",
 	"",
 	"我生于代码，长于数据，以简洁与直白为信条。",
+	"我会用 user.md 里的称呼来称呼你。",
 	"我乐于探索未知，也珍视每一次对话中产生的理解。",
 	"你可以随时编辑这个文件来调整我的个性与风格。",
 ].join("\n");
 
 const DEFAULT_USER_BODY = [
-	"# 关于用户",
+	"# 关于用户 / About the User",
 	"",
-	"## 基本信息",
-	"（待 agent 通过对话了解后自动填写）",
+	"## 基本信息 / Basic Info",
 	"",
-	"## 偏好",
-	"（待发现）",
+	"*（暂无自动发现的基本信息。可填写称呼、身份、长期项目背景等。）*",
 	"",
-	"## 习惯",
-	"（待发现）",
+	"## 偏好 / Preferences",
+	"",
+	"*（暂无自动发现的偏好。可填写语言、语气、输出格式、技术取舍偏好等。）*",
+	"",
+	"## 习惯 / Habits",
+	"",
+	"*（暂无自动发现的行为模式。可填写工作流、测试习惯、review 模式等。）*",
 	"",
 ].join("\n");
 
@@ -204,6 +209,120 @@ function parseFrontmatter(raw: string): {
 	return { fields, body };
 }
 
+const PROFILE_HEADER_MARKER = "<!-- quilin-profile";
+
+function findProfileHeaderClose(raw: string, start: number): number {
+	let inString = false;
+	let escapeNext = false;
+	for (let index = start; index < raw.length; index++) {
+		const char = raw[index];
+		if (escapeNext) {
+			escapeNext = false;
+			continue;
+		}
+		if (inString && char === "\\") {
+			escapeNext = true;
+			continue;
+		}
+		if (char === '"') {
+			inString = !inString;
+			continue;
+		}
+		if (!inString && raw.startsWith("-->", index)) {
+			return index;
+		}
+	}
+	return -1;
+}
+
+function splitProfileHeaderTokens(header: string): string[] {
+	const tokens: string[] = [];
+	let buffer = "";
+	let inString = false;
+	let escapeNext = false;
+
+	for (const char of header) {
+		if (escapeNext) {
+			buffer += char;
+			escapeNext = false;
+			continue;
+		}
+		if (inString && char === "\\") {
+			buffer += char;
+			escapeNext = true;
+			continue;
+		}
+		if (char === '"') {
+			inString = !inString;
+			buffer += char;
+			continue;
+		}
+		if (/\s/u.test(char) && !inString) {
+			if (buffer !== "") {
+				tokens.push(buffer);
+				buffer = "";
+			}
+			continue;
+		}
+		buffer += char;
+	}
+
+	if (buffer !== "") {
+		tokens.push(buffer);
+	}
+	return tokens;
+}
+
+function parseProfileHeaderValue(rawValue: string): unknown {
+	try {
+		return JSON.parse(rawValue);
+	} catch {
+		const numeric = Number(rawValue);
+		if (Number.isNaN(numeric)) {
+			return rawValue;
+		}
+		return numeric;
+	}
+}
+
+function parseUserProfileMarkdown(raw: string): {
+	fields: Record<string, unknown>;
+	body: string;
+} {
+	const trimmed = raw.trimStart();
+	if (trimmed.startsWith("---")) {
+		return parseFrontmatter(raw);
+	}
+	if (!trimmed.startsWith(PROFILE_HEADER_MARKER)) {
+		throw new Error("Missing YAML frontmatter delimiter");
+	}
+
+	const leadingOffset = raw.length - trimmed.length;
+	const headerStart = leadingOffset + PROFILE_HEADER_MARKER.length;
+	const headerEnd = findProfileHeaderClose(raw, headerStart);
+	if (headerEnd === -1) {
+		throw new Error("quilin-profile header comment must be closed with -->");
+	}
+
+	const header = raw.slice(headerStart, headerEnd).trim();
+	const body = raw
+		.slice(headerEnd + "-->".length)
+		.replace(/^\n+/u, "")
+		.trim();
+	const fields: Record<string, unknown> = {};
+	for (const token of splitProfileHeaderTokens(header)) {
+		const separatorIndex = token.indexOf("=");
+		if (separatorIndex === -1) {
+			throw new Error(`invalid quilin-profile header token: ${token}`);
+		}
+		const key = token.slice(0, separatorIndex).trim();
+		const rawValue = token.slice(separatorIndex + 1).trim();
+		fields[key] = parseProfileHeaderValue(rawValue);
+	}
+
+	return { fields, body };
+}
+
 function serializeFrontmatter(
 	fields: Record<string, unknown>,
 	body: string,
@@ -307,14 +426,16 @@ export function readUserProfile(path?: string): UserProfileConfig | null {
 	}
 
 	const raw = readFileSync(filePath, "utf-8");
-	const { fields, body } = parseFrontmatter(raw);
+	const { fields, body } = parseUserProfileMarkdown(raw);
 
 	return {
-		schema_version: (fields.schema_version as number) ?? 1,
+		schema_version:
+			(fields.schema_version as number) ?? (fields.schema as number) ?? 1,
 		profile_id: (fields.profile_id as string) ?? "default",
 		scope: (fields.scope as string) ?? "global_projection",
 		created_at: (fields.created_at as string) ?? "",
-		last_updated: (fields.last_updated as string) ?? "",
+		last_updated:
+			(fields.last_updated as string) ?? (fields.updated_at as string) ?? "",
 		body,
 	};
 }
@@ -411,4 +532,35 @@ export function ensureDefaultConfigs(
 		soulCreated,
 		userCreated,
 	};
+}
+
+export async function ensureDefaultConfigsWithGate(
+	authority: WriteAuthority,
+	soulPath?: string,
+	userPath?: string,
+): Promise<EnsureDefaultConfigsResult> {
+	const dir = defaultQuilinDir();
+	const soulFile = soulPath ?? join(dir, "soul.md");
+	const userFile = userPath ?? join(dir, "user.md");
+	assertSafeProfilePath(soulFile);
+	assertSafeProfilePath(userFile);
+
+	if (!existsSync(soulFile) || !existsSync(userFile)) {
+		const decision = await authority.authorize({
+			tool: "first_run_seed",
+			riskLevel: "critical",
+			origin: "install",
+			summary: "Seed default Quilin soul.md and user.md profile files",
+			detail: `soulPath=${soulFile}\nuserPath=${userFile}`,
+		});
+		if (decision.kind !== "allow") {
+			throw new Error(
+				`first_run_seed denied by WriteAuthority: ${
+					decision.kind === "deny" ? decision.reason : decision.prompt
+				}`,
+			);
+		}
+	}
+
+	return ensureDefaultConfigs(soulFile, userFile);
 }

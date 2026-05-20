@@ -204,10 +204,38 @@ export function validateMCPServerConfig(config: MCPServerConfig): void {
 export function createMCPSpawnEnv(
 	env: NodeJS.ProcessEnv = process.env,
 ): Record<string, string> {
-	return {
+	// QUI-187 follow-up (2026-05-20):quilin-mem 的 Consolidator LLM judge
+	// 需要 DEEPSEEK_API_KEY 等 LLM env 才能识别 entity 演化(老孟→孟哥/小明→小花)。
+	// 默认这里只传 LOG_LEVEL + QUILIN_ENV 是保护 agent 主体的 API key 不泄露给
+	// 不受信任的 MCP server 子进程。Quilin built-in providers(quilin-mem /
+	// quilin-web)是本仓库代码,受信任,需要 LLM env 才能跑(否则 dedupe 退化为
+	// hash-only 低质 fallback)。这里**白名单**显式列出需要传的 env keys,
+	// 不放任意 env(保留 API key strip 默认安全)。
+	const result: Record<string, string> = {
 		LOG_LEVEL: env.LOG_LEVEL ?? "debug",
 		QUILIN_ENV: env.QUILIN_ENV ?? "dev",
 	};
+	const LLM_ENV_ALLOWLIST = [
+		"DEEPSEEK_API_KEY",
+		"DEEPSEEK_BASE_URL",
+		"QUILIN_DEDUPE_API_KEY",
+		"QUILIN_DEDUPE_MODEL",
+		"QUILIN_DEDUPE_BASE_URL",
+		"QUILIN_OBSERVER_API_KEY",
+		"QUILIN_OBSERVER_MODEL",
+		"QUILIN_OBSERVER_BASE_URL",
+		"QUILIN_DEFAULT_MODEL",
+		"QUILIN_MEM_DB_PATH",
+		"QUILIN_PROFILE_UPDATER_API_KEY",
+		"QUILIN_PROFILE_UPDATER_MODEL",
+		"ANTHROPIC_API_KEY",
+		"OPENAI_API_KEY",
+	];
+	for (const key of LLM_ENV_ALLOWLIST) {
+		const v = env[key];
+		if (v != null) result[key] = v;
+	}
+	return result;
 }
 
 function withTimeout<T>(
@@ -526,6 +554,13 @@ export class MCPClientManager {
 		let pendingCall: Promise<CallToolResult> | undefined;
 		try {
 			const requestMetadata = createMCPRequestMetadata();
+			// QUI-187 follow-up (2026-05-20):memory_consolidate_plan 走 LLM judge
+			// 串行 (per-pair ~2-3s),12+ pair 远超 30s。临时:专用长 timeout 120s。
+			// 后续 batch judge / 并行 LLM call follow-up issue。
+			// 注:MCPClientManager 内层用的是无 namespace prefix 的 name(prefix
+			// `quilin-mem/` 是 registry wrapper 加的,这里看到的是 server 原始注册名)。
+			const toolTimeoutMs =
+				name === "memory_consolidate_plan" ? 120_000 : DEFAULT_TOOL_TIMEOUT_MS;
 			pendingCall = withTimeout<CallToolResult>(
 				this.client.callTool({
 					name,
@@ -533,7 +568,7 @@ export class MCPClientManager {
 					...(requestMetadata == null ? {} : { _meta: requestMetadata }),
 				}) as Promise<CallToolResult>,
 				`MCP tool ${name}`,
-				DEFAULT_TOOL_TIMEOUT_MS,
+				toolTimeoutMs,
 			);
 			this.pendingCalls.add(pendingCall);
 			const result = await pendingCall;

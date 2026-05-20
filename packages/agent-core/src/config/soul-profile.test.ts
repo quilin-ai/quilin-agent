@@ -6,11 +6,13 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { WriteAuthority } from "../safety/write-authority.js";
 import type { SoulConfig, UserProfileConfig } from "./soul-profile.js";
 import {
 	ensureDefaultConfigs,
+	ensureDefaultConfigsWithGate,
 	generateRandomSoul,
 	readSoulConfig,
 	readUserProfile,
@@ -56,6 +58,10 @@ const MBTI_TYPES = [
 
 describe("soul-profile", () => {
 	let tmpDir: string;
+	let originalDefaultSoul: string | null;
+	let originalDefaultUser: string | null;
+	const defaultSoulPath = join(homedir(), ".quilin", "soul.md");
+	const defaultUserPath = join(homedir(), ".quilin", "user.md");
 
 	beforeEach(() => {
 		tmpDir = join(
@@ -63,11 +69,27 @@ describe("soul-profile", () => {
 			`quilin-soul-profile-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
 		);
 		mkdirSync(tmpDir, { recursive: true });
+		originalDefaultSoul = existsSync(defaultSoulPath)
+			? readFileSync(defaultSoulPath, "utf-8")
+			: null;
+		originalDefaultUser = existsSync(defaultUserPath)
+			? readFileSync(defaultUserPath, "utf-8")
+			: null;
 	});
 
 	afterEach(() => {
 		if (existsSync(tmpDir)) {
 			rmSync(tmpDir, { recursive: true, force: true });
+		}
+		if (originalDefaultSoul == null) {
+			rmSync(defaultSoulPath, { force: true });
+		} else {
+			writeFileSync(defaultSoulPath, originalDefaultSoul, "utf-8");
+		}
+		if (originalDefaultUser == null) {
+			rmSync(defaultUserPath, { force: true });
+		} else {
+			writeFileSync(defaultUserPath, originalDefaultUser, "utf-8");
 		}
 	});
 
@@ -112,6 +134,7 @@ describe("soul-profile", () => {
 			expect(soul.communication_style).toBe("casual");
 			expect(soul.body).toBeTruthy();
 			expect(soul.body).toContain("Quilin");
+			expect(soul.body).toContain("user.md 里的称呼");
 		});
 
 		it("sets created_at to an ISO-8601 timestamp", () => {
@@ -401,6 +424,62 @@ describe("soul-profile", () => {
 			expect(read!.profile_id).toBe("default");
 			expect(read!.scope).toBe("global_projection");
 		});
+
+		it("reads Python pure-markdown quilin-profile header comments", () => {
+			const userPath = join(tmpDir, "user-html-comment.md");
+			writeFileSync(
+				userPath,
+				[
+					'<!-- quilin-profile schema=2 profile_id="default" scope=global_projection updated_at="2026-05-20T00:00:00+00:00" updated_by="profile_updater" sensitive_export=false -->',
+					"",
+					"# 关于用户 / About the User",
+					"",
+					"## 基本信息 / Basic Info",
+					"",
+					'- **称呼**: "孟哥"',
+				].join("\n"),
+				"utf-8",
+			);
+
+			const read = readUserProfile(userPath);
+
+			expect(read).not.toBeNull();
+			expect(read!.schema_version).toBe(2);
+			expect(read!.profile_id).toBe("default");
+			expect(read!.scope).toBe("global_projection");
+			expect(read!.last_updated).toBe("2026-05-20T00:00:00+00:00");
+			expect(read!.body).toContain("## 基本信息 / Basic Info");
+			expect(read!.body).toContain("孟哥");
+		});
+
+		it("continues to read legacy YAML user profile frontmatter", () => {
+			const userPath = join(tmpDir, "user-yaml.md");
+			writeFileSync(
+				userPath,
+				[
+					"---",
+					"schema_version: 1",
+					'profile_id: "legacy"',
+					'scope: "global_projection"',
+					'created_at: "2026-05-19T00:00:00Z"',
+					'last_updated: "2026-05-20T00:00:00Z"',
+					"---",
+					"",
+					"# 关于用户",
+					"",
+					"## 基本信息",
+					"legacy body",
+				].join("\n"),
+				"utf-8",
+			);
+
+			const read = readUserProfile(userPath);
+
+			expect(read).not.toBeNull();
+			expect(read!.profile_id).toBe("legacy");
+			expect(read!.last_updated).toBe("2026-05-20T00:00:00Z");
+			expect(read!.body).toContain("legacy body");
+		});
 	});
 
 	// -----------------------------------------------------------------------
@@ -468,6 +547,52 @@ describe("soul-profile", () => {
 			expect(result.soulConfig.body).toBe("Custom soul body.");
 			expect(result.userProfile.profile_id).toBe("existing-profile");
 			expect(result.userProfile.body).toBe("Existing user body.");
+		});
+
+		it("routes first-run seed writes through WriteAuthority", async () => {
+			const soulPath = join(tmpDir, "gated-soul.md");
+			const userPath = join(tmpDir, "gated-user.md");
+			const requests: unknown[] = [];
+			const authority = new WriteAuthority({
+				mode: "ask",
+				confirm: async (request) => {
+					requests.push(request);
+					return true;
+				},
+			});
+
+			const result = await ensureDefaultConfigsWithGate(
+				authority,
+				soulPath,
+				userPath,
+			);
+
+			expect(result.soulCreated).toBe(true);
+			expect(result.userCreated).toBe(true);
+			expect(requests).toHaveLength(1);
+			expect(requests[0]).toMatchObject({
+				tool: "first_run_seed",
+				riskLevel: "critical",
+				origin: "install",
+			});
+			expect(readFileSync(userPath, "utf-8")).toContain(
+				"## 基本信息 / Basic Info",
+			);
+		});
+
+		it("does not write first-run defaults when WriteAuthority denies", async () => {
+			const soulPath = join(tmpDir, "denied-soul.md");
+			const userPath = join(tmpDir, "denied-user.md");
+			const authority = new WriteAuthority({
+				mode: "ask",
+				confirm: async () => false,
+			});
+
+			await expect(
+				ensureDefaultConfigsWithGate(authority, soulPath, userPath),
+			).rejects.toThrow(/first_run_seed denied/u);
+			expect(existsSync(soulPath)).toBe(false);
+			expect(existsSync(userPath)).toBe(false);
 		});
 	});
 
@@ -575,7 +700,15 @@ describe("soul-profile", () => {
 		}
 
 		it("rejects path-traversal segments that escape ~/.quilin after resolution", () => {
-			const traversal = join(homedir(), ".quilin", "..", "..", "..", "etc", "passwd");
+			const traversal = join(
+				homedir(),
+				".quilin",
+				"..",
+				"..",
+				"..",
+				"etc",
+				"passwd",
+			);
 			expect(() => readSoulConfig(traversal)).toThrow(/Refusing/);
 		});
 	});

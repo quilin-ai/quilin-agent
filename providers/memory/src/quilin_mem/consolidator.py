@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import json
 import math
+import os
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -12,7 +14,7 @@ from typing import TYPE_CHECKING, Literal, Protocol
 from .idle_budget import IdleBudgetProvider, IdleBudgetResult
 from .reflector import ReflectionProposal, Reflector, TaskOutcome
 from .store import QuilinMemStore
-from .types import VALID_MEMORY_LAYERS, MemoryItem, MemoryLayer, validate_memory_layer
+from .types import MemoryItem, MemoryLayer, validate_memory_layer
 
 if TYPE_CHECKING:
     from .consolidation_log import ConsolidationLogStore
@@ -23,7 +25,13 @@ JudgeDecision = Literal["duplicate", "supersedes", "distinct"]
 CONSOLIDATOR_SCHEMA_VERSION = 1
 DEFAULT_CONSOLIDATION_TASK = "quilin_mem.consolidator.propose"
 DIRECT_SIMILARITY_THRESHOLD = 0.85
-LLM_SIMILARITY_THRESHOLD = 0.5
+# QUI-187 Reviewer F follow-up (2026-05-20):LLM 灰区阈值 0.4 — 实证 9 条记忆
+# 之间 cosine 相似度分布,关键 4 对 entity 演化("老孟→孟哥"0.575 / "小明→
+# 小花"0.825 / "我是小明助手→我是麒麟也叫小花"0.471 / "用户名小明→我是麒麟
+# 也叫小花"0.499)都 ≥ 0.4 能进 LLM judge。
+# 0.0 让 36 pair 都跑 LLM ~36s > MCP tool 30s timeout 死。0.4 减到 ~10 pair
+# ~10s 内完成。后续 batch LLM call follow-up issue 解决性能。
+LLM_SIMILARITY_THRESHOLD = 0.4
 _LOCAL_EMBEDDING_DIM = 128
 _WORD_RE = re.compile(r"[A-Za-z0-9_]+")
 
@@ -193,6 +201,92 @@ class _LocalEmbeddingProvider:
         return [_hash_embedding(text) for text in texts]
 
 
+# QUI-187 Reviewer F follow-up (2026-05-20): user-facing bug — 9 条明显语义重复
+# (老孟/孟哥/小明/小花)显示 0 条整理。根因双重:
+#   1. server.py 默认 IdleBudgetProvider(enabled=False) → 永远 denied(已修)
+#   2. Codex 迁 dedupe.py 时**漏迁** DeepseekDedupeJudge → LLM judge 路径永远不跑,
+#      只 hash embedding(低质,无法识别 entity 演化)
+# 这里补回 LLM judge — DeepSeek v4 flash 便宜模型,prompt 严格要求 JSON 输出
+# {"decision": "duplicate|supersedes|distinct", "reason": "..."}
+class _DeepseekConsolidationJudge:
+    """LLM-based dedupe judge for gray-zone pairs (0.5 ≤ similarity < 0.85).
+
+    用便宜的 deepseek-v4-flash 判定两条记忆是否语义重复 / 一条 supersede 另一条 /
+    完全独立。返回结构化 JSON 由 Consolidator._build_layer_groups 消费。
+
+    API key 从环境变量按优先级取(QUILIN_DEDUPE_API_KEY → QUILIN_OBSERVER_API_KEY
+    → DEEPSEEK_API_KEY),无 key 时 fallback 返 distinct(保守不合并)。
+    """
+
+    DEFAULT_MODEL = "deepseek-v4-flash"
+    DEFAULT_BASE_URL = "https://api.deepseek.com/v1/chat/completions"
+
+    def __init__(
+        self,
+        *,
+        model: str | None = None,
+        base_url: str | None = None,
+        api_key: str | None = None,
+    ) -> None:
+        self._model = model or os.environ.get("QUILIN_DEDUPE_MODEL", self.DEFAULT_MODEL)
+        self._base_url = base_url or os.environ.get(
+            "QUILIN_DEDUPE_BASE_URL", self.DEFAULT_BASE_URL
+        )
+        self._api_key = api_key or (
+            os.environ.get("QUILIN_DEDUPE_API_KEY")
+            or os.environ.get("QUILIN_OBSERVER_API_KEY")
+            or os.environ.get("DEEPSEEK_API_KEY")
+        )
+
+    def judge(self, left: MemoryItem, right: MemoryItem, similarity: float) -> DedupeJudgeResult:
+        if not self._api_key:
+            return DedupeJudgeResult(decision="distinct", reason="no LLM api key configured")
+        try:
+            from .observer import _call_deepseek_api as _llm_call
+
+            prompt = self._build_prompt(left, right, similarity)
+            payload = json.dumps(
+                {
+                    "model": self._model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.1,
+                    "max_tokens": 200,
+                    "response_format": {"type": "json_object"},
+                }
+            ).encode("utf-8")
+            # observer._call_deepseek_api 已经提取 choices[0].message.content 返字符串,
+            # 不是 raw response。直接 json.loads(raw)。
+            raw = _llm_call(self._base_url, self._api_key, payload)
+            parsed = json.loads(raw)
+            decision = parsed.get("decision", "distinct")
+            if decision not in ("duplicate", "supersedes", "distinct"):
+                decision = "distinct"
+            reason = parsed.get("reason", "")
+            return DedupeJudgeResult(decision=decision, reason=str(reason)[:200])
+        except Exception as exc:  # noqa: BLE001 — 保守 fallback,不让 LLM 错误中断 dedupe
+            return DedupeJudgeResult(
+                decision="distinct", reason=f"llm judge fallback: {type(exc).__name__}"
+            )
+
+    def _build_prompt(self, left: MemoryItem, right: MemoryItem, similarity: float) -> str:
+        return (
+            "你是 Quilin Agent 的记忆整理助手。判定两条记忆是否语义重复,"
+            "或者一条是否 supersede(更新覆盖)另一条。\n\n"
+            f"相似度(embedding cosine): {similarity:.3f}\n\n"
+            f"[左] id={left.id} tier={left.layer} created={left.created_at}\n"
+            f"内容: {left.content}\n\n"
+            f"[右] id={right.id} tier={right.layer} created={right.created_at}\n"
+            f"内容: {right.content}\n\n"
+            "判定:\n"
+            '  - "duplicate": 两条语义重复(同一事实/同一偏好/同一身份),可以合并\n'
+            '  - "supersedes": 一条是另一条的更新版本(如"老孟"被"孟哥"取代,'
+            '"小明"被"小花"取代),应保留更新版\n'
+            '  - "distinct": 语义独立,不该合并\n\n'
+            '只输出 JSON: {"decision": "duplicate|supersedes|distinct", '
+            '"reason": "中文一句话说明判定依据"}'
+        )
+
+
 @dataclass(slots=True, frozen=True)
 class RecallWeightsUpdate:
     source_prior_key: str
@@ -348,6 +442,37 @@ class Consolidator:
         records = self._store._list_by_layer_sync("episodic", limit=count, offset=0)
         return tuple(self._reflector.propose(records, task_outcome=task_outcome, now=now))
 
+    def _fetch_all_active_records(self) -> list[MemoryItem]:
+        """Cross-tier raw fetch of all active records (deleted=0).
+
+        QUI-187 Reviewer F follow-up:绕过 `_list_by_layer_sync` 的 tier Literal 限制,
+        覆盖 schema drift tier(如 "short")。`_row_to_record` 内部已经把非法 tier
+        值统一映射成合法 MemoryLayer,确保 dedupe 算法能看到所有 active records。
+        """
+        from .store import _row_to_record
+        from .store_search import record_columns
+
+        if self._store is None:
+            return []
+        try:
+            with self._store._lock:  # type: ignore[attr-defined]
+                rows = self._store._conn.execute(  # type: ignore[attr-defined]
+                    f"SELECT {record_columns()} FROM memory_records "
+                    "WHERE deleted = 0 ORDER BY rowid ASC"
+                ).fetchall()
+        except Exception:
+            return []
+
+        items: list[MemoryItem] = []
+        now_fn = datetime.now
+        for row in rows:
+            try:
+                item = _row_to_record(row, now=lambda: now_fn(UTC))
+            except Exception:
+                continue
+            items.append(item)
+        return items
+
     def _build_dedupe_plan(
         self,
         *,
@@ -358,21 +483,36 @@ class Consolidator:
     ) -> DedupePlan:
         if self._store is None:
             return DedupePlan(groups=(), total_delete=0, total_keep=0)
-        layers = (validate_memory_layer(tier),) if tier is not None else VALID_MEMORY_LAYERS
         all_groups: list[DedupeGroup] = []
-        for layer in layers:
-            count = self._store._count_sync({"layer": layer})
-            if count < 2:
-                continue
-            records = self._store._list_by_layer_sync(layer, limit=count, offset=0)
-            all_groups.extend(
-                self._build_layer_groups(
-                    records,
-                    allow_expensive=allow_expensive,
-                    direct_threshold=direct_threshold,
-                    llm_threshold=llm_threshold,
+        if tier is None:
+            # QUI-187 Reviewer F follow-up (2026-05-20):tier=None 走 cross-tier
+            # raw SQL,跨所有 active records dedupe。原 `for layer in VALID_MEMORY_LAYERS`
+            # 路径只遍历 4 个合法 tier,但 SQLite memory_records 表里可能有 schema drift
+            # 的 tier(如旧版 L3a observer 写入的 "short" tier,4 条 entity 演化记录因此
+            # 被完全跳过),导致 user-facing"9 条记忆 0 整理"bug。
+            records = self._fetch_all_active_records()
+            if len(records) >= 2:
+                all_groups.extend(
+                    self._build_layer_groups(
+                        records,
+                        allow_expensive=allow_expensive,
+                        direct_threshold=direct_threshold,
+                        llm_threshold=llm_threshold,
+                    )
                 )
-            )
+        else:
+            layer = validate_memory_layer(tier)
+            count = self._store._count_sync({"layer": layer})
+            if count >= 2:
+                records = self._store._list_by_layer_sync(layer, limit=count, offset=0)
+                all_groups.extend(
+                    self._build_layer_groups(
+                        records,
+                        allow_expensive=allow_expensive,
+                        direct_threshold=direct_threshold,
+                        llm_threshold=llm_threshold,
+                    )
+                )
 
         all_groups.sort(key=lambda group: (-len(group.delete_ids), group.tier, group.keep_id))
         return DedupePlan(

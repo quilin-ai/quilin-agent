@@ -1,8 +1,9 @@
-import { readSoulConfig } from "../config/soul-profile.js";
+import { readSoulConfig, readUserProfile } from "../config/soul-profile.js";
 import {
 	applyStyleToPrompt,
 	resolveStylePreset,
 } from "./conversation-style.js";
+import { scanExternalContext } from "./injection-scanner.js";
 import type { BuildContext, PromptSection } from "./prompt-types.js";
 
 function describeTools(availableTools: readonly string[]): string {
@@ -170,6 +171,28 @@ export function createIdentitySection(): PromptSection {
 	};
 }
 
+export function createUserIdentitySection(
+	order = 15,
+	updateFrequency: PromptSection["updateFrequency"] = "per_session",
+	userProfilePath?: string,
+): PromptSection {
+	return {
+		name: "user-identity",
+		order,
+		updateFrequency,
+		compute: () => {
+			const profile = readUserProfile(userProfilePath);
+			const body = profile?.body.trim();
+			if (body == null || body === "") {
+				return null;
+			}
+
+			const content = `About the user (~/.quilin/user.md):\n${body}`;
+			return scanExternalContext(content, "~/.quilin/user.md").sanitizedContent;
+		},
+	};
+}
+
 export function createRulesSection(): PromptSection {
 	return {
 		name: "rules",
@@ -177,6 +200,36 @@ export function createRulesSection(): PromptSection {
 		updateFrequency: "static",
 		compute: () =>
 			"Be concise, accurate, and friendly. Answer in the same language as the user.",
+	};
+}
+
+export function createSoulPersonaSection(
+	order = 25,
+	updateFrequency: PromptSection["updateFrequency"] = "per_session",
+	soulConfigPath?: string,
+): PromptSection {
+	return {
+		name: "soul-persona",
+		order,
+		updateFrequency,
+		compute: () => {
+			const soul = readSoulConfig(soulConfigPath);
+			if (soul == null) {
+				return null;
+			}
+
+			const body = soul.body.trim();
+			const coreValues = soul.core_values.join(", ");
+			const content = [
+				"Your persona (麒麟自述, ~/.quilin/soul.md):",
+				`name=${soul.persona_name}, MBTI=${soul.mbti}, core_values=${coreValues}`,
+				body,
+			]
+				.filter((line) => line.trim() !== "")
+				.join("\n");
+
+			return scanExternalContext(content, "~/.quilin/soul.md").sanitizedContent;
+		},
 	};
 }
 
@@ -251,7 +304,9 @@ export function createConversationStyleSection(
 export function createDefaultPromptSections(): PromptSection[] {
 	return [
 		createIdentitySection(),
+		createUserIdentitySection(),
 		createRulesSection(),
+		createSoulPersonaSection(),
 		createToolProvenanceSection(),
 		createToolGuidanceSection(),
 		createConversationStyleSection(),
