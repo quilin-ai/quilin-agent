@@ -27,6 +27,15 @@ export interface ComposerProps {
 	readonly intro?: boolean;
 	readonly onSubmit?: (text: string) => void;
 	readonly onSelectAgent?: (agentId: string) => void;
+	/**
+	 * QUI-182 follow-up: 当上一轮 chat 还在 server-side pump(浏览器流可能 ready
+	 * 但 AgentService.session.status === "running")或排队中 → button disabled,
+	 * 输入框仍可继续打字。配合 ConversationView 的 drain probe 实现客户端背压,
+	 * 减少 `evicted: user input changed` 触发。
+	 */
+	readonly sendDisabled?: boolean;
+	/** disable 状态下显示给用户的提示文案。默认"思考中…"。 */
+	readonly sendBusyLabel?: string;
 }
 
 /**
@@ -42,6 +51,8 @@ export function Composer({
 	intro = false,
 	onSubmit,
 	onSelectAgent,
+	sendDisabled = false,
+	sendBusyLabel = "思考中…",
 }: ComposerProps) {
 	const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 	const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -214,10 +225,13 @@ export function Composer({
 				<button
 					type="submit"
 					className="q-composer-send"
-					aria-label="发送消息 · send"
+					aria-label={
+						sendDisabled ? `${sendBusyLabel} · 回车入队 / press to queue` : "发送消息 · send"
+					}
 					data-testid="composer-send"
+					data-busy={sendDisabled ? "true" : "false"}
 				>
-					发送 · send
+					{sendDisabled ? sendBusyLabel : "发送 · send"}
 				</button>
 			</form>
 		</footer>

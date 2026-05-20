@@ -338,6 +338,9 @@ function ChatBody({
 	const activeRunRef = useRef(streaming);
 	const queuedIdRef = useRef(0);
 	const [queuedSends, setQueuedSends] = useState<readonly QueuedUserMessage[]>([]);
+	// QUI-182 follow-up: 防 drain effect 在 probe 期间被 deps 变化触发的并发 probe。
+	// 同步置位,同步 release(finally 块),不引入 setState 异步开销。
+	const probingRef = useRef(false);
 
 	const releaseActiveRun = useCallback((_reason: string): void => {
 		activeRunRef.current = false;
@@ -378,7 +381,13 @@ function ChatBody({
 	}, [status, syncPersistedMessages]);
 
 	useEffect(() => {
-		if (!rawStreaming || serverTerminal) return;
+		// QUI-182 follow-up (B'):背压场景也启动 watchdog。
+		// 排队(queuedSends.length > 0)但浏览器流已 ready(!rawStreaming)时,
+		// 用户看似空闲但 server pump 可能仍 running。让 watchdog 继续 poll
+		// `/api/chat/status`,server completed → setServerTerminal(true) +
+		// releaseActiveRun → drain effect 重跑 → probe → 发出下一条 queued msg。
+		const needPoll = rawStreaming || queuedSends.length > 0;
+		if (!needPoll || serverTerminal) return;
 		let cancelled = false;
 		const poll = async (): Promise<void> => {
 			try {
@@ -424,7 +433,15 @@ function ChatBody({
 			cancelled = true;
 			window.clearInterval(handle);
 		};
-	}, [rawStreaming, serverTerminal, sessionId, stop, syncPersistedMessages, releaseActiveRun]);
+	}, [
+		rawStreaming,
+		serverTerminal,
+		sessionId,
+		stop,
+		syncPersistedMessages,
+		releaseActiveRun,
+		queuedSends.length,
+	]);
 
 	// Mount hook:
 	//   1. Probe `/api/chat/status` to learn the server's current epoch
@@ -632,21 +649,67 @@ function ChatBody({
 		// queue 不被 drain。
 		void releaseTick;
 		if (streaming || activeRunRef.current || queuedSends.length === 0) return;
+		if (probingRef.current) return;
 		const next = queuedSends[0];
 		if (next == null) return;
-		activeRunRef.current = true;
-		setQueuedSends((prev) => prev.slice(1));
-		forceScrollToBottom();
-		// QUI-182 follow-up: drain 前 reset serverTerminal,避免上一轮 watchdog
-		// 留下的 true 让新发的消息算入 streaming === false 但被别的逻辑判定为
-		// "上一轮 server-terminal 残留"。
-		setServerTerminal(false);
-		void sendMessage({ text: next.text }).catch(() => {
-			releaseActiveRun("drain-sendMessage-catch");
-		});
+
+		// QUI-182 follow-up (B'):drain 前 probe `/api/chat/status`。理由:
+		// useChat 的浏览器流 status 可能已 "ready",但 AgentService 后端 pump 仍
+		// "running"(SSE 关闭和 server pump finish 之间有窗口)。这正是
+		// `/api/chat` 看到同 session 新 hash 时主动 evict 的窗口 →
+		// 用户表现为"刷屏后某些消息没回复"。
+		// 这里在 drain 前先确认服务端真的 terminal,才发新 POST,避免触发
+		// `evicted: user input changed`。
+		let cancelled = false;
+		probingRef.current = true;
+		(async (): Promise<void> => {
+			try {
+				const res = await fetch(`/api/chat/status?session=${encodeURIComponent(sessionId)}`, {
+					cache: "no-store",
+				});
+				if (cancelled) return;
+				if (res.ok) {
+					const body = (await res.json()) as {
+						readonly ok: boolean;
+						readonly data?: {
+							readonly exists: boolean;
+							readonly status: string | null;
+						};
+					};
+					if (cancelled) return;
+					if (body.ok && body.data?.exists && body.data.status === "running") {
+						// 还在 running,不 drain 这一轮。server watchdog 会继续
+						// poll,翻 serverTerminal 后通过 releaseActiveRun + bump
+						// releaseTick 触发 drain effect 重跑。
+						return;
+					}
+				}
+				if (cancelled) return;
+				activeRunRef.current = true;
+				setQueuedSends((prev) => prev.slice(1));
+				forceScrollToBottom();
+				setServerTerminal(false);
+				void sendMessage({ text: next.text }).catch(() => {
+					releaseActiveRun("drain-sendMessage-catch");
+				});
+			} finally {
+				probingRef.current = false;
+			}
+		})();
+		return () => {
+			cancelled = true;
+		};
 		// `releaseTick` 列入依赖,让 releaseActiveRun() 触发的 ref 释放能立刻
 		// 重跑这条 drain effect,不依赖 React 异步同步 streaming state。
-	}, [streaming, queuedSends, releaseTick, sendMessage, forceScrollToBottom, releaseActiveRun]);
+	}, [
+		streaming,
+		queuedSends,
+		releaseTick,
+		sendMessage,
+		forceScrollToBottom,
+		releaseActiveRun,
+		sessionId,
+	]);
 
 	// Persist conversation to localStorage so /sessions page can list it.
 	useEffect(() => {
@@ -659,27 +722,16 @@ function ChatBody({
 			const trimmed = text.trim();
 			if (!trimmed) return;
 			forceScrollToBottom();
-			if (streaming || activeRunRef.current || queuedSends.length > 0) {
-				enqueueSend(trimmed);
-				return;
-			}
-			// QUI-182 follow-up: 新一轮 send 前 reset serverTerminal,避免上轮
-			// watchdog 设的 true 让 streaming = rawStreaming && !serverTerminal
-			// 算错。下一轮 server watchdog 会按需重新 set true。
-			setServerTerminal(false);
-			activeRunRef.current = true;
-			void sendMessage({ text: trimmed }).catch(() => {
-				releaseActiveRun("submit-sendMessage-catch");
-			});
+			// QUI-182 follow-up (B'):统一走 enqueue + drain probe 路径。
+			// 即使当前 client 看似空闲(streaming=false / activeRef=false / queue=0),
+			// 上一轮 AgentService pump 可能仍在 server-side finalize,这时直接
+			// sendMessage 会被 `/api/chat` 看到同 session + new hash → 触发
+			// `evicted: user input changed`(老路径) 或 `409 session_busy`(Codex D
+			// fix 之后)。两种情况都不该让 user message 丢。改成全部入队让 drain
+			// effect 先 probe `/api/chat/status`,只有 terminal 才真正 sendMessage。
+			enqueueSend(trimmed);
 		},
-		[
-			sendMessage,
-			forceScrollToBottom,
-			streaming,
-			queuedSends.length,
-			enqueueSend,
-			releaseActiveRun,
-		],
+		[forceScrollToBottom, enqueueSend],
 	);
 
 	return (
@@ -722,6 +774,8 @@ function ChatBody({
 				sessionId={sessionId}
 				onSubmit={onSubmit}
 				onSelectAgent={onSelectAgent}
+				sendDisabled={streaming || queuedSends.length > 0}
+				sendBusyLabel={queuedSends.length > 0 ? `排队中 · ${queuedSends.length} 待发` : "思考中…"}
 			/>
 		</main>
 	);
