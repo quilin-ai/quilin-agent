@@ -877,6 +877,119 @@ describe("Iter F Slice 1 — SQLite persistence", () => {
 		}
 	});
 
+	it("POST /api/chat/stop aborts a running web chat without deleting persisted history", async () => {
+		_resetWebSessionMetaForTests();
+		resetAgentServiceForTests();
+		const fakeService = makeRouteFakeAgentService();
+		const sessionId = "draft-post-chat-stop";
+		fakeService.createSession({ origin: "web", id: sessionId, title: "active" });
+		fakeService.setSessionStatus(sessionId, "running");
+		const meta = setMeta(
+			sessionId,
+			hashMessages([
+				{
+					role: "user",
+					parts: [{ type: "text", text: "please stop this run" }],
+				},
+			]),
+			fakeService,
+			fakeService.currentSeq(),
+		);
+		const emitted: AgentEventPayload[] = [];
+		const emitFromRunner = fakeService.emitFromRunner;
+		fakeService.emitFromRunner = (id, payload, options) => {
+			emitted.push(payload);
+			emitFromRunner(id, payload, options);
+		};
+
+		vi.resetModules();
+		vi.doMock("@/lib/agent-service-client", () => ({
+			getAgentService: async () => fakeService,
+		}));
+		try {
+			const { POST } = await import("@/app/api/chat/stop/route");
+			const res = await POST(
+				new Request("http://localhost/api/chat/stop", {
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ sessionId }),
+				}),
+			);
+
+			expect(res.status).toBe(200);
+			const body = (await res.json()) as {
+				readonly ok: boolean;
+				readonly data?: {
+					readonly sessionId?: string;
+					readonly stopped?: boolean;
+					readonly hadMeta?: boolean;
+					readonly hadSession?: boolean;
+				};
+			};
+			expect(body).toMatchObject({
+				ok: true,
+				data: { sessionId, stopped: true, hadMeta: true, hadSession: true },
+			});
+			expect(meta.abort.signal.aborted).toBe(true);
+			expect(fakeService.getSession(sessionId)).toBeNull();
+			expect(getMeta(sessionId)).toBeUndefined();
+			expect(emitted).toContainEqual({
+				type: "session.failed",
+				error: "user stopped chat run",
+			});
+		} finally {
+			vi.doUnmock("@/lib/agent-service-client");
+			vi.resetModules();
+		}
+	});
+
+	it("POST /api/chat/stop cleans up orphan AgentService sessions idempotently", async () => {
+		_resetWebSessionMetaForTests();
+		resetAgentServiceForTests();
+		const fakeService = makeRouteFakeAgentService();
+		const sessionId = "draft-post-chat-stop-orphan";
+		fakeService.createSession({ origin: "web", id: sessionId, title: "orphan" });
+		fakeService.setSessionStatus(sessionId, "running");
+
+		vi.resetModules();
+		vi.doMock("@/lib/agent-service-client", () => ({
+			getAgentService: async () => fakeService,
+		}));
+		try {
+			const { POST } = await import("@/app/api/chat/stop/route");
+			const res = await POST(
+				new Request("http://localhost/api/chat/stop", {
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ sessionId }),
+				}),
+			);
+			const first = (await res.json()) as {
+				readonly data?: { readonly stopped?: boolean; readonly hadMeta?: boolean };
+			};
+
+			expect(res.status).toBe(200);
+			expect(first.data).toMatchObject({ stopped: true, hadMeta: false });
+			expect(fakeService.getSession(sessionId)).toBeNull();
+
+			const secondRes = await POST(
+				new Request("http://localhost/api/chat/stop", {
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ sessionId }),
+				}),
+			);
+			const second = (await secondRes.json()) as {
+				readonly data?: { readonly stopped?: boolean; readonly hadSession?: boolean };
+			};
+			expect(secondRes.status).toBe(200);
+			expect(second.data).toMatchObject({ stopped: false, hadSession: false });
+		} finally {
+			vi.doUnmock("@/lib/agent-service-client");
+			vi.resetModules();
+		}
+	});
+
 	it("migration runner re-runs are idempotent (user_version skip)", () => {
 		// First reset already migrated to user_version=1 (from 0001_init.sql)
 		// via beforeEach. Reset and reopen — migrations should detect

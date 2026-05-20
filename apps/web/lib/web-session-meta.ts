@@ -121,15 +121,40 @@ export function touchMeta(sessionId: string): void {
  * while the session is still in the registry.
  */
 export function evictSession(sessionId: string, service: AgentServiceLike, reason: string): void {
+	void stopSession(sessionId, service, reason);
+}
+
+export interface StopSessionResult {
+	readonly stopped: boolean;
+	readonly hadMeta: boolean;
+	readonly hadSession: boolean;
+}
+
+/**
+ * Stop an active web chat runner without deleting persisted SQLite
+ * history. Unlike `evictSession`, this also cleans up an orphaned
+ * AgentService session when HMR / prior cleanup already dropped the
+ * web meta entry.
+ *
+ * 停止 web chat runner,但不删 SQLite 会话历史。相比 evictSession,这里也处理
+ * "AgentService 里还有 session,web meta 已没了"的孤儿状态。
+ */
+export function stopSession(
+	sessionId: string,
+	service: AgentServiceLike,
+	reason: string,
+): StopSessionResult {
 	const map = getMap();
 	const meta = map.get(sessionId);
-	if (meta == null) return;
-	try {
-		meta.abort.abort(new Error(`evicted: ${reason}`));
-	} catch {
-		/* abort can throw if already aborted; swallow */
+	if (meta != null) {
+		try {
+			meta.abort.abort(new Error(`evicted: ${reason}`));
+		} catch {
+			/* abort can throw if already aborted; swallow */
+		}
 	}
-	if (service.getSession(sessionId) != null) {
+	const hadSession = service.getSession(sessionId) != null;
+	if (hadSession) {
 		try {
 			service.emitFromRunner(
 				sessionId,
@@ -146,6 +171,7 @@ export function evictSession(sessionId: string, service: AgentServiceLike, reaso
 		}
 	}
 	map.delete(sessionId);
+	return { stopped: meta != null || hadSession, hadMeta: meta != null, hadSession };
 }
 
 /**
