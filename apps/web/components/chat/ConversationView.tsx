@@ -761,6 +761,32 @@ function ChatBody({
 		[forceScrollToBottom, enqueueSend],
 	);
 
+	// QUI-183 P2 frontend:user-initiated stop。
+	// 流程:
+	//   1. useChat.stop()  — 断浏览器 SSE 流(useChat 内部翻 status="ready")
+	//   2. POST /api/chat/stop — 断 server pump(Codex P2 backend `stopSession`)
+	//   3. releaseActiveRun("user-stop") — 清 activeRunRef + bump releaseTick →
+	//      drain effect 重跑取下一条 queue。queue 不被清,只终止当前 active run。
+	const onStop = useCallback(() => {
+		// 断浏览器流先,避免 useChat 状态机错乱
+		void stop().catch(() => {
+			/* 已 closed 也无所谓 */
+		});
+		// 断 server pump(幂等:已停 / 不存在也 200,所以不 await response)
+		void fetch("/api/chat/stop", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ sessionId }),
+			cache: "no-store",
+		}).catch(() => {
+			/* 网络错误也不阻塞 release */
+		});
+		// 同步释放 activeRunRef + bump tick,让 drain effect 立刻取下一条 queue。
+		releaseActiveRun("user-stop");
+		// reset serverTerminal,下一轮新 send 不带上一次 terminal 污染。
+		setServerTerminal(false);
+	}, [stop, sessionId, releaseActiveRun]);
+
 	return (
 		<main className="q-workspace">
 			<section className="q-view">
@@ -806,6 +832,8 @@ function ChatBody({
 				onSelectAgent={onSelectAgent}
 				sendDisabled={streaming || queuedSends.length > 0}
 				sendBusyLabel={queuedSends.length > 0 ? `排队中 · ${queuedSends.length} 待发` : "思考中…"}
+				showStop={streaming}
+				onStop={onStop}
 			/>
 		</main>
 	);

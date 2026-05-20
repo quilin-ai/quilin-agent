@@ -36,6 +36,12 @@ export interface ComposerProps {
 	readonly sendDisabled?: boolean;
 	/** disable 状态下显示给用户的提示文案。默认"思考中…"。 */
 	readonly sendBusyLabel?: string;
+	/**
+	 * QUI-183 P2 frontend:active run streaming 时,把 send button 替换为 ⏹ stop
+	 * button,点击调 `onStop()`。`showStop=true` 但 `onStop=null` 时按钮 disabled。
+	 */
+	readonly showStop?: boolean;
+	readonly onStop?: () => void;
 }
 
 /**
@@ -53,6 +59,8 @@ export function Composer({
 	onSelectAgent,
 	sendDisabled = false,
 	sendBusyLabel = "思考中…",
+	showStop = false,
+	onStop,
 }: ComposerProps) {
 	const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 	const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -222,17 +230,31 @@ export function Composer({
 					aria-label="对话输入框"
 					data-testid="composer-input"
 				/>
-				<button
-					type="submit"
-					className="q-composer-send"
-					aria-label={
-						sendDisabled ? `${sendBusyLabel} · 回车入队 / press to queue` : "发送消息 · send"
-					}
-					data-testid="composer-send"
-					data-busy={sendDisabled ? "true" : "false"}
-				>
-					{sendDisabled ? sendBusyLabel : "发送 · send"}
-				</button>
+				{showStop ? (
+					<button
+						type="button"
+						className="q-composer-send q-composer-stop"
+						aria-label="终止当前会话 · stop active run"
+						data-testid="composer-stop"
+						data-busy="true"
+						disabled={onStop == null}
+						onClick={onStop == null ? undefined : onStop}
+					>
+						⏹ 终止 · stop
+					</button>
+				) : (
+					<button
+						type="submit"
+						className="q-composer-send"
+						aria-label={
+							sendDisabled ? `${sendBusyLabel} · 回车入队 / press to queue` : "发送消息 · send"
+						}
+						data-testid="composer-send"
+						data-busy={sendDisabled ? "true" : "false"}
+					>
+						{sendDisabled ? sendBusyLabel : "发送 · send"}
+					</button>
+				)}
 			</form>
 		</footer>
 	);

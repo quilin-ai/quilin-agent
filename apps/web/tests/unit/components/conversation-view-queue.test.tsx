@@ -102,7 +102,9 @@ describe("ConversationView queued sends", () => {
 		const { rerender } = render(<ConversationView sessionId="queue-test-session" />);
 		const input = (await screen.findByTestId("composer-input")) as HTMLTextAreaElement;
 		fireEvent.change(input, { target: { value: "第二轮问题" } });
-		fireEvent.click(screen.getByTestId("composer-send"));
+		// QUI-183 P2:streaming 中 send button 被 stop button 替换(composer-stop),
+		// 用户改用 Enter 触发 enqueue(textarea onKey → form submit)。
+		fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
 
 		expect(sendMessage).not.toHaveBeenCalled();
 		// QUI-183 P1:排队消息从会话流抽到 Composer 上方 QueueArea 组件,
