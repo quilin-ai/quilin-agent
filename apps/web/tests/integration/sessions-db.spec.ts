@@ -42,7 +42,12 @@ import {
 	upsertSession,
 } from "@/lib/sessions-db";
 import { recordAssistantMessage } from "@/lib/sessions-db/recorder";
-import { _resetWebSessionMetaForTests, getMeta } from "@/lib/web-session-meta";
+import {
+	_resetWebSessionMetaForTests,
+	getMeta,
+	hashMessages,
+	setMeta,
+} from "@/lib/web-session-meta";
 
 const ORIGINAL_ENV = {
 	QUILIN_WEB_DB_PATH: process.env.QUILIN_WEB_DB_PATH,
@@ -805,6 +810,71 @@ describe("Iter F Slice 1 — SQLite persistence", () => {
 		expect(getMeta(sessionId)).toBeUndefined();
 		vi.doUnmock("@/lib/agent-service-client");
 		vi.resetModules();
+	});
+
+	it("POST 409 when a different prompt arrives while the session is still running", async () => {
+		process.env.DEEPSEEK_API_KEY = "test-key";
+		_resetWebSessionMetaForTests();
+		resetAgentServiceForTests();
+		const fakeService = makeRouteFakeAgentService();
+		const sessionId = "draft-post-session-busy";
+		fakeService.createSession({ origin: "web", id: sessionId, title: "busy" });
+		fakeService.setSessionStatus(sessionId, "running");
+		const oldMessages = [
+			{
+				id: "u-old",
+				role: "user",
+				parts: [{ type: "text", text: "first prompt still running" }],
+			},
+		];
+		const meta = setMeta(
+			sessionId,
+			hashMessages(oldMessages),
+			fakeService,
+			fakeService.currentSeq(),
+		);
+
+		vi.resetModules();
+		vi.doMock("@/lib/agent-service-client", () => ({
+			getAgentService: async () => fakeService,
+		}));
+		try {
+			const { POST } = await import("@/app/api/chat/route");
+			const res = await POST(
+				new Request("http://localhost/api/chat", {
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({
+						id: sessionId,
+						messages: [
+							{
+								id: "u-new",
+								role: "user",
+								parts: [{ type: "text", text: "second prompt should wait" }],
+							},
+						],
+					}),
+				}),
+			);
+
+			expect(res.status).toBe(409);
+			const body = (await res.json()) as {
+				readonly ok: boolean;
+				readonly code?: string;
+				readonly data?: { readonly epoch?: string; readonly status?: string };
+			};
+			expect(body).toMatchObject({
+				ok: false,
+				code: "session_busy",
+				data: { epoch: "epoch-route-test", status: "running" },
+			});
+			expect(fakeService.getSession(sessionId)?.status).toBe("running");
+			expect(getMeta(sessionId)).toBeDefined();
+			expect(meta.abort.signal.aborted).toBe(false);
+		} finally {
+			vi.doUnmock("@/lib/agent-service-client");
+			vi.resetModules();
+		}
 	});
 
 	it("migration runner re-runs are idempotent (user_version skip)", () => {

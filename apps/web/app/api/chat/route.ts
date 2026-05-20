@@ -721,6 +721,27 @@ export async function POST(req: Request): Promise<Response> {
 		(existingSession.status === "running" || eventCount > 0);
 
 	if (!isReconnect) {
+		if (!epochMismatch && existingSession?.status === "running") {
+			return Response.json(
+				{
+					ok: false,
+					code: "session_busy",
+					error: {
+						code: "session_busy",
+						message:
+							"chat session is still running; retry after /api/chat/status reports a terminal state",
+					},
+					data: { epoch: serverEpoch, status: existingSession.status },
+				},
+				{
+					status: 409,
+					headers: {
+						"cache-control": "no-store",
+						"x-quilin-epoch": serverEpoch,
+					},
+				},
+			);
+		}
 		// Either no existing session for this id, or the question
 		// changed. If something is here, evict it cleanly so the prior
 		// runner stops writing into a session we're about to recycle.
