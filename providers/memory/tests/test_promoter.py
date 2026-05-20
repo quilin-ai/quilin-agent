@@ -18,12 +18,14 @@ episodic tier afterwards.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from quilin_mem import promotion as promotion_module
 from quilin_mem.promotion import (
     AGED_WORKING_THRESHOLD,
     HIGH_IMPORTANCE_THRESHOLD,
@@ -442,9 +444,7 @@ async def test_commit_is_idempotent_for_same_proposal() -> None:
             importance_score=0.8,
         )
         records = await store.list_by_layer("working", limit=50, offset=0)
-        proposals = WorkingToEpisodicPromoter().propose(
-            records, trigger="explicit", now=FIXED_NOW
-        )
+        proposals = WorkingToEpisodicPromoter().propose(records, trigger="explicit", now=FIXED_NOW)
         assert len(proposals) == 1
 
         # First commit
@@ -465,19 +465,65 @@ async def test_commit_is_idempotent_for_same_proposal() -> None:
         assert await store.get(working_record.id) is None
 
 
+async def test_commit_is_idempotent_under_concurrency() -> None:
+    class AllowGate:
+        def authorize(self, request: Mapping[str, object]) -> Mapping[str, object]:
+            return {"allowed": True}
+
+    async with QuilinMemStore(db_path=":memory:") as store:
+        await store.store(
+            "Concurrent promotion test record.",
+            tier="working",
+            metadata={"schema_version": 1, "source": "observer"},
+            importance_score=0.8,
+        )
+        records = await store.list_by_layer("working", limit=50, offset=0)
+        proposal = WorkingToEpisodicPromoter().propose(
+            records,
+            trigger="explicit",
+            now=FIXED_NOW,
+        )[0]
+
+        results = await asyncio.gather(
+            WorkingToEpisodicPromoter().commit(
+                proposal,
+                store=store,
+                write_authority=AllowGate(),
+                now=FIXED_NOW,
+            ),
+            WorkingToEpisodicPromoter().commit(
+                proposal,
+                store=store,
+                write_authority=AllowGate(),
+                now=FIXED_NOW,
+            ),
+        )
+
+        assert results[0].promoted_id == results[1].promoted_id
+        assert await store.count({"layer": "episodic"}) == 1
+        assert await store.count({"layer": "working"}) == 0
+
+
 # ---------------------------------------------------------------------------
 # 12. QUI-22 Reviewer 1 REAL #3 fix: partial-commit rollback — store.delete
 # 失败时 promoted episodic record 被回滚物理删除。
 # ---------------------------------------------------------------------------
 
 
-async def test_commit_rolls_back_episodic_when_delete_fails() -> None:
+async def test_commit_rolls_back_episodic_when_delete_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """模拟 store.delete 抛 RuntimeError, 验证 commit 抛错且 episodic 已
     rollback (count=0), 不留 double-count 残骸。"""
 
     class AllowGate:
         def authorize(self, request: Mapping[str, object]) -> Mapping[str, object]:
             return {"allowed": True}
+
+    async def no_atomic(*args: object, **kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(promotion_module, "_commit_promotion_atomic_if_sqlite", no_atomic)
 
     async with QuilinMemStore(db_path=":memory:") as store:
         await store.store(
@@ -487,9 +533,7 @@ async def test_commit_rolls_back_episodic_when_delete_fails() -> None:
             importance_score=0.8,
         )
         records = await store.list_by_layer("working", limit=50, offset=0)
-        proposals = WorkingToEpisodicPromoter().propose(
-            records, trigger="explicit", now=FIXED_NOW
-        )
+        proposals = WorkingToEpisodicPromoter().propose(records, trigger="explicit", now=FIXED_NOW)
 
         # Monkey-patch store.delete to raise — 模拟 partial-commit 失败
         original_delete = store.delete
@@ -512,6 +556,69 @@ async def test_commit_rolls_back_episodic_when_delete_fails() -> None:
         # Episodic 应回滚 — 0 record (working 仍存在因为 delete 失败前未被删)
         assert await store.count({"layer": "episodic"}) == 0
         assert await store.count({"layer": "working"}) == 1
+        orphan_count = store._conn.execute(  # type: ignore[attr-defined]
+            """
+            SELECT COUNT(*)
+            FROM memory_records_fts AS fts
+            LEFT JOIN memory_records AS records ON records.id = fts.id
+            WHERE records.id IS NULL
+            """
+        ).fetchone()[0]
+        assert orphan_count == 0
+
+
+async def test_commit_rolls_back_episodic_when_delete_returns_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """store.delete 返回 False 也必须视为 partial-commit 失败。"""
+
+    class AllowGate:
+        def authorize(self, request: Mapping[str, object]) -> Mapping[str, object]:
+            return {"allowed": True}
+
+    async def no_atomic(*args: object, **kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(promotion_module, "_commit_promotion_atomic_if_sqlite", no_atomic)
+
+    async with QuilinMemStore(db_path=":memory:") as store:
+        await store.store(
+            "Delete false rollback test.",
+            tier="working",
+            metadata={"schema_version": 1, "source": "observer"},
+            importance_score=0.8,
+        )
+        records = await store.list_by_layer("working", limit=50, offset=0)
+        proposals = WorkingToEpisodicPromoter().propose(records, trigger="explicit", now=FIXED_NOW)
+
+        original_delete = store.delete
+
+        async def false_delete(record_id: str) -> bool:
+            return False
+
+        store.delete = false_delete  # type: ignore[method-assign]
+        try:
+            with pytest.raises(RuntimeError, match="promotion commit partial-failed"):
+                await WorkingToEpisodicPromoter().commit(
+                    proposals[0],
+                    store=store,
+                    write_authority=AllowGate(),
+                    now=FIXED_NOW,
+                )
+        finally:
+            store.delete = original_delete  # type: ignore[method-assign]
+
+        assert await store.count({"layer": "episodic"}) == 0
+        assert await store.count({"layer": "working"}) == 1
+        orphan_count = store._conn.execute(  # type: ignore[attr-defined]
+            """
+            SELECT COUNT(*)
+            FROM memory_records_fts AS fts
+            LEFT JOIN memory_records AS records ON records.id = fts.id
+            WHERE records.id IS NULL
+            """
+        ).fetchone()[0]
+        assert orphan_count == 0
 
 
 # ---------------------------------------------------------------------------
@@ -554,9 +661,7 @@ async def test_commit_idempotent_when_episodic_exceeds_default_limit() -> None:
 
         # 3. propose + first commit
         records = await store.list_by_layer("working", limit=50, offset=0)
-        proposals = WorkingToEpisodicPromoter().propose(
-            records, trigger="explicit", now=FIXED_NOW
-        )
+        proposals = WorkingToEpisodicPromoter().propose(records, trigger="explicit", now=FIXED_NOW)
         assert len(proposals) == 1
 
         result1 = await WorkingToEpisodicPromoter().commit(

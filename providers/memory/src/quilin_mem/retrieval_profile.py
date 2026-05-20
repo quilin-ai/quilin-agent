@@ -10,7 +10,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
 
-from .types import MemoryItem
+from .types import MemoryItem, memory_item_with
 
 DEFAULT_RETRIEVAL_WEIGHTS: dict[str, float] = {
     "bm25": 1.0,
@@ -539,18 +539,7 @@ def _with_retrieval_weight_overrides(
 def _with_weight_metadata(item: MemoryItem, weighted_score: float) -> MemoryItem:
     metadata: dict[str, Any] = dict(item.metadata)
     metadata["weighted_score"] = round(weighted_score, 6)
-    return MemoryItem(
-        id=item.id,
-        content=item.content,
-        content_type=item.content_type,
-        layer=item.layer,
-        metadata=metadata,
-        embedding=item.embedding,
-        created_at=item.created_at,
-        last_accessed=item.last_accessed,
-        access_count=item.access_count,
-        importance_score=item.importance_score,
-    )
+    return memory_item_with(item, metadata=metadata)
 
 
 def _retrieval_profile_weight_keys(*, source: str, layer: str | None = None) -> tuple[str, ...]:

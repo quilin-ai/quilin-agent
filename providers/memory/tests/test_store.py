@@ -4,6 +4,7 @@ import asyncio
 import sqlite3
 import time
 import uuid
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -38,6 +39,68 @@ async def test_store_with_custom_tier() -> None:
     )
     assert record.content == "important fact"
     assert record.tier == "semantic"
+
+
+async def test_store_preserves_structured_fields_on_get_search_and_recall() -> None:
+    deadline = datetime(2026, 5, 22, 12, 0, tzinfo=UTC)
+    async with QuilinMemStore(db_path=":memory:") as store:
+        created = await store.store(
+            "prospective follow-up memory",
+            tier="working",
+            metadata={"schema_version": 1, "source": "test"},
+            last_writer_client="cli",
+            last_writer_session_id="session-1",
+            project_scope="/repo/quilin",
+            salience={"importance": 0.8},
+            kind="prospective",
+            deadline_at=deadline,
+            prospective_action="remind user",
+            resource_pointer={"uri": "file:///tmp/note.md"},
+        )
+
+        fetched = await store.get(created.id)
+        search_results = await store.search("prospective", limit=5)
+        recall_results = await store.recall("prospective")
+
+    for record in (fetched, search_results[0], recall_results[0]):
+        assert record is not None
+        assert record.last_writer_client == "cli"
+        assert record.last_writer_session_id == "session-1"
+        assert record.project_scope == "/repo/quilin"
+        assert record.salience == {"importance": 0.8}
+        assert record.kind == "prospective"
+        assert record.deadline_at == deadline
+        assert record.prospective_action == "remind user"
+        assert record.resource_pointer == {"uri": "file:///tmp/note.md"}
+
+
+async def test_read_access_does_not_create_false_writer_conflict() -> None:
+    async with QuilinMemStore(db_path=":memory:") as store:
+        record = await store.store(
+            "conflict clock should use writes only",
+            last_writer_client="cli",
+            metadata={"schema_version": 1},
+        )
+        store._conn.execute(  # type: ignore[attr-defined]
+            """
+            UPDATE memory_records
+            SET last_accessed = ?, last_written_at = ?
+            WHERE id = ?
+            """,
+            (
+                datetime.now(UTC).isoformat(),
+                (datetime.now(UTC) - timedelta(days=1)).isoformat(),
+                record.id,
+            ),
+        )
+        store._conn.commit()  # type: ignore[attr-defined]
+
+        assert await store.get(record.id) is not None
+        await store.update(record.id, "updated by web", last_writer_client="web")
+        updated = await store.get(record.id)
+
+    assert updated is not None
+    assert updated.metadata.get("conflict_resolution_pending") is not True
     uuid.UUID(record.id)
 
 

@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from .event_log import RetrievalEventLog
-from .types import MemoryItem
+from .types import MemoryItem, memory_item_with
 
 DEFAULT_SOURCE_PRIORS = {
     "working_direct": 0.65,
@@ -115,18 +115,7 @@ class LearnableReranker:
         metadata["reranker_score"] = round(score, 6)
         metadata["reranker_rank"] = rank
         metadata["score"] = round(score, 6)
-        return MemoryItem(
-            id=item.id,
-            content=item.content,
-            content_type=item.content_type,
-            layer=item.layer,
-            metadata=metadata,
-            embedding=item.embedding,
-            created_at=item.created_at,
-            last_accessed=item.last_accessed,
-            access_count=item.access_count,
-            importance_score=item.importance_score,
-        )
+        return memory_item_with(item, metadata=metadata)
 
 
 __all__ = ["DEFAULT_SOURCE_PRIORS", "LearnableReranker", "RerankerWeights"]

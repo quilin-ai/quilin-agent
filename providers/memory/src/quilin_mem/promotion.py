@@ -46,6 +46,10 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, Protocol, cast
 
 from .store import QuilinMemStore
+from .store_records import insert_memory
+from .store_search import build_keywords as _build_keywords
+from .store_search import record_columns
+from .store_serialization import row_to_record as _row_to_record
 from .types import MemoryItem, MemoryMetadata
 
 PROMOTER_SCHEMA_VERSION = 1
@@ -322,10 +326,19 @@ class WorkingToEpisodicPromoter:
         promoted_metadata["promotion_reason_kind"] = proposal.reason_kind
         promoted_metadata["promotion_trigger"] = proposal.trigger
 
-        # QUI-22 Reviewer 1 REAL #1 fix (2026-05-21):commit 幂等性 — 同一
-        # PromotionProposal 二次调用 commit 不应生成第二个 episodic record。
-        # 通过 search promoted_metadata["promotion_source_id"] 已存在的
-        # episodic record 检测重复。
+        atomic_result = await _commit_promotion_atomic_if_sqlite(
+            store,
+            proposal=proposal,
+            promoted_metadata=promoted_metadata,
+            confidence=proposal.confidence,
+            committed_at=committed_at,
+        )
+        if atomic_result is not None:
+            return atomic_result
+
+        # Fallback for mock/non-SQLite stores. The real QuilinMemStore path above
+        # holds the store lock across check/insert/delete so concurrent commits
+        # cannot double-promote.
         existing = await _find_existing_promotion(store, proposal.source_id)
         if existing is not None:
             return PromotionResult(
@@ -348,7 +361,9 @@ class WorkingToEpisodicPromoter:
         )
 
         try:
-            await store.delete(proposal.source_id)
+            delete_ok = await cast(Any, store.delete)(proposal.source_id)
+            if delete_ok is False:
+                raise RuntimeError("store.delete returned False")
         except Exception as exc:
             # 补偿:如果 working delete 失败,回滚 episodic insert 避免 double-count。
             # 用 store._lock + raw SQL 物理删除新建的 episodic record,绕开
@@ -396,9 +411,7 @@ async def _authorize_write(
     return decision
 
 
-async def _find_existing_promotion(
-    store: QuilinMemStore, source_id: str
-) -> MemoryItem | None:
+async def _find_existing_promotion(store: QuilinMemStore, source_id: str) -> MemoryItem | None:
     """QUI-22 Reviewer 1 REAL #1 fix + Reviewer 3 REAL #1 fix:查找 source_id 是否已 promote 过。
 
     通过 SQL LIKE 直接查 `metadata_json` 含 `"promotion_source_id":"<source_id>"`
@@ -465,9 +478,108 @@ async def _find_existing_promotion(
     return await store.get(existing_id)
 
 
-async def _hard_delete_promoted_record(
-    store: QuilinMemStore, record_id: str
-) -> None:
+async def _commit_promotion_atomic_if_sqlite(
+    store: QuilinMemStore,
+    *,
+    proposal: PromotionProposal,
+    promoted_metadata: dict[str, object],
+    confidence: float,
+    committed_at: datetime,
+) -> PromotionResult | None:
+    """Atomically check, insert promotion, and archive source for QuilinMemStore."""
+
+    conn = getattr(store, "_conn", None)
+    lock = getattr(store, "_lock", None)
+    if conn is None or lock is None:
+        return None
+
+    promoted = MemoryItem(
+        content=proposal.promoted_content,
+        layer=PROMOTION_TARGET_LAYER,
+        metadata=promoted_metadata,
+        importance_score=confidence,
+    )
+    escaped_source = (
+        proposal.source_id.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    )
+    needle = f'%"promotion_source_id": "{escaped_source}"%'
+
+    def _commit_sync() -> PromotionResult:
+        with lock:
+            conn.execute("BEGIN IMMEDIATE")
+            with conn:
+                existing = conn.execute(
+                    """
+                    SELECT id FROM memory_records
+                    WHERE tier = 'episodic'
+                      AND deleted = 0
+                      AND is_latest = 1
+                      AND metadata_json LIKE ? ESCAPE '\\'
+                    ORDER BY created_at ASC
+                    LIMIT 1
+                    """,
+                    (needle,),
+                ).fetchone()
+                if existing is not None:
+                    return PromotionResult(
+                        source_id=proposal.source_id,
+                        promoted_id=existing["id"] if hasattr(existing, "keys") else existing[0],
+                        target_layer=PROMOTION_TARGET_LAYER,
+                        committed_at=committed_at,
+                        reason_kind=proposal.reason_kind,
+                    )
+
+                source_row = conn.execute(
+                    f"""
+                    SELECT {record_columns()}
+                    FROM memory_records
+                    WHERE id = ? AND tier = 'working' AND deleted = 0 AND is_latest = 1
+                    """,
+                    (proposal.source_id,),
+                ).fetchone()
+                if source_row is None:
+                    raise RuntimeError("promotion source is no longer active")
+
+                insert_memory(conn, promoted, build_keywords=_build_keywords)
+                snapshot = getattr(store, "_record_history_snapshot_locked", None)
+                if callable(snapshot):
+                    snapshot(
+                        memory_id=proposal.source_id,
+                        record=_row_to_record(source_row, now=_utcnow),
+                        label_kind="delete",
+                        snapshot_at=committed_at,
+                    )
+                conn.execute(
+                    """
+                    UPDATE memory_records
+                    SET deleted = 1, archived_at = ?, forget_after = ?, recovered_at = NULL
+                    WHERE id = ? AND deleted = 0 AND is_latest = 1
+                    """,
+                    (
+                        committed_at.isoformat(),
+                        committed_at.isoformat(),
+                        proposal.source_id,
+                    ),
+                )
+                conn.execute(
+                    "DELETE FROM memory_records_fts WHERE id = ?",
+                    (proposal.source_id,),
+                )
+
+        return PromotionResult(
+            source_id=proposal.source_id,
+            promoted_id=promoted.id,
+            target_layer=PROMOTION_TARGET_LAYER,
+            committed_at=committed_at,
+            reason_kind=proposal.reason_kind,
+        )
+
+    import asyncio
+
+    return await asyncio.to_thread(_commit_sync)
+
+
+async def _hard_delete_promoted_record(store: QuilinMemStore, record_id: str) -> None:
     """QUI-22 Reviewer 1 REAL #3 fix:补偿性物理删除 partial-commit 残留。
 
     `store.delete` 走 soft-delete + forget_after history-preserve(QUI-193 设计),
@@ -486,6 +598,7 @@ async def _hard_delete_promoted_record(
     def _hard_delete_sync() -> None:
         with conn:
             conn.execute("DELETE FROM memory_records WHERE id = ?", (record_id,))
+            conn.execute("DELETE FROM memory_records_fts WHERE id = ?", (record_id,))
             conn.execute("DELETE FROM memory_sources WHERE memory_record_id = ?", (record_id,))
 
     # 用 asyncio.to_thread 避免 sync SQL 阻塞 event loop。但 lock 是 threading.Lock,

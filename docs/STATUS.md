@@ -23,15 +23,33 @@ Speed correction (measured): Week 1 5/5 milestones shipped in 6 hours (estimated
 | `150c955` | Playwright fix | memory-crud-and-dedupe e2e 4 个 test code bug | 6 |
 | **累计** | **6 工单** | 4 commit / 7000+ 行 / 95%+ coverage | **11221** |
 
-**进行中**:
-- ⏳ QUI-195 破坏防护(72h 软删 + 撤销 + 影响预览 + 历史快照事件流) — Codex 主线,已修 10 个 REAL,Reviewer I 找最新 legacy migration REAL 修中
-- ⏳ QUI-188 quilin-daemon 持久后台服务 — Codex subagent 完成 8 测试,等 QUI-195 合 commit
+**本地已收敛、待提交(2026-05-21)**:
+- ✅ QUI-195 破坏防护(72h 软删 + 撤销 + 影响预览 + 历史快照事件流) — `providers/memory` 全量 `723 passed`, coverage `95.21%`, ruff pass, mypy targeted pass, 2 fresh reviewer `0 REAL / 0 SUSPECT`
+- ✅ QUI-188 quilin-daemon 持久后台服务 — daemon job registry / lease / heartbeat / retry / responsive shutdown 已并入同一 provider diff, 覆盖 daemon cancellation regression
+- ✅ QUI-197 部分落地 — `MemoryKind` 校验、salience strict JSON / schema fallback、retrieval 重建保留 structured fields
+- ✅ QUI-198 部分落地 — trajectory compressor + skill proposer 修复混合正负反馈误判, 相关测试已并入 provider suite
+- ✅ QUI-199 部分落地 — prospective/resource metadata path 支持 `kind/deadline_at/prospective_action/resource_pointer/source`
+- ✅ QUI-22 follow-up — promotion commit 改为 SQLite lock 内原子 check/insert/archive, 防并发 double-promote, rollback 清 FTS orphan
 
-**计划中**:
-- 📋 QUI-196 多客户端 + 项目范围(第二周,等 QUI-195 schema)
-- 📋 QUI-197 重要性多维 + 类型 + 过期感知(第三周,等 QUI-195 schema)
-- 📋 QUI-199 前瞻 + 证据可视化 + 资源指针(第四周)
+**Locally converged, pending commit (2026-05-21)**:
+- ✅ QUI-195 destructive guard (72h soft delete + recover + impact preview + history snapshots) — full `providers/memory` suite `723 passed`, coverage `95.21%`, ruff pass, targeted mypy pass, two fresh reviewers reported `0 REAL / 0 SUSPECT`
+- ✅ QUI-188 quilin-daemon durable background service — daemon job registry / lease / heartbeat / retry / responsive shutdown are included in the same provider diff, with cancellation regression coverage
+- ✅ QUI-197 partially landed — `MemoryKind` validation, salience strict JSON / schema fallback, and structured-field-preserving retrieval rebuilds
+- ✅ QUI-198 partially landed — trajectory compressor + skill proposer fix for mixed negative/positive feedback, covered by provider tests
+- ✅ QUI-199 partially landed — prospective/resource metadata path supports `kind/deadline_at/prospective_action/resource_pointer/source`
+- ✅ QUI-22 follow-up — promotion commit now performs atomic SQLite check/insert/archive under the store lock, prevents concurrent double-promote, and clears FTS orphans on rollback
+
+**仍需继续完成 / Remaining work**:
+- 📋 QUI-196 多客户端 + 项目范围: project-scoped conflict policy, per-client receipts, UI/API surfacing
+- 📋 QUI-197 剩余: multidimensional salience ranking integration and migration/UI surfaces beyond the current schema/type safety slice
+- 📋 QUI-199 剩余: evidence visualizer, resource store UI/API, prospective memory scheduler integration
 - 📋 QUI-200 SafetyLessonStore SQLite-backed(QUI-194 follow-up)
+- 📋 QUI-190 temporal-aware dedupe: verify current acceptance against shipped versioning/time fields, then finish temporal prompt + KG superseded edges if still missing
+- 📋 QUI-81 Soul Import full 6-framework scan: QUI-186 covered first-run profile prompt injection, but full install-time import scanner/generator remains separate
+
+Current Codex session note: Plane MCP tools are not exposed in the current Codex toolset, so Plane state must be synchronized by a later Plane-capable session. This STATUS update records the local evidence and intended Plane transitions.
+
+当前 Codex session 说明：当前 Codex 工具集中没有暴露 Plane MCP 工具，因此 Plane 状态需要由后续具备 Plane 工具的 session 同步。本 STATUS 更新只记录本地实证和预期 Plane 流转。
 
 **Cross-review 投入**:
 - 累计派出 **35+ reviewer subagent**(跨 6 个已 ship 工单 + QUI-195/188 进行中)

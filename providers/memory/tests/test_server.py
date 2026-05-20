@@ -143,6 +143,37 @@ async def test_memory_store_tool_with_tier(server: object) -> None:
     )
 
 
+async def test_memory_store_tool_accepts_structured_memory_fields(server: object) -> None:
+    await server.call_tool(  # type: ignore[attr-defined]
+        "memory_store",
+        {
+            "content": "deadline follow-up",
+            "kind": "prospective",
+            "deadline_at": "2026-05-22T12:00:00+00:00",
+            "prospective_action": "remind user",
+            "last_writer_client": "web",
+            "last_writer_session_id": "session-1",
+            "project_scope": "/repo/quilin",
+            "salience": {"importance": 0.9},
+            "resource_pointer": {"uri": "file:///tmp/note.md"},
+        },
+    )
+
+    recall_result = _decode_call_tool_result(
+        await server.call_tool("memory_recall", {"query": "deadline follow-up"})  # type: ignore[attr-defined]
+    )
+    record = recall_result["records"][0]  # type: ignore[index]
+
+    assert record["kind"] == "prospective"
+    assert record["deadline_at"] == "2026-05-22T12:00:00+00:00"
+    assert record["prospective_action"] == "remind user"
+    assert record["last_writer_client"] == "web"
+    assert record["last_writer_session_id"] == "session-1"
+    assert record["project_scope"] == "/repo/quilin"
+    assert record["salience"] == {"importance": 0.9}
+    assert record["resource_pointer"] == {"uri": "file:///tmp/note.md"}
+
+
 async def test_memory_store_tool_defaults_semantic_metadata(server: object) -> None:
     store_result = _decode_call_tool_result(
         await server.call_tool(  # type: ignore[attr-defined]

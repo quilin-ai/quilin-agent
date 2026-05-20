@@ -32,6 +32,7 @@ def ensure_store_schema(
             embedding_json TEXT,
             created_at TEXT NOT NULL,
             last_accessed TEXT NOT NULL,
+            last_written_at TEXT,
             access_count INTEGER NOT NULL DEFAULT 0,
             importance_score REAL NOT NULL DEFAULT 0.5,
             archived_at TEXT,
@@ -95,6 +96,10 @@ def _ensure_memory_record_columns(
             "ALTER TABLE memory_records ADD COLUMN last_accessed TEXT",
         ),
         (
+            "last_written_at",
+            "ALTER TABLE memory_records ADD COLUMN last_written_at TEXT",
+        ),
+        (
             "access_count",
             "ALTER TABLE memory_records ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0",
         ),
@@ -149,6 +154,38 @@ def _ensure_memory_record_columns(
             "strength",
             "ALTER TABLE memory_records ADD COLUMN strength REAL NOT NULL DEFAULT 1.0",
         ),
+        (
+            "last_writer_client",
+            "ALTER TABLE memory_records ADD COLUMN last_writer_client TEXT",
+        ),
+        (
+            "last_writer_session_id",
+            "ALTER TABLE memory_records ADD COLUMN last_writer_session_id TEXT",
+        ),
+        (
+            "project_scope",
+            "ALTER TABLE memory_records ADD COLUMN project_scope TEXT",
+        ),
+        (
+            "salience_json",
+            "ALTER TABLE memory_records ADD COLUMN salience_json TEXT",
+        ),
+        (
+            "kind",
+            "ALTER TABLE memory_records ADD COLUMN kind TEXT",
+        ),
+        (
+            "deadline_at",
+            "ALTER TABLE memory_records ADD COLUMN deadline_at TEXT",
+        ),
+        (
+            "prospective_action",
+            "ALTER TABLE memory_records ADD COLUMN prospective_action TEXT",
+        ),
+        (
+            "resource_pointer_json",
+            "ALTER TABLE memory_records ADD COLUMN resource_pointer_json TEXT",
+        ),
     )
     for column_name, statement in additions:
         if column_name in columns:
@@ -185,6 +222,13 @@ def _ensure_memory_record_columns(
         UPDATE memory_records
         SET last_accessed = created_at
         WHERE last_accessed IS NULL OR last_accessed = ''
+        """,
+    )
+    conn.execute(
+        """
+        UPDATE memory_records
+        SET last_written_at = created_at
+        WHERE last_written_at IS NULL OR last_written_at = ''
         """,
     )
     conn.execute(

@@ -9,6 +9,7 @@ from quilin_mem.daemon import (
     DaemonConfig,
     JobContext,
     JobResult,
+    LeaseStore,
     QuilinDaemon,
 )
 
@@ -209,3 +210,137 @@ def test_result_record_preserves_result_metadata() -> None:
     assert record.tokens_used == 8
     assert record.cost_used == 0.002
     assert record.data == {"records": 3}
+
+
+def test_config_and_lease_store_validate_boundaries() -> None:
+    for kwargs, message in (
+        ({"token_budget_per_run": -1}, "token_budget_per_run"),
+        ({"cost_budget_per_run": -0.1}, "cost_budget_per_run"),
+        ({"lease_ttl_seconds": 0}, "lease_ttl_seconds"),
+        ({"tick_interval_seconds": 0}, "tick_interval_seconds"),
+    ):
+        try:
+            DaemonConfig(**kwargs)
+        except ValueError as exc:
+            assert message in str(exc)
+        else:  # pragma: no cover - defensive
+            raise AssertionError(f"expected ValueError for {kwargs}")
+
+    try:
+        LeaseStore(ttl_seconds=0)
+    except ValueError as exc:
+        assert "ttl_seconds" in str(exc)
+    else:  # pragma: no cover - defensive
+        raise AssertionError("expected LeaseStore ttl validation")
+
+
+def test_lease_store_rejects_wrong_owner_heartbeat_and_release() -> None:
+    leases = LeaseStore(ttl_seconds=10)
+    assert leases.acquire("job", "owner-a", NOW) is True
+    assert leases.acquire("job", "owner-b", NOW + timedelta(seconds=1)) is False
+    assert leases.heartbeat("job", "owner-b", NOW + timedelta(seconds=2)) is False
+    leases.release("job", "owner-b")
+    assert leases.get("job") is not None
+    assert leases.heartbeat("missing", "owner-a", NOW) is False
+    leases.release("job", "owner-a")
+    assert leases.get("job") is None
+
+
+def test_register_rejects_invalid_and_duplicate_jobs() -> None:
+    daemon = QuilinDaemon(config=DaemonConfig())
+    daemon.register(FakeJob(id="valid"))
+
+    for job, message in (
+        (FakeJob(id=" "), "job id"),
+        (FakeJob(id="bad-interval", interval_seconds=0), "interval_seconds"),
+        (FakeJob(id="bad-tokens", estimated_tokens=-1), "estimated_tokens"),
+        (FakeJob(id="bad-cost", estimated_cost=-1), "estimated_cost"),
+        (FakeJob(id="bad-retries", max_retries=-1), "max_retries"),
+        (FakeJob(id="bad-backoff", backoff_seconds=0), "backoff_seconds"),
+    ):
+        try:
+            daemon.register(job)
+        except ValueError as exc:
+            assert message in str(exc)
+        else:  # pragma: no cover - defensive
+            raise AssertionError(f"expected ValueError for {job.id}")
+
+    try:
+        daemon.register(FakeJob(id="valid"))
+    except ValueError as exc:
+        assert "already registered" in str(exc)
+    else:  # pragma: no cover - defensive
+        raise AssertionError("expected duplicate job validation")
+
+    try:
+        daemon.next_run_at("missing")
+    except KeyError as exc:
+        assert "unknown job" in str(exc)
+    else:  # pragma: no cover - defensive
+        raise AssertionError("expected unknown job")
+
+
+def test_run_once_records_exception_as_failed_result() -> None:
+    @dataclass(slots=True)
+    class ExplodingJob:
+        id: str = "explode"
+        interval_seconds: float = 60
+        estimated_tokens: int = 1
+        estimated_cost: float = 0
+        max_retries: int = 0
+        backoff_seconds: float = 1
+
+        async def run(self, context: JobContext) -> JobResult:
+            del context
+            raise RuntimeError("boom")
+
+    daemon = QuilinDaemon(config=DaemonConfig())
+    daemon.register(ExplodingJob())
+    record = asyncio.run(daemon.run_once("explode", now=NOW))
+
+    assert record.status == "failed"
+    assert record.reason == "RuntimeError"
+    assert record.message == "boom"
+
+
+def test_run_forever_stops_when_event_is_set() -> None:
+    daemon = QuilinDaemon(config=DaemonConfig(tick_interval_seconds=0.01))
+    stop_event = asyncio.Event()
+    stop_event.set()
+
+    asyncio.run(daemon.run_forever(stop_event))
+
+    assert daemon._stopping is True  # type: ignore[attr-defined]
+
+
+def test_run_forever_cancels_active_job_when_stop_event_is_set() -> None:
+    @dataclass(slots=True)
+    class SlowJob:
+        id: str = "slow"
+        interval_seconds: float = 60
+        estimated_tokens: int = 1
+        estimated_cost: float = 0
+        max_retries: int = 0
+        backoff_seconds: float = 1
+
+        async def run(self, context: JobContext) -> JobResult:
+            context.heartbeat()
+            await asyncio.sleep(10)
+            return JobResult.succeeded()
+
+    async def scenario() -> None:
+        daemon = QuilinDaemon(config=DaemonConfig(tick_interval_seconds=0.01))
+        daemon.register(SlowJob())
+        stop_event = asyncio.Event()
+        task = asyncio.create_task(daemon.run_forever(stop_event))
+
+        while "slow" not in daemon._active_tasks:  # type: ignore[attr-defined]
+            await asyncio.sleep(0)
+        stop_event.set()
+
+        await asyncio.wait_for(task, timeout=0.5)
+        assert "slow" not in daemon._active_tasks  # type: ignore[attr-defined]
+        records = daemon.records["slow"]
+        assert records[-1].status == "cancelled"
+
+    asyncio.run(scenario())

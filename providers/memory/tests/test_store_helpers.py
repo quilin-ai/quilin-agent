@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import sqlite3
 from datetime import UTC, datetime, timedelta
 
@@ -8,11 +9,15 @@ import pytest
 from quilin_mem.store_filters import coerce_filter_datetime, layer_filter, matches_filters
 from quilin_mem.store_serialization import (
     deserialize_embedding,
+    deserialize_json_object,
     deserialize_memory_tier,
     deserialize_metadata,
     parse_datetime,
+    parse_optional_datetime,
     row_to_record,
     serialize_embedding,
+    serialize_json_object,
+    serialize_metadata,
     validate_memory_tier,
 )
 from quilin_mem.types import MemoryItem
@@ -61,6 +66,38 @@ def test_row_to_record_uses_safe_defaults_for_nullable_legacy_rows() -> None:
     assert record.embedding is None
     assert record.created_at == now
     assert record.last_accessed == now
+    assert record.kind is None
+    assert record.salience is None
+
+
+def test_serialize_json_object_rejects_non_finite_values() -> None:
+    with pytest.raises(ValueError, match="JSON"):
+        serialize_json_object({"novelty": math.nan})
+
+    with pytest.raises(ValueError, match="JSON"):
+        serialize_json_object({"score": math.inf})
+
+    with pytest.raises(ValueError, match="JSON"):
+        serialize_metadata({"score": math.nan})
+
+
+def test_json_object_and_optional_datetime_helpers_cover_invalid_shapes() -> None:
+    assert serialize_json_object(None) is None
+    assert serialize_json_object({"b": 2, "a": 1}) == '{"a": 1, "b": 2}'
+    assert deserialize_json_object(None) is None
+    assert deserialize_json_object("") is None
+    assert deserialize_json_object("[]") is None
+    assert deserialize_json_object('{"ok": true}') == {"ok": True}
+    assert parse_optional_datetime(None) is None
+    assert parse_optional_datetime("") is None
+    assert parse_optional_datetime("2026-05-21T10:00:00") == datetime(
+        2026, 5, 21, 10, 0, tzinfo=UTC
+    )
+
+
+def test_memory_item_rejects_unknown_kind() -> None:
+    with pytest.raises(ValueError, match="Invalid memory kind"):
+        MemoryItem(content="bad kind", kind="made-up-kind")
 
 
 @pytest.mark.parametrize(

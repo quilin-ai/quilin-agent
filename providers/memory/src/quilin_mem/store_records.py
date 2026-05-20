@@ -5,7 +5,11 @@ import sqlite3
 from collections.abc import Callable
 from datetime import datetime
 
-from .store_serialization import serialize_embedding, serialize_metadata
+from .store_serialization import (
+    serialize_embedding,
+    serialize_json_object,
+    serialize_metadata,
+)
 from .types import MemoryItem
 
 
@@ -34,6 +38,7 @@ def insert_memory(
             embedding_json,
             created_at,
             last_accessed,
+            last_written_at,
             access_count,
             importance_score,
             deleted,
@@ -44,9 +49,17 @@ def insert_memory(
             source_event_id,
             evidence_hash,
             forget_after,
-            strength
+            strength,
+            last_writer_client,
+            last_writer_session_id,
+            project_scope,
+            salience_json,
+            kind,
+            deadline_at,
+            prospective_action,
+            resource_pointer_json
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             memory.id,
@@ -57,6 +70,7 @@ def insert_memory(
             serialize_embedding(memory.embedding),
             memory.created_at.isoformat(),
             memory.last_accessed.isoformat(),
+            memory.created_at.isoformat(),
             memory.access_count,
             memory.importance_score,
             version,
@@ -71,6 +85,14 @@ def insert_memory(
             evidence_hash,
             forget_after.isoformat() if forget_after is not None else None,
             strength,
+            memory.last_writer_client,
+            memory.last_writer_session_id,
+            memory.project_scope,
+            serialize_json_object(memory.salience),
+            memory.kind,
+            memory.deadline_at.isoformat() if memory.deadline_at is not None else None,
+            memory.prospective_action,
+            serialize_json_object(memory.resource_pointer),
         ),
     )
     conn.execute(

@@ -22,6 +22,7 @@ from .store_search import build_keywords as _search_build_keywords
 from .store_search import candidate_rows, rebuild_fts_index, record_columns
 from .store_serialization import deserialize_metadata as _deserialize_metadata
 from .store_serialization import row_to_record as _row_to_record
+from .store_serialization import serialize_metadata as _serialize_metadata
 from .store_serialization import validate_memory_tier as _validate_memory_tier
 from .store_validation import validate_semantic_ingestion_contract
 from .store_versioning import (
@@ -45,6 +46,7 @@ from .types import (
     MemoryLayer,
     MemoryRecord,
     MemoryTier,
+    memory_item_with,
     validate_memory_layer,
 )
 
@@ -52,6 +54,7 @@ FTS_SCHEMA_COMPONENT = _FTS_SCHEMA_COMPONENT
 FTS_SCHEMA_VERSION = _FTS_SCHEMA_VERSION
 HISTORY_SNAPSHOT_LABEL_PREFIX = "__history__:"
 DEFAULT_RECOVERY_WINDOW = timedelta(days=7)
+DEFAULT_CONFLICT_WINDOW = timedelta(seconds=30)
 
 
 @runtime_checkable
@@ -67,7 +70,14 @@ class MemoryStore(Protocol):
 
     async def get(self, memory_id: str) -> MemoryItem | None: ...
 
-    async def update(self, memory_id: str, content: str) -> None: ...
+    async def update(
+        self,
+        memory_id: str,
+        content: str,
+        *,
+        last_writer_client: str | None = None,
+        last_writer_session_id: str | None = None,
+    ) -> None: ...
 
     async def delete(self, memory_id: str) -> None: ...
 
@@ -273,10 +283,29 @@ class QuilinMemStore:
             self._mark_accessed_locked([memory_id], accessed_at)
             return self._with_access_signal(record, accessed_at)
 
-    async def update(self, memory_id: str, content: str) -> None:
-        await asyncio.to_thread(self._update_sync, memory_id, content)
+    async def update(
+        self,
+        memory_id: str,
+        content: str,
+        *,
+        last_writer_client: str | None = None,
+        last_writer_session_id: str | None = None,
+    ) -> None:
+        await asyncio.to_thread(
+            self._update_sync,
+            memory_id,
+            content,
+            last_writer_client,
+            last_writer_session_id,
+        )
 
-    def _update_sync(self, memory_id: str, content: str) -> None:
+    def _update_sync(
+        self,
+        memory_id: str,
+        content: str,
+        last_writer_client: str | None,
+        last_writer_session_id: str | None,
+    ) -> None:
         with self._lock:
             self._conn.execute("BEGIN IMMEDIATE")
             with self._conn:
@@ -291,25 +320,52 @@ class QuilinMemStore:
                 if row is None:
                     return
 
+                now = _utcnow()
+                metadata = _deserialize_metadata(row["metadata_json"])
+                conflict = self._detect_conflict_locked(
+                    row,
+                    last_writer_client=last_writer_client,
+                    at=now,
+                )
+                if conflict:
+                    metadata["conflict_resolution_pending"] = True
+                    metadata["conflict_with_client"] = str(row["last_writer_client"])
+                    if row["last_writer_session_id"]:
+                        metadata["conflict_with_session_id"] = str(row["last_writer_session_id"])
+
                 validate_semantic_ingestion_contract(
                     layer=validate_memory_layer(row["tier"]),
                     content_type=row["content_type"],
-                    metadata=_deserialize_metadata(row["metadata_json"]),
+                    metadata=metadata,
                     content=content,
                 )
                 self._record_history_snapshot_locked(
                     memory_id=memory_id,
                     record=_row_to_record(row, now=_utcnow),
                     label_kind="update",
-                    snapshot_at=_utcnow(),
+                    snapshot_at=now,
                 )
                 self._conn.execute(
                     """
                     UPDATE memory_records
-                    SET content = ?, embedding_json = NULL
+                    SET content = ?,
+                        embedding_json = NULL,
+                        metadata_json = ?,
+                        last_accessed = ?,
+                        last_written_at = ?,
+                        last_writer_client = COALESCE(?, last_writer_client),
+                        last_writer_session_id = COALESCE(?, last_writer_session_id)
                     WHERE id = ? AND deleted = 0 AND is_latest = 1
                     """,
-                    (content, memory_id),
+                    (
+                        content,
+                        _serialize_metadata(metadata),
+                        now.isoformat(),
+                        now.isoformat(),
+                        last_writer_client,
+                        last_writer_session_id,
+                        memory_id,
+                    ),
                 )
                 self._conn.execute(
                     """
@@ -319,6 +375,27 @@ class QuilinMemStore:
                     """,
                     (content, _build_keywords(content), memory_id),
                 )
+
+    def _detect_conflict_locked(
+        self,
+        row: sqlite3.Row,
+        *,
+        last_writer_client: str | None,
+        at: datetime,
+        window: timedelta = DEFAULT_CONFLICT_WINDOW,
+    ) -> bool:
+        if not last_writer_client or not row["last_writer_client"]:
+            return False
+        if str(row["last_writer_client"]) == last_writer_client:
+            return False
+        try:
+            last_written_at = (
+                row["last_written_at"] if "last_written_at" in tuple(row.keys()) else None
+            )
+            last_write_at = datetime.fromisoformat(str(last_written_at or row["last_accessed"]))
+        except ValueError:
+            return False
+        return at - last_write_at <= window
 
     async def delete(self, memory_id: str) -> None:
         await asyncio.to_thread(self._delete_sync, memory_id)
@@ -647,6 +724,14 @@ class QuilinMemStore:
         content_type: str = "text",
         embedding: list[float] | None = None,
         importance_score: float = 0.5,
+        last_writer_client: str | None = None,
+        last_writer_session_id: str | None = None,
+        project_scope: str | None = None,
+        salience: dict[str, object] | None = None,
+        kind: str | None = None,
+        deadline_at: datetime | None = None,
+        prospective_action: str | None = None,
+        resource_pointer: dict[str, object] | None = None,
     ) -> MemoryRecord:
         return await asyncio.to_thread(
             self._store_sync,
@@ -657,6 +742,14 @@ class QuilinMemStore:
             content_type,
             embedding,
             importance_score,
+            last_writer_client,
+            last_writer_session_id,
+            project_scope,
+            salience,
+            kind,
+            deadline_at,
+            prospective_action,
+            resource_pointer,
         )
 
     def _store_sync(
@@ -668,6 +761,14 @@ class QuilinMemStore:
         content_type: str = "text",
         embedding: list[float] | None = None,
         importance_score: float = 0.5,
+        last_writer_client: str | None = None,
+        last_writer_session_id: str | None = None,
+        project_scope: str | None = None,
+        salience: dict[str, object] | None = None,
+        kind: str | None = None,
+        deadline_at: datetime | None = None,
+        prospective_action: str | None = None,
+        resource_pointer: dict[str, object] | None = None,
     ) -> MemoryRecord:
         resolved_layer = (
             validate_memory_layer(layer) if layer is not None else _validate_memory_tier(tier)
@@ -686,6 +787,14 @@ class QuilinMemStore:
             metadata=resolved_metadata,
             embedding=embedding,
             importance_score=importance_score,
+            last_writer_client=last_writer_client,
+            last_writer_session_id=last_writer_session_id,
+            project_scope=project_scope,
+            salience=salience,
+            kind=kind,
+            deadline_at=deadline_at,
+            prospective_action=prospective_action,
+            resource_pointer=resource_pointer,
         )
         with self._lock:
             self._conn.execute("BEGIN IMMEDIATE")
@@ -1251,15 +1360,8 @@ class QuilinMemStore:
 
     @staticmethod
     def _with_access_signal(record: MemoryItem, accessed_at: datetime) -> MemoryItem:
-        return MemoryItem(
-            id=record.id,
-            content=record.content,
-            content_type=record.content_type,
-            layer=record.layer,
-            metadata=dict(record.metadata),
-            embedding=record.embedding,
-            created_at=record.created_at,
+        return memory_item_with(
+            record,
             last_accessed=accessed_at,
             access_count=record.access_count + 1,
-            importance_score=record.importance_score,
         )

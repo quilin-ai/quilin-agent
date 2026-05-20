@@ -127,9 +127,7 @@ class SkillProposal:
                 )
             if ":" in field_value and field_name == "name":
                 # name 用 kebab-case,绝不应有冒号
-                raise ValueError(
-                    "SkillProposal.name must not contain ':' (YAML injection risk)"
-                )
+                raise ValueError("SkillProposal.name must not contain ':' (YAML injection risk)")
 
     def to_skill_md(self) -> str:
         """Render this proposal as a SKILL.md document.
@@ -283,9 +281,7 @@ class SkillProposer:
 def _intent_tokens(intent: str) -> set[str]:
     cleaned = "".join(ch.lower() if ch.isalnum() else " " for ch in intent)
     tokens = {
-        token
-        for token in cleaned.split()
-        if len(token) >= 2 and token not in _INTENT_STOPWORDS
+        token for token in cleaned.split() if len(token) >= 2 and token not in _INTENT_STOPWORDS
     }
     return tokens
 

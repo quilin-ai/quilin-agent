@@ -15,6 +15,28 @@ VALID_MEMORY_LAYERS: tuple[MemoryLayer, ...] = (
     "skill",
 )
 VALID_MEMORY_TIERS: tuple[MemoryTier, ...] = VALID_MEMORY_LAYERS
+MemoryKind = Literal[
+    "preference",
+    "feedback",
+    "project_note",
+    "reference",
+    "pattern",
+    "bug",
+    "workflow",
+    "prospective",
+    "resource",
+]
+VALID_MEMORY_KINDS: tuple[MemoryKind, ...] = (
+    "preference",
+    "feedback",
+    "project_note",
+    "reference",
+    "pattern",
+    "bug",
+    "workflow",
+    "prospective",
+    "resource",
+)
 
 
 class MemoryMetadata(TypedDict):
@@ -35,6 +57,10 @@ class MemoryMetadata(TypedDict):
     reranker_rank: NotRequired[int]
     run_id: NotRequired[str]
     stability_reason: NotRequired[str]
+    conflict_resolution_pending: NotRequired[bool]
+    conflict_with_client: NotRequired[str]
+    conflict_with_session_id: NotRequired[str]
+    staleness_marker: NotRequired[dict[str, object]]
 
 
 def _utcnow() -> datetime:
@@ -63,6 +89,16 @@ def validate_memory_layer(layer: str) -> MemoryLayer:
     return cast(MemoryLayer, layer)
 
 
+def validate_memory_kind(kind: str | None) -> MemoryKind | None:
+    if kind is None:
+        return None
+    normalized = kind.strip().lower()
+    if normalized not in VALID_MEMORY_KINDS:
+        valid_kinds = ", ".join(VALID_MEMORY_KINDS)
+        raise ValueError(f"Invalid memory kind: {kind}. Expected one of: {valid_kinds}")
+    return cast(MemoryKind, normalized)
+
+
 @dataclass(slots=True, frozen=True, init=False)
 class MemoryItem:
     id: str = field(default_factory=_new_memory_id)
@@ -77,6 +113,14 @@ class MemoryItem:
     last_accessed: datetime = field(default_factory=_utcnow)
     access_count: int = 0
     importance_score: float = 0.5
+    last_writer_client: str | None = None
+    last_writer_session_id: str | None = None
+    project_scope: str | None = None
+    salience: dict[str, object] | None = None
+    kind: str | None = None
+    deadline_at: datetime | None = None
+    prospective_action: str | None = None
+    resource_pointer: dict[str, object] | None = None
 
     def __init__(
         self,
@@ -92,6 +136,14 @@ class MemoryItem:
         importance_score: float = 0.5,
         *,
         tier: MemoryTier | None = None,
+        last_writer_client: str | None = None,
+        last_writer_session_id: str | None = None,
+        project_scope: str | None = None,
+        salience: dict[str, object] | None = None,
+        kind: str | None = None,
+        deadline_at: datetime | None = None,
+        prospective_action: str | None = None,
+        resource_pointer: dict[str, object] | None = None,
     ) -> None:
         resolved_layer = validate_memory_layer(tier or layer)
         created = created_at or _utcnow()
@@ -111,6 +163,18 @@ class MemoryItem:
         object.__setattr__(self, "last_accessed", last_seen)
         object.__setattr__(self, "access_count", access_count)
         object.__setattr__(self, "importance_score", float(importance_score))
+        object.__setattr__(self, "last_writer_client", last_writer_client)
+        object.__setattr__(self, "last_writer_session_id", last_writer_session_id)
+        object.__setattr__(self, "project_scope", project_scope)
+        object.__setattr__(self, "salience", dict(salience) if salience is not None else None)
+        object.__setattr__(self, "kind", validate_memory_kind(kind))
+        object.__setattr__(self, "deadline_at", deadline_at)
+        object.__setattr__(self, "prospective_action", prospective_action)
+        object.__setattr__(
+            self,
+            "resource_pointer",
+            dict(resource_pointer) if resource_pointer is not None else None,
+        )
 
     @property
     def tier(self) -> MemoryTier:
@@ -131,6 +195,16 @@ class MemoryItem:
             "last_accessed": self.last_accessed.isoformat(),
             "access_count": self.access_count,
             "importance_score": self.importance_score,
+            "last_writer_client": self.last_writer_client,
+            "last_writer_session_id": self.last_writer_session_id,
+            "project_scope": self.project_scope,
+            "salience": dict(self.salience) if self.salience is not None else None,
+            "kind": self.kind,
+            "deadline_at": self.deadline_at.isoformat() if self.deadline_at else None,
+            "prospective_action": self.prospective_action,
+            "resource_pointer": (
+                dict(self.resource_pointer) if self.resource_pointer is not None else None
+            ),
         }
         if include_legacy_tier:
             payload["tier"] = self.layer
@@ -144,6 +218,7 @@ class MemoryItem:
         embedding = payload.get("embedding")
         created_at = payload.get("created_at")
         last_accessed = payload.get("last_accessed")
+        deadline_at = payload.get("deadline_at")
 
         return cls(
             id=cast(str | None, payload.get("id")),
@@ -155,16 +230,42 @@ class MemoryItem:
             created_at=(
                 datetime.fromisoformat(cast(str, created_at))
                 if isinstance(created_at, str)
+                else created_at
+                if isinstance(created_at, datetime)
                 else None
             ),
             last_accessed=(
                 datetime.fromisoformat(cast(str, last_accessed))
                 if isinstance(last_accessed, str)
+                else last_accessed
+                if isinstance(last_accessed, datetime)
                 else None
             ),
             access_count=int(cast(int | float, payload.get("access_count", 0))),
             importance_score=float(cast(int | float, payload.get("importance_score", 0.5))),
+            last_writer_client=cast(str | None, payload.get("last_writer_client")),
+            last_writer_session_id=cast(str | None, payload.get("last_writer_session_id")),
+            project_scope=cast(str | None, payload.get("project_scope")),
+            salience=cast(dict[str, object] | None, payload.get("salience")),
+            kind=cast(str | None, payload.get("kind")),
+            deadline_at=(
+                datetime.fromisoformat(cast(str, deadline_at))
+                if isinstance(deadline_at, str)
+                else deadline_at
+                if isinstance(deadline_at, datetime)
+                else None
+            ),
+            prospective_action=cast(str | None, payload.get("prospective_action")),
+            resource_pointer=cast(dict[str, object] | None, payload.get("resource_pointer")),
         )
 
 
 MemoryRecord = MemoryItem
+
+
+def memory_item_with(record: MemoryItem, **updates: object) -> MemoryItem:
+    """Clone a memory item while preserving all structured fields."""
+
+    payload = record.to_wire_dict()
+    payload.update(updates)
+    return MemoryItem.from_dict(payload)

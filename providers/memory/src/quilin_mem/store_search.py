@@ -153,8 +153,17 @@ def record_columns(alias: str | None = None) -> str:
             "embedding_json",
             "created_at",
             "last_accessed",
+            "last_written_at",
             "access_count",
             "importance_score",
+            "last_writer_client",
+            "last_writer_session_id",
+            "project_scope",
+            "salience_json",
+            "kind",
+            "deadline_at",
+            "prospective_action",
+            "resource_pointer_json",
         )
     )
 

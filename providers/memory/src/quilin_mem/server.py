@@ -6,6 +6,7 @@ import os
 import secrets
 from collections import OrderedDict
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import Any
 
 from mcp.server.fastmcp import Context, FastMCP
@@ -29,7 +30,7 @@ from .retrieval_profile import RetrievalProfileStore
 from .retriever import MemoryRetriever
 from .scratchpad import ScratchpadStore
 from .store import QuilinMemStore
-from .types import MemoryLayer, MemoryTier
+from .types import MemoryKind, MemoryLayer, MemoryTier
 
 MAX_RECALL_QUERY_LENGTH = 512
 MAX_TOOL_METADATA_DEPTH = 4
@@ -158,6 +159,14 @@ def _validate_tool_metadata(metadata: dict[str, object] | None) -> dict[str, obj
         raise ValueError(f"memory_store metadata must be at most {MAX_TOOL_METADATA_BYTES} bytes")
 
     return normalized
+
+
+def _parse_tool_datetime(value: str | None, *, field_name: str) -> datetime | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} must be an ISO datetime string")
+    return datetime.fromisoformat(value)
 
 
 def _is_blank_string(value: object) -> bool:
@@ -304,6 +313,14 @@ async def _memory_store_with_store(
     layer: MemoryLayer | None = None,
     metadata: dict[str, object] | None = None,
     content_type: str = "text",
+    last_writer_client: str | None = None,
+    last_writer_session_id: str | None = None,
+    project_scope: str | None = None,
+    salience: dict[str, object] | None = None,
+    kind: MemoryKind | None = None,
+    deadline_at: str | None = None,
+    prospective_action: str | None = None,
+    resource_pointer: dict[str, object] | None = None,
     trace_context: TraceContext | None = None,
 ) -> str:
     """Store a new memory record.
@@ -314,6 +331,11 @@ async def _memory_store_with_store(
     """
     metadata_with_defaults = _tool_metadata_with_defaults(tier, layer, metadata)
     validated_metadata = _validate_tool_metadata(metadata_with_defaults)
+    if salience is not None:
+        _validate_metadata_value(salience, depth=1)
+    if resource_pointer is not None:
+        _validate_metadata_value(resource_pointer, depth=1)
+    parsed_deadline_at = _parse_tool_datetime(deadline_at, field_name="deadline_at")
     try:
         if layer is None:
             record = await store.store(
@@ -321,6 +343,14 @@ async def _memory_store_with_store(
                 tier=tier,
                 metadata=validated_metadata,
                 content_type=content_type,
+                last_writer_client=last_writer_client,
+                last_writer_session_id=last_writer_session_id,
+                project_scope=project_scope,
+                salience=salience,
+                kind=kind,
+                deadline_at=parsed_deadline_at,
+                prospective_action=prospective_action,
+                resource_pointer=resource_pointer,
             )
         else:
             record = await store.store(
@@ -329,6 +359,14 @@ async def _memory_store_with_store(
                 layer=layer,
                 metadata=validated_metadata,
                 content_type=content_type,
+                last_writer_client=last_writer_client,
+                last_writer_session_id=last_writer_session_id,
+                project_scope=project_scope,
+                salience=salience,
+                kind=kind,
+                deadline_at=parsed_deadline_at,
+                prospective_action=prospective_action,
+                resource_pointer=resource_pointer,
             )
     except Exception as exc:
         _raise_memory_operation_error("memory_store", exc)
@@ -629,6 +667,14 @@ async def memory_store(
     layer: MemoryLayer | None = None,
     metadata: dict[str, object] | None = None,
     content_type: str = "text",
+    last_writer_client: str | None = None,
+    last_writer_session_id: str | None = None,
+    project_scope: str | None = None,
+    salience: dict[str, object] | None = None,
+    kind: MemoryKind | None = None,
+    deadline_at: str | None = None,
+    prospective_action: str | None = None,
+    resource_pointer: dict[str, object] | None = None,
 ) -> str:
     """Legacy direct helper that opens a store per call."""
     async with QuilinMemStore() as store:
@@ -639,6 +685,14 @@ async def memory_store(
             layer,
             metadata,
             content_type,
+            last_writer_client,
+            last_writer_session_id,
+            project_scope,
+            salience,
+            kind,
+            deadline_at,
+            prospective_action,
+            resource_pointer,
         )
 
 
@@ -817,6 +871,14 @@ def create_server(
         layer: MemoryLayer | None = None,
         metadata: dict[str, object] | None = None,
         content_type: str = "text",
+        last_writer_client: str | None = None,
+        last_writer_session_id: str | None = None,
+        project_scope: str | None = None,
+        salience: dict[str, object] | None = None,
+        kind: MemoryKind | None = None,
+        deadline_at: str | None = None,
+        prospective_action: str | None = None,
+        resource_pointer: dict[str, object] | None = None,
         ctx: Context[object, Any, object] | None = None,
     ) -> str:
         """Store a new memory record.
@@ -834,6 +896,14 @@ def create_server(
             layer,
             metadata,
             content_type,
+            last_writer_client,
+            last_writer_session_id,
+            project_scope,
+            salience,
+            kind,
+            deadline_at,
+            prospective_action,
+            resource_pointer,
             trace_context=_child_trace_context(parent_trace),
         )
 

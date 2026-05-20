@@ -5,7 +5,7 @@ import json
 from typing import Any, Protocol
 
 from .logging import logger
-from .types import MemoryItem, MemoryLayer, validate_memory_layer
+from .types import MemoryItem, MemoryLayer, memory_item_with, validate_memory_layer
 
 DEFAULT_BM25_LIMIT = 50
 DEFAULT_RRF_K = 60
@@ -226,15 +226,4 @@ class BM25RetrieverMixin:
         if block_version is not None:
             metadata["block_version"] = block_version
 
-        return MemoryItem(
-            id=item.id,
-            content=item.content,
-            content_type=item.content_type,
-            layer=item.layer,
-            metadata=metadata,
-            embedding=item.embedding,
-            created_at=item.created_at,
-            last_accessed=item.last_accessed,
-            access_count=item.access_count,
-            importance_score=item.importance_score,
-        )
+        return memory_item_with(item, metadata=metadata)

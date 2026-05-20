@@ -88,6 +88,12 @@ def test_from_json_dict_clamps_out_of_range_values() -> None:
     assert restored.personal_relevance == 0.5  # NaN → fallback
 
 
+def test_from_json_dict_schema_version_falls_back_for_invalid_values() -> None:
+    for raw_schema_version in (float("nan"), float("inf"), "not-an-int", True, None):
+        restored = SalienceVector.from_json_dict({"schema_version": raw_schema_version})
+        assert restored.schema_version == SALIENCE_SCHEMA_VERSION
+
+
 # ---------------------------------------------------------------------------
 # 2. compute_weighted_score — intent → 维度加权
 # ---------------------------------------------------------------------------

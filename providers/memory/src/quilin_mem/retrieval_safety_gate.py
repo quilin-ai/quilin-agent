@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol, cast
 
-from .types import MemoryItem, MemoryMetadata
+from .types import MemoryItem, MemoryMetadata, memory_item_with
 
 DEFAULT_LOW_CONFIDENCE_THRESHOLD = 0.3
 DEFAULT_CONSENSUS_TOP_K = 3
@@ -261,18 +261,7 @@ def _annotate(item: MemoryItem, updates: dict[str, object]) -> MemoryItem:
 
     merged: dict[str, object] = dict(item.metadata)
     merged.update(updates)
-    return MemoryItem(
-        id=item.id,
-        content=item.content,
-        content_type=item.content_type,
-        layer=item.layer,
-        metadata=cast(MemoryMetadata, merged),
-        embedding=item.embedding,
-        created_at=item.created_at,
-        last_accessed=item.last_accessed,
-        access_count=item.access_count,
-        importance_score=item.importance_score,
-    )
+    return memory_item_with(item, metadata=cast(MemoryMetadata, merged))
 
 
 class _DeepseekRelevanceJudge:
@@ -509,8 +498,7 @@ class RetrievalSafetyGate:
                     {
                         META_CONSENSUS: CONSENSUS_DISAGREE,
                         META_QUARANTINE_REASON: (
-                            f"top-{k} consensus disagree "
-                            f"(spread={spread:.2f}, score={score:.2f})"
+                            f"top-{k} consensus disagree (spread={spread:.2f}, score={score:.2f})"
                         ),
                     },
                 )

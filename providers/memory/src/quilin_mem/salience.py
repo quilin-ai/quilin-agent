@@ -26,6 +26,7 @@ so it can be reused by retriever weighting, store insertion paths, and
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Final, Literal
@@ -155,6 +156,25 @@ class SalienceVector:
                 return _clamp01(float(raw))
             return _DEFAULT_FALLBACK_DIM_VALUE
 
+        def _safe_schema_version() -> int:
+            raw = payload.get("schema_version")
+            if isinstance(raw, bool):
+                return SALIENCE_SCHEMA_VERSION
+            if isinstance(raw, int):
+                return raw if raw > 0 else SALIENCE_SCHEMA_VERSION
+            if isinstance(raw, float):
+                if not math.isfinite(raw):
+                    return SALIENCE_SCHEMA_VERSION
+                coerced = int(raw)
+                return coerced if coerced > 0 else SALIENCE_SCHEMA_VERSION
+            if isinstance(raw, str):
+                try:
+                    coerced = int(raw)
+                except ValueError:
+                    return SALIENCE_SCHEMA_VERSION
+                return coerced if coerced > 0 else SALIENCE_SCHEMA_VERSION
+            return SALIENCE_SCHEMA_VERSION
+
         return cls(
             novelty=_safe_dim("novelty"),
             utility=_safe_dim("utility"),
@@ -162,7 +182,7 @@ class SalienceVector:
             actionability=_safe_dim("actionability"),
             temporal_relevance=_safe_dim("temporal_relevance"),
             stability=_safe_dim("stability"),
-            schema_version=int(payload.get("schema_version", SALIENCE_SCHEMA_VERSION) or 1),
+            schema_version=_safe_schema_version(),
         )
 
 
@@ -317,8 +337,6 @@ def build_staleness_marker(
 
 def _clamp01(value: float) -> float:
     """Clamp to [0.0, 1.0]. NaN / inf collapse to default fallback."""
-    import math
-
     if not math.isfinite(value):
         return _DEFAULT_FALLBACK_DIM_VALUE
     return max(0.0, min(1.0, value))

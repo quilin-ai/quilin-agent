@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import sys
 from collections.abc import Callable, Coroutine, Mapping
@@ -360,7 +361,25 @@ class QuilinDaemon:
             while self._running and not self._stopping:
                 if stop_event is not None and stop_event.is_set():
                     break
-                await self.tick_due()
+                if stop_event is None:
+                    await self.tick_due()
+                else:
+                    tick_task = asyncio.create_task(self.tick_due())
+                    stop_task = asyncio.create_task(stop_event.wait())
+                    done, pending = await asyncio.wait(
+                        {tick_task, stop_task},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if stop_task in done:
+                        tick_task.cancel()
+                        await self.stop()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await tick_task
+                        break
+                    stop_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await stop_task
+                    await tick_task
                 try:
                     if stop_event is None:
                         await asyncio.sleep(self.config.tick_interval_seconds)
@@ -372,7 +391,8 @@ class QuilinDaemon:
                 except TimeoutError:
                     continue
         finally:
-            await self.stop()
+            if self._running or not self._stopping:
+                await self.stop()
 
     def _state(self, job_id: str) -> _JobState:
         try:

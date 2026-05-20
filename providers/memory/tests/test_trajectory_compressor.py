@@ -86,6 +86,34 @@ def test_failure_signals_recognised() -> None:
     assert case.succeeded is False
 
 
+def test_failure_phrase_does_not_emit_embedded_success_signal() -> None:
+    turns = [
+        _turn("user", "跑 pytest", turn_id="t1"),
+        _turn("assistant", "run pytest -q", turn_id="t2"),
+        _turn("user", "不对，撤销", turn_id="t3"),
+    ]
+
+    case = TrajectoryCompressor().compress(turns)
+
+    assert case is not None
+    assert "不对" in case.failure_signals
+    assert "对" not in case.success_signals
+
+
+def test_failure_phrase_only_suppresses_overlapping_success_token() -> None:
+    turns = [
+        _turn("user", "跑 pytest", turn_id="t1"),
+        _turn("assistant", "run pytest -q", turn_id="t2"),
+        _turn("user", "不对，后来对了", turn_id="t3"),
+    ]
+
+    case = TrajectoryCompressor().compress(turns)
+
+    assert case is not None
+    assert "不对" in case.failure_signals
+    assert "对" in case.success_signals
+
+
 def test_llm_caller_extracts_actions_and_intent() -> None:
     captured: list[Mapping[str, object]] = []
 

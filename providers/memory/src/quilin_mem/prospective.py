@@ -54,6 +54,7 @@ class ProspectiveItem:
         action: 建议触发时执行的 action 摘要(可空)。
         actor: 责任人范围(LLM 主动 / user 手动 / 导入,跟 QUI-196 last_writer
             一致)。
+        source: 来源范围(conversation / import / idle 等,由 caller 传入)。
     """
 
     memory_id: str
@@ -61,6 +62,7 @@ class ProspectiveItem:
     deadline_at: datetime
     action: str | None = None
     actor: str | None = None
+    source: str | None = None
     schema_version: int = PROSPECTIVE_SCHEMA_VERSION
 
 
@@ -74,6 +76,8 @@ class ReminderPayload:
         urgency: "soon" / "due" / "overdue" — 决定渲染样式。
         deadline_at: ISO8601 字符串(便于 wire 透传)。
         suggested_action: 来自 ``ProspectiveItem.action``,可空。
+        actor: 透传 ``ProspectiveItem.actor``。
+        source: 透传 ``ProspectiveItem.source``。
     """
 
     memory_id: str
@@ -81,6 +85,8 @@ class ReminderPayload:
     urgency: str
     deadline_at: str
     suggested_action: str | None = None
+    actor: str | None = None
+    source: str | None = None
 
 
 def is_due(
@@ -100,9 +106,7 @@ def is_due(
     return current >= window_start
 
 
-def format_reminder(
-    item: ProspectiveItem, now: datetime | None = None
-) -> ReminderPayload:
+def format_reminder(item: ProspectiveItem, now: datetime | None = None) -> ReminderPayload:
     """生成 ReminderPayload — 决定 urgency + 渲染中英双语 message。
 
     Urgency 决定方式:
@@ -116,24 +120,15 @@ def format_reminder(
     if delta_seconds < 0:
         urgency = "overdue"
         overdue_hours = int(abs(delta_seconds) // 3600)
-        message = (
-            f"⚠️ 已过期 {overdue_hours} 小时 / Overdue by {overdue_hours} hours:"
-            f"{item.content}"
-        )
+        message = f"⚠️ 已过期 {overdue_hours} 小时 / Overdue by {overdue_hours} hours:{item.content}"
     elif delta_seconds < 3600:
         urgency = "due"
         minutes_left = max(int(delta_seconds // 60), 0)
-        message = (
-            f"⏰ {minutes_left} 分钟后到期 / Due in {minutes_left} minutes:"
-            f"{item.content}"
-        )
+        message = f"⏰ {minutes_left} 分钟后到期 / Due in {minutes_left} minutes:{item.content}"
     else:
         urgency = "soon"
         hours_left = int(delta_seconds // 3600)
-        message = (
-            f"📅 {hours_left} 小时后到期 / Due in {hours_left} hours:"
-            f"{item.content}"
-        )
+        message = f"📅 {hours_left} 小时后到期 / Due in {hours_left} hours:{item.content}"
 
     return ReminderPayload(
         memory_id=item.memory_id,
@@ -141,6 +136,8 @@ def format_reminder(
         urgency=urgency,
         deadline_at=item.deadline_at.isoformat(),
         suggested_action=item.action,
+        actor=item.actor,
+        source=item.source,
     )
 
 

@@ -253,8 +253,12 @@ class TrajectoryCompressor:
             return None
 
         normalised = self._truncate_turns(turns)
-        success_signals = self._collect_signals(normalised, SUCCESS_LEXICON)
         failure_signals = self._collect_signals(normalised, FAILURE_LEXICON)
+        success_signals = self._collect_signals(
+            normalised,
+            SUCCESS_LEXICON,
+            suppress_when_tokens_present=FAILURE_LEXICON,
+        )
 
         llm_payload = self._invoke_llm(normalised)
         heuristic_intent = self.extract_intent(normalised)
@@ -378,6 +382,8 @@ class TrajectoryCompressor:
         self,
         turns: Sequence[ObservationTurn],
         lexicon: Sequence[str],
+        *,
+        suppress_when_tokens_present: Sequence[str] = (),
     ) -> tuple[str, ...]:
         hits: list[str] = []
         for turn in turns:
@@ -385,7 +391,15 @@ class TrajectoryCompressor:
                 continue
             text = turn.content.lower()
             for token in lexicon:
-                if token in text and token not in hits:
+                if token not in text:
+                    continue
+                if _all_token_occurrences_suppressed(
+                    text,
+                    token,
+                    suppress_when_tokens_present,
+                ):
+                    continue
+                if token not in hits:
                     hits.append(token)
         return tuple(hits)
 
@@ -556,6 +570,43 @@ def _payload_contains_token(payload: Mapping[str, object], token: str) -> bool:
     """
 
     return token in repr(payload)
+
+
+def _all_token_occurrences_suppressed(
+    text: str,
+    token: str,
+    blockers: Sequence[str],
+) -> bool:
+    token_spans = list(_find_spans(text, token))
+    if not token_spans:
+        return False
+    blocker_spans = [
+        span for blocker in blockers if token in blocker for span in _find_spans(text, blocker)
+    ]
+    if not blocker_spans:
+        return False
+    return all(
+        any(
+            blocker_start <= token_start and token_end <= blocker_end
+            for blocker_start, blocker_end in blocker_spans
+        )
+        for token_start, token_end in token_spans
+    )
+
+
+def _find_spans(text: str, needle: str) -> Sequence[tuple[int, int]]:
+    if not needle:
+        return ()
+    spans: list[tuple[int, int]] = []
+    start = 0
+    while True:
+        idx = text.find(needle, start)
+        if idx < 0:
+            break
+        end = idx + len(needle)
+        spans.append((idx, end))
+        start = end
+    return tuple(spans)
 
 
 __all__ = [
