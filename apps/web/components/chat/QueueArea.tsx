@@ -8,11 +8,13 @@
  * 内容,而是"待执行的指令列表"(可编辑、可重排、可删除)。
  *
  * QUI-183 P3(2026-05-20):加 5 个交互回调 + 原生 HTML5 drag-and-drop。
- *   - onDelete(id):删除单条
- *   - onMoveUp / onMoveDown(id):上移 / 下移
- *   - onPinTop(id):置顶
- *   - onEdit(id, newText):编辑文本(行内 textarea + 保存 / 取消)
- *   - onReorder(fromId, toId):拖拽 reorder(放到目标行位置)
+ *
+ * QUI-183 P3 UX 改进(2026-05-20,user feedback):
+ *   - 点文字区域直接进入编辑(去掉 ✏ 按钮,减少视觉噪音)
+ *   - 去掉 ⤒ 置顶按钮(用 ⏩ 立即插入语义代替)
+ *   - 删除按钮 ⃝ → 🗑 垃圾桶(更符合通用 icon 语义)
+ *   - 新增 ⏩ 立即插入按钮:把这条移到队头,当前 phase 完成后立即 drain
+ *     (功能上 = 置顶 + drain semantics,语义上更明确"插队")
  *
  * 不引入 @dnd-kit,follow-up 评估移动端触控拖拽。
  */
@@ -45,14 +47,27 @@ export function QueueArea({
 }: QueueAreaProps): ReactElement | null {
 	const [draggingId, setDraggingId] = useState<string | null>(null);
 	const [dragOverId, setDragOverId] = useState<string | null>(null);
+	// QUI-183 P3 UX 改进(2026-05-20):队列可收起。默认 expanded,user 点 ▼ 收起。
+	// 收起时只显示 header(节省屏幕空间,会话区 padding 也减小)。
+	const [collapsed, setCollapsed] = useState(false);
 	if (queued.length === 0) return null;
 	return (
 		<section
 			className="q-queue-area"
 			data-testid="queue-area"
+			data-collapsed={collapsed ? "true" : "false"}
 			aria-label="排队消息 · queued messages"
 		>
 			<div className="q-queue-area-header">
+				<button
+					type="button"
+					className="q-queue-area-toggle"
+					aria-label={collapsed ? "展开队列 · expand" : "收起队列 · collapse"}
+					data-testid="queue-area-toggle"
+					onClick={() => setCollapsed((c) => !c)}
+				>
+					{collapsed ? "▶" : "▼"}
+				</button>
 				<span className="q-queue-area-count">
 					<strong>{queued.length}</strong>条待发 · queued
 				</span>
@@ -60,27 +75,29 @@ export function QueueArea({
 					{onReorder != null ? "拖拽重排 · drag to reorder" : "按顺序送入 · processed in order"}
 				</span>
 			</div>
-			<ul className="q-queue-area-list">
-				{queued.map((item, idx) => (
-					<QueueAreaRow
-						key={item.id}
-						item={item}
-						position={idx + 1}
-						isFirst={idx === 0}
-						isLast={idx === queued.length - 1}
-						onDelete={onDelete}
-						onPinTop={onPinTop}
-						onMoveDown={onMoveDown}
-						onMoveUp={onMoveUp}
-						onEdit={onEdit}
-						onReorder={onReorder}
-						draggingId={draggingId}
-						dragOverId={dragOverId}
-						setDraggingId={setDraggingId}
-						setDragOverId={setDragOverId}
-					/>
-				))}
-			</ul>
+			{collapsed ? null : (
+				<ul className="q-queue-area-list">
+					{queued.map((item, idx) => (
+						<QueueAreaRow
+							key={item.id}
+							item={item}
+							position={idx + 1}
+							isFirst={idx === 0}
+							isLast={idx === queued.length - 1}
+							onDelete={onDelete}
+							onPinTop={onPinTop}
+							onMoveDown={onMoveDown}
+							onMoveUp={onMoveUp}
+							onEdit={onEdit}
+							onReorder={onReorder}
+							draggingId={draggingId}
+							dragOverId={dragOverId}
+							setDraggingId={setDraggingId}
+							setDragOverId={setDragOverId}
+						/>
+					))}
+				</ul>
+			)}
 		</section>
 	);
 }
@@ -231,6 +248,7 @@ function QueueAreaRow({
 								cancelEdit();
 							}
 						}}
+						onBlur={saveEdit}
 						// biome-ignore lint/a11y/noAutofocus: 行内编辑需即时聚焦
 						autoFocus
 						rows={1}
@@ -239,7 +257,7 @@ function QueueAreaRow({
 						<button
 							type="button"
 							className="q-queue-area-row-action"
-							aria-label="保存 · save"
+							aria-label="保存 · save (Enter)"
 							data-testid={`queue-row-${item.id}-edit-save`}
 							onClick={saveEdit}
 						>
@@ -248,7 +266,7 @@ function QueueAreaRow({
 						<button
 							type="button"
 							className="q-queue-area-row-action q-queue-area-row-action-danger"
-							aria-label="取消 · cancel"
+							aria-label="取消 · cancel (Esc)"
 							data-testid={`queue-row-${item.id}-edit-cancel`}
 							onClick={cancelEdit}
 						>
@@ -258,9 +276,23 @@ function QueueAreaRow({
 				</>
 			) : (
 				<>
-					<span className="q-queue-area-row-text" title={item.text}>
-						{item.text}
-					</span>
+					{/* QUI-183 P3 UX 改进:点 text 直接进入编辑(无需 ✏ 按钮)。
+					   用 <button type="button"> 包裹保证键盘可达 + a11y。 */}
+					{onEdit != null ? (
+						<button
+							type="button"
+							className="q-queue-area-row-text q-queue-area-row-text-button"
+							data-testid={`queue-row-${item.id}-text`}
+							title={`${item.text}\n\n点击编辑 / click to edit`}
+							onClick={beginEdit}
+						>
+							{item.text}
+						</button>
+					) : (
+						<span className="q-queue-area-row-text" title={item.text}>
+							{item.text}
+						</span>
+					)}
 					<div className="q-queue-area-row-actions">
 						<button
 							type="button"
@@ -282,25 +314,18 @@ function QueueAreaRow({
 						>
 							↓
 						</button>
+						{/* 立即插入 = 把这条移到队头,当前 streaming phase 完成后立即 drain。
+						   功能等同 pin-top,但语义更明确表达"插队优先发"。 */}
 						<button
 							type="button"
-							className="q-queue-area-row-action"
-							aria-label={`置顶 · pin top (queue ${position})`}
-							data-testid={`queue-row-${item.id}-pin-top`}
+							className="q-queue-area-row-action q-queue-area-row-action-priority"
+							aria-label={`立即插入 · jump queue (queue ${position}, drain next)`}
+							data-testid={`queue-row-${item.id}-jump`}
 							disabled={onPinTop == null || isFirst}
 							onClick={onPinTop == null ? undefined : () => onPinTop(item.id)}
+							title="立即插入 · 当前会话完成后立刻发送此条"
 						>
-							⤒
-						</button>
-						<button
-							type="button"
-							className="q-queue-area-row-action"
-							aria-label={`编辑 · edit (queue ${position})`}
-							data-testid={`queue-row-${item.id}-edit`}
-							disabled={onEdit == null}
-							onClick={onEdit == null ? undefined : beginEdit}
-						>
-							✏
+							⏩
 						</button>
 						<button
 							type="button"
@@ -309,8 +334,9 @@ function QueueAreaRow({
 							data-testid={`queue-row-${item.id}-delete`}
 							disabled={onDelete == null}
 							onClick={onDelete == null ? undefined : () => onDelete(item.id)}
+							title="删除 · remove this queued message"
 						>
-							⃝
+							🗑
 						</button>
 					</div>
 				</>

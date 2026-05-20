@@ -1381,8 +1381,6 @@ main.q-workspace.no-composer {
 	transform: translateX(-50%);
 	width: calc(100% - 48px);
 	max-width: var(--col-width);
-	max-height: 32vh;
-	overflow-y: auto;
 	background: var(--bg-floating);
 	backdrop-filter: blur(12px);
 	-webkit-backdrop-filter: blur(12px);
@@ -1393,6 +1391,24 @@ main.q-workspace.no-composer {
 	transition: border-color 180ms ease-out;
 	font-family: "JetBrains Mono", monospace;
 	font-size: 12px;
+}
+.q-queue-area[data-collapsed="true"] {
+	padding: 6px 12px;
+}
+.q-queue-area-toggle {
+	background: none;
+	border: 1px solid transparent;
+	color: var(--fg-muted);
+	font-family: inherit;
+	font-size: 11px;
+	padding: 0 4px;
+	margin-right: 4px;
+	cursor: pointer;
+	line-height: 1;
+}
+.q-queue-area-toggle:hover {
+	color: var(--fg);
+	border-color: var(--border);
 }
 .q-queue-area-header {
 	display: flex;
@@ -1421,6 +1437,10 @@ main.q-workspace.no-composer {
 	display: flex;
 	flex-direction: column;
 	gap: 2px;
+	/* QUI-183 P3 UX 改进:最多 5 行高,超出 list 内部 scroll(不挡会话)。
+	   每行 ~28px(content) + 2px gap = ~30px, 5 行 = 150px。 */
+	max-height: 150px;
+	overflow-y: auto;
 }
 .q-queue-area-row {
 	display: flex;
@@ -1448,6 +1468,32 @@ main.q-workspace.no-composer {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	color: var(--fg);
+}
+/* QUI-183 P3 UX 改进:文字区可点击编辑。button 重置默认样式让它看起来像普通文本。 */
+.q-queue-area-row-text-button {
+	background: none;
+	border: 1px solid transparent;
+	padding: 2px 4px;
+	margin: -2px -4px;
+	font-family: inherit;
+	font-size: inherit;
+	text-align: left;
+	cursor: text;
+	color: var(--fg);
+	transition: border-color 120ms ease-out, background 120ms ease-out;
+}
+.q-queue-area-row-text-button:hover {
+	border-color: var(--border);
+	background: var(--bg-elev);
+}
+.q-queue-area-row-text-button:focus {
+	outline: none;
+	border-color: var(--accent-vermillion);
+}
+/* 立即插入按钮:用 accent vermillion 作 priority 视觉强调 */
+.q-queue-area-row-action-priority:hover:not(:disabled) {
+	color: var(--accent-vermillion);
+	border-color: var(--accent-vermillion);
 }
 .q-queue-area-row-actions {
 	display: flex;

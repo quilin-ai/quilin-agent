@@ -237,7 +237,9 @@ test.describe("QUI-183 chat queue controls", () => {
 		await page.getByTestId(`queue-row-${sessionId}-queued-4-move-up`).click();
 		expect(await queueTexts(page)).toEqual(["queue gamma", "queue delta", "queue alpha"]);
 
-		await page.getByTestId(`queue-row-${sessionId}-queued-1-pin-top`).click();
+		// QUI-183 P3 UX 改进:置顶按钮 testid 从 -pin-top 改为 -jump
+		// (语义改为"立即插入",functionality 等价 move-to-head)
+		await page.getByTestId(`queue-row-${sessionId}-queued-1-jump`).click();
 		expect(await queueTexts(page)).toEqual(["queue alpha", "queue gamma", "queue delta"]);
 	});
 });

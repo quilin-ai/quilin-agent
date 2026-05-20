@@ -861,9 +861,19 @@ function ChatBody({
 		setServerTerminal(false);
 	}, [stop, sessionId, releaseActiveRun]);
 
+	// QUI-183 P3 UX 改进(2026-05-20):动态计算会话区底部 padding/sentinel
+	// margin,保证会话最后一条 message 不被 QueueArea 遮挡。
+	//   - 无 queue:120px(只 Composer 的高度)
+	//   - 有 queue:Composer 120 + QueueArea ~180px(header + 5 行 max + padding) +
+	//     gap 8 = 308px
+	// QueueArea collapsed 时 list 不渲染,实际高度只 header ~36px。但 UI 切换
+	// collapse 会重排,简化:这里按 expanded 上限算,padding 永远够 — 实际
+	// 看不见的 padding 部分对会话区 scroll 无害。
+	const bottomReserve = queuedSends.length === 0 ? 120 : 308;
+
 	return (
 		<main className="q-workspace">
-			<section className="q-view">
+			<section className="q-view" style={{ paddingBottom: `${bottomReserve}px` }}>
 				{messages.length === 0 ? (
 					<div style={{ color: "var(--fg-muted)", padding: "24px 0" }}>
 						开始对话 · session id <code>{sessionId}</code>
@@ -879,19 +889,12 @@ function ChatBody({
 				))}
 				{/* QUI-183 P1: 排队消息不再渲染在会话流内,改由 Composer 上方的
 				   QueueArea 组件承载(语义上是"待执行的指令列表",不是会话内容)。 */}
-				{/* Bottom sentinel for auto-scroll. The document scrolls (not q-view),
-				    so we anchor scrollIntoView() to this empty element at the end. */}
-				{/* Scroll anchor — `scroll-margin-bottom` keeps the *last
-				    content row* clear of the fixed composer when
-				    `scrollIntoView({block: "end"})` aligns this anchor to
-				    the viewport bottom. The composer is ~88px tall plus
-				    ~32px breathing room → 120px total. Without this margin
-				    the last lines render behind the composer and the user
-				    has to scroll a bit further by hand. */}
+				{/* Bottom sentinel for auto-scroll。scrollMarginBottom 动态根据 queue
+				   状态调整,确保自动滚动到最后一条时不被 QueueArea 遮挡。 */}
 				<div
 					ref={bottomRef}
 					aria-hidden="true"
-					style={{ height: 1, scrollMarginBottom: "120px" }}
+					style={{ height: 1, scrollMarginBottom: `${bottomReserve}px` }}
 				/>
 			</section>
 			{/* QUI-183 P3:queue 操作 callback 接入 QueueArea。 */}
