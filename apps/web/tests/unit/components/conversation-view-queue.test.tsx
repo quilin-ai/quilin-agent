@@ -233,4 +233,55 @@ describe("ConversationView queued sends", () => {
 		expect(await screen.findByText("标题是 Example Domain。")).toBeInTheDocument();
 		expect(screen.getByText(/web_fetch/)).toBeInTheDocument();
 	});
+
+	it("does not call useChat.stop from the server-terminal watchdog before draining queued sends", async () => {
+		const sendMessage = vi.fn(async () => undefined);
+		const resumeStream = vi.fn(async () => undefined);
+		const stop = vi.fn(async () => undefined);
+		const chatMessages: UIMessage[] = [];
+		vi.mocked(useChat).mockImplementation(
+			() =>
+				({
+					id: "mock-chat",
+					messages: chatMessages,
+					setMessages: vi.fn(),
+					sendMessage,
+					resumeStream,
+					stop,
+					status: "ready",
+					error: undefined,
+					regenerate: vi.fn(),
+					clearError: vi.fn(),
+					addToolResult: vi.fn(),
+					addToolOutput: vi.fn(),
+					addToolApprovalResponse: vi.fn(),
+				}) as unknown as ReturnType<typeof useChat>,
+		);
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input: RequestInfo | URL) => {
+				const url = String(input);
+				if (url.includes("/api/chat/status")) {
+					return Response.json({
+						ok: true,
+						data: { exists: true, status: "completed", epoch: "test-epoch" },
+					});
+				}
+				if (url.includes("/api/sessions/watchdog-stop-race")) {
+					return sessionResponse([]);
+				}
+				return new Response("not found", { status: 404 });
+			}),
+		);
+
+		render(<ConversationView sessionId="watchdog-stop-race" />);
+		const input = (await screen.findByTestId("composer-input")) as HTMLTextAreaElement;
+		fireEvent.change(input, { target: { value: "下一条不能被 watchdog stop 抢断" } });
+		fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+
+		await waitFor(() =>
+			expect(sendMessage).toHaveBeenCalledWith({ text: "下一条不能被 watchdog stop 抢断" }),
+		);
+		expect(stop).not.toHaveBeenCalled();
+	});
 });
