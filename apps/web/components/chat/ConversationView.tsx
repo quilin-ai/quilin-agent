@@ -308,15 +308,28 @@ function ChatBody({
 		[],
 	);
 	const syncPersistedMessagesRef = useRef<(reason: string) => Promise<void>>(async () => {});
+	// QUI-182 follow-up (2026-05-20):
+	// `releaseActiveRun(reason)` 是 activeRunRef 闩锁的统一释放器。之前 ref 通过
+	// useEffect([streaming]) 异步同步,但如果 useChat.status 快速完成、或没产生
+	// streaming=true→false 的 render(stream 立刻 error / network race), ref 永久
+	// 卡 true → drain effect 看到 ref=true 也不取队列 → 用户看到「已排队 · QUEUED 1」
+	// 但消息不发出。
+	//
+	// 释放路径同时 bump `releaseTick`:drain effect 把 releaseTick 列入依赖
+	// (line 604 附近),保证 ref 翻 false 后 effect 一定重跑取走队列首项。
+	const [releaseTick, setReleaseTick] = useState(0);
+	const releaseActiveRunRef = useRef<(reason: string) => void>(() => {});
 	const { messages, setMessages, sendMessage, status, resumeStream, stop } = useChat({
 		id: sessionId,
 		messages: storedMessages ? [...storedMessages] : undefined,
 		transport,
 		onFinish: () => {
 			void syncPersistedMessagesRef.current("finish");
+			releaseActiveRunRef.current("finish");
 		},
 		onError: () => {
 			void syncPersistedMessagesRef.current("error");
+			releaseActiveRunRef.current("error");
 		},
 	});
 	const rawStreaming = status === "submitted" || status === "streaming";
@@ -325,6 +338,14 @@ function ChatBody({
 	const activeRunRef = useRef(streaming);
 	const queuedIdRef = useRef(0);
 	const [queuedSends, setQueuedSends] = useState<readonly QueuedUserMessage[]>([]);
+
+	const releaseActiveRun = useCallback((_reason: string): void => {
+		activeRunRef.current = false;
+		setReleaseTick((n) => n + 1);
+	}, []);
+	useEffect(() => {
+		releaseActiveRunRef.current = releaseActiveRun;
+	}, [releaseActiveRun]);
 
 	useEffect(() => {
 		activeRunRef.current = streaming;
@@ -385,7 +406,7 @@ function ChatBody({
 				) {
 					await syncPersistedMessages(`server:${body.data.status}`);
 					if (cancelled) return;
-					activeRunRef.current = false;
+					releaseActiveRun(`server:${body.data.status}`);
 					setServerTerminal(true);
 					void stop().catch(() => {
 						/* active stream may already be closed */
@@ -403,7 +424,7 @@ function ChatBody({
 			cancelled = true;
 			window.clearInterval(handle);
 		};
-	}, [rawStreaming, serverTerminal, sessionId, stop, syncPersistedMessages]);
+	}, [rawStreaming, serverTerminal, sessionId, stop, syncPersistedMessages, releaseActiveRun]);
 
 	// Mount hook:
 	//   1. Probe `/api/chat/status` to learn the server's current epoch
@@ -441,13 +462,26 @@ function ChatBody({
 				}
 				if (body.data.exists && body.data.status === "running") {
 					// Server still has an active run — re-attach.
+					setServerTerminal(false);
 					await resumeStream();
+				} else if (
+					body.data.exists &&
+					(body.data.status === "completed" ||
+						body.data.status === "failed" ||
+						body.data.status === "cancelled")
+				) {
+					// QUI-182 follow-up: 服务端已经结束,前端 mount 时若 useChat 状态
+					// race / activeRunRef 闩锁泄漏,新消息会一直入队不发。这里强制
+					// 释放 ref + bump releaseTick + setServerTerminal(true),让 drain
+					// effect 立刻 reschedule,保证打开历史 session 不会卡住发送。
+					releaseActiveRun(`mount:${body.data.status}`);
+					setServerTerminal(true);
 				}
 			} catch {
 				/* status probe is best-effort; on failure we just stay idle */
 			}
 		})();
-	}, [sessionId, resumeStream]);
+	}, [sessionId, resumeStream, releaseActiveRun]);
 
 	const onSelectAgent = useCallback(
 		(id: string) => {
@@ -592,16 +626,27 @@ function ChatBody({
 	);
 
 	useEffect(() => {
+		// `releaseTick` 作为 re-run trigger,显式读一次让 biome /
+		// useExhaustiveDependencies 认它(否则 biome 会建议移除 deps)。
+		// 移除 releaseTick 依赖会让 releaseActiveRun() 之后这个 effect 不重跑,
+		// queue 不被 drain。
+		void releaseTick;
 		if (streaming || activeRunRef.current || queuedSends.length === 0) return;
 		const next = queuedSends[0];
 		if (next == null) return;
 		activeRunRef.current = true;
 		setQueuedSends((prev) => prev.slice(1));
 		forceScrollToBottom();
+		// QUI-182 follow-up: drain 前 reset serverTerminal,避免上一轮 watchdog
+		// 留下的 true 让新发的消息算入 streaming === false 但被别的逻辑判定为
+		// "上一轮 server-terminal 残留"。
+		setServerTerminal(false);
 		void sendMessage({ text: next.text }).catch(() => {
-			activeRunRef.current = false;
+			releaseActiveRun("drain-sendMessage-catch");
 		});
-	}, [streaming, queuedSends, sendMessage, forceScrollToBottom]);
+		// `releaseTick` 列入依赖,让 releaseActiveRun() 触发的 ref 释放能立刻
+		// 重跑这条 drain effect,不依赖 React 异步同步 streaming state。
+	}, [streaming, queuedSends, releaseTick, sendMessage, forceScrollToBottom, releaseActiveRun]);
 
 	// Persist conversation to localStorage so /sessions page can list it.
 	useEffect(() => {
@@ -618,12 +663,23 @@ function ChatBody({
 				enqueueSend(trimmed);
 				return;
 			}
+			// QUI-182 follow-up: 新一轮 send 前 reset serverTerminal,避免上轮
+			// watchdog 设的 true 让 streaming = rawStreaming && !serverTerminal
+			// 算错。下一轮 server watchdog 会按需重新 set true。
+			setServerTerminal(false);
 			activeRunRef.current = true;
 			void sendMessage({ text: trimmed }).catch(() => {
-				activeRunRef.current = false;
+				releaseActiveRun("submit-sendMessage-catch");
 			});
 		},
-		[sendMessage, forceScrollToBottom, streaming, queuedSends.length, enqueueSend],
+		[
+			sendMessage,
+			forceScrollToBottom,
+			streaming,
+			queuedSends.length,
+			enqueueSend,
+			releaseActiveRun,
+		],
 	);
 
 	return (
