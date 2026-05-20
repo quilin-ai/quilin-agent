@@ -235,6 +235,17 @@ async def _memory_recall_with_store(
         except Exception as exc:
             _raise_memory_operation_error("memory_recall", exc)
 
+    # QUI-194 cross-review Reviewer 1 REAL #1 fix (2026-05-21):
+    # MCP memory_recall handler 必须 wire 到 RetrievalSafetyGate,否则
+    # 用户 export QUILIN_RETRIEVAL_SAFETY_ENABLED=true 也无效(gate 三策略
+    # 一条都不跑)。env disabled 时 scrub 直接返回原 list,不破坏现有行为。
+    from .retrieval_safety_gate import RetrievalSafetyGate, load_config_from_env
+
+    _safety_config = load_config_from_env()
+    if _safety_config.enabled:
+        _safety_gate = RetrievalSafetyGate(config=_safety_config)
+        results = _safety_gate.scrub(query, list(results))
+
     payload: dict[str, object] = {"records": [r.to_wire_dict() for r in results]}
     if trace_context is not None:
         payload["traceparent"] = trace_context.traceparent

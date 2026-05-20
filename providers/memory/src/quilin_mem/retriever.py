@@ -166,7 +166,17 @@ class MemoryRetriever(BM25RetrieverMixin, VectorRetrieverMixin, KGRetrieverMixin
         *,
         limit: int | None = None,
     ) -> list[MemoryItem]:
-        return await self.retrieve(query, task_context, limit=limit)
+        items = await self.retrieve(query, task_context, limit=limit)
+        # QUI-194: opt-in retrieval safety gate. env QUILIN_RETRIEVAL_SAFETY_ENABLED
+        # gates activation; default OFF keeps callers (default-sections.ts /
+        # local-client.ts / web/memory page) on the pre-existing behaviour.
+        from .retrieval_safety_gate import RetrievalSafetyGate, load_config_from_env
+
+        config = load_config_from_env()
+        if not config.enabled:
+            return items
+        gate = RetrievalSafetyGate(config=config)
+        return gate.scrub(query, list(items))
 
     def annotate_recall_results(
         self,

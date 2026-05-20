@@ -1,5 +1,45 @@
 # 记忆工程（Memory Engineering）
 
+> **2026-05-21 v2 Roadmap / Perfect Memory System v2**
+>
+> 用户原话："我要做一个能打爆所有竞品的记忆系统"。完成 14 个竞品仓库 + 24 篇论文 + 9 个评测榜调研，Claude × Codex 双视角协商产出 unified roadmap。
+>
+> **调研产物**：
+> - [`docs/research/agent-memory-systems-survey-2026-05-21.md`](../research/agent-memory-systems-survey-2026-05-21.md)（315 行 unified report）+ HTML 可视化版
+> - [`docs/research/competitor-analysis-codex.md`](../research/competitor-analysis-codex.md)（205 行 Codex 视角）
+> - [`docs/research/external-survey-codex.md`](../research/external-survey-codex.md)（296 行 papers/bench/repo 扩展）
+> - [`docs/research/quilin-mem-competitive-strategy-claude.md`](../research/quilin-mem-competitive-strategy-claude.md)（576 行 Claude 视角）
+> - [`docs/research/external-survey-claude.md`](../research/external-survey-claude.md)（494 行 papers/bench/repo 扩展）
+> - [`docs/research/integration-feasibility-codex.md`](../research/integration-feasibility-codex.md)（298 行 Codex 独立接入可行性 verify）
+>
+> **核心策略**：不为了层级而加层级，交付"受治理的记忆操作系统"。基础是 append-only evidence + actor-scoped provenance + 时态有效期 + 版本链 + soft-delete rollback。检索 hybrid 且谨慎（低置信拒答 + 多重验证）。后台智能通过 quilin-daemon 跑。
+>
+> **Quilin 已超前业界 3 项**（14 竞品都没）：
+> 1. **WriteAuthority 全局门禁** — 一套审批门管 14 类敏感操作
+> 2. **4 客户端共享记忆** — 命令行 / 终端 / 网页 / Mac App 共享 `~/.quilin/`
+> 3. **灵魂导入（Soul Import）** — 6 框架扫描冷启动（反向导出已明确不做）
+>
+> **v2 epic + 子工单**（Plane）：
+> - **QUI-191** epic 完美记忆系统 v2（Backlog）
+> - **第一周（必做前置）**：
+>   - QUI-192（QUI-191A）记忆完整性本地评测集（纯新增，先建记分牌）
+>   - QUI-193（QUI-191B）证据库 + 版本链 + 时光回溯（additive migration）
+>   - QUI-194（QUI-191C）安全检索门（低置信拒答 + 多重验证，吸收 QUI-15 拆出的 HippoRAG）
+>   - QUI-189（既有）批量 LLM judge（保留独立，不扩破坏防护）
+> - **第二周**：
+>   - QUI-195（QUI-191E）破坏防护（72h soft-delete + 影响预览 + 回滚）
+>   - QUI-196（QUI-191F）多客户端 + 项目范围（冲突解决 + QUILIN.md 检索加权）
+> - **第三周**：
+>   - QUI-188（既有）quilin-daemon idle 调度框架
+>   - QUI-197（QUI-191H）重要性多维 + 类型标签 + 过期感知
+> - **第四周+**：
+>   - QUI-198（QUI-191I）操作步骤流水线（对话轨迹→技能编译，吸收 QUI-15 拆出的 trajectory_compressor）
+>   - QUI-199（QUI-191J）前瞻记忆 + 证据可视化 + 资源指针
+> - **保留 Active**：QUI-190（temporal-aware dedupe，acceptance 微调）+ QUI-22（L3a working→episodic promotion，acceptance 扩）+ QUI-81（灵魂导入 6 框架 scan）
+> - **Close**：QUI-186（状态漂移 → Done，commit `d918608` 已 ship）+ QUI-15（Cancelled，Graphiti superseded by docs/03-memory D-20，HippoRAG/trajectory 移到 QUI-194/198）
+>
+> **核心架构规则**：能用可选 metadata 或侧表承载能力时，不要新增 layer 或替换字段。Quilin 的优势是本地优先安全 + WriteAuthority + 多客户端上下文 + Soul Import 可移植；保住这些边界，比照搬竞品分类体系更重要。
+
 > **实现状态（2026-05-18 增量更新，前序 2026-04-30 实证保留）**
 >
 > **2026-05-15 新增 / Shipped 2026-05-15**：

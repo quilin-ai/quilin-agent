@@ -154,6 +154,9 @@ test-py:
     cd providers/web && QUILIN_ENV=test uv run pytest
     cd providers/optimizer && QUILIN_ENV=test uv run pytest
 
+test-memory-integrity:
+    tmpdir="$(mktemp -d)"; trap 'rm -rf "$tmpdir"' EXIT; cd providers/memory && QUILIN_INTEGRITY_DB="$tmpdir" QUILIN_ENV=test uv run pytest tests/test_memory_integrity.py -v --no-cov
+
 lint-py:
     cd providers/memory && uv run ruff check src/ tests/
     cd providers/web && uv run ruff check src/ tests/

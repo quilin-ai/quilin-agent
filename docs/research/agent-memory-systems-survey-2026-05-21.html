@@ -1,0 +1,773 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent 记忆系统调研合并报告 · 麒麟(Quilin)</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600;700&family=Noto+Serif+SC:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #faf8f4;
+    --bg-card: #ffffff;
+    --ink: #1e1b16;
+    --ink-soft: #4a463e;
+    --ink-light: #7c7669;
+    --line: #e8e2d6;
+    --accent: #b1411e;
+    --accent-soft: #fce8df;
+    --accent-bg: #faf1eb;
+    --good: #6b8e3a;
+    --warn: #c97a1d;
+    --crit: #b1411e;
+    --info: #4a6fa5;
+  }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: "Noto Sans SC", "Inter", -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    line-height: 1.85;
+  }
+  .font-serif { font-family: "Cormorant Garamond", "Noto Serif SC", serif; font-weight: 500; }
+  .font-mono { font-family: "JetBrains Mono", monospace; font-size: 0.875em; }
+  h1, h2, h3, h4 { font-family: "Cormorant Garamond", "Noto Serif SC", serif; font-weight: 600; color: var(--ink); letter-spacing: -0.005em; }
+  h1 { font-size: 2.75rem; line-height: 1.2; }
+  h2 { font-size: 1.875rem; line-height: 1.25; margin-top: 4rem; margin-bottom: 1.5rem; padding-bottom: 0.75rem; border-bottom: 1px solid var(--line); }
+  h3 { font-size: 1.3rem; line-height: 1.35; margin-top: 2.5rem; margin-bottom: 1rem; }
+  h4 { font-size: 1.05rem; margin-top: 1.5rem; margin-bottom: 0.5rem; color: var(--ink-soft); }
+  p { margin-bottom: 1.1rem; color: var(--ink-soft); }
+  .original { font-family: "JetBrains Mono", "Inter", monospace; font-size: 0.82em; color: var(--ink-light); font-style: normal; font-weight: 400; }
+  .original::before { content: "("; }
+  .original::after { content: ")"; }
+  code { font-family: "JetBrains Mono", monospace; font-size: 0.85em; background: var(--accent-bg); color: var(--accent); padding: 0.125rem 0.4rem; border-radius: 3px; font-weight: 400; }
+  table { width: 100%; margin: 1.5rem 0; font-size: 0.9rem; border-collapse: collapse; background: var(--bg-card); border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+  th { background: var(--accent-bg); color: var(--ink); font-weight: 600; text-align: left; padding: 0.75rem 1rem; border-bottom: 2px solid var(--accent-soft); font-size: 0.85rem; }
+  td { padding: 0.85rem 1rem; border-bottom: 1px solid var(--line); vertical-align: top; color: var(--ink-soft); line-height: 1.6; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover { background: rgba(252, 232, 223, 0.3); }
+  .badge { display: inline-flex; align-items: center; padding: 0.125rem 0.625rem; border-radius: 9999px; font-size: 0.72rem; font-weight: 600; letter-spacing: 0.02em; }
+  .b-high { background: #fde4dc; color: var(--crit); }
+  .b-mid { background: #fff0db; color: var(--warn); }
+  .b-low { background: #ede9df; color: var(--ink-light); }
+  .b-unique { background: #ddead0; color: var(--good); }
+  .b-safety { background: #fde4dc; color: var(--crit); border: 1px solid #f5b8a8; }
+  .b-yes { background: #ddead0; color: var(--good); }
+  blockquote { border-left: 3px solid var(--accent); background: var(--accent-bg); padding: 1.1rem 1.4rem; margin: 1.5rem 0; border-radius: 0 6px 6px 0; }
+  blockquote p { margin-bottom: 0; color: var(--ink); font-size: 0.95rem; line-height: 1.8; }
+  .card { background: var(--bg-card); border: 1px solid var(--line); border-radius: 10px; padding: 1.5rem; margin-bottom: 1.25rem; transition: all 0.2s; }
+  .card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.06); border-color: var(--accent-soft); }
+  .toc { position: sticky; top: 1.5rem; max-height: calc(100vh - 3rem); overflow-y: auto; padding-right: 0.5rem; }
+  .toc::-webkit-scrollbar { width: 4px; }
+  .toc::-webkit-scrollbar-thumb { background: var(--line); border-radius: 2px; }
+  .toc a { display: block; padding: 0.3rem 0.85rem; color: var(--ink-light); font-size: 0.875rem; border-left: 2px solid transparent; transition: all 0.15s; line-height: 1.4; }
+  .toc a:hover { color: var(--accent); border-left-color: var(--accent-soft); background: var(--accent-bg); }
+  .toc a.active { color: var(--accent); border-left-color: var(--accent); background: var(--accent-bg); font-weight: 500; }
+  .stat-card { background: var(--bg-card); border: 1px solid var(--line); border-radius: 10px; padding: 1.25rem 1rem; text-align: center; }
+  .stat-value { font-family: "Cormorant Garamond", serif; font-size: 2rem; font-weight: 600; color: var(--accent); line-height: 1; }
+  .stat-label { font-size: 0.75rem; color: var(--ink-light); margin-top: 0.5rem; }
+  details > summary { cursor: pointer; padding: 0.85rem 1rem; background: var(--accent-bg); border-radius: 6px; font-weight: 500; color: var(--ink); list-style: none; user-select: none; margin-top: 0.5rem; }
+  details > summary::-webkit-details-marker { display: none; }
+  details > summary::before { content: "▶"; display: inline-block; margin-right: 0.5rem; transition: transform 0.2s; font-size: 0.7rem; color: var(--accent); }
+  details[open] > summary::before { transform: rotate(90deg); }
+  details > div { padding: 1.1rem 1rem 0; }
+  .matrix-row td:first-child { font-weight: 500; color: var(--ink); }
+  .disagree-card { background: var(--bg-card); border: 1px solid var(--line); border-left: 3px solid var(--warn); border-radius: 8px; padding: 1.25rem; margin-bottom: 1rem; }
+  .disagree-card .conflict { font-weight: 600; color: var(--ink); margin-bottom: 0.75rem; font-size: 1rem; }
+  .views { display: grid; grid-template-columns: 1fr 1fr; gap: 0.85rem; margin: 0.75rem 0; }
+  .view-box { background: var(--bg); padding: 0.85rem 1rem; border-radius: 6px; font-size: 0.875rem; line-height: 1.6; color: var(--ink-soft); }
+  .view-box.claude { border-left: 3px solid var(--info); }
+  .view-box.codex { border-left: 3px solid var(--good); }
+  .view-box .label { font-size: 0.7rem; font-weight: 600; letter-spacing: 0.04em; margin-bottom: 0.3rem; }
+  .view-box.claude .label { color: var(--info); }
+  .view-box.codex .label { color: var(--good); }
+  .proposed { background: var(--accent-bg); padding: 0.7rem 0.9rem; border-radius: 6px; font-size: 0.875rem; color: var(--ink); margin-top: 0.7rem; line-height: 1.6; }
+  .proposed .label { font-size: 0.7rem; font-weight: 700; color: var(--accent); margin-right: 0.5rem; }
+  @media (max-width: 768px) {
+    .views { grid-template-columns: 1fr; }
+    h1 { font-size: 2rem; }
+    h2 { font-size: 1.5rem; }
+  }
+</style>
+</head>
+<body>
+<div class="max-w-7xl mx-auto px-6 py-12">
+  <div class="grid lg:grid-cols-[240px_1fr] gap-12">
+
+    <aside class="hidden lg:block">
+      <nav class="toc">
+        <p class="text-xs font-semibold tracking-wider text-stone-400 mb-3 px-3">目录</p>
+        <a href="#summary">一. 一句话总结</a>
+        <a href="#overview">二. 14 个竞品分类</a>
+        <a href="#matrix">三. 横向对比表</a>
+        <a href="#position">四. 麒麟当前位置</a>
+        <a href="#roadmap">五. 升级路线</a>
+        <a href="#feasibility">六. 接入可行性 + 落地顺序</a>
+        <a href="#consensus">七. 双方共识</a>
+        <a href="#claude-view">八. 我(Claude)独家视角</a>
+        <a href="#codex-view">九. 它(Codex)独家视角</a>
+        <a href="#disagree">十. 5 个待你拍板</a>
+        <a href="#next">十一. 下一步行动</a>
+      </nav>
+    </aside>
+
+    <main>
+
+      <header class="mb-12 pb-8 border-b border-stone-200">
+        <p class="text-sm font-medium tracking-widest uppercase text-stone-500 mb-3">麒麟 Agent · 调研报告</p>
+        <h1 class="font-serif mb-3">Agent 记忆系统<br>调研合并报告</h1>
+        <p class="text-lg text-stone-500 italic mb-6">"我要做一个能打爆所有竞品的记忆系统"</p>
+        <div class="flex flex-wrap gap-3 text-sm text-stone-500">
+          <span>📅 2026-05-21</span>
+          <span>·</span>
+          <span>👥 Claude × Codex 双视角协商</span>
+          <span>·</span>
+          <span>📚 14 仓库 + 24 篇论文 + 9 个评测榜</span>
+        </div>
+      </header>
+
+      <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-12">
+        <div class="stat-card"><div class="stat-value">14</div><div class="stat-label">竞品仓库</div></div>
+        <div class="stat-card"><div class="stat-value">24</div><div class="stat-label">论文</div></div>
+        <div class="stat-card"><div class="stat-value">9</div><div class="stat-label">评测榜</div></div>
+        <div class="stat-card"><div class="stat-value">10</div><div class="stat-label">升级方向</div></div>
+        <div class="stat-card"><div class="stat-value">3</div><div class="stat-light">麒麟已超前</div></div>
+      </div>
+
+      <!-- 一. 一句话总结 -->
+      <section id="summary">
+        <h2>一. 一句话总结 <span class="original">Executive Summary</span></h2>
+
+        <p>目标不是再做一个记忆插件。目标是给麒麟做一个<strong>能打爆所有竞品的记忆系统</strong>:</p>
+
+        <ul class="space-y-2 text-base text-stone-700 ml-4 my-5 list-disc list-inside">
+          <li><strong>本地优先</strong> — 数据全在你电脑上,不上云</li>
+          <li><strong>保留证据</strong> — 每条提炼记忆都能追溯到原始对话片段</li>
+          <li><strong>时间正确</strong> — 一年前住北京 vs 现在住深圳,两条都保留 + 标时间</li>
+          <li><strong>写入安全</strong> — 任何修改都过<span class="font-mono">写入审批门</span><span class="original">WriteAuthority</span>,防误删 / 投毒</li>
+          <li><strong>长周期可测</strong> — 写入完整性 + 检索准确率都能跑评测</li>
+          <li><strong>跨客户端共用</strong> — 命令行 / 终端 / 网页 / Mac 应用全连同一份记忆</li>
+        </ul>
+
+        <p>业界已经收敛出几个强组件 — Mem0 的快速抽取、Zep 的时间图谱、MemPalace 的原始证据保真、GBrain 的可靠后台任务、Claude Code 的文件记忆。但<strong>没有任何竞品同时具备:</strong></p>
+
+        <div class="card border-l-4 border-l-orange-700">
+          <ul class="space-y-2 text-base text-stone-700 list-disc list-inside">
+            <li>麒麟的<strong>全局写入审批门</strong> — 统一管 14 类敏感操作</li>
+            <li>麒麟的<strong>灵魂导入</strong><span class="original">Soul Import</span> — 一次扫描 6 个其他 agent(Claude Code/OpenClaw/Hermes/Codex/Gemini CLI/OpenCode)的本地配置文件,做冷启动</li>
+            <li>麒麟的<strong>4 端共享</strong> — 命令行 / 终端 / 网页 / Mac App 共享同一份本地数据库</li>
+            <li>麒麟的<strong>技能系统</strong>(skill = 操作步骤记忆) + <strong>自我进化闭环</strong></li>
+          </ul>
+        </div>
+
+        <blockquote class="mt-6">
+          <p><strong>核心策略</strong>:不为了层级而加层级。交付一个<strong>受治理的记忆操作系统</strong>。基础是"<strong>每条记忆都有出处 + 都能追溯历史版本 + 错了能回滚</strong>";检索时遇到不确定的情况主动拒答而不是瞎说;后台整理通过<strong>独立的后台服务</strong><span class="original">quilin-daemon</span>跑,不挤进对话路径。第一周不追逐所有 idea,先让记忆更安全、更可测。</p>
+        </blockquote>
+      </section>
+
+      <!-- 二. Overview -->
+      <section id="overview">
+        <h2>二. 14 个竞品分成 5 类 <span class="original">Combined Overview</span></h2>
+
+        <div class="grid md:grid-cols-2 gap-4 my-6">
+          <div class="card">
+            <h4>记忆库(给 Agent 当模块用)</h4>
+            <p class="text-sm text-stone-500 mb-0">mem0 · agentmemory · MemMachine 客户端</p>
+          </div>
+          <div class="card">
+            <h4>独立服务(自己起一个 server)</h4>
+            <p class="text-sm text-stone-500 mb-0">letta · zep · mempalace · MemMachine · gbrain</p>
+          </div>
+          <div class="card">
+            <h4>主机插件(挂在别的 agent 上)</h4>
+            <p class="text-sm text-stone-500 mb-0">hermes-agent · OpenClaw 记忆插件</p>
+          </div>
+          <div class="card">
+            <h4>Agent 自带原生记忆</h4>
+            <p class="text-sm text-stone-500 mb-0">codex · claude-code · OpenClaw</p>
+          </div>
+          <div class="card md:col-span-2">
+            <h4>商用 / 领域专用</h4>
+            <p class="text-sm text-stone-500 mb-0">EverOS · TencentDB-Agent-Memory · claude-mem</p>
+          </div>
+        </div>
+
+        <p>最强模式是"<strong>共识</strong>",不是冲突。所有系统都需要:持久原始证据、抽取后的事实、融合检索、后台整理、用户画像存储。<strong>分歧在于"权力放在哪里"</strong>:</p>
+
+        <table class="my-6">
+          <thead><tr><th>派系</th><th>代表</th><th>权力归属</th></tr></thead>
+          <tbody>
+            <tr class="matrix-row"><td>让大模型自己管</td><td>Letta / AgeMem</td><td>给 LLM 各种工具自己增删改</td></tr>
+            <tr class="matrix-row"><td>证据优先</td><td>MemPalace / MemMachine</td><td>先保留原始对话片段,再抽取</td></tr>
+            <tr class="matrix-row"><td>时间图谱真值</td><td>Zep / Graphiti</td><td>所有事实都带"什么时候是真的"</td></tr>
+            <tr class="matrix-row"><td>可靠后台任务</td><td>GBrain / Codex</td><td>把记忆整理放后台,带租约/心跳/重试</td></tr>
+            <tr class="matrix-row"><td>用户可见文件</td><td>Claude Code / 各种 markdown</td><td>记忆就是几个 .md 文件,你能直接看/改</td></tr>
+          </tbody>
+        </table>
+
+        <blockquote>
+          <p>麒麟应该组合这些<strong>共识</strong>部分,但<strong>权力必须放在大模型之外</strong>(走写入审批门,不能让 LLM 自己说"我决定记这个就记")。</p>
+        </blockquote>
+      </section>
+
+      <!-- 三. Matrix -->
+      <section id="matrix">
+        <h2>三. 横向对比表 <span class="original">Comparison Matrix</span></h2>
+        <p>18 个维度对照。从证据 / 时间 / 安全 / 评测多角度评估。</p>
+
+        <div class="overflow-x-auto">
+          <table>
+            <thead>
+              <tr>
+                <th>维度</th>
+                <th>业界最佳实现</th>
+                <th>麒麟现状</th>
+                <th>差距 / 决策</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="matrix-row"><td>记忆分层</td><td>Letta 块 / EverOS 8 类 / MIRIX 6 类</td><td>工作 / 情景 / 语义 / 技能 4 层</td><td>保持 4 层 + 加正交"类型"标签</td></tr>
+              <tr class="matrix-row"><td>原始证据保存</td><td>MemPalace / MemMachine / 腾讯</td><td>事实事件流计划中,部分日志</td><td><span class="badge b-safety">必须</span> 一等公民的证据库</td></tr>
+              <tr class="matrix-row"><td>时间真值</td><td>Zep / Graphiti / GBrain 有效期</td><td>知识图谱 + 有效起止 计划中</td><td>所有层都要,不只是图谱</td></tr>
+              <tr class="matrix-row"><td>版本链</td><td>Letta git 风格 / Memoria / AgentMemory</td><td>覆盖更新 计划中</td><td>完整版本链 + 快照 + 时光回溯</td></tr>
+              <tr class="matrix-row"><td>写入安全</td><td>GBrain 破坏防护 / OWASP</td><td><span class="badge b-unique">超前</span> 全局写入审批门</td><td>再加删除影响预览 + 软删除回滚期</td></tr>
+              <tr class="matrix-row"><td>投毒防御</td><td>A-MemGuard / AgentPoison / MemoryGraft</td><td>检查计划中</td><td><span class="badge b-safety">必须</span> 多重验证检索 + 安全教训</td></tr>
+              <tr class="matrix-row"><td>检索</td><td>Mem0 / GBrain / MemX</td><td>混合检索已实现</td><td>+ 低置信度拒答 + 渐进披露</td></tr>
+              <tr class="matrix-row"><td>后台任务</td><td>Codex 两阶段队列 / GBrain / Claude autoDream</td><td>独立后台服务设计中(QUI-188)</td><td>持久租约 / 心跳 / 运行上限</td></tr>
+              <tr class="matrix-row"><td>整理去重</td><td>Mem0 批量 / MemMachine 切片</td><td>整理器已有,逐对判定太慢</td><td>改成批量集群判定(QUI-189)</td></tr>
+              <tr class="matrix-row"><td>重要性打分</td><td>Generative Agents 单一分 / SCM 多维</td><td>单一 importance + 访问 / 时间</td><td>升级成多维向量 + 按意图加权</td></tr>
+              <tr class="matrix-row"><td>未来事项</td><td>EverOS ForesightModel</td><td>离别上下文 字符串</td><td>正式的未来事项模型</td></tr>
+              <tr class="matrix-row"><td>操作步骤记忆</td><td>Voyager / EverOS AgentCase→Skill</td><td>13-skills 底盘扎实</td><td>+ 对话轨迹自动编译技能</td></tr>
+              <tr class="matrix-row"><td>多客户端</td><td>极少 / Letta 仅 server</td><td><span class="badge b-unique">独有</span> 命令行/终端/网页/Mac App</td><td>必须解决冲突合并</td></tr>
+              <tr class="matrix-row"><td>可移植</td><td>Claude markdown / GBrain markdown</td><td><span class="badge b-unique">超前</span> 灵魂导入(单向)</td><td>反向导出不做(用户决定)</td></tr>
+              <tr class="matrix-row"><td>多模态</td><td>MIRIX / GBrain</td><td>纯文本</td><td>先留资源指针字段,实际索引延后</td></tr>
+              <tr class="matrix-row"><td>评测</td><td>LongMemEval / LoCoMo / MemBench / BEAM</td><td>本地测试集计划中</td><td>+ 写入完整性 + 责任人归属</td></tr>
+              <tr class="matrix-row"><td>项目上下文</td><td>Claude / Codex 文件 · QUILIN.md 计划</td><td>QUILIN.md 已存在</td><td>当前工作目录 → 检索加权</td></tr>
+              <tr class="matrix-row"><td>可观测</td><td>GBrain doctor / Claude-Mem 审计日志</td><td>事件日志已存在</td><td>5 字段审计 + 运行/出处图谱</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p class="mt-4">表格说明:麒麟<strong>不应变成 EverOS 那样的重基础设施</strong>,也不应变成 Mem0 那样的<strong>云端黑盒接口</strong>。应保持"<strong>本地优先 + 类型清晰</strong>",然后补齐运维契约。</p>
+      </section>
+
+      <!-- 四. 现状定位 -->
+      <section id="position">
+        <h2>四. 麒麟当前位置 <span class="original">Quilin Position</span></h2>
+
+        <h3 class="flex items-center gap-2"><span class="badge b-yes">已对齐</span> 业界主流的 8 项</h3>
+        <div class="grid md:grid-cols-2 gap-3 my-4 text-sm">
+          <div class="card !p-3">4 层记忆(工作 / 情景 / 语义 / 技能)</div>
+          <div class="card !p-3">Python 后端 + TypeScript 主体的清晰边界</div>
+          <div class="card !p-3">SQLite + 全文搜索 + 知识图谱 + 向量检索</div>
+          <div class="card !p-3">自有时间图谱(替代了 Graphiti 依赖)</div>
+          <div class="card !p-3">L3a 对话观察员 + 反思器 + 整理器</div>
+          <div class="card !p-3"><code>user.md</code> + <code>soul.md</code> + <code>QUILIN.md</code> 持久身份</div>
+          <div class="card !p-3">技能 = 操作步骤记忆 + SKILL.md 目录</div>
+          <div class="card !p-3">追加式事实流 + 证据来源 + 隔离区 + 投毒检查</div>
+        </div>
+
+        <h3 class="flex items-center gap-2"><span class="badge b-unique">已超前</span> 业界没有的 3 项(打爆机会的基础)</h3>
+        <div class="space-y-3 my-4">
+          <div class="card border-l-4 border-l-green-600">
+            <strong class="text-base">1. 全局写入审批门</strong><span class="original">WriteAuthority</span>
+            <p class="text-sm mt-2 mb-0">竞品要么只在单个记忆模块内做门禁,要么完全没有。麒麟用<strong>一套审批门</strong>管 14 类敏感操作:文件写入、记忆增删改、技能创建、空闲时段写入、自演化提案。<strong>14 个竞品都没做到</strong>。</p>
+          </div>
+          <div class="card border-l-4 border-l-green-600">
+            <strong class="text-base">2. 4 客户端共享同一份本地记忆</strong>
+            <p class="text-sm mt-2 mb-0">命令行 / 终端 / 网页 / Mac 应用 共享 <code>~/.quilin/</code>。比"只跑在服务器上"更难也更有价值。Mac App 上线前必须解决,只有麒麟面对、能解。</p>
+          </div>
+          <div class="card border-l-4 border-l-green-600">
+            <strong class="text-base">3. 灵魂导入</strong><span class="original">Soul Import</span>
+            <p class="text-sm mt-2 mb-0">第一次安装麒麟时,自动扫描 6 个其他 agent 的本地配置(Claude Code、OpenClaw、Hermes、Codex、Gemini CLI、OpenCode),把它们的用户偏好、习惯、项目笔记导入到麒麟的 <code>user.md</code> + <code>soul.md</code> + <code>QUILIN.md</code>。<strong>独特的冷启动优势 — 你不用从零教麒麟你是谁</strong>。</p>
+          </div>
+        </div>
+
+        <h3 class="flex items-center gap-2"><span class="badge b-mid">差距明显</span> 10 项要补</h3>
+        <ol class="text-sm space-y-2 my-4 text-stone-600 list-decimal pl-6">
+          <li>缺生产级<strong>后台任务队列</strong>(带租约、心跳、过期任务抢占、运行上限)</li>
+          <li>缺完整<strong>版本链</strong>+ 快照 + 时光回溯接口</li>
+          <li>缺与每条派生事实相连的<strong>原始观察证据库</strong></li>
+          <li>缺<strong>责任人范围的证据来源</strong>(多人、多客户端、导入的记忆都要标"谁写的")</li>
+          <li>缺<strong>多重验证检索</strong>和低置信度拒答(防大模型瞎说)</li>
+          <li>缺<strong>破坏性操作防护</strong>(删除前预览影响 + 软删除保留期 + 回滚)</li>
+          <li>缺与层级正交的<strong>记忆类型标签</strong>(用户偏好 / 反馈 / 项目笔记 / 引用 / 模式 / 工作流 / etc)</li>
+          <li>缺<strong>前瞻记忆</strong>(未来承诺 + 提醒)</li>
+          <li>缺<strong>对话轨迹自动编译成技能</strong>的成熟度流水线</li>
+          <li>缺<strong>多模态资源库</strong>或 schema 预留(截图 / PDF / 图片)</li>
+        </ol>
+      </section>
+
+      <!-- 五. Roadmap -->
+      <section id="roadmap">
+        <h2>五. 打爆所有的升级路线 <span class="original">Upgrade Roadmap</span></h2>
+        <p>双方 20 条 idea 去重压成 <strong>10 个升级方向</strong>。优先级 = 落地顺序,不代表价值。<strong>"高"= 信任和正确性的前置条件</strong>。</p>
+
+        <div class="overflow-x-auto mb-6">
+          <table>
+            <thead>
+              <tr>
+                <th>优先级</th>
+                <th>升级方向</th>
+                <th>独有</th>
+                <th>安全</th>
+                <th>接入难度</th>
+                <th>工时 (联合日)</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="matrix-row"><td><span class="badge b-high">高</span></td><td>证据保存 + 版本链 + 时光回溯</td><td><span class="badge b-unique">是</span></td><td><span class="badge b-safety">是</span></td><td><span class="badge b-mid">需迁移</span></td><td>4-5</td></tr>
+              <tr class="matrix-row"><td><span class="badge b-high">高</span></td><td>安全检索门(低置信度拒答 + 多重验证)</td><td>—</td><td><span class="badge b-safety">是</span></td><td><span class="badge b-yes">低破坏(有条件)</span></td><td>2-3</td></tr>
+              <tr class="matrix-row"><td><span class="badge b-high">高</span></td><td>批量整理 + 破坏性操作防护</td><td>—</td><td><span class="badge b-safety">是</span></td><td><span class="badge b-mid">需迁移(组合项)</span></td><td>3</td></tr>
+              <tr class="matrix-row"><td><span class="badge b-high">高</span></td><td>记忆完整性评测</td><td><span class="badge b-unique">是</span></td><td><span class="badge b-safety">是</span></td><td><span class="badge b-yes">完美接入</span></td><td>2</td></tr>
+              <tr class="matrix-row"><td><span class="badge b-high">高</span></td><td>持久后台服务 quilin-daemon</td><td><span class="badge b-unique">是</span></td><td><span class="badge b-safety">是</span></td><td><span class="badge b-mid">中破坏(跨运行时)</span></td><td>3-4</td></tr>
+              <tr class="matrix-row"><td><span class="badge b-mid">中</span></td><td>多客户端 + 项目范围</td><td><span class="badge b-unique">是</span></td><td><span class="badge b-safety">是</span></td><td><span class="badge b-mid">需迁移</span></td><td>3</td></tr>
+              <tr class="matrix-row"><td><span class="badge b-mid">中</span></td><td>操作步骤记忆流水线</td><td><span class="badge b-unique">是</span></td><td><span class="badge b-safety">是</span></td><td><span class="badge b-mid">中破坏(架构边界)</span></td><td>4</td></tr>
+              <tr class="matrix-row"><td><span class="badge b-mid">中</span></td><td>前瞻记忆 + 提前准备</td><td>部分</td><td>中</td><td><span class="badge b-mid">需迁移(避免新增 layer)</span></td><td>3</td></tr>
+              <tr class="matrix-row"><td><span class="badge b-mid">中</span></td><td>重要性多维 + 类型标签</td><td>—</td><td>中</td><td><span class="badge b-high">破坏风险(若替换 float)</span></td><td>2</td></tr>
+              <tr class="matrix-row"><td><span class="badge b-low">低</span></td><td>证据可视化 + 资源指针预留</td><td><span class="badge b-unique">是</span></td><td>中</td><td><span class="badge b-yes">低破坏(有前置)</span></td><td>2-3</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p class="text-sm text-stone-500 italic">注 1:联合日 ≈ Claude + Codex 一起干一天,大约等于 1-2 周个人开发。</p>
+        <p class="text-sm text-stone-500 italic">注 2:接入难度 4 档(完美接入 / 低破坏 / 需迁移 / 中破坏 / 破坏风险)来自 Codex 独立实证评估,详见第六章。</p>
+
+        <h3>10 个升级方向详解</h3>
+
+        <details open>
+          <summary>🔥 第 1 高:证据保存 + 版本链 + 时光回溯(4-5 联合日)</summary>
+          <div>
+            <p>给每条记忆加版本字段(版本号、父记录 ID、覆盖了谁、是不是最新、什么时候过期、可信度强度);加一张<strong>记忆来源表</strong>把每条派生事实指回一段或几段原始对话;加<strong>记忆快照表</strong>可以"回到上周三的记忆状态"。</p>
+            <p><strong>核心规则:每次纠错都新建事件,不改写历史</strong>。比如"用户名是老孟" → "用户希望叫孟哥",老的记录标记"被覆盖",但<strong>不删除</strong>,留作历史。</p>
+            <p class="text-sm"><strong>会拆成 3 个工单</strong>:QUI-191A 证据库 · QUI-191B 版本链 · QUI-191C 快照回溯</p>
+          </div>
+        </details>
+
+        <details open>
+          <summary>🛡️ 第 2 高:安全检索门(2-3 联合日)</summary>
+          <div>
+            <p>在混合检索之上加一层"<strong>聪明的看门人</strong>"。规则:</p>
+            <ul class="ml-4 list-disc text-sm space-y-1 mb-2">
+              <li>置信度低 → 返回"我不确定,你能再说一遍吗?"而不是瞎编</li>
+              <li>检索到的 top 3 互相矛盾 → 跑<strong>多重验证</strong>(让大模型从多个角度评判)</li>
+              <li>偏离结果 → 进<strong>隔离区</strong>,并生成"<strong>安全教训</strong>"记录,下次类似情况自动警觉</li>
+            </ul>
+            <p>这是 A-MemGuard、MemX、OWASP Agent 防护、AgentPoison(投毒攻击防御)和麒麟已有 docs 的交汇点。</p>
+            <p class="text-sm"><strong>会拆成 2 个工单</strong>:QUI-191D 低置信度拒答 · QUI-191E 多重验证检索门</p>
+          </div>
+        </details>
+
+        <details open>
+          <summary>⚙️ 第 3 高:批量整理 + 破坏性操作防护(3 联合日)</summary>
+          <div>
+            <p>把"逐对判定"换成"<strong>批量集群判定</strong>" — 一次扔 10 对给大模型,返回结构化的"哪些是一组重复"。但用户界面不变(<code>memory_consolidate_plan</code> 接口不动)。</p>
+            <p>真正删除前必须:</p>
+            <ul class="ml-4 list-disc text-sm space-y-1 mb-2">
+              <li>预览"如果删了这条,会影响哪些下游"</li>
+              <li>走<strong>写入审批门</strong>让用户确认</li>
+              <li>软删除保留 72 小时(可恢复)</li>
+              <li>72 小时后才物理删</li>
+            </ul>
+            <p>这把 QUI-189 批量判定升级成<strong>安全的生产整理路径</strong>,并吸收了 GBrain 的破坏防护设计。</p>
+            <p class="text-sm"><strong>会拆成 2 个工单</strong>:QUI-189 批量判定 · QUI-191F 破坏防护</p>
+          </div>
+        </details>
+
+        <details>
+          <summary>📊 第 4 高:记忆完整性评测(2 联合日)</summary>
+          <div>
+            <p>本地搞一套<strong>自己的评测集</strong>,专门测"<strong>写入是否正确</strong>",而不只是测检索召回率。具体测:</p>
+            <ul class="ml-4 list-disc text-sm space-y-1 mb-2">
+              <li>错误画像写入(把"用户是程序员"误写成"用户是医生")</li>
+              <li>"我参与的事" vs "我观察到的事"(权重不同)</li>
+              <li>责任人归属(同一条记忆是 LLM 主动写的、还是 user 手动改的、还是从其他 agent 导入的)</li>
+              <li>并发写入冲突</li>
+              <li>覆盖更新</li>
+              <li>回滚</li>
+              <li>投毒</li>
+              <li>无来源的"凭空生成"记忆</li>
+              <li>中英文双语轮次</li>
+            </ul>
+            <p>公开评测榜(LongMemEval / LoCoMo / BEAM)仍然跑,但 CI(自动测试管道)的<strong>守门员</strong>是本地的、可复现的。</p>
+            <p class="text-sm"><strong>会拆成 2 个工单</strong>:QUI-191G 完整性测试集 · QUI-191H 责任人归属测试集</p>
+          </div>
+        </details>
+
+        <details>
+          <summary>⏰ 第 5 高:持久后台服务 quilin-daemon(3-4 联合日)</summary>
+          <div>
+            <p>独立的<strong>后台进程</strong>(类似手机后台天气更新),跟主对话解耦。它管:</p>
+            <ul class="ml-4 list-disc text-sm space-y-1 mb-2">
+              <li>每 24 小时跑一次整理</li>
+              <li>反思器抽取知识</li>
+              <li>自演化模块定期看有没有需要升级的脚手架</li>
+              <li>用户行为模式挖掘</li>
+              <li>Token 预算监控</li>
+              <li>未来可能的:技能自动安装、定期跑评测</li>
+            </ul>
+            <p>设计要求:<strong>租约</strong>(同一任务不会两个进程同时跑)、<strong>心跳</strong>(死了能被发现)、<strong>过期任务抢占</strong>、<strong>重试退避</strong>、<strong>持久日志</strong>(重启后能接着跑)。</p>
+            <p class="text-sm"><strong>会拆成 2 个工单</strong>:QUI-188 后台服务框架 · QUI-191I 记忆任务队列</p>
+          </div>
+        </details>
+
+        <details>
+          <summary>🔀 第 1 中:多客户端 + 项目范围(3 联合日)</summary>
+          <div>
+            <p>给每条记忆加"<strong>最后是谁写的</strong>"标签(命令行 / 终端 / 网页 / Mac App)。当两个客户端同时改同一条记忆,要有<strong>冲突合并界面</strong>让用户决定。</p>
+            <p>把<strong>当前工作目录 + QUILIN.md</strong> 作为"<strong>检索时的加权信号</strong>" — 在 /repo/A 跟麒麟聊天,记忆优先返 A 项目的;切到 /repo/B,自动激活 B 项目的记忆。<strong>这是麒麟独有的机会</strong>,因为"只跑在服务器上"的系统不面对 4 客户端共享本地数据库的问题。</p>
+            <p class="text-sm"><strong>会拆成 2 个工单</strong>:QUI-191J 多端冲突合并 · QUI-191K 项目检索加权</p>
+          </div>
+        </details>
+
+        <details>
+          <summary>🛠️ 第 2 中:操作步骤记忆流水线(4 联合日)</summary>
+          <div>
+            <p>用<strong>自演化对话轨迹</strong> + 重复成功的任务模式,自动创建"<strong>案例记录</strong>"<span class="original">AgentCase</span>。比如"用户连续 5 次让我跑 pytest + ruff + commit",系统识别出这是一个常用工作流。</p>
+            <p>当足够多类似高质量案例累积,后台服务自动生成一个 <code>SKILL.md</code> 候选,包含:</p>
+            <ul class="ml-4 list-disc text-sm space-y-1 mb-2">
+              <li>什么场景该激活这个技能</li>
+              <li>前置条件</li>
+              <li>验证步骤</li>
+              <li>预期证据</li>
+              <li>失败 case</li>
+              <li>出处(来自哪些对话)</li>
+            </ul>
+            <p>但<strong>用户必须批准</strong>(走写入审批门)才能正式落地成技能。</p>
+            <p class="text-sm"><strong>会拆成 2 个工单</strong>:QUI-191L 案例记录 · QUI-191M 轨迹→技能提案</p>
+          </div>
+        </details>
+
+        <details>
+          <summary>🔮 第 3 中:前瞻记忆 + 提前准备(3 联合日)</summary>
+          <div>
+            <p>增加<strong>未来事项模型</strong> — 用户的承诺、待办、提醒、有时间边界的意图。比如用户说"下周二我要见客户",麒麟记下来,周二之前自动提醒。</p>
+            <p>保守的<strong>提前准备</strong>:任务可预测且预算够时,后台服务<strong>预先准备</strong>可能需要的上下文。<strong>它不应该在用户提问前先回答</strong>,只是把证据 + 缓存备好,用户一问马上响应。</p>
+            <p class="text-sm"><strong>会拆成 2 个工单</strong>:QUI-191N 前瞻记忆 · QUI-191O 提前准备</p>
+          </div>
+        </details>
+
+        <details>
+          <summary>🏷️ 第 4 中:重要性多维 + 类型标签 + 过期感知(2 联合日)</summary>
+          <div>
+            <p>把单一的"重要性数字"替换成<strong>小向量</strong>:新颖性 / 实用性 / 个人相关度 / 可操作性 / 时效性 / 稳定性。按用户当前意图加权。</p>
+            <p>加与"层级"正交的<strong>类型标签</strong>:用户偏好 / 反馈 / 项目笔记 / 引用 / 模式 / Bug / 工作流 / 前瞻 / 资源。</p>
+            <p>加 Claude Code 风格的<strong>过期感知</strong>: "47 天前的记忆" 提示 + 给老记忆加 system-reminder 包装(让大模型知道这是历史信息可能不准)。</p>
+            <p class="text-sm"><strong>会拆成 3 个工单</strong>:QUI-191P 多维重要性 · QUI-191Q 类型标签 · QUI-191R 过期感知</p>
+          </div>
+        </details>
+
+        <details>
+          <summary>🚢 低优:证据可视化 + 资源指针预留(2-3 联合日)</summary>
+          <div>
+            <p>Web 端的<strong>证据可视化</strong>(reactflow 节点图,看一条记忆的所有出处链)— 等版本/出处数据存在后再做。点开一条记忆能看到:</p>
+            <ul class="ml-4 list-disc text-sm space-y-1 my-2">
+              <li>这条记忆来自哪几次对话(原始证据片段)</li>
+              <li>覆盖了哪些老版本</li>
+              <li>谁写的(LLM 主动 / user 手动 / 从其他 agent 导入)</li>
+              <li>当前置信度</li>
+            </ul>
+            <p>预留<strong>资源指针字段</strong>(截图、PDF、图片、未来多模态),但真实用户需求出现前不优先做完整索引。</p>
+            <p class="text-sm"><strong>会拆成 2 个工单</strong>:QUI-191T 证据可视化 · QUI-191U 资源指针预留</p>
+            <p class="text-sm text-stone-400 italic mt-2">注:反向灵魂导出从 roadmap 移除(用户决定不做)— 麒麟只做单向导入,不做导出回其他 agent。</p>
+          </div>
+        </details>
+      </section>
+
+      <!-- 六. 接入可行性 + 落地顺序 -->
+      <section id="feasibility">
+        <h2>六. 接入可行性 + 推荐落地顺序 <span class="original">Integration Feasibility</span></h2>
+
+        <p>Codex <strong>独立读了 15+ 现有文件</strong>(<code>store_schema.py</code> / <code>store_serialization.py</code> / <code>retriever.py</code> / <code>WriteAuthority</code> / <code>skill manager.ts</code> / Web <code>/memory</code> 路由 / 现有测试)做接入实证,**修正了 Claude 6 项过度乐观判断**。</p>
+
+        <blockquote>
+          <p><strong>Codex 一句话独立结论:</strong>不能说 10 项都能完美接入。方向兼容,但<strong>"完美接入"只适用于评测 harness 和少数限定范围的只读投影</strong>。真正的 v2 需要有意识的 schema 演进、稳定的 wire contract、跨运行时的 authority/budget 设计。</p>
+        </blockquote>
+
+        <h3>Claude vs Codex 判断 Diff</h3>
+
+        <div class="overflow-x-auto mb-4">
+          <table>
+            <thead>
+              <tr>
+                <th>升级项</th>
+                <th>Claude 判断</th>
+                <th>Codex 修正</th>
+                <th>原因</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="matrix-row"><td>完整性评测</td><td>完美</td><td><span class="badge b-yes">完美</span></td><td>✓ 同意</td></tr>
+              <tr class="matrix-row"><td>quilin-daemon</td><td>完美</td><td><span class="badge b-mid">中破坏</span></td><td><strong>强反对</strong> — idle budget 是内存态 stub,WriteAuthority 在 TS 侧,daemon 需 启动编排 + 持久 state + authority bridge</td></tr>
+              <tr class="matrix-row"><td>操作步骤流水线</td><td>完美</td><td><span class="badge b-mid">中破坏</span></td><td>必须经 13-skills 文件系统唯一真源,不能把 procedure body 存 memory</td></tr>
+              <tr class="matrix-row"><td>证据可视化 + 资源指针</td><td>完美</td><td><span class="badge b-yes">低破坏(有前置)</span></td><td>可视化依赖证据链 schema 先落;反向导出已从 roadmap 移除</td></tr>
+              <tr class="matrix-row"><td>安全检索门</td><td>低破坏</td><td><span class="badge b-yes">低破坏(有条件)</span></td><td>条件 = 保留 <code>list[MemoryItem]</code> 返回类型,不改成 union</td></tr>
+              <tr class="matrix-row"><td>批量整理+破坏防护</td><td>低破坏</td><td><span class="badge b-mid">需迁移</span></td><td>batch 局部低破坏,但破坏防护改 delete 语义 + 需新增 <code>archived_at</code> / <code>archive_expires_at</code> 字段</td></tr>
+              <tr class="matrix-row"><td>多客户端+项目</td><td>低破坏</td><td><span class="badge b-mid">需迁移</span></td><td>真正冲突解决需 <code>writer identity</code> / <code>updated_at_epoch</code> 持久字段 + 侧表</td></tr>
+              <tr class="matrix-row"><td>证据+版本链</td><td>需迁移</td><td><span class="badge b-mid">需迁移</span></td><td>✓ 同意</td></tr>
+              <tr class="matrix-row"><td>前瞻记忆</td><td>需迁移</td><td><span class="badge b-mid">需迁移(警告)</span></td><td>⚠ <strong>警告</strong>:绝不能新增第 5 个 <code>MemoryLayer</code>,跨 Python/TS/Web 3 处枚举改</td></tr>
+              <tr class="matrix-row"><td>重要性多维</td><td>需迁移</td><td><span class="badge b-high">破坏风险</span></td><td>替换 <code>importance_score</code> float→JSON 会破坏 Python row 反序列化 + TS 客户端;只能 <strong>保留 float + 加可选 JSON 字段</strong></td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p class="text-sm text-stone-500 mb-6">统计:同意 4 项 / 重分类 6 项 / 强反对 1 项(quilin-daemon)。</p>
+
+        <h3>Codex 找到的关键证据 / Key Evidence</h3>
+
+        <div class="space-y-3 mb-6">
+          <div class="card border-l-4 border-l-orange-700">
+            <strong>1. <code>MemoryLayer</code> 是跨 3 处的硬枚举,不是单点</strong>
+            <p class="text-sm mt-2 mb-0">Python <code>types.py:8</code>、TS <code>memory/types.ts:1</code>、Web <code>page.tsx:37</code> 三处都固定 4 层(工作/情景/语义/技能)。<strong>加新层要改 3 处 + SQLite CHECK 约束 + 所有测试</strong>。</p>
+          </div>
+          <div class="card border-l-4 border-l-orange-700">
+            <strong>2. <code>importance_score</code> 不只在 SQLite</strong>
+            <p class="text-sm mt-2 mb-0">SQLite REAL + Python <code>MemoryItem.coerce</code> 强制 float + 归档策略数值比较 + TS 本地客户端直接当 number 用。<strong>替换成 JSON 会全链路破坏</strong>,只能 additive 加新字段。</p>
+          </div>
+          <div class="card border-l-4 border-l-orange-700">
+            <strong>3. <code>memory_delete</code> 当前是 Web 逐条调</strong>
+            <p class="text-sm mt-2 mb-0">Web <code>/api/memory/route.ts:245</code> + dedupe 执行 <code>/api/memory/dedupe/route.ts:215</code> 都<strong>逐条</strong>调 MCP 工具。加破坏防护(72h 保留)会改 delete 语义 + Web 测试断言。</p>
+          </div>
+          <div class="card border-l-4 border-l-orange-700">
+            <strong>4. <code>WriteAuthority</code> 只在 TypeScript 侧</strong>
+            <p class="text-sm mt-2 mb-0">写入审批门当前是 <code>packages/agent-core/src/safety/write-authority.ts</code> 的 TS class。<strong>独立 Python daemon 无法直接复用,必须有 bridge 进程或跨语言协议</strong>。</p>
+          </div>
+          <div class="card border-l-4 border-l-orange-700">
+            <strong>5. <code>SKILL.md</code> 是 13-skills 文件系统唯一真源</strong>
+            <p class="text-sm mt-2 mb-0">docs/03-memory line 425/445 明文:技能路径归 13-skills 所有,03-memory 只镜像使用统计。<strong>操作步骤流水线必须通过 SKILL.md 提案路径,不能存 procedure body 到 memory</strong>。</p>
+          </div>
+        </div>
+
+        <h3>🚦 推荐落地顺序(Codex 独立排序)</h3>
+
+        <p>不按"优先级高低"机械执行,按<strong>依赖链 + 风险递减</strong>排:先建评测当记分牌,再建证据链当地基,然后才上 daemon 等跨运行时改造。</p>
+
+        <div class="overflow-x-auto mb-6">
+          <table>
+            <thead>
+              <tr><th>顺序</th><th>升级项</th><th>关键理由</th><th>阶段</th></tr>
+            </thead>
+            <tbody>
+              <tr class="matrix-row"><td><span class="badge b-yes">1</span></td><td>完整性评测</td><td>纯新增,无 schema 风险,先建记分牌</td><td rowspan="4" style="border-left: 3px solid #b1411e;"><strong>第一周</strong><br><span class="text-xs text-stone-500">必做前置</span></td></tr>
+              <tr class="matrix-row"><td><span class="badge b-yes">2</span></td><td>证据 + 版本链</td><td>additive migration,建立证据/版本骨干</td></tr>
+              <tr class="matrix-row"><td><span class="badge b-yes">3</span></td><td>安全检索门</td><td>保留 <code>list[MemoryItem]</code>,加拒答/隔离 metadata</td></tr>
+              <tr class="matrix-row"><td><span class="badge b-yes">4</span></td><td>批量整理</td><td>保持 <code>memory_consolidate_plan</code> wire shape 不变</td></tr>
+              <tr class="matrix-row"><td><span class="badge b-mid">5</span></td><td>破坏防护</td><td>分阶段 delete + 撤销窗口 + WriteAuthority + 持久审计</td><td rowspan="2" style="border-left: 3px solid #c97a1d;"><strong>第二周</strong><br><span class="text-xs text-stone-500">在证据/版本之上</span></td></tr>
+              <tr class="matrix-row"><td><span class="badge b-mid">6</span></td><td>多客户端 + 项目范围</td><td>项目/写入者 metadata 与冲突解决</td></tr>
+              <tr class="matrix-row"><td><span class="badge b-mid">7</span></td><td>持久后台服务 quilin-daemon</td><td>默认关闭,持久预算与 run state</td><td rowspan="2" style="border-left: 3px solid #c97a1d;"><strong>第三周</strong><br><span class="text-xs text-stone-500">跨运行时改造</span></td></tr>
+              <tr class="matrix-row"><td><span class="badge b-low">8</span></td><td>重要性多维 + 分类</td><td>additive JSON 字段,保留 scalar 兼容</td></tr>
+              <tr class="matrix-row"><td><span class="badge b-low">9</span></td><td>操作步骤流水线</td><td>对话轨迹→技能 提案,绝不存 procedure body 到 memory</td><td rowspan="2" style="border-left: 3px solid #7c7669;"><strong>第四周+</strong><br><span class="text-xs text-stone-500">建立在前 8 项之上</span></td></tr>
+              <tr class="matrix-row"><td><span class="badge b-low">10</span></td><td>前瞻 + 证据可视化 + 资源指针</td><td>等证据链落地后再做侧表与可视化</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>核心架构规则</h3>
+
+        <blockquote>
+          <p><strong>能用可选 metadata 或侧表承载能力时,不要新增 layer 或替换字段</strong>。Quilin 的优势是<strong>本地优先安全 + 写入审批门 + 多客户端上下文 + 灵魂导入可移植</strong>;保住这些边界,比照搬竞品分类体系更重要。</p>
+        </blockquote>
+      </section>
+
+      <!-- 七. Consensus -->
+      <section id="consensus">
+        <h2>七. 双方共识 <span class="original">Consensus</span></h2>
+        <p>Claude 跟 Codex 在以下原则上完全一致:</p>
+
+        <ul class="space-y-2 text-base text-stone-700 ml-4 my-5 list-disc list-inside">
+          <li>麒麟应保持<strong>本地优先</strong>,而不是云端优先</li>
+          <li>应<strong>先保留原始证据</strong>,再做语义抽取</li>
+          <li>有后果的记忆修改必须走<strong>写入审批门</strong></li>
+          <li>评测分数是<strong>证据</strong>,不是<strong>产品目标</strong>(不刷榜)</li>
+          <li>应实现<strong>持久后台调度</strong>,而不是各模块各自起循环</li>
+          <li>操作步骤记忆应流经<strong>技能系统</strong>(13-skills),不重新发明</li>
+          <li>项目 / 用户 / 灵魂这 3 个 markdown 文件应该是<strong>一等公民</strong>的记忆界面</li>
+        </ul>
+
+        <blockquote>
+          <p><strong>"完美记忆"不是再加一个检索器,而是一个完整的、受治理的生命周期:</strong></p>
+          <p class="mt-3 font-mono text-sm leading-relaxed">捕获 → 证明 → 检索 → 推理 → 整理 → 纠错 → 回滚 → 导出 → 评测</p>
+        </blockquote>
+      </section>
+
+      <!-- 八. Claude 视角 -->
+      <section id="claude-view">
+        <h2>八. 我(Claude)独家视角 <span class="original">Claude-Unique View</span></h2>
+        <p>我看到 Codex 没特别强调的部分,主要是<strong>运维和产品形态</strong>:</p>
+        <ul class="ml-4 list-disc text-sm space-y-1 my-3">
+          <li>Codex 的生产任务队列(两阶段) 作为后台服务租约的参考</li>
+          <li>Claude Code 的过期感知用户界面</li>
+          <li>GBrain 的破坏防护设计</li>
+          <li>Letta 的 git 风格记忆块</li>
+          <li>EverOS 的前瞻模型 + 案例→技能升级</li>
+          <li>腾讯的<code>prepend</code> vs <code>append</code> 上下文注入区别</li>
+          <li>4 客户端共享记忆 的<strong>战略价值</strong>(Mac App 必须解决)</li>
+        </ul>
+
+        <div class="card border-l-4 border-l-blue-500 bg-blue-50/30">
+          <strong class="text-blue-900">最高价值的独家洞察</strong>
+          <p class="mt-2 mb-0 text-sm"><strong>4 客户端共享记忆冲突解决</strong> — 命令行 / 终端 / 网页 / Mac App 都写同一份 <code>~/.quilin/</code>,这是<strong>只有麒麟面对的真实工程难题</strong>。Mac App 上线前必须解决,服务器型 agent(Letta / Zep / Mem0 等)从架构上避开了这个问题但也失去了"<strong>本地 + 多端</strong>"的产品形态。</p>
+        </div>
+      </section>
+
+      <!-- 九. Codex 视角 -->
+      <section id="codex-view">
+        <h2>九. 它(Codex)独家视角 <span class="original">Codex-Unique View</span></h2>
+        <p>Codex 看到我没特别强调的部分,主要是<strong>安全和评测形态</strong>:</p>
+        <ul class="ml-4 list-disc text-sm space-y-1 my-3">
+          <li>非大模型的原始证据(不让 LLM 是唯一写入方)</li>
+          <li>写入完整性评测(测"写得对",不只是"找得到")</li>
+          <li>"我参与的事" vs "我观察到的事"(权重不同)</li>
+          <li>责任人范围的证据来源</li>
+          <li>低置信度检索拒答</li>
+          <li>带验证的"对话轨迹→技能"编译</li>
+        </ul>
+
+        <p>Codex 还<strong>明确反对</strong>"为了层级而加层级"的思路,认为 <strong>证据 / 时间 / 权威 / 评测</strong> 比层数多少更重要。</p>
+
+        <div class="card border-l-4 border-l-green-600 bg-green-50/30">
+          <strong class="text-green-900">最高价值的独家洞察</strong>
+          <p class="mt-2 mb-0 text-sm"><strong>"写入完整性"</strong> — 只测检索召回率不够。一个记忆系统可以通过召回测试,却<strong>静默污染用户身份、项目约束、流程规则</strong>。比如"用户偏好 Python"被错抹成"用户偏好 Java",检索召回测试看不出来。</p>
+        </div>
+      </section>
+
+      <!-- 十. Disagree -->
+      <section id="disagree">
+        <h2>十. 5 个待你拍板的冲突点 <span class="original">Disagree</span></h2>
+        <p class="text-stone-600">5 个 disagree(意见分歧),每条标注 Claude / Codex 视角 + 建议拍板。</p>
+
+        <div class="disagree-card">
+          <div class="conflict">1. 多模态资源库多早做?</div>
+          <div class="views">
+            <div class="view-box claude"><div class="label">Claude 视角</div>多模态记忆(图片、PDF 等)现在就应影响 schema 设计</div>
+            <div class="view-box codex"><div class="label">Codex 视角</div>真实截图/PDF/图片需求出现前优先级较低</div>
+          </div>
+          <div class="proposed"><span class="label">建议拍板</span> 现在<strong>预留资源指针字段</strong>(schema 设计层面),完整多模态索引延后</div>
+        </div>
+
+        <div class="disagree-card">
+          <div class="conflict">2. 提前准备多激进?</div>
+          <div class="views">
+            <div class="view-box claude"><div class="label">Claude 视角</div>倾向"睡眠时段也算"的激进预计算</div>
+            <div class="view-box codex"><div class="label">Codex 视角</div>担心烧 Token + 错误假设</div>
+          </div>
+          <div class="proposed"><span class="label">建议拍板</span> 只允许<strong>证据/缓存预热</strong>,不主动生成未被请求的答案</div>
+        </div>
+
+        <div class="disagree-card">
+          <div class="conflict">3. 时光回溯暴露给用户到什么程度?</div>
+          <div class="views">
+            <div class="view-box claude"><div class="label">Claude 视角</div>看重时光回溯的调试 UX(用户能"看上周三的我")</div>
+            <div class="view-box codex"><div class="label">Codex 视角</div>先做底层版本链/证据,UX 等正确性证明后再说</div>
+          </div>
+          <div class="proposed"><span class="label">建议拍板</span> <strong>先实现底层版本链和快照</strong>,<code>memory_checkout(时间)</code> 接口等评测证明正确后再暴露给用户</div>
+        </div>
+
+        <div class="disagree-card" style="opacity: 0.55; border-left-color: var(--ink-light);">
+          <div class="conflict">4. 反向导出 v1 支持多广?</div>
+          <div class="views">
+            <div class="view-box claude"><div class="label">Claude 视角</div>反向导出是战略高优先级,值得 v1 就做</div>
+            <div class="view-box codex"><div class="label">Codex 视角</div>安全和证据是前置,导出在证据链完整后再做</div>
+          </div>
+          <div class="proposed" style="background: #ede9df; color: var(--ink-light);"><span class="label" style="color: var(--ink-light);">用户已拍板</span> <strong>不做反向导出</strong> — 麒麟只做单向导入(灵魂导入),不导出回其他 agent</div>
+        </div>
+
+        <div class="disagree-card">
+          <div class="conflict">5. 记忆类型加多少?</div>
+          <div class="views">
+            <div class="view-box claude"><div class="label">Claude 视角</div>引用 7-8 种类型(EverOS 8 类 / MIRIX 6 类)</div>
+            <div class="view-box codex"><div class="label">Codex 视角</div>警惕"类型膨胀",简单就好</div>
+          </div>
+          <div class="proposed"><span class="label">建议拍板</span> <strong>保留 4 层</strong>,只在"检索 / 门禁 / 评测行为不同"的地方添加正交类型标签</div>
+        </div>
+      </section>
+
+      <!-- 十一. Next Steps -->
+      <section id="next">
+        <h2>十一. 下一步行动 <span class="original">Next Steps</span></h2>
+
+        <blockquote>
+          <p>立 Plane(任务追踪)大需求 <strong>QUI-191 完美记忆系统 v2</strong>。验收标准是:<strong>任何记忆修改路径都不得绕过"出处 + 版本 + 安全门 + 本地评测"4 道关</strong>。</p>
+        </blockquote>
+
+        <h3>10 个子任务(按 Codex 推荐依赖顺序排序)</h3>
+        <div class="overflow-x-auto">
+          <table>
+            <thead><tr><th>顺序</th><th>工单</th><th>范围</th><th>阶段</th></tr></thead>
+            <tbody>
+              <tr class="matrix-row"><td>1</td><td><code>QUI-191A</code></td><td>记忆完整性本地评测集(纯新增,先建记分牌)</td><td rowspan="4"><span class="badge b-high">第一周</span></td></tr>
+              <tr class="matrix-row"><td>2</td><td><code>QUI-191B</code></td><td>证据库 + 版本链(additive migration,建立证据/版本骨干)</td></tr>
+              <tr class="matrix-row"><td>3</td><td><code>QUI-191C</code></td><td>安全检索门(保留 list[MemoryItem],加拒答 metadata)</td></tr>
+              <tr class="matrix-row"><td>4</td><td><code>QUI-191D</code></td><td>批量大模型整理(保持 wire shape 不变)</td></tr>
+              <tr class="matrix-row"><td>5</td><td><code>QUI-191E</code></td><td>破坏防护(分阶段 delete + 撤销窗口)</td><td rowspan="2"><span class="badge b-mid">第二周</span></td></tr>
+              <tr class="matrix-row"><td>6</td><td><code>QUI-191F</code></td><td>多客户端 + 项目范围(writer/conflict metadata)</td></tr>
+              <tr class="matrix-row"><td>7</td><td><code>QUI-191G</code></td><td>quilin-daemon 持久后台服务(默认关闭)</td><td rowspan="2"><span class="badge b-mid">第三周</span></td></tr>
+              <tr class="matrix-row"><td>8</td><td><code>QUI-191H</code></td><td>重要性多维 + 分类(additive JSON,保留 scalar 兼容)</td></tr>
+              <tr class="matrix-row"><td>9</td><td><code>QUI-191I</code></td><td>操作步骤流水线(经 SKILL.md 提案路径)</td><td rowspan="2"><span class="badge b-low">第四周+</span></td></tr>
+              <tr class="matrix-row"><td>10</td><td><code>QUI-191J</code></td><td>前瞻记忆 + 证据可视化 + 资源指针(反向导出已移除)</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>第一周里程碑(Codex 推荐顺序)</h3>
+        <div class="space-y-3 my-6">
+          <div class="card">
+            <strong>第 1 天:</strong> 完整性评测集落地(纯新增,无 schema 风险)— 先建<strong>记分牌</strong>
+          </div>
+          <div class="card">
+            <strong>第 2-3 天:</strong> 证据 + 版本链 additive migration(<code>memory_records</code> 加 6 可选字段 + 新建 <code>memory_sources</code> 侧表)
+          </div>
+          <div class="card">
+            <strong>第 4-5 天:</strong> 安全检索门(保留 <code>list[MemoryItem]</code> 返回类型不变,只加拒答/隔离 metadata)
+          </div>
+          <div class="card">
+            <strong>第 6-7 天:</strong> 批量大模型整理(QUI-189,保持 <code>memory_consolidate_plan</code> wire shape 不变)
+          </div>
+        </div>
+
+        <blockquote>
+          <p><strong>第一周结束时应该达到可测的 4 道关:</strong></p>
+          <ol class="text-sm mt-2 space-y-1 list-decimal pl-5">
+            <li>种子恶意记忆<strong>不能</strong>变成可信的用户画像或技能</li>
+            <li>被覆盖的用户身份<strong>不会</strong>继续在新对话中激活</li>
+            <li>批量整理的每个去重提案<strong>都能追溯</strong>到原始证据</li>
+            <li>低置信度召回<strong>触发拒答或澄清</strong>,而不是幻觉回答</li>
+          </ol>
+        </blockquote>
+      </section>
+
+      <footer class="mt-20 pt-8 border-t border-stone-200 text-sm text-stone-500">
+        <p class="mb-2">报告来源:</p>
+        <ul class="space-y-1 text-xs">
+          <li>📄 <code>competitor-analysis-codex.md</code> · 205 行 / Codex 14 个仓库分析</li>
+          <li>📄 <code>external-survey-codex.md</code> · 296 行 / Codex 论文+评测+新 repo 扩展</li>
+          <li>📄 <code>quilin-mem-competitive-strategy-claude.md</code> · 576 行 / Claude 14 个仓库分析</li>
+          <li>📄 <code>external-survey-claude.md</code> · 494 行 / Claude 论文+评测+新 repo 扩展</li>
+          <li>📄 本文件 · Codex 起草合并报告,Claude 协商 review</li>
+        </ul>
+        <p class="mt-4 text-xs">合计 1571 行调研 → 压成 10 个升级方向 → 10 个工单 → 完美记忆系统</p>
+        <p class="mt-2 text-xs">© 2026 麒麟(Quilin)Agent · Claude × Codex 协作产出</p>
+      </footer>
+
+    </main>
+  </div>
+</div>
+
+<script>
+  const sections = document.querySelectorAll('section[id]');
+  const tocLinks = document.querySelectorAll('.toc a');
+  function updateActive() {
+    let current = '';
+    sections.forEach(s => {
+      const rect = s.getBoundingClientRect();
+      if (rect.top <= 100) current = s.id;
+    });
+    tocLinks.forEach(l => l.classList.toggle('active', l.getAttribute('href') === '#' + current));
+  }
+  window.addEventListener('scroll', updateActive, { passive: true });
+  updateActive();
+</script>
+</body>
+</html>

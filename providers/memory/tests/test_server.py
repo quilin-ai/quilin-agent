@@ -928,10 +928,7 @@ async def test_consolidation_log_recent_tool_returns_empty_when_no_entries(
     )
     # The tool returns a JSON-encoded string at the top level; we decode through
     # the helper which already JSON-parses the MCP envelope.
-    if isinstance(result, str):
-        payload = json.loads(result)
-    else:
-        payload = result
+    payload = json.loads(result) if isinstance(result, str) else result
     assert payload.get("available") is True
     assert payload.get("total") == 0
     assert payload.get("entries") == []
@@ -945,10 +942,7 @@ async def test_kg_dump_for_viz_tool_returns_empty_payload_when_kg_unseeded(
     result = _decode_call_tool_result(
         await server.call_tool("kg_dump_for_viz", {"limit": 100})  # type: ignore[attr-defined]
     )
-    if isinstance(result, str):
-        payload = json.loads(result)
-    else:
-        payload = result
+    payload = json.loads(result) if isinstance(result, str) else result
     assert payload.get("nodes") == []
     assert payload.get("edges") == []
 
@@ -976,10 +970,7 @@ async def test_memory_delete_tool_removes_record_from_recall(server: object) -> 
     delete_result = _decode_call_tool_result(
         await server.call_tool("memory_delete", {"memory_id": memory_id})  # type: ignore[attr-defined]
     )
-    if isinstance(delete_result, str):
-        payload = json.loads(delete_result)
-    else:
-        payload = delete_result
+    payload = json.loads(delete_result) if isinstance(delete_result, str) else delete_result
     assert payload.get("ok") is True
     assert payload.get("memory_id") == memory_id
 
@@ -997,8 +988,5 @@ async def test_memory_delete_idempotent_on_unknown_id(server: object) -> None:
     result = _decode_call_tool_result(
         await server.call_tool("memory_delete", {"memory_id": "no-such-id"})  # type: ignore[attr-defined]
     )
-    if isinstance(result, str):
-        payload = json.loads(result)
-    else:
-        payload = result
+    payload = json.loads(result) if isinstance(result, str) else result
     assert payload.get("ok") is True

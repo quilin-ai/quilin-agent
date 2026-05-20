@@ -6,6 +6,33 @@ This file is the only global progress entry point under `docs/`. Component-level
 
 本文件是 `docs/` 下唯一的全局进度入口。组件级当前事实写在各 `docs/<component>/README.md`。历史快照通过 git history 追溯。任务管理与 backlog 统一迁移到 Plane；本文件只保留当前状态快照。
 
+## 2026-05-21 完美记忆系统 v2 调研 + Roadmap / Perfect Memory System v2 Roadmap
+
+用户原话："我要做一个能打爆所有竞品的记忆系统"。完成 **14 个竞品仓库**（mem0/letta/zep/mempalace/agentmemory/MemMachine/EverOS/gbrain/TencentDB/claude-mem/hermes-agent/codex/openclaw/claude-code）+ **24 篇论文** + **9 个评测榜**调研，Claude × Codex 双视角协商产出 unified roadmap。
+
+User said: "I want a memory system that crushes all competitors." Completed survey of **14 competitor repos** + **24 papers** + **9 benchmarks**. Claude × Codex twin-perspective collaboration produced unified roadmap.
+
+**调研产物（docs/research/）**:
+- `agent-memory-systems-survey-2026-05-21.md`（315 行 unified report，含 HTML 可视化版）
+- `competitor-analysis-codex.md`（205 行 Codex 视角）+ `external-survey-codex.md`（296 行）
+- `quilin-mem-competitive-strategy-claude.md`（576 行 Claude 视角）+ `external-survey-claude.md`（494 行）
+- `integration-feasibility-codex.md`（298 行 Codex 独立接入可行性 verify）
+
+**Plane epic + 子工单**：
+- **QUI-191** epic 完美记忆系统 v2（Backlog）
+- 8 个新子工单 QUI-192 ~ QUI-199（详见 [docs/03-memory/README.md](03-memory/README.md) 顶部 v2 roadmap section）
+- 复用 3 个既有：QUI-188 (idle daemon) + QUI-189 (batch judge) + QUI-190 (temporal-aware)
+- Close 2 个：QUI-186（状态漂移→Done）+ QUI-15（Cancelled，Graphiti 部分 superseded by D-20，HippoRAG/trajectory 移到 QUI-194/198）
+
+**Quilin 已超前业界 3 项**（14 竞品都没）：
+1. WriteAuthority 全局门禁
+2. 4 客户端共享记忆（命令行 / 终端 / 网页 / Mac App）
+3. 灵魂导入（反向导出已明确不做）
+
+**核心策略**：不为了层级而加层级，交付"受治理的记忆操作系统"— append-only evidence + actor-scoped provenance + 时态有效期 + 版本链 + soft-delete rollback + 检索 hybrid 且谨慎 + 后台智能通过 quilin-daemon 跑。
+
+**预计工时**：~25-30 联合日（≈ 25-50 周个人开发）。落地顺序：第一周完整性评测 + 证据链 + 安全检索门 + 批量整理 → 第二周破坏防护 + 多客户端 → 第三周 quilin-daemon + 重要性多维 → 第四周+ 操作步骤流水线 + 前瞻+可视化。
+
 ## 2026-05-15/18 Iter F web 收尾 / Iter F web close-out
 
 Iter F web/UX 整轮已完成。详细 ship 清单见 [`docs/STATUS-iter-F-autonomous-2026-05-15.md`](STATUS-iter-F-autonomous-2026-05-15.md)（含 commit hash 表）。本次收尾包含：
