@@ -341,6 +341,12 @@ function ChatBody({
 	// QUI-182 follow-up: 防 drain effect 在 probe 期间被 deps 变化触发的并发 probe。
 	// 同步置位,同步 release(finally 块),不引入 setState 异步开销。
 	const probingRef = useRef(false);
+	// QUI-182 follow-up (B'2): mountedRef 替代 cleanup-based cancelled flag。
+	// 老路径在 deps 变化 cleanup 时设 cancelled=true 会让 in-flight probe 完成
+	// 后立即退出,user 快速 enqueue(多 deps 变化)→ probe 不停被取消 → 永远
+	// 不 drain → 6 条 rapid-fire 0 POST 出去(e2e 复现)。改成只在组件真正
+	// unmount 时阻止 setState/sendMessage,deps 变化不影响 in-flight probe。
+	const mountedRef = useRef(true);
 
 	const releaseActiveRun = useCallback((_reason: string): void => {
 		activeRunRef.current = false;
@@ -349,6 +355,17 @@ function ChatBody({
 	useEffect(() => {
 		releaseActiveRunRef.current = releaseActiveRun;
 	}, [releaseActiveRun]);
+	// QUI-182 follow-up (B'3): React Strict Mode 强制 mount → unmount → re-mount。
+	// useRef(true) 初值在 Strict Mode 首次 unmount 后被 cleanup 设 false,
+	// re-mount 时 useRef 保留旧值 → 永久 false → drain probe 完成后所有
+	// `if (!mountedRef.current) return` 都 early return → sendMessage 永远调不到
+	// → 6 连发 0 POST。setup phase 显式 set true 保证 re-mount 后恢复。
+	useEffect(() => {
+		mountedRef.current = true;
+		return () => {
+			mountedRef.current = false;
+		};
+	}, []);
 
 	useEffect(() => {
 		activeRunRef.current = streaming;
@@ -413,6 +430,11 @@ function ChatBody({
 						body.data.status === "failed" ||
 						body.data.status === "cancelled")
 				) {
+					// QUI-182 follow-up (B'2): server pump 完成不代表 client 收齐 SSE chunks。
+					// rawStreaming === true 表示 useChat 还在消费 stream → 不要抢断 / sync /
+					// release,让 useChat 自己 onFinish 路径处理。watchdog 1.5s 后再 poll 时
+					// 浏览器流也应已 ready,此时再 sync + release 才安全。
+					if (rawStreaming) return;
 					await syncPersistedMessages(`server:${body.data.status}`);
 					if (cancelled) return;
 					releaseActiveRun(`server:${body.data.status}`);
@@ -659,15 +681,22 @@ function ChatBody({
 		// `/api/chat` 看到同 session 新 hash 时主动 evict 的窗口 →
 		// 用户表现为"刷屏后某些消息没回复"。
 		// 这里在 drain 前先确认服务端真的 terminal,才发新 POST,避免触发
-		// `evicted: user input changed`。
-		let cancelled = false;
+		// `evicted: user input changed`(老路径)/ 409 session_busy(D fix)。
+		//
+		// B'2 修复:不再用 cleanup-based cancelled flag。e2e 复现:user 快速 6 连发
+		// 时 enqueue 让 queuedSends deps 反复变化 → cleanup 反复设 cancelled=true
+		// → in-flight probe 永远在返回时被拦截 → drain 永远不执行 → 6 条全 QUEUED
+		// 0 POST。改用 mountedRef 只在组件真正 unmount 时拦截 setState/sendMessage,
+		// deps 变化不影响 in-flight probe。
+		// 同一时刻只有 1 个 probe 在跑(probingRef 守卫),user 新 enqueue 只追加
+		// 队尾,head 不变 → 不需要 CAS,probe 完成后 head 一定还是 next。
 		probingRef.current = true;
 		(async (): Promise<void> => {
 			try {
 				const res = await fetch(`/api/chat/status?session=${encodeURIComponent(sessionId)}`, {
 					cache: "no-store",
 				});
-				if (cancelled) return;
+				if (!mountedRef.current) return;
 				if (res.ok) {
 					const body = (await res.json()) as {
 						readonly ok: boolean;
@@ -676,7 +705,7 @@ function ChatBody({
 							readonly status: string | null;
 						};
 					};
-					if (cancelled) return;
+					if (!mountedRef.current) return;
 					if (body.ok && body.data?.exists && body.data.status === "running") {
 						// 还在 running,不 drain 这一轮。server watchdog 会继续
 						// poll,翻 serverTerminal 后通过 releaseActiveRun + bump
@@ -684,7 +713,7 @@ function ChatBody({
 						return;
 					}
 				}
-				if (cancelled) return;
+				// server terminal / not exists / 网络错误 → drain。
 				activeRunRef.current = true;
 				setQueuedSends((prev) => prev.slice(1));
 				forceScrollToBottom();
@@ -696,9 +725,6 @@ function ChatBody({
 				probingRef.current = false;
 			}
 		})();
-		return () => {
-			cancelled = true;
-		};
 		// `releaseTick` 列入依赖,让 releaseActiveRun() 触发的 ref 释放能立刻
 		// 重跑这条 drain effect,不依赖 React 异步同步 streaming state。
 	}, [
