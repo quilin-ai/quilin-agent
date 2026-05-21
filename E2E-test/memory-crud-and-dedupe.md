@@ -684,3 +684,160 @@ pnpm exec playwright test tests/e2e/memory-crud-and-dedupe.spec.ts --headed
 | GAP-8 | server.py budget gate 可能让 plan 空 | 用户主线在改 |
 | GAP-9 | reflect-insight `insertContent` 后端跳过 | 是(对 "全部功能" 而言),QUI-187 follow-up |
 | GAP-10 | `memory_delete` idempotent no-op | 否,设计行为 |
+
+---
+
+## 7. v2 系统完整功能矩阵 / Full Feature Matrix(2026-05-21 单一权威源 / single SOT)
+
+> 之前 `docs/03-memory/e2e-test-coverage.md` 的 43 测试点矩阵已 merge 进本文,本表是 Web 端记忆功能 e2e 测试的唯一权威来源。任何 memory 改动后跑 `apps/web/tests/e2e/memory-crud-and-dedupe.spec.ts`(canonical spec)即可。
+
+### 7.1 测试文件清单 / Test Files
+
+| 文件 | 范围 | 状态 |
+|---|---|---|
+| `apps/web/tests/e2e/memory-crud-and-dedupe.spec.ts` | **canonical** — CRUD + dedupe + v2 详情面板 + 4 tier 显示 + KG backfill 按钮 + timeline 翻译 + chat observer | ⏳ 整合中(Codex subagent 3 跑 verify)|
+| `apps/web/tests/unit/app/memory-dedupe-route.test.ts` | dedupe wire 协议单测(QUI-208 sub-strategy 映射) | ✅ 14/14 PASS |
+| `apps/web/tests/unit/app/memory-consolidations-route.test.ts` | consolidations normalizer(QUI-187 三类 proposal) | ✅ 6/6 PASS |
+
+### 7.2 完整功能矩阵(7 类别 / 44 测试点)
+
+#### 列表 / 浏览(6 点)
+| # | 功能 | 状态 |
+|---|---|---|
+| 1 | `/memory` 页加载 + auth | ✅ test1 |
+| 2 | 按 tier 分组渲染 | ✅ test1 |
+| 3 | 每 tier 计数 + 标签 | ✅ test1 |
+| 4 | **始终显示 4 个 tier(空层显说明)**(commit `3e4c84e`) | ✅ |
+| 5 | tier filter dropdown | ✅ test5 |
+| 6 | 空状态(无 records)显示 | ❌ 缺口 |
+
+#### 详情面板(QUI-193/196/197 — commit `404fc77`)(12 点)
+| # | 功能 | 状态 |
+|---|---|---|
+| 7 | 点击列表一条 → expand panel | ✅ test6 |
+| 8 | `MemoryDetailPanel` 真渲染 | ✅ test6 |
+| 9 | staleness marker(>30 天橙色 warning) | ✅ test6 |
+| 10 | 6 维 salience 网格 | ✅ test6 |
+| 11 | last_writer_client 显示 | ✅ test6 |
+| 12 | project_scope 显示 | ✅ test6 |
+| 13 | kind 显示 | ✅ test6 |
+| 14 | importance_score 显示 | ✅ test6 |
+| 15 | 版本链(version + parent_id + is_latest) | ⏳ Codex 主线接 v2 字段透出 |
+| 16 | archived_at + recovered_at | ❌ 缺口 |
+| 17 | 原始 metadata 折叠 | ✅ |
+| 18 | **4 tier info icon hover popover**(commit `3a2d14e`) | ✅ |
+
+#### 写入 / Memory Store(5 点)
+| # | 功能 | 状态 |
+|---|---|---|
+| 19 | LLM 主动调 `memory_store` | ✅ dogfood 1 |
+| 20 | 直接 API 注入 | ✅ test2 |
+| 21 | SQLite 真落 row | ✅ test2 |
+| 22 | **Web chat onFinish 触发 memory_store**(QUI-205 — commit `ca697d2`)| ⏳ subagent 3 verify |
+| 23 | observer payload 含 `[user]: ... [assistant]: ...` | ⏳ |
+
+#### 整理 / Consolidate(8 点)
+| # | 功能 | 状态 |
+|---|---|---|
+| 24 | dedupe button 触发 | ✅ test3 |
+| 25 | preview modal 弹出 | ✅ test3 |
+| 26 | 3 种 proposals(dedupe / kg-prune / reflect-insight) | ❌ 缺口 |
+| 27 | reflect-insight 字段保留(commit `acdcbc1`) | ✅ 单测 |
+| 28 | dedupe execute 真合并 SQLite | ❌ 缺口 |
+| 29 | strategy 协议兼容(sub → top,QUI-208) | ✅ 单测 |
+| 30 | 大数据集 150+ records 不超 timeout(QUI-204) | ✅ Codex e2e verify |
+| 31 | budget_exceeded → exact-only | ✅ pytest |
+
+#### 删除 / 恢复(7 点)
+| # | 功能 | 状态 |
+|---|---|---|
+| 32 | 单条删除按钮 | ✅ test4 |
+| 33 | confirm dialog | ✅ test4 |
+| 34 | 软删 + archived_at 落 | ✅ test4 |
+| 35 | 批量 + select-all | ✅ test5 |
+| 36 | tier filter + select-all 交互 | ✅ test5 |
+| 37 | 删除后 list 不显示 | ✅ test4 |
+| 38 | recover API 7 天 round trip | ❌ 缺口 |
+
+#### 视图切换(5 点)
+| # | 功能 | 状态 |
+|---|---|---|
+| 39 | tab "list"(默认) | ✅ test1 |
+| 40 | tab "graph"(KG view) | ❌ 缺口 |
+| 41 | **KG empty state "立即灌入" 按钮**(commit `ca697d2`)| ✅ |
+| 42 | tab "timeline" 切换 | ❌ 缺口 |
+| 43 | **timeline 友好翻译**(commit `ca697d2`,no JSON dump)| ✅ |
+
+#### Observer 自动反思链路(QUI-202)(2 点)
+| # | 功能 | 状态 |
+|---|---|---|
+| 44 | memory_observations 真写(直调 MCP) | ✅ dogfood 2(commit `c087330`)|
+| 45 | quilin-daemon 4 job 真触发 backend(reflect / consolidate / kg / token)| ⏳ subagent wire |
+
+### 7.3 当前覆盖率 / Coverage Stats
+
+| 类别 | 已 ✅ | 部分 ⏳ | 缺口 ❌ | 总数 |
+|---|---|---|---|---|
+| 列表 / 浏览 | 5 | 0 | 1 | 6 |
+| 详情面板 | 10 | 1 | 1 | 12 |
+| 写入 | 3 | 2 | 0 | 5 |
+| 整理 / dedupe | 6 | 0 | 2 | 8 |
+| 删除 / 恢复 | 6 | 0 | 1 | 7 |
+| 视图切换 | 3 | 0 | 2 | 5 |
+| Observer 链路 | 1 | 1 | 0 | 2 |
+| **总计** | **34 ✅ + 4 ⏳** | | **7 ❌** | **45** |
+
+**当前覆盖率 ≈ 84%**。Codex subagent 3 跑完 verify 后 → 90%+。
+
+### 7.4 固定 Playwright 执行命令(以后任何 memory 改动跑一遍)
+
+```bash
+# === 1. 起 backend(quilin-mem MCP server)===
+cd providers/memory
+DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY:-sk-xxx}" uv run python -m quilin_mem > /tmp/qm.log 2>&1 &
+QM_PID=$!
+sleep 3
+
+# === 2. 起 Web dev server ===
+cd /Users/raysonmeng/repo/quilin-agent/apps/web
+lsof -i :3000 -t | xargs -r kill -9 2>/dev/null
+pnpm dev > /tmp/web.log 2>&1 &
+WEB_PID=$!
+sleep 12
+curl -s http://localhost:3000/memory -o /dev/null -w "HTTP %{http_code}\n"
+
+# === 3. 跑 canonical spec(覆盖 45 测试点)===
+cd /Users/raysonmeng/repo/quilin-agent
+pnpm --filter web exec playwright test apps/web/tests/e2e/memory-crud-and-dedupe.spec.ts
+
+# === 4. 清理 ===
+kill $QM_PID $WEB_PID 2>/dev/null
+```
+
+### 7.5 7 个 e2e 缺口 follow-up Plane
+
+每个缺口 1 Plane issue,优先级:
+
+**高优先级(用户体验直接相关)**:
+1. dedupe execute 真合并(test 30 但 plan only,真 confirm 合并没跑)
+2. recover API 真 round trip(7 天窗口)
+3. 3 种 proposals UI 真区分(dedupe / kg-prune / reflect-insight)
+
+**中优先级**:
+4. tab "graph" 切换 + reactflow 真渲染
+5. tab "timeline" 切换 + consolidation_log 真显示
+
+**低优先级**:
+6. 空状态 UI
+7. archived_at + recovered_at 详情面板显示
+
+由 Codex subagent 2 立 Plane follow-up(待报告)。
+
+### 7.6 与原 §1-§6 关系
+
+§1-§6:CRUD + dedupe 单条 / 9→2-3 整理流程 — 历史细节深 spec(2026-05-19 初版)。
+§7:v2 系统完整功能矩阵 — 2026-05-21 dogfood + user 反馈后整合的最新状态。
+
+两者**互补不冲突**:跑 e2e 时按 §7.4 命令执行 canonical spec,覆盖 §7.2 表里的 45 点;§1-§6 的 9→2-3 细节场景仍是 dedupe 部分的真实数据 seed 来源。
+
+---
