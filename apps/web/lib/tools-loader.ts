@@ -119,6 +119,9 @@ declare global {
 				}) => Promise<readonly unknown[]>;
 				unregister: (serverId: string) => Promise<void>;
 				getAllTools: () => readonly unknown[];
+				getServerCallToolTransport?: (
+					serverId: string,
+				) => { callTool(name: string, args: Record<string, unknown>): Promise<string> } | undefined;
 		  }
 		| undefined;
 }
@@ -571,6 +574,17 @@ export async function getToolsCatalog(): Promise<ToolsCatalog> {
 		return cached;
 	}
 	return startToolsCatalogBuild();
+}
+
+/**
+ * Internal runtime hook for Web routes that need an MCP server's direct
+ * callTool transport without exposing internal-only tools to the LLM-visible
+ * catalog. Used by `/api/chat` for `memory_observe`.
+ */
+export function getMcpServerCallToolTransport(
+	serverId: string,
+): { callTool(name: string, args: Record<string, unknown>): Promise<string> } | undefined {
+	return globalThis.__quilin_mcp_registry__?.getServerCallToolTransport?.(serverId);
 }
 
 function startToolsCatalogBuild(): Promise<ToolsCatalog> {

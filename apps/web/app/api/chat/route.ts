@@ -63,7 +63,12 @@ import { makeAskUserQuestionTool } from "@/lib/tools/ask-user-question";
 import { makeNarrateAsideTool } from "@/lib/tools/narrate-aside";
 import { makeRequestApprovalTool } from "@/lib/tools/request-approval";
 import { wrapToolWithApproval } from "@/lib/tools/with-approval";
-import { getToolsCatalog, markToolCallDone, markToolCallInFlight } from "@/lib/tools-loader";
+import {
+	getMcpServerCallToolTransport,
+	getToolsCatalog,
+	markToolCallDone,
+	markToolCallInFlight,
+} from "@/lib/tools-loader";
 import {
 	intentRewriteSystemNote,
 	rewriteUserIntentText,
@@ -897,15 +902,11 @@ export async function POST(req: Request): Promise<Response> {
 		const narrateAsideTool = makeNarrateAsideTool({ sessionId, service });
 		const catalog = await getToolsCatalog();
 		const builtinTools = catalog.adapted;
-		// QUI-205 dogfood 2 fix(2026-05-21,iter 2):第一版尝试调 `memory_observe`,
-		// 但 e2e 实证发现该 tool 在 `INTERNAL_MCP_TOOL_NAMES`(packages/agent-core/
-		// src/tools/mcp-client.ts)被过滤掉,catalog.rawTools 永远找不到。这是
-		// 有意设计 — `memory_observe` 是 internal observer 用,LLM 不可见。
-		//
-		// Workaround:改用 `memory_store`(已 publicly expose)直接把 user 消息
-		// 存为 working tier 记忆 — 等效于 observer 写入路径的入口,记忆从
-		// Web 对话进 DB 后,后续 consolidator + reflector 链路照常触发升 tier。
-		// 失败 best-effort 不阻塞 chat。
+		const observeTransport = getMcpServerCallToolTransport("quilin-mem");
+		// `memory_observe` is intentionally filtered out of catalog.rawTools so
+		// the LLM cannot call it, but runtime code can still use the server's
+		// direct callTool transport. Keep memory_store as a fallback for older
+		// registries that do not expose that transport.
 		const observeTool = catalog.rawTools.find(
 			(t) => t.name === "quilin-mem/memory_store" || t.name === "quilin-mem__memory_store",
 		);
@@ -1004,36 +1005,52 @@ export async function POST(req: Request): Promise<Response> {
 					stopWhen: stepCountIs(15),
 					abortSignal,
 					onFinish: async (event: { text?: string }) => {
-						releaseToolCallSlot();
-						// QUI-205 dogfood 2 fix(iter 3):memory_store payload shape
-						// 是 `{content, tier}`。把 user 消息 + assistant 回复拼成
-						// observation 内容,存 working tier — 这是 catalog 暴露的
-						// 等效 observer 路径(memory_observe 被 INTERNAL filter)。
-						if (observeTool != null && lastUserMessageText.length > 0) {
-							try {
-								const assistantText = typeof event.text === "string" ? event.text : "";
-								const observation =
-									assistantText.length > 0
-										? `[user]: ${lastUserMessageText}\n[assistant]: ${assistantText}`
-										: `[user]: ${lastUserMessageText}`;
-								// QUI-205 iter 4 fix(Codex subagent 3 实证根因):
-								// last_writer_client/session_id 是 memory_store 顶层参数,
-								// 不是 metadata 嵌套字段(metadata validator 会拒绝 unknown
-								// keys → record 不写)。把它们提到顶层。
-								await observeTool.execute({
-									content: observation,
-									tier: "working",
-									last_writer_client: "web",
-									last_writer_session_id: sessionId,
-									metadata: {
-										schema_version: 1,
-										source: "web_chat_observer",
-									},
-								});
-							} catch {
-								// best-effort: swallow observer failures(Observer is never
-								// supposed to block chat,QUI-202 isolation 设计)
+						try {
+							// Prefer the true observer path so raw turns land in
+							// memory_observations; fallback keeps older registry
+							// builds storing a working-tier memory record.
+							if (
+								(observeTransport != null || observeTool != null) &&
+								lastUserMessageText.length > 0
+							) {
+								try {
+									const assistantText = typeof event.text === "string" ? event.text : "";
+									const observation =
+										assistantText.length > 0
+											? `[user]: ${lastUserMessageText}\n[assistant]: ${assistantText}`
+											: `[user]: ${lastUserMessageText}`;
+									if (observeTransport != null) {
+										await observeTransport.callTool("memory_observe", {
+											user_text: lastUserMessageText,
+											assistant_text: assistantText,
+											session_id: sessionId,
+											metadata: {
+												schema_version: 1,
+												source: "web_chat_observer",
+											},
+										});
+									} else if (observeTool != null) {
+										await observeTool.execute({
+											content: observation,
+											tier: "working",
+											last_writer_client: "web",
+											last_writer_session_id: sessionId,
+											metadata: {
+												schema_version: 1,
+												source: "web_chat_observer",
+											},
+										});
+									}
+								} catch {
+									// best-effort: swallow observer failures(Observer is never
+									// supposed to block chat,QUI-202 isolation 设计)
+								}
 							}
+						} finally {
+							// Keep the MCP in-flight guard held until the observer write
+							// finishes; otherwise a pending dev hot-reload can disconnect
+							// the captured memory_observe transport mid-onFinish.
+							releaseToolCallSlot();
 						}
 					},
 					onError: releaseToolCallSlot,

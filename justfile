@@ -132,6 +132,10 @@ web-test-coverage:
 web-e2e:
     pnpm --filter @quilin/web exec playwright test
 
+# 隔离真链路 memory e2e：临时 SQLite + 临时 MCP config + fake DeepSeek
+web-e2e-memory-live:
+    node apps/web/tests/e2e/run-live-memory-chain.mjs
+
 # 类型检查
 web-typecheck:
     pnpm --filter @quilin/web exec tsc --noEmit
