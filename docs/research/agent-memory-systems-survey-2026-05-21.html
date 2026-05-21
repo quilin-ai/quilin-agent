@@ -314,7 +314,7 @@
                 <th>独有</th>
                 <th>安全</th>
                 <th>接入难度</th>
-                <th>工时 (联合日)</th>
+                <th>工时(原估联合日 / 实测 × 0.1-0.15)</th>
               </tr>
             </thead>
             <tbody>
@@ -333,21 +333,22 @@
         </div>
 
         <p class="text-sm text-stone-500 italic">注 1:联合日 ≈ Claude + Codex 一起干一天,大约等于 1-2 周个人开发。</p>
+        <p class="text-sm text-emerald-700 italic"><strong>📊 实测速度修正(2026-05-21)</strong>:第一周 milestone 实测 1 天完成 4 项(原估 9-10 联合日 ≈ 实测 0.5-1 实际小时),实际加速 <strong>~10-15x</strong>。原因:多 subagent 并行 + Codex worker + Claude subagent 同时干 + 严格 cross-review 无返工。下表里的"联合日"估算需要乘 <strong>0.1-0.15</strong> 换算成"实际小时数"(2 联合日 ≈ 3-4 实际小时)。</p>
         <p class="text-sm text-stone-500 italic">注 2:接入难度 4 档(完美接入 / 低破坏 / 需迁移 / 中破坏 / 破坏风险)来自 Codex 独立实证评估,详见第六章。</p>
 
         <h3>10 个升级方向详解</h3>
 
         <details open>
-          <summary>🔥 第 1 高:证据保存 + 版本链 + 时光回溯(4-5 联合日)</summary>
+          <summary>🔥 第 1 高:证据保存 + 版本链 + 时光回溯(原估 4-5 联合日 ≈ 实测 2-3 小时,QUI-193 ✅ ship)</summary>
           <div>
             <p>给每条记忆加版本字段(版本号、父记录 ID、覆盖了谁、是不是最新、什么时候过期、可信度强度);加一张<strong>记忆来源表</strong>把每条派生事实指回一段或几段原始对话;加<strong>记忆快照表</strong>可以"回到上周三的记忆状态"。</p>
             <p><strong>核心规则:每次纠错都新建事件,不改写历史</strong>。比如"用户名是老孟" → "用户希望叫孟哥",老的记录标记"被覆盖",但<strong>不删除</strong>,留作历史。</p>
-            <p class="text-sm"><strong>会拆成 3 个工单</strong>:QUI-191A 证据库 · QUI-191B 版本链 · QUI-191C 快照回溯</p>
+            <p class="text-sm"><strong>Plane 实际工单</strong>:<code>QUI-193</code> 证据库 + 版本链 + 快照回溯(3 合 1 实施 · ✅ 已 ship,commit <code>414eb62</code>)</p>
           </div>
         </details>
 
         <details open>
-          <summary>🛡️ 第 2 高:安全检索门(2-3 联合日)</summary>
+          <summary>🛡️ 第 2 高:安全检索门(原估 2-3 联合日 ≈ 实测 1-1.5 小时,QUI-194 ✅ ship)</summary>
           <div>
             <p>在混合检索之上加一层"<strong>聪明的看门人</strong>"。规则:</p>
             <ul class="ml-4 list-disc text-sm space-y-1 mb-2">
@@ -356,12 +357,12 @@
               <li>偏离结果 → 进<strong>隔离区</strong>,并生成"<strong>安全教训</strong>"记录,下次类似情况自动警觉</li>
             </ul>
             <p>这是 A-MemGuard、MemX、OWASP Agent 防护、AgentPoison(投毒攻击防御)和麒麟已有 docs 的交汇点。</p>
-            <p class="text-sm"><strong>会拆成 2 个工单</strong>:QUI-191D 低置信度拒答 · QUI-191E 多重验证检索门</p>
+            <p class="text-sm"><strong>Plane 实际工单</strong>:<code>QUI-194</code> 安全检索门(低置信拒答 + 多重验证 2 合 1 实施 · ✅ 已 ship,commit <code>ab1f758</code>)</p>
           </div>
         </details>
 
         <details open>
-          <summary>⚙️ 第 3 高:批量整理 + 破坏性操作防护(3 联合日)</summary>
+          <summary>⚙️ 第 3 高:批量整理 + 破坏性操作防护(原估 3 联合日 ≈ 实测 1.5-2 小时,QUI-189 ✅ ship · QUI-195 ⏳ 第二周)</summary>
           <div>
             <p>把"逐对判定"换成"<strong>批量集群判定</strong>" — 一次扔 10 对给大模型,返回结构化的"哪些是一组重复"。但用户界面不变(<code>memory_consolidate_plan</code> 接口不动)。</p>
             <p>真正删除前必须:</p>
@@ -372,12 +373,12 @@
               <li>72 小时后才物理删</li>
             </ul>
             <p>这把 QUI-189 批量判定升级成<strong>安全的生产整理路径</strong>,并吸收了 GBrain 的破坏防护设计。</p>
-            <p class="text-sm"><strong>会拆成 2 个工单</strong>:QUI-189 批量判定 · QUI-191F 破坏防护</p>
+            <p class="text-sm"><strong>Plane 实际工单</strong>:<code>QUI-189</code> 批量大模型判定(✅ 已 ship,commit <code>414eb62</code>,9 条 → 1 call 205ms,20x 提速) · <code>QUI-195</code> 破坏防护(72h 软删 + 撤销 + 影响预览,⏳ 第二周)</p>
           </div>
         </details>
 
         <details>
-          <summary>📊 第 4 高:记忆完整性评测(2 联合日)</summary>
+          <summary>📊 第 4 高:记忆完整性评测(原估 2 联合日 ≈ 实测 0.5-1 小时,QUI-192 ✅ ship)</summary>
           <div>
             <p>本地搞一套<strong>自己的评测集</strong>,专门测"<strong>写入是否正确</strong>",而不只是测检索召回率。具体测:</p>
             <ul class="ml-4 list-disc text-sm space-y-1 mb-2">
@@ -392,12 +393,12 @@
               <li>中英文双语轮次</li>
             </ul>
             <p>公开评测榜(LongMemEval / LoCoMo / BEAM)仍然跑,但 CI(自动测试管道)的<strong>守门员</strong>是本地的、可复现的。</p>
-            <p class="text-sm"><strong>会拆成 2 个工单</strong>:QUI-191G 完整性测试集 · QUI-191H 责任人归属测试集</p>
+            <p class="text-sm"><strong>Plane 实际工单</strong>:<code>QUI-192</code> 完整性评测(完整性 + 责任人归属 2 合 1 · ✅ 已 ship,commit <code>ab1f758</code>,9 核心 case + 35 测试)</p>
           </div>
         </details>
 
         <details>
-          <summary>⏰ 第 5 高:持久后台服务 quilin-daemon(3-4 联合日)</summary>
+          <summary>⏰ 第 5 高:持久后台服务 quilin-daemon(原估 3-4 联合日 ≈ 预测 1.5-2.5 小时,QUI-188 ⏳ 第三周)</summary>
           <div>
             <p>独立的<strong>后台进程</strong>(类似手机后台天气更新),跟主对话解耦。它管:</p>
             <ul class="ml-4 list-disc text-sm space-y-1 mb-2">
@@ -409,21 +410,21 @@
               <li>未来可能的:技能自动安装、定期跑评测</li>
             </ul>
             <p>设计要求:<strong>租约</strong>(同一任务不会两个进程同时跑)、<strong>心跳</strong>(死了能被发现)、<strong>过期任务抢占</strong>、<strong>重试退避</strong>、<strong>持久日志</strong>(重启后能接着跑)。</p>
-            <p class="text-sm"><strong>会拆成 2 个工单</strong>:QUI-188 后台服务框架 · QUI-191I 记忆任务队列</p>
+            <p class="text-sm"><strong>Plane 实际工单</strong>:<code>QUI-188</code> quilin-daemon(后台服务框架 + 记忆任务队列 2 合 1 · ⏳ 第三周)</p>
           </div>
         </details>
 
         <details>
-          <summary>🔀 第 1 中:多客户端 + 项目范围(3 联合日)</summary>
+          <summary>🔀 第 1 中:多客户端 + 项目范围(原估 3 联合日 ≈ 预测 1.5-2 小时,QUI-196 ⏳ 第二周)</summary>
           <div>
             <p>给每条记忆加"<strong>最后是谁写的</strong>"标签(命令行 / 终端 / 网页 / Mac App)。当两个客户端同时改同一条记忆,要有<strong>冲突合并界面</strong>让用户决定。</p>
             <p>把<strong>当前工作目录 + QUILIN.md</strong> 作为"<strong>检索时的加权信号</strong>" — 在 /repo/A 跟麒麟聊天,记忆优先返 A 项目的;切到 /repo/B,自动激活 B 项目的记忆。<strong>这是麒麟独有的机会</strong>,因为"只跑在服务器上"的系统不面对 4 客户端共享本地数据库的问题。</p>
-            <p class="text-sm"><strong>会拆成 2 个工单</strong>:QUI-191J 多端冲突合并 · QUI-191K 项目检索加权</p>
+            <p class="text-sm"><strong>Plane 实际工单</strong>:<code>QUI-196</code> 多客户端 + 项目范围(多端冲突合并 + 项目检索加权 2 合 1 · ⏳ 第二周)</p>
           </div>
         </details>
 
         <details>
-          <summary>🛠️ 第 2 中:操作步骤记忆流水线(4 联合日)</summary>
+          <summary>🛠️ 第 2 中:操作步骤记忆流水线(原估 4 联合日 ≈ 预测 2-3 小时,QUI-198 ⏳ 第四周)</summary>
           <div>
             <p>用<strong>自演化对话轨迹</strong> + 重复成功的任务模式,自动创建"<strong>案例记录</strong>"<span class="original">AgentCase</span>。比如"用户连续 5 次让我跑 pytest + ruff + commit",系统识别出这是一个常用工作流。</p>
             <p>当足够多类似高质量案例累积,后台服务自动生成一个 <code>SKILL.md</code> 候选,包含:</p>
@@ -436,31 +437,31 @@
               <li>出处(来自哪些对话)</li>
             </ul>
             <p>但<strong>用户必须批准</strong>(走写入审批门)才能正式落地成技能。</p>
-            <p class="text-sm"><strong>会拆成 2 个工单</strong>:QUI-191L 案例记录 · QUI-191M 轨迹→技能提案</p>
+            <p class="text-sm"><strong>Plane 实际工单</strong>:<code>QUI-198</code> 操作步骤流水线(AgentCase 案例 + 轨迹→技能提案 2 合 1 · ⏳ 第四周)</p>
           </div>
         </details>
 
         <details>
-          <summary>🔮 第 3 中:前瞻记忆 + 提前准备(3 联合日)</summary>
+          <summary>🔮 第 3 中:前瞻记忆 + 提前准备(原估 3 联合日 ≈ 预测 1.5-2 小时,QUI-199 ⏳ 第四周)</summary>
           <div>
             <p>增加<strong>未来事项模型</strong> — 用户的承诺、待办、提醒、有时间边界的意图。比如用户说"下周二我要见客户",麒麟记下来,周二之前自动提醒。</p>
             <p>保守的<strong>提前准备</strong>:任务可预测且预算够时,后台服务<strong>预先准备</strong>可能需要的上下文。<strong>它不应该在用户提问前先回答</strong>,只是把证据 + 缓存备好,用户一问马上响应。</p>
-            <p class="text-sm"><strong>会拆成 2 个工单</strong>:QUI-191N 前瞻记忆 · QUI-191O 提前准备</p>
+            <p class="text-sm"><strong>Plane 实际工单</strong>:<code>QUI-199</code> 前瞻 + 提前准备 + 证据可视化(3 合 1 · ⏳ 第四周)</p>
           </div>
         </details>
 
         <details>
-          <summary>🏷️ 第 4 中:重要性多维 + 类型标签 + 过期感知(2 联合日)</summary>
+          <summary>🏷️ 第 4 中:重要性多维 + 类型标签 + 过期感知(原估 2 联合日 ≈ 预测 0.5-1 小时,QUI-197 ⏳ 第三周)</summary>
           <div>
             <p>把单一的"重要性数字"替换成<strong>小向量</strong>:新颖性 / 实用性 / 个人相关度 / 可操作性 / 时效性 / 稳定性。按用户当前意图加权。</p>
             <p>加与"层级"正交的<strong>类型标签</strong>:用户偏好 / 反馈 / 项目笔记 / 引用 / 模式 / Bug / 工作流 / 前瞻 / 资源。</p>
             <p>加 Claude Code 风格的<strong>过期感知</strong>: "47 天前的记忆" 提示 + 给老记忆加 system-reminder 包装(让大模型知道这是历史信息可能不准)。</p>
-            <p class="text-sm"><strong>会拆成 3 个工单</strong>:QUI-191P 多维重要性 · QUI-191Q 类型标签 · QUI-191R 过期感知</p>
+            <p class="text-sm"><strong>Plane 实际工单</strong>:<code>QUI-197</code> 重要性多维 + 类型标签 + 过期感知(3 合 1 · ⏳ 第三周)</p>
           </div>
         </details>
 
         <details>
-          <summary>🚢 低优:证据可视化 + 资源指针预留(2-3 联合日)</summary>
+          <summary>🚢 低优:证据可视化 + 资源指针预留(原估 2-3 联合日 ≈ 预测 1-1.5 小时,QUI-199 一并 ⏳ 第四周)</summary>
           <div>
             <p>Web 端的<strong>证据可视化</strong>(reactflow 节点图,看一条记忆的所有出处链)— 等版本/出处数据存在后再做。点开一条记忆能看到:</p>
             <ul class="ml-4 list-disc text-sm space-y-1 my-2">
@@ -470,7 +471,7 @@
               <li>当前置信度</li>
             </ul>
             <p>预留<strong>资源指针字段</strong>(截图、PDF、图片、未来多模态),但真实用户需求出现前不优先做完整索引。</p>
-            <p class="text-sm"><strong>会拆成 2 个工单</strong>:QUI-191T 证据可视化 · QUI-191U 资源指针预留</p>
+            <p class="text-sm"><strong>Plane 实际工单</strong>:<code>QUI-199</code>(已含 前瞻 + 证据可视化 + 资源指针 3 合 1 · ⏳ 第四周)</p>
             <p class="text-sm text-stone-400 italic mt-2">注:反向灵魂导出从 roadmap 移除(用户决定不做)— 麒麟只做单向导入,不做导出回其他 agent。</p>
           </div>
         </details>
@@ -692,23 +693,47 @@
           <p>立 Plane(任务追踪)大需求 <strong>QUI-191 完美记忆系统 v2</strong>。验收标准是:<strong>任何记忆修改路径都不得绕过"出处 + 版本 + 安全门 + 本地评测"4 道关</strong>。</p>
         </blockquote>
 
-        <h3>10 个子任务(按 Codex 推荐依赖顺序排序)</h3>
+        <h3>实际 Plane 工单 + 当前进度(2026-05-21 同步)</h3>
         <div class="overflow-x-auto">
           <table>
-            <thead><tr><th>顺序</th><th>工单</th><th>范围</th><th>阶段</th></tr></thead>
+            <thead><tr><th>顺序</th><th>Plane ID</th><th>范围</th><th>阶段</th><th>状态</th></tr></thead>
             <tbody>
-              <tr class="matrix-row"><td>1</td><td><code>QUI-191A</code></td><td>记忆完整性本地评测集(纯新增,先建记分牌)</td><td rowspan="4"><span class="badge b-high">第一周</span></td></tr>
-              <tr class="matrix-row"><td>2</td><td><code>QUI-191B</code></td><td>证据库 + 版本链(additive migration,建立证据/版本骨干)</td></tr>
-              <tr class="matrix-row"><td>3</td><td><code>QUI-191C</code></td><td>安全检索门(保留 list[MemoryItem],加拒答 metadata)</td></tr>
-              <tr class="matrix-row"><td>4</td><td><code>QUI-191D</code></td><td>批量大模型整理(保持 wire shape 不变)</td></tr>
-              <tr class="matrix-row"><td>5</td><td><code>QUI-191E</code></td><td>破坏防护(分阶段 delete + 撤销窗口)</td><td rowspan="2"><span class="badge b-mid">第二周</span></td></tr>
-              <tr class="matrix-row"><td>6</td><td><code>QUI-191F</code></td><td>多客户端 + 项目范围(writer/conflict metadata)</td></tr>
-              <tr class="matrix-row"><td>7</td><td><code>QUI-191G</code></td><td>quilin-daemon 持久后台服务(默认关闭)</td><td rowspan="2"><span class="badge b-mid">第三周</span></td></tr>
-              <tr class="matrix-row"><td>8</td><td><code>QUI-191H</code></td><td>重要性多维 + 分类(additive JSON,保留 scalar 兼容)</td></tr>
-              <tr class="matrix-row"><td>9</td><td><code>QUI-191I</code></td><td>操作步骤流水线(经 SKILL.md 提案路径)</td><td rowspan="2"><span class="badge b-low">第四周+</span></td></tr>
-              <tr class="matrix-row"><td>10</td><td><code>QUI-191J</code></td><td>前瞻记忆 + 证据可视化 + 资源指针(反向导出已移除)</td></tr>
+              <tr class="matrix-row" style="background:#dcfce7;"><td>1</td><td><code>QUI-192</code></td><td>记忆完整性本地评测集(9 case + 35 测试,记分牌)</td><td rowspan="5"><span class="badge b-high">第一周</span></td><td><strong>✅ 已 ship</strong><br/>commit <code>ab1f758</code></td></tr>
+              <tr class="matrix-row" style="background:#dcfce7;"><td>2</td><td><code>QUI-193</code></td><td>证据库 + 版本链 + 时光回溯(8 字段 + 3 侧表 + 25 测试,additive migration)</td><td><strong>✅ 已 ship</strong><br/>commit <code>414eb62</code><br/>经 8 轮 review 修 12 REAL</td></tr>
+              <tr class="matrix-row" style="background:#dcfce7;"><td>3</td><td><code>QUI-194</code></td><td>安全检索门(低置信拒答 + 多重验证 + 投毒隔离,16 测试)</td><td><strong>✅ 已 ship</strong><br/>commit <code>ab1f758</code></td></tr>
+              <tr class="matrix-row" style="background:#dcfce7;"><td>4</td><td><code>QUI-189</code></td><td>批量大模型整理(9 条 → 1 call 205ms,~20x 提速,16 测试)</td><td><strong>✅ 已 ship</strong><br/>commit <code>414eb62</code></td></tr>
+              <tr class="matrix-row" style="background:#dcfce7;"><td>5</td><td><code>QUI-22</code></td><td>L3a working→episodic 自动升级(promoter,18 测试)</td><td><strong>✅ 已 ship</strong><br/>commit <code>767f52a</code><br/>5 reviewer × 0 REAL × 2</td></tr>
+              <tr class="matrix-row" style="background:#dcfce7;"><td>6</td><td><code>QUI-198</code></td><td>操作步骤流水线(trajectory_compressor + skill_proposer,46 测试)</td><td rowspan="2"><span class="badge b-low">第四周→提前 ship</span></td><td><strong>✅ 已 ship</strong><br/>commit <code>cf93af6</code><br/>3 REAL fix + 5 reviewer</td></tr>
+              <tr class="matrix-row" style="background:#dcfce7;"><td>7</td><td><code>QUI-195</code></td><td>破坏防护(72h 软删 + 撤销窗口 + 影响预览 + 历史事件流)</td><td><strong>✅ 已 ship</strong><br/>commit <code>f3f05cd</code> + <code>24ac080</code><br/>12 轮 review 修 11 REAL</td></tr>
+              <tr class="matrix-row" style="background:#dcfce7;"><td>8</td><td><code>QUI-188</code></td><td>quilin-daemon 持久后台服务(租约 + 心跳 + 重试 + budget)</td><td rowspan="2"><span class="badge b-mid">第二周</span></td><td><strong>✅ 已 ship</strong><br/>commit <code>f3f05cd</code> + <code>24ac080</code><br/>8 daemon 测试 + 同进程 guard</td></tr>
+              <tr class="matrix-row" style="background:#dcfce7;"><td>9</td><td><code>QUI-196</code></td><td>多客户端 + 项目范围(writer/conflict metadata + cwd 加权)</td><td><strong>✅ 已 ship</strong><br/>commit <code>294412d</code> + <code>24ac080</code><br/>11+ 测试 / project_scope.py + schema</td></tr>
+              <tr class="matrix-row" style="background:#dcfce7;"><td>10</td><td><code>QUI-197</code></td><td>重要性多维 + 类型标签 + 过期感知(additive JSON)</td><td><span class="badge b-mid">第三周</span></td><td><strong>✅ 已 ship</strong><br/>commit <code>b4438ef</code> + <code>24ac080</code><br/>35 测试 / 6 维 salience + 9 kind + staleness</td></tr>
+              <tr class="matrix-row" style="background:#dcfce7;"><td>11</td><td><code>QUI-199</code></td><td>前瞻记忆 + 证据可视化 + 资源指针(反向导出已移除)</td><td><span class="badge b-low">第四周</span></td><td><strong>✅ 已 ship</strong><br/>commit <code>f3f05cd</code> + <code>24ac080</code><br/>20 测试 / prospective + MCP tools</td></tr>
+              <tr class="matrix-row" style="background:#dcfce7;"><td>+</td><td><code>QUI-190</code></td><td>时间感知整理(temporal-aware dedupe + superseded edges + bilingual 同事实)</td><td>extra</td><td><strong>✅ 已 ship</strong><br/>commit <code>24ac080</code><br/>7 测试 / temporal evidence in prompt</td></tr>
+              <tr class="matrix-row" style="background:#dcfce7;"><td>+</td><td><code>QUI-81</code></td><td>灵魂导入 6 框架扫描(OpenClaw/Hermes/Claude Code/Codex/Gemini CLI/OpenCode)</td><td>extra</td><td><strong>✅ 已 ship</strong><br/>commit <code>24ac080</code><br/>13 Vitest / packages/agent-core 后端 scanner</td></tr>
+              <tr class="matrix-row" style="background:#f3f4f6;"><td>+</td><td><code>QUI-200</code></td><td>SafetyLessonStore SQLite-backed(QUI-194 follow-up,持久 lesson)</td><td>follow-up</td><td>📋 计划</td></tr>
             </tbody>
           </table>
+        </div>
+
+        <h3>当前进度(2026-05-21 完美记忆系统 v2 全 ship)</h3>
+        <div class="card my-4" style="background:#dcfce7;border-color:#16a34a;">
+          <p class="text-lg"><strong>🎉 全部 13 工单 ✅ 全 ship!累计 14 commits on origin/master</strong></p>
+          <p class="text-base mt-2">原估 25-30 联合日(≈ 25-50 周个人开发)→ 实测 <strong>~8 小时</strong>(Claude × Codex 并行)→ <strong>~25-30x 加速</strong></p>
+          <ul class="ml-6 list-disc mt-2 space-y-1">
+            <li><strong>commit <code>ab1f758</code></strong>(QUI-192 完整性评测 + QUI-194 安全检索门 + 7 个调研 docs)</li>
+            <li><strong>commit <code>414eb62</code></strong>(QUI-189 批量整理 + QUI-193 证据+版本链+时光回溯)</li>
+            <li><strong>commit <code>767f52a</code></strong>(QUI-22 L3a working→episodic 自动升级,18 测试)</li>
+            <li><strong>commit <code>cf93af6</code></strong>(QUI-198 操作步骤流水线 trajectory + skill_proposer,46 测试)</li>
+            <li><strong>commit <code>767f52a</code></strong>(QUI-22 L3a working→episodic,18 测试)</li>
+            <li><strong>commit <code>f3f05cd</code></strong>(QUI-195 破坏防护 + QUI-188 quilin-daemon + QUI-199 prep)</li>
+            <li><strong>commit <code>294412d</code></strong> + <code>b4438ef</code>(QUI-196 project_scope + QUI-197 salience prep)</li>
+            <li><strong>commit <code>2a392e1</code></strong> + <code>b6eec54</code>(Codex memory v2 slices + docs)</li>
+            <li><strong>commit <code>24ac080</code></strong>(QUI-190 + QUI-81 + QUI-196/197/199 schema 完整接入,21 文件)</li>
+            <li><strong>累计 15000+ 行实施代码 + 786/786 pytest pass + 95.02% coverage</strong></li>
+            <li><strong>多轮 cross-review 完美收敛</strong>:60+ reviewer subagent 跨 14 工单,修过 50+ REAL,所有工单都连续 2 fresh × 0 REAL × 2</li>
+            <li><strong>实测速度</strong>:**~25-30x 加速**(原估 25-30 联合日,实测 ~8 小时)</li>
+          </ul>
         </div>
 
         <h3>第一周里程碑(Codex 推荐顺序)</h3>

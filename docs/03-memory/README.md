@@ -2,7 +2,7 @@
 
 > **2026-05-21 v2 落地进度 / Perfect Memory System v2 Shipping Progress**
 >
-> **第一周 milestone 5/5 ✅ 全 ship + 第二周后端批次 ✅ 本地收敛并提交**
+> **第一周 milestone 5/5 ✅ 全 ship + 第二周后端批次 ✅ 已提交**
 >
 > | Commit | 工单 | 范围 |
 > |---|---|---|
@@ -14,22 +14,20 @@
 > | `953fb7b` | docs/STATUS | 落地进度同步 |
 > | `b5b0f08` | QUI-196/197/199 spec | 主线预写 implementation spec |
 > | `2a392e1` | QUI-195 + QUI-188 + support slices | 破坏防护 + daemon + promotion/salience/prospective/trajectory support fixes |
+> | `24ac080` | QUI-196 + QUI-197 + QUI-199 + QUI-200 + QUI-190 + QUI-81 | 多客户端范围、salience 检索、前瞻后端、SQLite SafetyLessonStore、temporal dedupe、Soul Import 6 框架 scanner |
 >
-> **累计:8 commit / 12700+ 行 / 95%+ coverage / 40+ reviewer subagent / 29+ REAL fix**
+> **累计:9 commit / 17000+ 行 / 95%+ coverage / 50+ reviewer subagent / 35+ REAL fix**
 >
 > **最新已提交 / Latest committed**:
 > - ✅ QUI-195 破坏防护:full `providers/memory` `723 passed`, coverage `95.21%`, ruff pass, targeted mypy pass, 2 fresh reviewer `0 REAL / 0 SUSPECT`
 > - ✅ QUI-188 quilin-daemon:job registry / lease / heartbeat / retry / responsive shutdown 后端已并入
 > - ✅ QUI-22 follow-up:promotion commit 原子化,防并发 double-promote,rollback 清 FTS orphan
-> - ✅ QUI-197/198/199 support slices:structured fields 保留、strict JSON、prospective/resource metadata、trajectory feedback 修正
+> - ✅ QUI-196/197/199/200/190/81 后端批次:commit `24ac080`, full `providers/memory` `786 passed`, coverage `95.02%`, ruff pass, TS focused `77 passed`, biome scanner check pass, final 2 fresh reviewer `0 REAL / 0 SUSPECT`
 >
-> **当前并行中 / In parallel now**:
-> - ⏳ QUI-196 多客户端 + 项目范围
-> - ⏳ QUI-197 重要性多维检索集成
-> - ⏳ QUI-199 前瞻记忆 scheduler/resource 后端
-> - ⏳ QUI-200 SafetyLessonStore SQLite-backed
-> - ⏳ QUI-190 temporal-aware dedupe
-> - ⏳ QUI-81 灵魂导入 6 框架 scan
+> **当前剩余 / Remaining now**:
+> - ⏳ Plane 状态同步:本 session 无 Plane MCP tool,需由有 Plane 工具的 agent 按 commit `24ac080` 更新 QUI-196 / QUI-197 / QUI-199 / QUI-200 / QUI-190 / QUI-81
+> - ⏳ Unrelated TS blocker:`packages/agent-core/src/index.ts` + `packages/agent-core/src/control-plane/v2/adapter.ts` 脏改导致 `tsc --noEmit` 失败,未纳入 `24ac080`
+> - ⏳ Web/UI follow-up:QUI-199 Evidence Graph 可视化、QUI-196 冲突合并 UI、QUI-81 install-time trigger UI
 >
 > **实测速度**:第一周 5/5 milestone 6 小时完成(原估 9-10 联合日,~10-15x 加速)。
 > 加速来源:Claude × Codex 双主线 + 2-4 subagent 并行 + 严格 cross-review 无返工。
