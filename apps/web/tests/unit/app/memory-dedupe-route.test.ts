@@ -283,8 +283,22 @@ describe("POST /api/memory/dedupe — Consolidator wire", () => {
 			isError: false,
 		}));
 		mockCatalog.rawTools = [{ name: "quilin-mem/memory_consolidate_plan", execute: planExecute }];
+		// QUI-208 dogfood fix(2026-05-21):dedupe sub-strategy
+		// (`exact|embedding|llm`)是历史前端值,后端 memory_consolidate_plan
+		// 只认 top-level(`dedupe|reflect|kg-prune|all`)。route.ts 加兼容
+		// 映射:sub-strategy → 隐含 `dedupe`,避免 backend 返 502。
 		await POST(buildPostRequest({ execute: false, tier: "semantic", strategy: "embedding" }));
-		expect(planExecute).toHaveBeenCalledWith({ tier: "semantic", strategy: "embedding" });
+		expect(planExecute).toHaveBeenCalledWith({ tier: "semantic", strategy: "dedupe" });
+	});
+
+	it("passes through top-level ConsolidationStrategy verbatim", async () => {
+		const planExecute = vi.fn(async () => ({
+			content: JSON.stringify({ proposals: [], totalDelete: 0, totalKeep: 0, totalInsert: 0 }),
+			isError: false,
+		}));
+		mockCatalog.rawTools = [{ name: "quilin-mem/memory_consolidate_plan", execute: planExecute }];
+		await POST(buildPostRequest({ execute: false, tier: "semantic", strategy: "reflect" }));
+		expect(planExecute).toHaveBeenCalledWith({ tier: "semantic", strategy: "reflect" });
 	});
 });
 

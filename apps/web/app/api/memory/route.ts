@@ -38,6 +38,19 @@ export interface MemoryRecord {
 	readonly layer: string | null;
 	readonly createdAt: string | null;
 	readonly metadata: Record<string, unknown> | null;
+	// v2 字段(QUI-193/196/197 ship 后真有值)— UI 详情面板用
+	readonly version: number | null;
+	readonly parentId: string | null;
+	readonly isLatest: boolean | null;
+	readonly supersedesJson: Record<string, unknown> | null;
+	readonly lastWriterClient: string | null;
+	readonly lastWriterSessionId: string | null;
+	readonly projectScope: string | null;
+	readonly salience: Record<string, unknown> | null;
+	readonly kind: string | null;
+	readonly importanceScore: number | null;
+	readonly archivedAt: string | null;
+	readonly recoveredAt: string | null;
 }
 
 function pickString(obj: Record<string, unknown>, key: string): string | null {
@@ -87,7 +100,42 @@ function pickRecord(value: unknown, indexHint: number): MemoryRecord | null {
 		metadataValue != null && typeof metadataValue === "object"
 			? (metadataValue as Record<string, unknown>)
 			: null;
-	return { id, content, tier, layer, createdAt, metadata };
+	// v2 字段提取(QUI-193/196/197 — UI 详情面板用)
+	const pickNumber = (key: string): number | null => {
+		const v = obj[key];
+		return typeof v === "number" && Number.isFinite(v) ? v : null;
+	};
+	const pickBool = (key: string): boolean | null => {
+		const v = obj[key];
+		return typeof v === "boolean" ? v : null;
+	};
+	const pickObject = (key: string): Record<string, unknown> | null => {
+		const v = obj[key];
+		return v != null && typeof v === "object" && !Array.isArray(v)
+			? (v as Record<string, unknown>)
+			: null;
+	};
+	return {
+		id,
+		content,
+		tier,
+		layer,
+		createdAt,
+		metadata,
+		version: pickNumber("version"),
+		parentId: pickString(obj, "parent_id") ?? pickString(obj, "parentId"),
+		isLatest: pickBool("is_latest") ?? pickBool("isLatest"),
+		supersedesJson: pickObject("supersedes_json") ?? pickObject("supersedesJson"),
+		lastWriterClient: pickString(obj, "last_writer_client") ?? pickString(obj, "lastWriterClient"),
+		lastWriterSessionId:
+			pickString(obj, "last_writer_session_id") ?? pickString(obj, "lastWriterSessionId"),
+		projectScope: pickString(obj, "project_scope") ?? pickString(obj, "projectScope"),
+		salience: pickObject("salience") ?? pickObject("salience_json"),
+		kind: pickString(obj, "kind"),
+		importanceScore: pickNumber("importance_score") ?? pickNumber("importanceScore"),
+		archivedAt: pickString(obj, "archived_at") ?? pickString(obj, "archivedAt"),
+		recoveredAt: pickString(obj, "recovered_at") ?? pickString(obj, "recoveredAt"),
+	};
 }
 
 function parseToolOutput(content: string): readonly MemoryRecord[] {

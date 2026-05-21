@@ -15,6 +15,19 @@ interface MemoryRecord {
 	readonly layer: string | null;
 	readonly createdAt: string | null;
 	readonly metadata: Record<string, unknown> | null;
+	// v2 字段(QUI-193/196/197 ship)— 详情面板渲染
+	readonly version?: number | null;
+	readonly parentId?: string | null;
+	readonly isLatest?: boolean | null;
+	readonly supersedesJson?: Record<string, unknown> | null;
+	readonly lastWriterClient?: string | null;
+	readonly lastWriterSessionId?: string | null;
+	readonly projectScope?: string | null;
+	readonly salience?: Record<string, unknown> | null;
+	readonly kind?: string | null;
+	readonly importanceScore?: number | null;
+	readonly archivedAt?: string | null;
+	readonly recoveredAt?: string | null;
 }
 
 interface MemoryResponse {
@@ -752,23 +765,7 @@ export default function MemoryPage() {
 														>
 															{formatTimestamp(record.createdAt)} · id={record.id.slice(0, 8)}
 														</div>
-														{expanded && record.metadata != null ? (
-															<pre
-																style={{
-																	marginTop: 8,
-																	padding: "6px 8px",
-																	border: "1px solid var(--border)",
-																	fontFamily: '"JetBrains Mono", monospace',
-																	fontSize: 10,
-																	color: "var(--fg-muted)",
-																	lineHeight: 1.5,
-																	whiteSpace: "pre-wrap",
-																	wordBreak: "break-word",
-																}}
-															>
-																{JSON.stringify(record.metadata, null, 2)}
-															</pre>
-														) : null}
+														{expanded ? <MemoryDetailPanel record={record} /> : null}
 													</button>
 												</div>
 											);
@@ -1149,4 +1146,187 @@ function ConsolidatePreviewModal({
 			</div>
 		</div>
 	);
+}
+
+/**
+ * 详情面板:展开一条记忆时,把 v2 字段(QUI-193 supersede 链 / QUI-196
+ * last_writer_client / QUI-197 salience + kind + staleness)按字段渲染,
+ * 不是把 metadata JSON 整团 dump。让用户能直观看到 v2 的语义维度。
+ */
+interface MemoryDetailPanelProps {
+	readonly record: MemoryRecord;
+}
+
+function MemoryDetailPanel({ record }: MemoryDetailPanelProps): React.ReactElement {
+	const stalenessDays = computeStalenessDays(record.createdAt);
+	const stalenessMarker = stalenessDays != null && stalenessDays >= 30;
+	return (
+		<div
+			data-testid={`memory-detail-${record.id}`}
+			style={{
+				marginTop: 8,
+				padding: "10px 12px",
+				border: "1px solid var(--border)",
+				background: "var(--bg)",
+				fontSize: 11,
+				color: "var(--fg)",
+				lineHeight: 1.6,
+				display: "grid",
+				gap: 6,
+			}}
+		>
+			{stalenessMarker ? (
+				<div
+					data-testid="memory-detail-staleness"
+					style={{
+						padding: "4px 8px",
+						background: "rgba(255, 165, 0, 0.1)",
+						border: "1px solid rgba(255, 165, 0, 0.3)",
+						color: "var(--accent-orange, #d97706)",
+						fontSize: 10,
+					}}
+				>
+					⚠️ 这条记忆是 <strong>{stalenessDays} 天前</strong> 的(staleness marker · 历史可能已变化)
+				</div>
+			) : null}
+
+			<DetailRow label="ID" value={record.id} mono />
+			<DetailRow label="层级 / tier" value={record.tier} />
+			{record.kind != null ? <DetailRow label="类型 / kind" value={record.kind} /> : null}
+			{record.importanceScore != null ? (
+				<DetailRow label="重要性 / importance" value={record.importanceScore.toFixed(3)} />
+			) : null}
+
+			{record.version != null && record.version > 1 ? (
+				<DetailRow
+					label="版本 / version"
+					value={`v${record.version}${record.isLatest === false ? "(已被覆盖)" : "(最新)"}`}
+				/>
+			) : null}
+			{record.parentId != null ? (
+				<DetailRow label="父版本 / parent_id" value={record.parentId.slice(0, 16)} mono />
+			) : null}
+
+			{record.lastWriterClient != null ? (
+				<DetailRow label="最后写入端 / writer" value={record.lastWriterClient} />
+			) : null}
+			{record.projectScope != null ? (
+				<DetailRow label="项目范围 / project_scope" value={record.projectScope} mono />
+			) : null}
+
+			{record.salience != null && Object.keys(record.salience).length > 0 ? (
+				<div data-testid="memory-detail-salience">
+					<div
+						style={{
+							marginBottom: 4,
+							fontSize: 10,
+							color: "var(--fg-muted)",
+							fontWeight: 600,
+						}}
+					>
+						6 维显著度 / salience(按 intent 加权)
+					</div>
+					<div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
+						{Object.entries(record.salience).map(([dim, raw]) => {
+							const val = typeof raw === "number" ? raw : Number.parseFloat(String(raw));
+							const display = Number.isFinite(val) ? val.toFixed(2) : "—";
+							return (
+								<div
+									key={dim}
+									style={{
+										fontSize: 10,
+										color: "var(--fg-muted)",
+										fontFamily: '"JetBrains Mono", monospace',
+									}}
+								>
+									{dim}: <strong style={{ color: "var(--fg)" }}>{display}</strong>
+								</div>
+							);
+						})}
+					</div>
+				</div>
+			) : null}
+
+			{record.archivedAt != null ? (
+				<DetailRow
+					label="归档时间 / archived_at"
+					value={`${formatTimestamp(record.archivedAt)}${
+						record.recoveredAt != null ? ` · 已恢复 ${formatTimestamp(record.recoveredAt)}` : ""
+					}`}
+				/>
+			) : null}
+
+			{record.metadata != null && Object.keys(record.metadata).length > 0 ? (
+				<details style={{ marginTop: 4 }}>
+					<summary
+						style={{
+							cursor: "pointer",
+							color: "var(--fg-muted)",
+							fontSize: 10,
+						}}
+					>
+						原始 metadata(raw JSON)
+					</summary>
+					<pre
+						style={{
+							marginTop: 4,
+							padding: "6px 8px",
+							border: "1px solid var(--border)",
+							fontFamily: '"JetBrains Mono", monospace',
+							fontSize: 10,
+							color: "var(--fg-muted)",
+							lineHeight: 1.5,
+							whiteSpace: "pre-wrap",
+							wordBreak: "break-word",
+						}}
+					>
+						{JSON.stringify(record.metadata, null, 2)}
+					</pre>
+				</details>
+			) : null}
+		</div>
+	);
+}
+
+interface DetailRowProps {
+	readonly label: string;
+	readonly value: string;
+	readonly mono?: boolean;
+}
+
+function DetailRow({ label, value, mono = false }: DetailRowProps): React.ReactElement {
+	return (
+		<div style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
+			<span
+				style={{
+					minWidth: 140,
+					color: "var(--fg-muted)",
+					fontSize: 10,
+				}}
+			>
+				{label}
+			</span>
+			<span
+				style={{
+					color: "var(--fg)",
+					fontSize: 11,
+					fontFamily: mono ? '"JetBrains Mono", monospace' : undefined,
+				}}
+			>
+				{value}
+			</span>
+		</div>
+	);
+}
+
+function computeStalenessDays(createdAt: string | null): number | null {
+	if (createdAt == null) return null;
+	try {
+		const created = new Date(createdAt).getTime();
+		if (!Number.isFinite(created)) return null;
+		const now = Date.now();
+		return Math.floor((now - created) / (1000 * 60 * 60 * 24));
+	} catch {
+		return null;
+	}
 }
