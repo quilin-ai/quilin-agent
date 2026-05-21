@@ -6,6 +6,52 @@ This file is the only global progress entry point under `docs/`. Component-level
 
 本文件是 `docs/` 下唯一的全局进度入口。组件级当前事实写在各 `docs/<component>/README.md`。历史快照通过 git history 追溯。任务管理与 backlog 统一迁移到 Plane；本文件只保留当前状态快照。
 
+## 2026-05-21 完美记忆系统 v2 — 100% 收口 / Final Closure
+
+完美记忆系统 v2 **audit 11/11 gap 全 ship**,**累计 41 commits ship on master**,
+**canonical Playwright spec 12/12 PASS**,**843 pytest + 52 vitest 全过**。
+
+### audit 11 gap 全完成 / All 11 audit gaps closed
+
+🔴 P0(影响 v2 完整性):
+- ✅ #1 QUI-205 Web chat → memory_observe(commit `ca697d2` → `2da6502` payload shape fix)
+- ✅ #2 KGBackfillJob daemon real wire(commit `71e00d5`)
+- ✅ #3 TokenBudgetMonitorJob real wire(commit `71e00d5`)
+
+🟡 P1(UX 收尾):
+- ✅ #4 QUI-198 SKILL.md 落盘 wire(commit `0f8bd74`)
+- ✅ #5 QUI-197 staleness LLM prompt wrap(commit `e22bdf6`)
+- ✅ #6 QUI-199 Web Evidence Graph viz(commit `0f8bd74`)
+- ✅ #7 QUI-196 Web 冲突合并 UI(commit `e22bdf6`)
+- ✅ #8 QUI-81 Soul Import install-time wizard(commit `e22bdf6`)
+
+🟢 P2(调研承诺):
+- ✅ #9 Predictive warmer(commit `e22bdf6`)
+- ✅ #10 DepartureContext writer(commit `e22bdf6`)
+- ✅ #11 SafetyLesson 自动学习(commit `e22bdf6`)
+
+### Playwright canonical spec / Single SOT e2e
+
+`E2E-test/memory-crud-and-dedupe.md` + `apps/web/tests/e2e/memory-crud-and-dedupe.spec.ts`:
+- **12/12 PASS in 6.1s**
+- 45 测试点覆盖矩阵 84% → 90%+
+- 固定 Playwright 命令(以后任何 memory 改动跑一遍即可)
+
+### v2 ship 时间总览
+
+- Day 1(2026-05-20 → 22:25):13 主工单 + 6 commits
+- Day 1 夜:dogfood + 4 bug fix + 7 commits
+- Day 2(2026-05-21 早):QUI-202 Observer 接通 + e2e + 7 commits
+- Day 2 中:user 醒后 4 UX bug + tier viz + daemon + 9 commits
+- Day 2 下午:6 agent 并行 11 audit gap 全 ship + 12 commits = **41 total commits**
+
+### 实测速度
+
+原估 25-30 联合日(≈ 25-50 周个人开发)→ 实测 **~12 小时**(Claude × Codex 6 agent 并行)
+→ **~30-40x 加速**(校准:Iter J/F 1 联合日 ship 全 web 的锚点)
+
+---
+
 ## 2026-05-21 完美记忆系统 v2 落地最终状态 + dogfood + Playwright e2e
 
 User dogfood + Playwright e2e 验证后,做了 bug fix + follow-up 跟进。**累计 19 commits ship**,**实际产品真端到端可用**(Playwright e2e 5/5 PASS 实证)。
