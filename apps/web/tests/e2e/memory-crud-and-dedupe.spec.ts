@@ -924,4 +924,575 @@ test.describe("Memory · CRUD + dedupe (mocked)", () => {
 		// Preview modal never appeared.
 		await expect(page.getByTestId("memory-dedupe-preview")).toHaveCount(0);
 	});
+
+	// ── 4-tier display (tests 10-13) ───────────────────────────────────────────
+
+	test("always shows all 4 tiers even when some are empty", async ({ page }) => {
+		// Only working + episodic + semantic have data; skill tier is absent from byTier.
+		const store = new FakeMemoryStore(buildListFixture().data.records);
+		await installMemoryRoutes(page, store);
+
+		await page.goto("/memory");
+		await expect(page.getByTestId("memory-view")).toBeVisible();
+
+		// All four tier section headings must appear.
+		await expect(page.getByText(/工作 · working/)).toBeVisible();
+		await expect(page.getByText(/情景 · episodic/)).toBeVisible();
+		await expect(page.getByText(/语义 · semantic/)).toBeVisible();
+		await expect(page.getByText(/技能 · skill/)).toBeVisible();
+	});
+
+	test("empty tier shows explanation placeholder text", async ({ page }) => {
+		const store = new FakeMemoryStore(buildListFixture().data.records);
+		await installMemoryRoutes(page, store);
+
+		await page.goto("/memory");
+		await expect(page.getByTestId("memory-view")).toBeVisible();
+
+		// The skill tier has no records — its empty placeholder must be visible.
+		const skillEmpty = page.getByTestId("memory-tier-empty-skill");
+		await expect(skillEmpty).toBeVisible();
+		await expect(skillEmpty).toContainText("暂无");
+
+		// Working / episodic / semantic have records so their empty divs must not render.
+		await expect(page.getByTestId("memory-tier-empty-working")).toHaveCount(0);
+	});
+
+	test("tier info icons render for all 4 tiers", async ({ page }) => {
+		const store = new FakeMemoryStore(buildListFixture().data.records);
+		await installMemoryRoutes(page, store);
+
+		await page.goto("/memory");
+		await expect(page.getByTestId("memory-view")).toBeVisible();
+
+		for (const tier of ["working", "episodic", "semantic", "skill"]) {
+			await expect(page.getByTestId(`tier-info-${tier}`)).toBeVisible();
+		}
+	});
+
+	test("tier info icon hover shows popover with tier concept description", async ({ page }) => {
+		const store = new FakeMemoryStore(buildListFixture().data.records);
+		await installMemoryRoutes(page, store);
+
+		await page.goto("/memory");
+		await expect(page.getByTestId("memory-view")).toBeVisible();
+
+		// Hovering the working tier icon must reveal its popover.
+		await page.getByTestId("tier-info-working").hover();
+		const popover = page.getByTestId("tier-info-working-popover");
+		await expect(popover).toBeVisible();
+		// Popover must contain the tier analogy text.
+		await expect(popover).toContainText("工作层");
+		await expect(popover).toContainText("类比");
+	});
+
+	// ── Detail panel v2 fields (tests 14-19) ──────────────────────────────────
+
+	/**
+	 * Fixture with rich v2 metadata fields for detail-panel assertions.
+	 */
+	function buildDetailFixture(): MemoryWire {
+		const record: FixtureRecord = {
+			id: "detail-v2-1",
+			content: "语义层 · 老孟偏好凌晨工作,喜欢深夜独立 coding",
+			tier: "semantic",
+			layer: "semantic",
+			// createdAt 60 days ago — triggers staleness marker
+			createdAt: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString(),
+			metadata: { origin: "reflect" },
+			version: 3,
+			parentId: "detail-v2-parent-000000000000",
+			isLatest: true,
+			lastWriterClient: "web",
+			projectScope: "quilin-agent",
+			salience: {
+				novelty: 0.72,
+				utility: 0.88,
+				personal_relevance: 0.95,
+				actionability: 0.6,
+				recency: 0.45,
+				stability: 0.81,
+			},
+			kind: "user",
+			importanceScore: 0.87,
+		};
+		return buildMemoryWire([record]);
+	}
+
+	test("clicking a record expands the detail panel", async ({ page }) => {
+		const store = new FakeMemoryStore(buildDetailFixture().data.records);
+		await installMemoryRoutes(page, store);
+
+		await page.goto("/memory");
+		const row = page.getByTestId("memory-detail-v2-1");
+		await expect(row).toBeVisible();
+
+		// Detail panel must not be present yet.
+		await expect(page.getByTestId("memory-detail-detail-v2-1")).toHaveCount(0);
+
+		// Click the expand button inside the row.
+		await row.getByRole("button").click();
+
+		// Panel must appear.
+		await expect(page.getByTestId("memory-detail-detail-v2-1")).toBeVisible();
+	});
+
+	test("detail panel shows staleness marker for records older than 30 days", async ({ page }) => {
+		const store = new FakeMemoryStore(buildDetailFixture().data.records);
+		await installMemoryRoutes(page, store);
+
+		await page.goto("/memory");
+		await page.getByTestId("memory-detail-v2-1").getByRole("button").click();
+
+		const panel = page.getByTestId("memory-detail-detail-v2-1");
+		await expect(panel).toBeVisible();
+
+		const staleness = panel.getByTestId("memory-detail-staleness");
+		await expect(staleness).toBeVisible();
+		// Orange-warning text must mention days.
+		await expect(staleness).toContainText("天前");
+	});
+
+	test("detail panel renders 6-dim salience grid", async ({ page }) => {
+		const store = new FakeMemoryStore(buildDetailFixture().data.records);
+		await installMemoryRoutes(page, store);
+
+		await page.goto("/memory");
+		await page.getByTestId("memory-detail-v2-1").getByRole("button").click();
+
+		const panel = page.getByTestId("memory-detail-detail-v2-1");
+		const salienceGrid = panel.getByTestId("memory-detail-salience");
+		await expect(salienceGrid).toBeVisible();
+
+		// All 6 dimension labels must appear.
+		for (const dim of [
+			"novelty",
+			"utility",
+			"personal_relevance",
+			"actionability",
+			"recency",
+			"stability",
+		]) {
+			await expect(salienceGrid).toContainText(dim);
+		}
+	});
+
+	test("detail panel shows last_writer_client field", async ({ page }) => {
+		const store = new FakeMemoryStore(buildDetailFixture().data.records);
+		await installMemoryRoutes(page, store);
+
+		await page.goto("/memory");
+		await page.getByTestId("memory-detail-v2-1").getByRole("button").click();
+
+		const panel = page.getByTestId("memory-detail-detail-v2-1");
+		await expect(panel).toBeVisible();
+		// "最后写入端" row must show the client name.
+		await expect(panel).toContainText("最后写入端");
+		await expect(panel).toContainText("web");
+	});
+
+	test("detail panel shows version chain and kind and importance_score", async ({ page }) => {
+		const store = new FakeMemoryStore(buildDetailFixture().data.records);
+		await installMemoryRoutes(page, store);
+
+		await page.goto("/memory");
+		await page.getByTestId("memory-detail-v2-1").getByRole("button").click();
+
+		const panel = page.getByTestId("memory-detail-detail-v2-1");
+		await expect(panel).toBeVisible();
+
+		// version chain: v3, parentId snippet (slice(0,16) = "detail-v2-parent"), isLatest=true
+		await expect(panel).toContainText("v3");
+		await expect(panel).toContainText("最新");
+		// parentId.slice(0, 16) = "detail-v2-parent" (page.tsx DetailRow renders it that way)
+		await expect(panel).toContainText("detail-v2-parent");
+
+		// kind and importance_score fields
+		await expect(panel).toContainText("user"); // kind
+		await expect(panel).toContainText("0.870"); // importance_score.toFixed(3)
+	});
+
+	// ── KG empty state + backfill button (tests 20-21) ────────────────────────
+
+	test("KG tab empty state shows backfill button", async ({ page }) => {
+		const store = new FakeMemoryStore(buildListFixture().data.records);
+		await installMemoryRoutes(page, store);
+
+		// Mock /api/memory/graph to return empty edges (triggers KgEmptyState).
+		await page.route(/\/api\/memory\/graph/, async (route: Route) => {
+			await route.fulfill({
+				status: 200,
+				contentType: "application/json",
+				body: JSON.stringify({
+					ok: true,
+					data: {
+						available: true,
+						nodes: [],
+						edges: [],
+						counts: { nodes: 0, edges: 0 },
+					},
+				}),
+			});
+		});
+
+		await page.goto("/memory");
+		await page.getByTestId("memory-tab-graph").click();
+
+		const backfillBtn = page.getByTestId("kg-backfill-button");
+		await expect(backfillBtn).toBeVisible();
+		await expect(backfillBtn).toContainText("立即灌入");
+	});
+
+	test("KG backfill button POSTs to /api/memory/backfill-kg and shows success", async ({
+		page,
+	}) => {
+		const store = new FakeMemoryStore(buildListFixture().data.records);
+		await installMemoryRoutes(page, store);
+
+		// Always return empty graph so KgEmptyState stays mounted (preserving its local state).
+		await page.route(/\/api\/memory\/graph/, async (route: Route) => {
+			await route.fulfill({
+				status: 200,
+				contentType: "application/json",
+				body: JSON.stringify({
+					ok: true,
+					data: { available: true, nodes: [], edges: [], counts: { nodes: 0, edges: 0 } },
+				}),
+			});
+		});
+
+		let backfillCalled = false;
+		await page.route(/\/api\/memory\/backfill-kg/, async (route: Route) => {
+			backfillCalled = true;
+			await route.fulfill({
+				status: 200,
+				contentType: "application/json",
+				body: JSON.stringify({
+					ok: true,
+					data: { backfilled: 5, edges: 12 },
+				}),
+			});
+		});
+
+		await page.goto("/memory");
+		await page.getByTestId("memory-tab-graph").click();
+
+		// Wait for KgEmptyState to show.
+		const backfillBtn = page.getByTestId("kg-backfill-button");
+		await expect(backfillBtn).toBeVisible();
+
+		await backfillBtn.click();
+
+		// After click, the button enters "灌入中…" disabled state while the POST is in flight.
+		// Then `onBackfilled()` triggers parent re-fetch.  The backfill API must have been called.
+		// Wait for the button to become enabled again (re-fetch completed).
+		await expect(backfillBtn).not.toBeDisabled();
+		expect(backfillCalled).toBe(true);
+	});
+
+	// ── Timeline friendly translation (tests 22-23) ───────────────────────────
+
+	test("timeline tab switch shows consolidation entries", async ({ page }) => {
+		const store = new FakeMemoryStore(buildListFixture().data.records);
+		await installMemoryRoutes(page, store);
+
+		await page.route(/\/api\/memory\/consolidations/, async (route: Route) => {
+			await route.fulfill({
+				status: 200,
+				contentType: "application/json",
+				body: JSON.stringify({
+					ok: true,
+					data: {
+						available: true,
+						total: 1,
+						entries: [
+							{
+								id: 1,
+								task: "memory_consolidate_plan",
+								dry_run: false,
+								budget_decision: "approved",
+								actions: [],
+								writes_performed: 0,
+								created_at: "2026-05-20T10:00:00Z",
+								schema_version: 1,
+							},
+						],
+					},
+				}),
+			});
+		});
+
+		await page.goto("/memory");
+		await page.getByTestId("memory-tab-timeline").click();
+
+		const view = page.getByTestId("consolidation-view");
+		await expect(view).toBeVisible();
+		await expect(view.getByTestId("consolidation-entry-1")).toBeVisible();
+	});
+
+	test("timeline shows friendly labels: 智能整理 / 已批准 / 完全相同 / AI 语义判断 / 显示原始 JSON", async ({
+		page,
+	}) => {
+		const store = new FakeMemoryStore(buildListFixture().data.records);
+		await installMemoryRoutes(page, store);
+
+		await page.route(/\/api\/memory\/consolidations/, async (route: Route) => {
+			await route.fulfill({
+				status: 200,
+				contentType: "application/json",
+				body: JSON.stringify({
+					ok: true,
+					data: {
+						available: true,
+						total: 1,
+						entries: [
+							{
+								id: 42,
+								task: "memory_consolidate_plan",
+								dry_run: false,
+								budget_decision: "approved",
+								actions: [
+									{
+										kind: "dedupe",
+										target_layer: "semantic",
+										reason: "三条语义重复",
+										dry_run: false,
+										writes_semantic: true,
+										writes_skill: false,
+										metadata: {
+											dedupe_groups: [
+												{
+													keepId: "rec-keep-0000000",
+													deleteIds: ["rec-del-1", "rec-del-2"],
+													reason: "语义重复",
+													strategy: "exact",
+												},
+												{
+													keepId: "rec-keep-1111111",
+													deleteIds: ["rec-del-3"],
+													reason: "向量近似",
+													strategy: "llm",
+												},
+											],
+										},
+									},
+								],
+								writes_performed: 2,
+								created_at: "2026-05-20T10:00:00Z",
+								schema_version: 1,
+							},
+						],
+					},
+				}),
+			});
+		});
+
+		await page.goto("/memory");
+		await page.getByTestId("memory-tab-timeline").click();
+
+		const view = page.getByTestId("consolidation-view");
+		await expect(view).toBeVisible();
+
+		const entry = view.getByTestId("consolidation-entry-42");
+		await expect(entry).toBeVisible();
+
+		// Friendly top-level labels must appear without raw JSON dump.
+		await expect(entry).toContainText("智能整理");
+		await expect(entry).toContainText("已批准");
+
+		// Expand the entry to see action details.
+		await entry.getByRole("button").click();
+
+		// Strategy friendly labels.
+		await expect(entry).toContainText("完全相同");
+		await expect(entry).toContainText("AI 语义判断");
+
+		// Raw JSON details toggle must be present (collapsed by default).
+		const detailsEl = entry.locator("details");
+		await expect(detailsEl).toHaveCount(1);
+		const summary = detailsEl.locator("summary");
+		await expect(summary).toContainText("显示原始 JSON");
+	});
+
+	// ── Evidence Graph tab (tests 24-25) ──────────────────────────────────────
+
+	test("evidence tab switch shows no-selection placeholder when no memory is expanded", async ({
+		page,
+	}) => {
+		const store = new FakeMemoryStore(buildListFixture().data.records);
+		await installMemoryRoutes(page, store);
+
+		await page.goto("/memory");
+		await page.getByTestId("memory-tab-evidence").click();
+
+		const placeholder = page.getByTestId("evidence-view-no-selection");
+		await expect(placeholder).toBeVisible();
+		await expect(placeholder).toContainText("证据图");
+	});
+
+	test("evidence tab renders reactflow graph with supersede and source edges after mock", async ({
+		page,
+	}) => {
+		const store = new FakeMemoryStore(buildDetailFixture().data.records);
+		await installMemoryRoutes(page, store);
+
+		// Mock the evidence-graph endpoint.
+		await page.route("**/api/memory/evidence-graph**", async (route: Route) => {
+			await route.fulfill({
+				status: 200,
+				contentType: "application/json",
+				body: JSON.stringify({
+					ok: true,
+					data: {
+						nodes: [
+							{
+								id: "detail-v2-1",
+								kind: "memory",
+								label: "老孟偏好凌晨工作",
+								is_latest: true,
+								last_writer_client: "web",
+								created_at: "2026-05-20T10:00:00Z",
+							},
+							{
+								id: "detail-v2-parent-000000000000",
+								kind: "memory",
+								label: "老孟习惯凌晨(旧版本)",
+								is_latest: false,
+								last_writer_client: "cli",
+								created_at: "2026-05-10T10:00:00Z",
+							},
+							{
+								id: "obs-001",
+								kind: "observation",
+								label: "对话观察 · 老孟 2am 在线",
+								role: "user",
+								observed_at: "2026-05-10T02:00:00Z",
+							},
+						],
+						edges: [
+							{
+								id: "e-supersede-1",
+								from: "detail-v2-1",
+								to: "detail-v2-parent-000000000000",
+								kind: "supersedes",
+							},
+							{
+								id: "e-source-1",
+								from: "obs-001",
+								to: "detail-v2-1",
+								kind: "source_of",
+							},
+						],
+						counts: {
+							memories: 2,
+							observations: 1,
+							supersedes_edges: 1,
+							source_edges: 1,
+						},
+					},
+				}),
+			});
+		});
+
+		await page.goto("/memory");
+
+		// First expand a record so expandedId is set; evidence tab uses expandedId as memoryId.
+		await page.getByTestId("memory-detail-v2-1").getByRole("button").click();
+		await expect(page.getByTestId("memory-detail-detail-v2-1")).toBeVisible();
+
+		// Switch to evidence tab.
+		await page.getByTestId("memory-tab-evidence").click();
+
+		const evidenceView = page.getByTestId("evidence-view");
+		await expect(evidenceView).toBeVisible();
+
+		// The section title should mention version edges and source edges.
+		await expect(evidenceView).toContainText("版本边");
+		await expect(evidenceView).toContainText("出处边");
+	});
+
+	// ── Filter / search (tests 26-27) ─────────────────────────────────────────
+
+	test("text search filter narrows visible records to matching content", async ({ page }) => {
+		const store = new FakeMemoryStore(buildListFixture().data.records);
+		await installMemoryRoutes(page, store);
+
+		await page.goto("/memory");
+		await expect(page.getByTestId("memory-rec-working-1")).toBeVisible();
+		await expect(page.getByTestId("memory-rec-semantic-1")).toBeVisible();
+
+		// Type a search term that only matches working-layer content.
+		const filterInput = page.getByTestId("memory-filter");
+		await filterInput.fill("当前任务");
+
+		// Only the matching record should remain; semantic records should vanish.
+		await expect(page.getByTestId("memory-rec-working-1")).toBeVisible();
+		await expect(page.getByTestId("memory-rec-semantic-1")).toHaveCount(0);
+		await expect(page.getByTestId("memory-rec-semantic-2")).toHaveCount(0);
+		await expect(page.getByTestId("memory-rec-semantic-3")).toHaveCount(0);
+	});
+
+	test("tier filter button shows only records from the selected tier", async ({ page }) => {
+		const store = new FakeMemoryStore(buildListFixture().data.records);
+		await installMemoryRoutes(page, store);
+
+		await page.goto("/memory");
+
+		// Click the "语义" tier filter button.
+		await page.getByRole("button", { name: /语义/ }).click();
+
+		// Semantic records visible, working and episodic rows gone.
+		await expect(page.getByTestId("memory-rec-semantic-1")).toBeVisible();
+		await expect(page.getByTestId("memory-rec-semantic-2")).toBeVisible();
+		await expect(page.getByTestId("memory-rec-semantic-3")).toBeVisible();
+		await expect(page.getByTestId("memory-rec-working-1")).toHaveCount(0);
+		await expect(page.getByTestId("memory-rec-episodic-1")).toHaveCount(0);
+
+		// Clicking "全部" restores all records.
+		await page.getByRole("button", { name: /全部/ }).click();
+		await expect(page.getByTestId("memory-rec-working-1")).toBeVisible();
+	});
+
+	// ── Proposal 3-kind visual (test 28) ──────────────────────────────────────
+
+	test("proposal list visually distinguishes three kinds with different icons and colors", async ({
+		page,
+	}) => {
+		const store = new FakeMemoryStore(buildListFixture().data.records);
+		await installMemoryRoutes(page, store);
+
+		await page.route("**/api/memory/dedupe", async (route: Route) => {
+			await route.fulfill({
+				status: 200,
+				contentType: "application/json",
+				body: JSON.stringify({
+					ok: true,
+					data: { executed: false, plan: buildConsolidatePlan() },
+				}),
+			});
+		});
+
+		await page.goto("/memory");
+		await page.getByTestId("memory-dedupe-button").click();
+
+		const modal = page.getByTestId("memory-dedupe-preview");
+		await expect(modal).toBeVisible();
+
+		// Each kind has its own testid.
+		const dedupeItem = modal.getByTestId("memory-dedupe-proposal-dedupe");
+		const kgPruneItem = modal.getByTestId("memory-dedupe-proposal-kg-prune");
+		const insightItem = modal.getByTestId("memory-dedupe-proposal-reflect-insight");
+
+		await expect(dedupeItem).toBeVisible();
+		await expect(kgPruneItem).toBeVisible();
+		await expect(insightItem).toBeVisible();
+
+		// dedupe → "去重" label; kg-prune → "图谱剪枝"; reflect-insight → "语义抽取"
+		await expect(dedupeItem).toContainText("去重");
+		await expect(kgPruneItem).toContainText("图谱剪枝");
+		await expect(insightItem).toContainText("语义抽取");
+
+		// reflect-insight shows the new insight content body (blue dashed box).
+		await expect(insightItem).toContainText("用户偏好凌晨工作");
+	});
 });
