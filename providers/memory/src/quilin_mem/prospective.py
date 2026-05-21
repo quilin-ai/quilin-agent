@@ -20,19 +20,33 @@ Pure helpers, no I/O, no DB coupling. Module is dependency-only on stdlib
 
 from __future__ import annotations
 
+import asyncio
+import json
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Final
+from typing import Any, Final, cast
+from urllib.parse import urlparse
+
+from .store_search import record_columns
+from .store_serialization import row_to_record, serialize_metadata
+from .types import MemoryRecord
 
 __all__ = [
     "PROSPECTIVE_SCHEMA_VERSION",
     "DEFAULT_REMINDER_WINDOW_HOURS",
     "ProspectiveItem",
     "ReminderPayload",
+    "DueProspectiveItem",
     "is_due",
     "format_reminder",
     "extract_deadline_from_metadata",
     "extract_action_from_metadata",
+    "validate_resource_pointer",
+    "list_due_prospective",
+    "mark_prospective_done",
+    "snooze_prospective",
+    "cancel_prospective",
 ]
 
 
@@ -41,6 +55,10 @@ PROSPECTIVE_SCHEMA_VERSION: Final[int] = 1
 
 DEFAULT_REMINDER_WINDOW_HOURS: Final[int] = 24
 """默认在 deadline 前 24 小时开始提醒(可以通过 caller 参数覆盖)。"""
+
+RESOURCE_TYPE_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-z][a-z0-9._-]{0,63}$")
+METADATA_KIND_KEYS: Final[tuple[str, ...]] = ("kind", "memory_kind")
+PROSPECTIVE_STATUS_KEY: Final[str] = "prospective_status"
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +105,38 @@ class ReminderPayload:
     suggested_action: str | None = None
     actor: str | None = None
     source: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class DueProspectiveItem:
+    """Store-backed prospective memory item that is due for scheduler pickup."""
+
+    memory_id: str
+    content: str
+    deadline_at: datetime
+    kind: str = "prospective"
+    prospective_action: str | None = None
+    project_scope: str | None = None
+    user_id: str | None = None
+    session_id: str | None = None
+    resource_pointer: dict[str, object] | None = None
+    metadata: dict[str, object] | None = None
+
+    def to_wire_dict(self) -> dict[str, object]:
+        return {
+            "id": self.memory_id,
+            "content": self.content,
+            "kind": self.kind,
+            "deadline_at": self.deadline_at.isoformat(),
+            "prospective_action": self.prospective_action,
+            "project_scope": self.project_scope,
+            "user_id": self.user_id,
+            "session_id": self.session_id,
+            "resource_pointer": (
+                dict(self.resource_pointer) if self.resource_pointer is not None else None
+            ),
+            "metadata": dict(self.metadata or {}),
+        }
 
 
 def is_due(
@@ -171,3 +221,346 @@ def extract_action_from_metadata(metadata: dict[str, object] | None) -> str | No
         return None
     trimmed = raw.strip()
     return trimmed or None
+
+
+def validate_resource_pointer(pointer: dict[str, object] | None) -> dict[str, object] | None:
+    """Validate a resource pointer shape without opening files or network handles.
+
+    The validator is intentionally deterministic: it checks only JSON shape and
+    string syntax for ``uri`` / ``path`` / ``type``. It never stats paths, opens
+    files, resolves symlinks, or probes remote URLs.
+    """
+    if pointer is None:
+        return None
+    if not isinstance(pointer, dict):
+        raise ValueError("resource_pointer must be a JSON object")
+
+    normalized = dict(pointer)
+    raw_uri = normalized.get("uri")
+    raw_path = normalized.get("path")
+    raw_type = normalized.get("type")
+
+    has_uri = isinstance(raw_uri, str) and bool(raw_uri.strip())
+    has_path = isinstance(raw_path, str) and bool(raw_path.strip())
+    if has_uri == has_path:
+        raise ValueError("resource_pointer must include exactly one of uri or path")
+
+    if raw_uri is not None:
+        if not isinstance(raw_uri, str) or not raw_uri.strip():
+            raise ValueError("resource_pointer.uri must be a non-empty string")
+        uri = raw_uri.strip()
+        parsed = urlparse(uri)
+        if not parsed.scheme:
+            raise ValueError("resource_pointer.uri must include a URI scheme")
+        if any(ord(char) < 32 for char in uri):
+            raise ValueError("resource_pointer.uri must not contain control characters")
+        normalized["uri"] = uri
+
+    if raw_path is not None:
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            raise ValueError("resource_pointer.path must be a non-empty string")
+        path = raw_path.strip()
+        if "\x00" in path or any(ord(char) < 32 for char in path):
+            raise ValueError("resource_pointer.path must not contain control characters")
+        normalized["path"] = path
+
+    if raw_type is not None:
+        if not isinstance(raw_type, str) or not raw_type.strip():
+            raise ValueError("resource_pointer.type must be a non-empty string")
+        resource_type = raw_type.strip().lower()
+        if RESOURCE_TYPE_PATTERN.fullmatch(resource_type) is None:
+            raise ValueError("resource_pointer.type must be a stable lowercase identifier")
+        normalized["type"] = resource_type
+
+    return normalized
+
+
+async def list_due_prospective(
+    store: object,
+    *,
+    now: datetime,
+    project_scope: str | None = None,
+    user_id: str | None = None,
+    session_id: str | None = None,
+) -> list[DueProspectiveItem]:
+    """List due active prospective records using structured fields plus legacy metadata."""
+
+    return await asyncio.to_thread(
+        _list_due_prospective_sync,
+        store,
+        _ensure_aware(now),
+        project_scope,
+        user_id,
+        session_id,
+    )
+
+
+def _list_due_prospective_sync(
+    store: object,
+    now: datetime,
+    project_scope: str | None,
+    user_id: str | None,
+    session_id: str | None,
+) -> list[DueProspectiveItem]:
+    typed_store = cast(Any, store)
+    conn = typed_store._conn
+    lock = typed_store._lock
+    active_at = now.astimezone(UTC)
+    with lock:
+        rows = conn.execute(
+            f"""
+            SELECT {record_columns()}, forget_after, recovered_at
+            FROM memory_records
+            WHERE deleted = 0
+              AND is_latest = 1
+            ORDER BY rowid ASC
+            """,
+        ).fetchall()
+
+    due_items: list[DueProspectiveItem] = []
+    for row in rows:
+        if not _row_visible_at(row, active_at):
+            continue
+        try:
+            record = row_to_record(row, now=lambda: now)
+        except Exception:
+            continue
+        due_item = _record_to_due_item(record, now=now)
+        if due_item is None:
+            continue
+        if (
+            project_scope is not None
+            and due_item.project_scope is not None
+            and due_item.project_scope != project_scope
+        ):
+            continue
+        if user_id is not None and due_item.user_id != user_id:
+            continue
+        if session_id is not None and due_item.session_id != session_id:
+            continue
+        due_items.append(due_item)
+
+    return sorted(due_items, key=lambda item: (item.deadline_at, item.memory_id))
+
+
+async def mark_prospective_done(
+    store: object,
+    memory_id: str,
+    *,
+    now: datetime | None = None,
+) -> dict[str, object]:
+    """Mark a prospective memory done, then archive it via the store soft-delete path."""
+
+    completed_at = _ensure_aware(now or datetime.now(UTC))
+    updated = await asyncio.to_thread(
+        _merge_prospective_metadata_sync,
+        store,
+        memory_id,
+        {
+            PROSPECTIVE_STATUS_KEY: "done",
+            "prospective_done_at": completed_at.isoformat(),
+        },
+        None,
+    )
+    await cast(Any, store).delete(memory_id)
+    return {"ok": True, "memory_id": memory_id, "done": updated}
+
+
+async def cancel_prospective(
+    store: object,
+    memory_id: str,
+    *,
+    now: datetime | None = None,
+) -> dict[str, object]:
+    """Cancel a prospective memory and archive it without physically deleting the row."""
+
+    canceled_at = _ensure_aware(now or datetime.now(UTC))
+    updated = await asyncio.to_thread(
+        _merge_prospective_metadata_sync,
+        store,
+        memory_id,
+        {
+            PROSPECTIVE_STATUS_KEY: "canceled",
+            "prospective_canceled_at": canceled_at.isoformat(),
+        },
+        None,
+    )
+    await cast(Any, store).delete(memory_id)
+    return {"ok": True, "memory_id": memory_id, "canceled": updated}
+
+
+async def snooze_prospective(
+    store: object,
+    memory_id: str,
+    snooze_until: datetime,
+    *,
+    now: datetime | None = None,
+) -> dict[str, object]:
+    """Move the prospective deadline forward and recover if it was archived."""
+
+    updated_at = _ensure_aware(now or datetime.now(UTC))
+    new_deadline = _ensure_aware(snooze_until)
+    recovered = False
+    if await _is_deleted(store, memory_id):
+        recovered = bool(await cast(Any, store).recover_memory(memory_id))
+
+    updated = await asyncio.to_thread(
+        _merge_prospective_metadata_sync,
+        store,
+        memory_id,
+        {
+            PROSPECTIVE_STATUS_KEY: "pending",
+            "deadline_at": new_deadline.isoformat(),
+            "prospective_snoozed_at": updated_at.isoformat(),
+        },
+        new_deadline,
+    )
+    return {
+        "ok": True,
+        "memory_id": memory_id,
+        "snoozed": updated,
+        "recovered": recovered,
+        "deadline_at": new_deadline.isoformat(),
+    }
+
+
+async def _is_deleted(store: object, memory_id: str) -> bool:
+    return await asyncio.to_thread(_is_deleted_sync, store, memory_id)
+
+
+def _is_deleted_sync(store: object, memory_id: str) -> bool:
+    typed_store = cast(Any, store)
+    conn = typed_store._conn
+    lock = typed_store._lock
+    with lock:
+        row = conn.execute(
+            "SELECT deleted FROM memory_records WHERE id = ? AND is_latest = 1",
+            (memory_id,),
+        ).fetchone()
+    return row is not None and int(row["deleted"]) == 1
+
+
+def _merge_prospective_metadata_sync(
+    store: object,
+    memory_id: str,
+    metadata_updates: dict[str, object],
+    deadline_at: datetime | None,
+) -> bool:
+    typed_store = cast(Any, store)
+    conn = typed_store._conn
+    lock = typed_store._lock
+    with lock:
+        conn.execute("BEGIN IMMEDIATE")
+        with conn:
+            row = conn.execute(
+                """
+                SELECT metadata_json
+                FROM memory_records
+                WHERE id = ? AND is_latest = 1
+                """,
+                (memory_id,),
+            ).fetchone()
+            if row is None:
+                return False
+
+            metadata = _load_metadata_json(str(row["metadata_json"]))
+            metadata.update(metadata_updates)
+            if deadline_at is None:
+                conn.execute(
+                    """
+                    UPDATE memory_records
+                    SET metadata_json = ?
+                    WHERE id = ? AND is_latest = 1
+                    """,
+                    (serialize_metadata(metadata), memory_id),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE memory_records
+                    SET metadata_json = ?, deadline_at = ?
+                    WHERE id = ? AND is_latest = 1
+                    """,
+                    (serialize_metadata(metadata), deadline_at.isoformat(), memory_id),
+                )
+    return True
+
+
+def _record_to_due_item(record: MemoryRecord, *, now: datetime) -> DueProspectiveItem | None:
+    metadata = dict(record.metadata)
+    if _effective_kind(record, metadata) != "prospective":
+        return None
+    if metadata.get(PROSPECTIVE_STATUS_KEY) in {"done", "canceled"}:
+        return None
+
+    deadline = record.deadline_at or extract_deadline_from_metadata(metadata)
+    if deadline is None:
+        return None
+    deadline = _ensure_aware(deadline)
+    if deadline > now:
+        return None
+
+    try:
+        resource_pointer = validate_resource_pointer(record.resource_pointer)
+    except ValueError:
+        resource_pointer = None
+    return DueProspectiveItem(
+        memory_id=record.id,
+        content=record.content,
+        deadline_at=deadline,
+        prospective_action=record.prospective_action or extract_action_from_metadata(metadata),
+        project_scope=record.project_scope,
+        user_id=_metadata_string(metadata, "user_id"),
+        session_id=_metadata_string(metadata, "session_id"),
+        resource_pointer=resource_pointer,
+        metadata=metadata,
+    )
+
+
+def _effective_kind(record: MemoryRecord, metadata: dict[str, object]) -> str | None:
+    if record.kind:
+        return record.kind
+    for key in METADATA_KIND_KEYS:
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip().lower()
+    return None
+
+
+def _metadata_string(metadata: dict[str, object], key: str) -> str | None:
+    value = metadata.get(key)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def _row_visible_at(row: Any, active_at: datetime) -> bool:
+    if row["recovered_at"] is not None:
+        return True
+    raw_forget_after = row["forget_after"]
+    if raw_forget_after is None:
+        return True
+    try:
+        forget_after = datetime.fromisoformat(str(raw_forget_after))
+    except ValueError:
+        return False
+    if forget_after.tzinfo is None:
+        forget_after = forget_after.replace(tzinfo=UTC)
+    return forget_after.astimezone(UTC) > active_at
+
+
+def _load_metadata_json(raw: str) -> dict[str, object]:
+    try:
+        loaded = json.loads(raw)
+    except ValueError:
+        return {"schema_version": 1}
+    if not isinstance(loaded, dict):
+        return {"schema_version": 1}
+    loaded.setdefault("schema_version", 1)
+    return dict(loaded)
+
+
+def _ensure_aware(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value

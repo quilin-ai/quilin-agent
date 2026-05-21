@@ -77,6 +77,7 @@ class MemoryStore(Protocol):
         *,
         last_writer_client: str | None = None,
         last_writer_session_id: str | None = None,
+        project_scope: str | None = None,
     ) -> None: ...
 
     async def delete(self, memory_id: str) -> None: ...
@@ -290,6 +291,7 @@ class QuilinMemStore:
         *,
         last_writer_client: str | None = None,
         last_writer_session_id: str | None = None,
+        project_scope: str | None = None,
     ) -> None:
         await asyncio.to_thread(
             self._update_sync,
@@ -297,6 +299,7 @@ class QuilinMemStore:
             content,
             last_writer_client,
             last_writer_session_id,
+            project_scope,
         )
 
     def _update_sync(
@@ -305,6 +308,7 @@ class QuilinMemStore:
         content: str,
         last_writer_client: str | None,
         last_writer_session_id: str | None,
+        project_scope: str | None,
     ) -> None:
         with self._lock:
             self._conn.execute("BEGIN IMMEDIATE")
@@ -325,6 +329,7 @@ class QuilinMemStore:
                 conflict = self._detect_conflict_locked(
                     row,
                     last_writer_client=last_writer_client,
+                    project_scope=project_scope,
                     at=now,
                 )
                 if conflict:
@@ -354,7 +359,8 @@ class QuilinMemStore:
                         last_accessed = ?,
                         last_written_at = ?,
                         last_writer_client = COALESCE(?, last_writer_client),
-                        last_writer_session_id = COALESCE(?, last_writer_session_id)
+                        last_writer_session_id = COALESCE(?, last_writer_session_id),
+                        project_scope = COALESCE(?, project_scope)
                     WHERE id = ? AND deleted = 0 AND is_latest = 1
                     """,
                     (
@@ -364,6 +370,7 @@ class QuilinMemStore:
                         now.isoformat(),
                         last_writer_client,
                         last_writer_session_id,
+                        project_scope,
                         memory_id,
                     ),
                 )
@@ -381,12 +388,15 @@ class QuilinMemStore:
         row: sqlite3.Row,
         *,
         last_writer_client: str | None,
+        project_scope: str | None,
         at: datetime,
         window: timedelta = DEFAULT_CONFLICT_WINDOW,
     ) -> bool:
         if not last_writer_client or not row["last_writer_client"]:
             return False
         if str(row["last_writer_client"]) == last_writer_client:
+            return False
+        if not self._same_conflict_project_scope(row["project_scope"], project_scope):
             return False
         try:
             last_written_at = (
@@ -396,6 +406,17 @@ class QuilinMemStore:
         except ValueError:
             return False
         return at - last_write_at <= window
+
+    def _same_conflict_project_scope(
+        self,
+        existing_project_scope: object,
+        incoming_project_scope: str | None,
+    ) -> bool:
+        if incoming_project_scope is None:
+            return True
+        if existing_project_scope is None:
+            return False
+        return str(existing_project_scope) == incoming_project_scope
 
     async def delete(self, memory_id: str) -> None:
         await asyncio.to_thread(self._delete_sync, memory_id)
@@ -609,6 +630,27 @@ class QuilinMemStore:
                 predicates.append("content_type = ?")
                 params.append(str(content_type))
 
+            if "project_scope" in filters:
+                project_scope = filters["project_scope"]
+                if project_scope is None:
+                    predicates.append("project_scope IS NULL")
+                else:
+                    predicates.append("(project_scope = ? OR project_scope IS NULL)")
+                    params.append(str(project_scope))
+
+            writer_client = filters.get("last_writer_client", filters.get("writer_client"))
+            if writer_client is not None:
+                predicates.append("last_writer_client = ?")
+                params.append(str(writer_client))
+
+            writer_session_id = filters.get(
+                "last_writer_session_id",
+                filters.get("writer_session_id"),
+            )
+            if writer_session_id is not None:
+                predicates.append("last_writer_session_id = ?")
+                params.append(str(writer_session_id))
+
             metadata_filters = filters.get("metadata")
             if isinstance(metadata_filters, dict):
                 for key, value in sorted(metadata_filters.items()):
@@ -700,19 +742,30 @@ class QuilinMemStore:
 
         return int(cursor.rowcount or 0)
 
-    async def recall(self, query: str) -> list[MemoryRecord]:
-        return await asyncio.to_thread(self._recall_sync, query)
+    async def recall(
+        self,
+        query: str,
+        filters: dict[str, Any] | None = None,
+    ) -> list[MemoryRecord]:
+        return await asyncio.to_thread(self._recall_sync, query, filters)
 
-    def _recall_sync(self, query: str) -> list[MemoryRecord]:
+    def _recall_sync(
+        self,
+        query: str,
+        filters: dict[str, Any] | None = None,
+    ) -> list[MemoryRecord]:
         with self._lock:
             rows = candidate_rows(
                 self._conn,
                 query=query,
-                layer_filter=None,
+                layer_filter=layer_filter(filters),
                 active_at=_utcnow().isoformat(),
             )
 
-        return [_row_to_record(row, now=_utcnow) for row in rows]
+        records = [_row_to_record(row, now=_utcnow) for row in rows]
+        if filters:
+            records = [record for record in records if matches_filters(record, filters)]
+        return records
 
     async def store(
         self,
@@ -1013,18 +1066,13 @@ class QuilinMemStore:
         forget_after: datetime | None,
         strength: float,
     ) -> str:
-        validate_semantic_ingestion_contract(
-            layer=replacement.layer,
-            content_type=replacement.content_type,
-            metadata=dict(replacement.metadata),
-            content=replacement.content,
-        )
         with self._lock:
             self._conn.execute("BEGIN IMMEDIATE")
             with self._conn:
                 existing = self._conn.execute(
                     """
-                    SELECT version, is_latest, created_at, forget_after, recovered_at
+                    SELECT version, is_latest, created_at, forget_after, recovered_at,
+                           project_scope
                     FROM memory_records
                     WHERE id = ? AND deleted = 0
                     """,
@@ -1048,6 +1096,18 @@ class QuilinMemStore:
                 parent_created_at = datetime.fromisoformat(str(existing["created_at"]))
                 if replacement.created_at <= parent_created_at:
                     raise ValueError("replacement.created_at must be after parent created_at")
+                if replacement.project_scope is None and existing["project_scope"] is not None:
+                    replacement = memory_item_with(
+                        replacement,
+                        project_scope=str(existing["project_scope"]),
+                    )
+
+                validate_semantic_ingestion_contract(
+                    layer=replacement.layer,
+                    content_type=replacement.content_type,
+                    metadata=dict(replacement.metadata),
+                    content=replacement.content,
+                )
 
                 self._conn.execute(
                     """

@@ -11,10 +11,14 @@ from quilin_mem.salience import (
     SALIENCE_SCHEMA_VERSION,
     SalienceVector,
     build_staleness_marker,
+    compute_retrieval_ranking_score,
+    compute_salience_ranking_score,
     compute_weighted_score,
     kind_for_metadata,
     salience_from_importance_scalar,
+    salience_from_payload,
 )
+from quilin_mem.types import MemoryItem
 
 # ---------------------------------------------------------------------------
 # 1. SalienceVector dataclass + JSON round-trip
@@ -50,6 +54,22 @@ def test_to_json_dict_includes_schema_version() -> None:
     assert payload["novelty"] == 0.7
     assert payload["utility"] == 0.3
     assert payload["schema_version"] == SALIENCE_SCHEMA_VERSION
+
+
+def test_to_json_dict_clamps_direct_constructor_non_finite_values() -> None:
+    vec = SalienceVector(
+        novelty=math.nan,
+        utility=math.inf,
+        personal_relevance=-math.inf,
+        actionability=2.0,
+        temporal_relevance=-1.0,
+    )
+    payload = vec.to_json_dict()
+    assert payload["novelty"] == 0.5
+    assert payload["utility"] == 0.5
+    assert payload["personal_relevance"] == 0.5
+    assert payload["actionability"] == 1.0
+    assert payload["temporal_relevance"] == 0.0
 
 
 def test_from_json_dict_round_trips() -> None:
@@ -92,6 +112,21 @@ def test_from_json_dict_schema_version_falls_back_for_invalid_values() -> None:
     for raw_schema_version in (float("nan"), float("inf"), "not-an-int", True, None):
         restored = SalienceVector.from_json_dict({"schema_version": raw_schema_version})
         assert restored.schema_version == SALIENCE_SCHEMA_VERSION
+
+
+def test_from_json_dict_accepts_string_booleans_and_numeric_schema_versions() -> None:
+    yes_no = SalienceVector.from_json_dict(
+        {"user_confirmed": "yes", "active_project": "no", "schema_version": 2.0}
+    )
+    true_false = SalienceVector.from_json_dict(
+        {"user_confirmed": "true", "active_project": "false", "schema_version": "3"}
+    )
+    assert yes_no.user_confirmed is True
+    assert yes_no.active_project is False
+    assert yes_no.schema_version == 2
+    assert true_false.user_confirmed is True
+    assert true_false.active_project is False
+    assert true_false.schema_version == 3
 
 
 # ---------------------------------------------------------------------------
@@ -181,6 +216,112 @@ def test_scalar_fallback_clamps_out_of_range() -> None:
     assert high.novelty == 1.0
     assert low.novelty == 0.0
     assert nan.novelty == 0.5  # NaN → fallback
+
+
+# ---------------------------------------------------------------------------
+# 3b. Retrieval ranking score — salience JSON becomes query-useful
+# ---------------------------------------------------------------------------
+
+
+def test_payload_importance_fallback_fills_missing_dimensions() -> None:
+    vec = salience_from_payload({"importance": 0.72}, importance_score=0.2)
+    assert vec.novelty == 0.72
+    assert vec.utility == 0.72
+    assert vec.recency == 0.72
+
+
+def test_payload_non_finite_values_do_not_pollute_score() -> None:
+    vec = salience_from_payload(
+        {"importance": math.nan, "recency": math.inf, "safety_risk": math.nan},
+        importance_score=0.6,
+    )
+    assert vec.utility == 0.6
+    assert vec.recency == 0.6
+    assert vec.safety_risk == 0.0
+
+
+def test_salience_ranking_score_orders_by_multidimensional_signal() -> None:
+    low = compute_salience_ranking_score(
+        {"importance": 0.2, "utility": 0.2, "actionability": 0.2},
+        importance_score=0.2,
+        intent="coding_task",
+    )
+    high = compute_salience_ranking_score(
+        {"importance": 0.2, "utility": 1.0, "actionability": 1.0},
+        importance_score=0.2,
+        intent="coding_task",
+    )
+    assert high > low
+
+
+def test_old_record_without_salience_uses_importance_score() -> None:
+    low = compute_salience_ranking_score(None, importance_score=0.2)
+    high = compute_salience_ranking_score(None, importance_score=0.8)
+    assert high > low
+
+
+def test_high_safety_risk_cannot_boost_retrieval_score() -> None:
+    boosted = compute_retrieval_ranking_score(
+        1.0,
+        {"importance": 0.9, "user_confirmed": True, "safety_risk": 0.0},
+        importance_score=0.5,
+    )
+    risky = compute_retrieval_ranking_score(
+        1.0,
+        {"importance": 0.9, "user_confirmed": True, "safety_risk": 1.0},
+        importance_score=0.5,
+    )
+    assert boosted > 1.0
+    assert risky <= 1.0
+
+
+def test_retrieval_ranking_handles_non_finite_base_and_unknown_kind() -> None:
+    score = compute_retrieval_ranking_score(
+        math.nan,
+        {"importance": 0.9, "user_confirmed": True},
+        importance_score=0.5,
+        kind="unknown-kind",
+    )
+    assert 0.0 <= score <= 1.0
+
+
+def test_user_confirmed_and_active_project_raise_ranking_score() -> None:
+    base = compute_salience_ranking_score({"importance": 0.5}, importance_score=0.5)
+    confirmed = compute_salience_ranking_score(
+        {"importance": 0.5, "user_confirmed": True, "active_project": True},
+        importance_score=0.5,
+    )
+    assert confirmed > base
+
+
+def test_kind_specific_weight_prefers_bug_for_review() -> None:
+    reference = compute_salience_ranking_score(
+        {"importance": 0.6},
+        importance_score=0.6,
+        kind="reference",
+        intent="review",
+    )
+    bug = compute_salience_ranking_score(
+        {"importance": 0.6},
+        importance_score=0.6,
+        kind="bug",
+        intent="review",
+    )
+    assert bug > reference
+
+
+def test_salience_wire_round_trips_optional_ranking_fields() -> None:
+    salience = {
+        "importance": 0.82,
+        "recency": 0.7,
+        "user_confirmed": True,
+        "active_project": True,
+        "safety_risk": 0.1,
+    }
+    item = MemoryItem(content="wire", salience=salience, kind="project_note")
+    restored = MemoryItem.from_dict(item.to_wire_dict())
+    assert restored.salience == salience
+    assert restored.kind == "project_note"
 
 
 # ---------------------------------------------------------------------------

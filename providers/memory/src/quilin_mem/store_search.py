@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
+import math
 import re
 import sqlite3
 from collections.abc import Callable
 
+from .salience import compute_retrieval_ranking_score
 from .types import MemoryLayer
 
 ASCII_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_]+")
@@ -19,6 +22,8 @@ RECALL_QUERY_EXPANSIONS = (
     ),
 )
 MAX_EXPANDED_QUERY_TERMS = 64
+RERANK_POOL_MIN_SIZE = 50
+RERANK_POOL_MULTIPLIER = 8
 
 
 def build_keywords(content: str) -> str:
@@ -72,10 +77,10 @@ def recall_with_fts(
     if match_query is None:
         return []
 
-    limit_clause = _limit_clause(limit)
+    limit_clause = _limit_clause(_rerank_pool_limit(limit))
     active_predicate, active_params = _active_visibility_clause("mr", active_at)
     if layer_filter is None:
-        return conn.execute(
+        rows = conn.execute(
             f"""
             SELECT {record_columns("mr")}
             FROM memory_records_fts fts
@@ -89,8 +94,9 @@ def recall_with_fts(
             """,
             (match_query, *active_params),
         ).fetchall()
+        return _rank_rows(rows, limit=limit)
 
-    return conn.execute(
+    rows = conn.execute(
         f"""
         SELECT {record_columns("mr")}
         FROM memory_records_fts fts
@@ -105,6 +111,7 @@ def recall_with_fts(
         """,
         (match_query, *active_params, layer_filter),
     ).fetchall()
+    return _rank_rows(rows, limit=limit)
 
 
 def rebuild_fts_index(
@@ -221,10 +228,10 @@ def _all_rows(
     limit: int | None = None,
     active_at: str | None = None,
 ) -> list[sqlite3.Row]:
-    limit_clause = _limit_clause(limit)
+    limit_clause = _limit_clause(_rerank_pool_limit(limit))
     active_predicate, active_params = _active_visibility_clause(None, active_at)
     if layer_filter is None:
-        return conn.execute(
+        rows = conn.execute(
             f"""
             SELECT {record_columns()}
             FROM memory_records
@@ -235,8 +242,9 @@ def _all_rows(
             """,
             active_params,
         ).fetchall()
+        return _rank_rows(rows, limit=limit)
 
-    return conn.execute(
+    rows = conn.execute(
         f"""
         SELECT {record_columns()}
         FROM memory_records
@@ -248,6 +256,7 @@ def _all_rows(
         """,
         (*active_params, layer_filter),
     ).fetchall()
+    return _rank_rows(rows, limit=limit)
 
 
 def _like_rows(
@@ -259,10 +268,10 @@ def _like_rows(
     active_at: str | None = None,
 ) -> list[sqlite3.Row]:
     like_query = f"%{query.lower()}%"
-    limit_clause = _limit_clause(limit)
+    limit_clause = _limit_clause(_rerank_pool_limit(limit))
     active_predicate, active_params = _active_visibility_clause(None, active_at)
     if layer_filter is None:
-        return conn.execute(
+        rows = conn.execute(
             f"""
             SELECT {record_columns()}
             FROM memory_records
@@ -275,8 +284,9 @@ def _like_rows(
             """,
             (*active_params, like_query),
         ).fetchall()
+        return _rank_rows(rows, limit=limit)
 
-    return conn.execute(
+    rows = conn.execute(
         f"""
         SELECT {record_columns()}
         FROM memory_records
@@ -290,6 +300,7 @@ def _like_rows(
         """,
         (*active_params, layer_filter, like_query),
     ).fetchall()
+    return _rank_rows(rows, limit=limit)
 
 
 def _active_visibility_clause(
@@ -306,7 +317,76 @@ def _active_visibility_clause(
     ), (active_at,)
 
 
+def _rerank_pool_limit(limit: int | None) -> int | None:
+    if limit is None:
+        return None
+    normalized = max(int(limit), 0)
+    if normalized == 0:
+        return 0
+    return max(normalized * RERANK_POOL_MULTIPLIER, RERANK_POOL_MIN_SIZE)
+
+
 def _limit_clause(limit: int | None) -> str:
     if limit is None:
         return ""
     return f"LIMIT {max(int(limit), 0)}"
+
+
+def _rank_rows(rows: list[sqlite3.Row], *, limit: int | None) -> list[sqlite3.Row]:
+    if not rows:
+        return []
+
+    ranked = sorted(
+        enumerate(rows),
+        key=lambda indexed_row: (
+            -_row_ranking_score(indexed_row[1], indexed_row[0]),
+            indexed_row[0],
+        ),
+    )
+    ranked_rows = [row for _, row in ranked]
+    if limit is None:
+        return ranked_rows
+    return ranked_rows[: max(int(limit), 0)]
+
+
+def _row_ranking_score(row: sqlite3.Row, index: int) -> float:
+    # The base score is a tiny stable tie-breaker preserving SQL relevance when
+    # salience is equal; the multiplier comes from salience/importance.
+    base_score = max(0.0, 1.0 - (index * 0.000001))
+    return compute_retrieval_ranking_score(
+        base_score,
+        _row_salience_payload(row),
+        importance_score=_row_float(row, "importance_score", default=0.5),
+        kind=_row_str(row, "kind"),
+    )
+
+
+def _row_salience_payload(row: sqlite3.Row) -> dict[str, object] | None:
+    raw_payload = _row_str(row, "salience_json")
+    if not raw_payload:
+        return None
+
+    try:
+        loaded = json.loads(raw_payload)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(loaded, dict):
+        return None
+    return dict(loaded)
+
+
+def _row_float(row: sqlite3.Row, key: str, *, default: float) -> float:
+    if key not in tuple(row.keys()):
+        return default
+    try:
+        value = float(row[key])
+    except TypeError, ValueError:
+        return default
+    return value if math.isfinite(value) else default
+
+
+def _row_str(row: sqlite3.Row, key: str) -> str | None:
+    if key not in tuple(row.keys()):
+        return None
+    raw = row[key]
+    return raw if isinstance(raw, str) else None

@@ -10,6 +10,7 @@ Cover:
   7. Batch judge returns 0 clusters cleanly
   8. Batch judge rejects unknown ids (returns ok=False)
 """
+
 from __future__ import annotations
 
 import json
@@ -90,9 +91,7 @@ async def test_batch_judge_nine_records_single_call_returns_three_clusters() -> 
             ("u9", "用户住在上海", base + timedelta(minutes=8)),
         ]
         for mid, content, created in records_input:
-            await _store_semantic(
-                store, memory_id=mid, content=content, created_at=created
-            )
+            await _store_semantic(store, memory_id=mid, content=content, created_at=created)
 
         # 3 clusters: (u1,u2,u3) names, (u4,u5,u6) identity, (u7,u8) vim preference.
         def fake_batch(records: Sequence[MemoryItem]) -> BatchJudgeResult:
@@ -194,13 +193,9 @@ async def test_batch_judge_invalid_response_falls_back_to_per_pair() -> None:
     def fake_batch(records: Sequence[MemoryItem]) -> BatchJudgeResult:
         return BatchJudgeResult(ok=False, clusters=(), reason="invalid JSON")
 
-    def per_pair_judge(
-        left: MemoryItem, right: MemoryItem, _score: float
-    ) -> DedupeJudgeResult:
+    def per_pair_judge(left: MemoryItem, right: MemoryItem, _score: float) -> DedupeJudgeResult:
         per_pair_calls.append((left.id, right.id))
-        return DedupeJudgeResult(
-            decision="supersedes", reason="per-pair fallback verdict"
-        )
+        return DedupeJudgeResult(decision="supersedes", reason="per-pair fallback verdict")
 
     async with QuilinMemStore(db_path=":memory:") as store:
         await _store_semantic(
@@ -237,9 +232,7 @@ async def test_batch_judge_invalid_response_falls_back_to_per_pair() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_batch_judge_api_error_without_per_pair_judge_falls_to_exact_only() -> (
-    None
-):
+async def test_batch_judge_api_error_without_per_pair_judge_falls_to_exact_only() -> None:
     """If the batch judge raises (treated as ok=False) and no per-pair judge
     is configured, only exact-match dedupe remains."""
     base = datetime(2026, 5, 21, tzinfo=UTC)
@@ -314,9 +307,7 @@ async def test_batch_judge_wire_shape_matches_per_pair_path() -> None:
             ),
         )
 
-    def per_pair_judge(
-        _left: MemoryItem, _right: MemoryItem, _score: float
-    ) -> DedupeJudgeResult:
+    def per_pair_judge(_left: MemoryItem, _right: MemoryItem, _score: float) -> DedupeJudgeResult:
         return DedupeJudgeResult(decision="supersedes", reason="per-pair verdict")
 
     async with QuilinMemStore(db_path=":memory:") as store:
@@ -394,9 +385,7 @@ async def test_server_env_disabled_uses_per_pair_path(monkeypatch: Any) -> None:
             content="用户叫小明",
             created_at=base + timedelta(minutes=1),
         )
-        raw = await _memory_consolidate_plan_with_store(
-            store, strategy="dedupe", tier="semantic"
-        )
+        raw = await _memory_consolidate_plan_with_store(store, strategy="dedupe", tier="semantic")
 
     payload = json.loads(raw)
     # Even with batch disabled, exact dedupe still runs.
@@ -420,9 +409,7 @@ async def test_batch_judge_empty_clusters_keeps_only_exact_matches() -> None:
         return BatchJudgeResult(ok=True, clusters=())
 
     async with QuilinMemStore(db_path=":memory:") as store:
-        await _store_semantic(
-            store, memory_id="ex-a", content="用户叫小明", created_at=base
-        )
+        await _store_semantic(store, memory_id="ex-a", content="用户叫小明", created_at=base)
         await _store_semantic(
             store,
             memory_id="ex-b",
@@ -481,20 +468,24 @@ def test_parse_batch_judge_response_rejects_invalid_shapes() -> None:
     # keep == delete.
     bad = json.dumps({"clusters": [{"keepId": "a", "deleteIds": ["a"]}]})
     assert _parse_batch_judge_response(bad, records).ok is False
-    # Id reused across clusters.
-    bad = json.dumps(
+    # Overlapping clusters are accepted; union-find merges them later. The parser
+    # only validates shape and known ids so batch LLM output can express bridges.
+    overlapping = json.dumps(
         {
             "clusters": [
-                {"keepId": "a", "deleteIds": ["b"]},
-                {"keepId": "a", "deleteIds": ["b"]},
+                {"keepId": "a", "deleteIds": ["b"], "decision": "duplicate"},
+                {"keepId": "b", "deleteIds": ["a"], "decision": "supersedes"},
             ]
         }
     )
-    assert _parse_batch_judge_response(bad, records).ok is False
+    parsed_overlap = _parse_batch_judge_response(overlapping, records)
+    assert parsed_overlap.ok is True
+    assert [cluster.decision for cluster in parsed_overlap.clusters] == [
+        "duplicate",
+        "supersedes",
+    ]
     # Valid cluster.
-    good = json.dumps(
-        {"clusters": [{"keepId": "a", "deleteIds": ["b"], "reason": "ok"}]}
-    )
+    good = json.dumps({"clusters": [{"keepId": "a", "deleteIds": ["b"], "reason": "ok"}]})
     parsed = _parse_batch_judge_response(good, records)
     assert parsed.ok is True
     assert len(parsed.clusters) == 1
@@ -518,10 +509,7 @@ def test_parse_batch_judge_response_rejects_invalid_shapes() -> None:
 
 
 def test_estimate_records_tokens_and_split_helpers() -> None:
-    records = [
-        MemoryItem(id=f"id{i}", content="x" * 400, layer="semantic")
-        for i in range(20)
-    ]
+    records = [MemoryItem(id=f"id{i}", content="x" * 400, layer="semantic") for i in range(20)]
     # 400 bytes / 4 ≈ 100 tokens per record + scaffolding overhead.
     tokens = estimate_records_tokens(records[:1])
     assert 50 < tokens < 500
@@ -552,9 +540,7 @@ def test_deepseek_batch_judge_returns_not_ok_when_api_key_missing(monkeypatch: A
     monkeypatch.delenv("QUILIN_OBSERVER_API_KEY", raising=False)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     judge = _DeepseekBatchJudge()
-    result = judge.judge_batch(
-        [MemoryItem(id="a", content="x", layer="semantic")]
-    )
+    result = judge.judge_batch([MemoryItem(id="a", content="x", layer="semantic")])
     assert result.ok is False
     assert "no LLM api key" in result.reason
 
@@ -591,9 +577,7 @@ def test_deepseek_batch_judge_parses_real_llm_output(monkeypatch: Any) -> None:
     returns a parsed BatchJudgeResult."""
     import quilin_mem.observer as observer_mod
 
-    def fake_call(
-        _base_url: str, _api_key: str, _payload: bytes, *, timeout: float = 30.0
-    ) -> str:
+    def fake_call(_base_url: str, _api_key: str, _payload: bytes, *, timeout: float = 30.0) -> str:
         return json.dumps(
             {
                 "clusters": [
@@ -618,6 +602,44 @@ def test_deepseek_batch_judge_parses_real_llm_output(monkeypatch: Any) -> None:
     assert len(result.clusters) == 1
     assert result.clusters[0].keep_id == "b"
     assert result.clusters[0].delete_ids == ("a",)
+
+
+def test_deepseek_batch_judge_accepts_overlapping_clusters(monkeypatch: Any) -> None:
+    import quilin_mem.observer as observer_mod
+
+    def fake_call(_base_url: str, _api_key: str, _payload: bytes, *, timeout: float = 30.0) -> str:
+        return json.dumps(
+            {
+                "clusters": [
+                    {
+                        "keepId": "a",
+                        "deleteIds": ["b"],
+                        "reason": "same wording",
+                        "decision": "duplicate",
+                    },
+                    {
+                        "keepId": "c",
+                        "deleteIds": ["b"],
+                        "reason": "newer slot supersedes old wording",
+                        "decision": "supersedes",
+                    },
+                ]
+            }
+        )
+
+    monkeypatch.setattr(observer_mod, "_call_deepseek_api", fake_call)
+    judge = _DeepseekBatchJudge(api_key="dummy-key")
+    result = judge.judge_batch(
+        [
+            MemoryItem(id="a", content="老孟", layer="semantic"),
+            MemoryItem(id="b", content="老孟旧称呼", layer="semantic"),
+            MemoryItem(id="c", content="孟哥", layer="semantic"),
+        ]
+    )
+
+    assert result.ok is True
+    assert len(result.clusters) == 2
+    assert result.clusters[1].decision == "supersedes"
 
 
 # ---------------------------------------------------------------------------
@@ -666,9 +688,7 @@ async def test_batch_judge_merges_exact_and_cluster_into_single_group() -> None:
 
     async with QuilinMemStore(db_path=":memory:") as store:
         # m1 == m2 by exact content; m3 clustered with m2 by LLM.
-        await _store_semantic(
-            store, memory_id="m1", content="用户叫小明", created_at=base
-        )
+        await _store_semantic(store, memory_id="m1", content="用户叫小明", created_at=base)
         await _store_semantic(
             store,
             memory_id="m2",
@@ -713,9 +733,7 @@ async def test_batch_judge_not_invoked_when_budget_denied() -> None:
         return BatchJudgeResult(ok=True, clusters=())
 
     async with QuilinMemStore(db_path=":memory:") as store:
-        await _store_semantic(
-            store, memory_id="b-a", content="同样内容", created_at=base
-        )
+        await _store_semantic(store, memory_id="b-a", content="同样内容", created_at=base)
         await _store_semantic(
             store,
             memory_id="b-b",

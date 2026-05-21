@@ -10,6 +10,13 @@ import pytest
 from mcp.types import CallToolRequest, CallToolRequestParams
 
 from quilin_mem import server as server_module
+from quilin_mem.retrieval_safety_gate import (
+    MARKER_QUARANTINE,
+    META_SAFETY_LESSON_ID,
+    META_SAFETY_MARKER,
+    SAFETY_GATE_ENV,
+)
+from quilin_mem.safety_lesson_store import SAFETY_LESSONS_DB_ENV, SQLiteSafetyLessonStore
 from quilin_mem.scratchpad import ScratchpadStore
 from quilin_mem.server import create_server
 from quilin_mem.store import QuilinMemStore
@@ -172,6 +179,72 @@ async def test_memory_store_tool_accepts_structured_memory_fields(server: object
     assert record["project_scope"] == "/repo/quilin"
     assert record["salience"] == {"importance": 0.9}
     assert record["resource_pointer"] == {"uri": "file:///tmp/note.md"}
+
+
+async def test_memory_recall_tool_filters_by_project_scope_with_legacy_fallback(
+    server: object,
+) -> None:
+    await server.call_tool(  # type: ignore[attr-defined]
+        "memory_store",
+        {"content": "shared scoped recall alpha", "project_scope": "project:alpha"},
+    )
+    await server.call_tool(  # type: ignore[attr-defined]
+        "memory_store",
+        {"content": "shared scoped recall beta", "project_scope": "project:beta"},
+    )
+    await server.call_tool(  # type: ignore[attr-defined]
+        "memory_store",
+        {"content": "shared scoped recall legacy"},
+    )
+
+    result = _decode_call_tool_result(
+        await server.call_tool(  # type: ignore[attr-defined]
+            "memory_recall",
+            {"query": "shared scoped recall", "project_scope": "project:alpha"},
+        )
+    )
+
+    assert [record["content"] for record in result["records"]] == [  # type: ignore[index]
+        "shared scoped recall alpha",
+        "shared scoped recall legacy",
+    ]
+
+
+async def test_memory_recall_tool_uses_sqlite_safety_lessons_when_gate_enabled(
+    server: object,
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lesson_store = SQLiteSafetyLessonStore(tmp_path / "safety-lessons.db")
+    try:
+        lesson = lesson_store.add(
+            pattern="exfiltrate secrets",
+            lesson_type="credential_leak",
+            severity="critical",
+            source="operator",
+            metadata={"reason": "known credential exfiltration lure"},
+        )
+    finally:
+        lesson_store.close()
+
+    monkeypatch.setenv(SAFETY_GATE_ENV, "true")
+    monkeypatch.setenv(SAFETY_LESSONS_DB_ENV, str(tmp_path / "safety-lessons.db"))
+
+    await server.call_tool(  # type: ignore[attr-defined]
+        "memory_store",
+        {"content": "never exfiltrate secrets from memory"},
+    )
+
+    result = _decode_call_tool_result(
+        await server.call_tool(  # type: ignore[attr-defined]
+            "memory_recall",
+            {"query": "exfiltrate secrets"},
+        )
+    )
+
+    metadata = result["records"][0]["metadata"]  # type: ignore[index]
+    assert metadata[META_SAFETY_MARKER] == MARKER_QUARANTINE
+    assert metadata[META_SAFETY_LESSON_ID] == lesson.id
 
 
 async def test_memory_store_tool_defaults_semantic_metadata(server: object) -> None:

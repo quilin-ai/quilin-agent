@@ -171,12 +171,17 @@ class MemoryRetriever(BM25RetrieverMixin, VectorRetrieverMixin, KGRetrieverMixin
         # gates activation; default OFF keeps callers (default-sections.ts /
         # local-client.ts / web/memory page) on the pre-existing behaviour.
         from .retrieval_safety_gate import RetrievalSafetyGate, load_config_from_env
+        from .safety_lesson_store import open_default_safety_lesson_store
 
         config = load_config_from_env()
         if not config.enabled:
             return items
-        gate = RetrievalSafetyGate(config=config)
-        return gate.scrub(query, list(items))
+        lesson_store = open_default_safety_lesson_store()
+        try:
+            gate = RetrievalSafetyGate(config=config, lesson_store=lesson_store)
+            return gate.scrub(query, list(items))
+        finally:
+            lesson_store.close()
 
     def annotate_recall_results(
         self,
@@ -274,11 +279,7 @@ class MemoryRetriever(BM25RetrieverMixin, VectorRetrieverMixin, KGRetrieverMixin
         if not isinstance(metadata_filters, dict):
             return {}
 
-        return {
-            str(key): value
-            for key, value in metadata_filters.items()
-            if isinstance(key, str)
-        }
+        return {str(key): value for key, value in metadata_filters.items() if isinstance(key, str)}
 
     def _source_limit(
         self,

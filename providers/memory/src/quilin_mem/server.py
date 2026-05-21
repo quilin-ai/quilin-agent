@@ -26,6 +26,13 @@ from .observer import (
 )
 from .profile_store import ProfileStore
 from .profile_updater import ProfileUpdater
+from .prospective import (
+    cancel_prospective,
+    list_due_prospective,
+    mark_prospective_done,
+    snooze_prospective,
+    validate_resource_pointer,
+)
 from .retrieval_profile import RetrievalProfileStore
 from .retriever import MemoryRetriever
 from .scratchpad import ScratchpadStore
@@ -198,6 +205,7 @@ async def _memory_recall_with_store(
     *,
     user_id: str | None = None,
     session_id: str | None = None,
+    project_scope: str | None = None,
     retrieval_profile_store: RetrievalProfileStore | None = None,
     trace_context: TraceContext | None = None,
 ) -> str:
@@ -206,8 +214,11 @@ async def _memory_recall_with_store(
     Returns all records if query is empty.
     """
     _validate_memory_recall_query(query)
+    filters: dict[str, object] = {}
+    if project_scope is not None:
+        filters["project_scope"] = project_scope
     try:
-        raw_results = await store.recall(query)
+        raw_results = await store.recall(query, filters or None)
     except Exception as exc:
         _raise_memory_operation_error("memory_recall", exc)
 
@@ -249,11 +260,19 @@ async def _memory_recall_with_store(
     # 用户 export QUILIN_RETRIEVAL_SAFETY_ENABLED=true 也无效(gate 三策略
     # 一条都不跑)。env disabled 时 scrub 直接返回原 list,不破坏现有行为。
     from .retrieval_safety_gate import RetrievalSafetyGate, load_config_from_env
+    from .safety_lesson_store import open_default_safety_lesson_store
 
     _safety_config = load_config_from_env()
     if _safety_config.enabled:
-        _safety_gate = RetrievalSafetyGate(config=_safety_config)
-        results = _safety_gate.scrub(query, list(results))
+        _lesson_store = open_default_safety_lesson_store()
+        try:
+            _safety_gate = RetrievalSafetyGate(
+                config=_safety_config,
+                lesson_store=_lesson_store,
+            )
+            results = _safety_gate.scrub(query, list(results))
+        finally:
+            _lesson_store.close()
 
     payload: dict[str, object] = {"records": [r.to_wire_dict() for r in results]}
     if trace_context is not None:
@@ -333,8 +352,9 @@ async def _memory_store_with_store(
     validated_metadata = _validate_tool_metadata(metadata_with_defaults)
     if salience is not None:
         _validate_metadata_value(salience, depth=1)
+    validated_resource_pointer = validate_resource_pointer(resource_pointer)
     if resource_pointer is not None:
-        _validate_metadata_value(resource_pointer, depth=1)
+        _validate_metadata_value(validated_resource_pointer, depth=1)
     parsed_deadline_at = _parse_tool_datetime(deadline_at, field_name="deadline_at")
     try:
         if layer is None:
@@ -350,7 +370,7 @@ async def _memory_store_with_store(
                 kind=kind,
                 deadline_at=parsed_deadline_at,
                 prospective_action=prospective_action,
-                resource_pointer=resource_pointer,
+                resource_pointer=validated_resource_pointer,
             )
         else:
             record = await store.store(
@@ -366,7 +386,7 @@ async def _memory_store_with_store(
                 kind=kind,
                 deadline_at=parsed_deadline_at,
                 prospective_action=prospective_action,
-                resource_pointer=resource_pointer,
+                resource_pointer=validated_resource_pointer,
             )
     except Exception as exc:
         _raise_memory_operation_error("memory_store", exc)
@@ -649,6 +669,7 @@ async def memory_recall(
     query: str,
     user_id: str | None = None,
     session_id: str | None = None,
+    project_scope: str | None = None,
 ) -> str:
     """Legacy direct helper that opens a store per call."""
     async with QuilinMemStore() as store:
@@ -657,6 +678,7 @@ async def memory_recall(
             query,
             user_id=user_id,
             session_id=session_id,
+            project_scope=project_scope,
         )
 
 
@@ -849,6 +871,7 @@ def create_server(
         query: str,
         user_id: str | None = None,
         session_id: str | None = None,
+        project_scope: str | None = None,
         ctx: Context[object, Any, object] | None = None,
     ) -> str:
         """Recall memory records matching a query string (substring, case-insensitive).
@@ -861,6 +884,7 @@ def create_server(
             query,
             user_id=user_id,
             session_id=session_id,
+            project_scope=project_scope,
             trace_context=_child_trace_context(parent_trace),
         )
 
@@ -906,6 +930,80 @@ def create_server(
             resource_pointer,
             trace_context=_child_trace_context(parent_trace),
         )
+
+    @server.tool(name="memory_prospective_list_due")
+    async def memory_prospective_list_due_tool(
+        now: str,
+        project_scope: str | None = None,
+        user_id: str | None = None,
+        session_id: str | None = None,
+        ctx: Context[object, Any, object] | None = None,
+    ) -> str:
+        """List due prospective memories for scheduler pickup."""
+        parsed_now = _parse_tool_datetime(now, field_name="now")
+        if parsed_now is None:
+            raise ValueError("now must be an ISO datetime string")
+        items = await list_due_prospective(
+            await resolve_store(ctx),
+            now=parsed_now,
+            project_scope=project_scope,
+            user_id=user_id,
+            session_id=session_id,
+        )
+        return json.dumps(
+            {"items": [item.to_wire_dict() for item in items]},
+            ensure_ascii=False,
+        )
+
+    @server.tool(name="memory_prospective_mark_done")
+    async def memory_prospective_mark_done_tool(
+        memory_id: str,
+        now: str | None = None,
+        ctx: Context[object, Any, object] | None = None,
+    ) -> str:
+        """Mark a prospective memory done and archive it via soft-delete."""
+        parsed_now = _parse_tool_datetime(now, field_name="now")
+        payload = await mark_prospective_done(
+            await resolve_store(ctx),
+            memory_id,
+            now=parsed_now,
+        )
+        return json.dumps(payload, ensure_ascii=False)
+
+    @server.tool(name="memory_prospective_snooze")
+    async def memory_prospective_snooze_tool(
+        memory_id: str,
+        snooze_until: str,
+        now: str | None = None,
+        ctx: Context[object, Any, object] | None = None,
+    ) -> str:
+        """Snooze a prospective memory to a later deadline."""
+        parsed_snooze_until = _parse_tool_datetime(snooze_until, field_name="snooze_until")
+        if parsed_snooze_until is None:
+            raise ValueError("snooze_until must be an ISO datetime string")
+        parsed_now = _parse_tool_datetime(now, field_name="now")
+        payload = await snooze_prospective(
+            await resolve_store(ctx),
+            memory_id,
+            parsed_snooze_until,
+            now=parsed_now,
+        )
+        return json.dumps(payload, ensure_ascii=False)
+
+    @server.tool(name="memory_prospective_cancel")
+    async def memory_prospective_cancel_tool(
+        memory_id: str,
+        now: str | None = None,
+        ctx: Context[object, Any, object] | None = None,
+    ) -> str:
+        """Cancel a prospective memory and archive it via soft-delete."""
+        parsed_now = _parse_tool_datetime(now, field_name="now")
+        payload = await cancel_prospective(
+            await resolve_store(ctx),
+            memory_id,
+            now=parsed_now,
+        )
+        return json.dumps(payload, ensure_ascii=False)
 
     @server.tool(name="memory_delete")
     async def memory_delete_tool(

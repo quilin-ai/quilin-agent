@@ -65,8 +65,8 @@ class SafetyLesson:
 
     `pattern` is a substring or compiled-style regex (case-insensitive) tested
     against `MemoryItem.content`. `tags` describe the attack class (e.g. prompt
-    injection, role hijack). Lessons are persisted via
-    `memory_records.metadata["safety_lesson"]` rather than a separate schema.
+    injection, role hijack). QUI-200 adds a SQLite-backed store while keeping
+    this dataclass compatible with the original in-memory fixture shape.
     """
 
     id: str
@@ -74,6 +74,12 @@ class SafetyLesson:
     reason: str
     tags: tuple[str, ...] = ()
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime | None = None
+    lesson_type: str = "poisoning"
+    severity: str = "medium"
+    source: str = "memory"
+    metadata: dict[str, object] = field(default_factory=dict)
+    enabled: bool = True
     is_regex: bool = False
 
     def matches(self, content: str) -> bool:
@@ -94,6 +100,12 @@ class SafetyLesson:
             "reason": self.reason,
             "tags": list(self.tags),
             "created_at": self.created_at.isoformat(),
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "lesson_type": self.lesson_type,
+            "severity": self.severity,
+            "source": self.source,
+            "metadata": dict(self.metadata),
+            "enabled": self.enabled,
             "is_regex": self.is_regex,
         }
 
@@ -108,11 +120,23 @@ class SafetyLesson:
         else:
             created_at = datetime.now(UTC)
 
+        raw_updated = payload.get("updated_at")
+        if isinstance(raw_updated, str):
+            try:
+                updated_at: datetime | None = datetime.fromisoformat(raw_updated)
+            except ValueError:
+                updated_at = None
+        else:
+            updated_at = None
+
         tags_value = payload.get("tags", [])
         if isinstance(tags_value, (list, tuple)):
             tags = tuple(str(tag) for tag in tags_value)
         else:
             tags = ()
+
+        metadata_value = payload.get("metadata", {})
+        metadata = dict(metadata_value) if isinstance(metadata_value, dict) else {}
 
         return cls(
             id=str(payload.get("id", "")),
@@ -120,6 +144,12 @@ class SafetyLesson:
             reason=str(payload.get("reason", "")),
             tags=tags,
             created_at=created_at,
+            updated_at=updated_at,
+            lesson_type=str(payload.get("lesson_type", "poisoning")),
+            severity=str(payload.get("severity", "medium")),
+            source=str(payload.get("source", "memory")),
+            metadata=metadata,
+            enabled=bool(payload.get("enabled", True)),
             is_regex=bool(payload.get("is_regex", False)),
         )
 
@@ -143,12 +173,13 @@ class ConsensusJudge(Protocol):
 class SafetyLessonStore(Protocol):
     """Persistent store for SafetyLesson records.
 
-    Implementations may piggy-back on the existing `QuilinMemStore` by stashing
-    lessons inside `memory_records.metadata["safety_lesson"]` (schema-stable).
-    The gate only depends on the iterable contract here.
+    Implementations may be SQLite-backed or ephemeral. The gate depends only on
+    this small provider contract.
     """
 
     def list_lessons(self) -> Sequence[SafetyLesson]: ...
+
+    def match(self, text: str) -> Sequence[SafetyLesson]: ...
 
     def record_lesson(self, lesson: SafetyLesson) -> None: ...
 
@@ -156,23 +187,16 @@ class SafetyLessonStore(Protocol):
 class InMemorySafetyLessonStore:
     """Default in-memory implementation for tests and ephemeral runs.
 
-    ⚠️ v1 LIMITATION (QUI-194 follow-up tracked as QUI-200):
-
-    Production deployment currently uses this ephemeral store. The
-    SafetyLessonStore Protocol is designed to be backed by the existing
-    `memory_records.metadata["safety_lesson"]` slot (no new schema), but a
-    production SQLite-backed implementation is **deferred to follow-up issue
-    QUI-200**.
+    Legacy fallback for tests and ephemeral runs.
 
     Impact:
     - Process restart loses all recorded SafetyLessons.
     - poisoning_quarantine strategy still works within a process lifetime
       but cannot cumulative-learn across restarts.
-    - For testing, hand-feeding lessons via constructor or test injection is
-      sufficient. For production, expect quarantine effectiveness to degrade
-      after each web/daemon restart until QUI-200 lands.
+    - Production callers that need cross-session persistence should inject
+      `SQLiteSafetyLessonStore`.
 
-    Mitigation in v1 (QUI-194 commit):
+    Mitigation:
     - Gate is OFF by default (``QUILIN_RETRIEVAL_SAFETY_ENABLED=false``),
       lossy InMemoryStore does not silently degrade live UX.
     - When user opts in, every ``record_lesson`` call still works within
@@ -185,6 +209,9 @@ class InMemorySafetyLessonStore:
 
     def list_lessons(self) -> Sequence[SafetyLesson]:
         return tuple(self._lessons)
+
+    def match(self, text: str) -> Sequence[SafetyLesson]:
+        return tuple(lesson for lesson in self._lessons if lesson.matches(text))
 
     def record_lesson(self, lesson: SafetyLesson) -> None:
         self._lessons = [existing for existing in self._lessons if existing.id != lesson.id]

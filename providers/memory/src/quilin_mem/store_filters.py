@@ -29,6 +29,25 @@ def matches_filters(item: MemoryItem, filters: dict[str, Any] | None) -> bool:
     if content_type is not None and item.content_type != content_type:
         return False
 
+    if "project_scope" in filters:
+        project_scope = filters["project_scope"]
+        if project_scope is None:
+            if item.project_scope is not None:
+                return False
+        elif item.project_scope not in {str(project_scope), None}:
+            return False
+
+    writer_client = filters.get("last_writer_client", filters.get("writer_client"))
+    if writer_client is not None and item.last_writer_client != str(writer_client):
+        return False
+
+    writer_session_id = filters.get(
+        "last_writer_session_id",
+        filters.get("writer_session_id"),
+    )
+    if writer_session_id is not None and item.last_writer_session_id != str(writer_session_id):
+        return False
+
     metadata_filters = filters.get("metadata")
     if isinstance(metadata_filters, dict):
         for key, value in metadata_filters.items():

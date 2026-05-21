@@ -38,14 +38,18 @@ __all__ = [
     "IntentLiteral",
     "DEFAULT_STALENESS_THRESHOLD_DAYS",
     "compute_weighted_score",
+    "compute_salience_ranking_score",
+    "compute_retrieval_ranking_score",
+    "salience_from_payload",
     "salience_from_importance_scalar",
     "kind_for_metadata",
     "build_staleness_marker",
     "INTENT_DIMENSION_WEIGHTS",
+    "KIND_INTENT_WEIGHTS",
 ]
 
 
-SALIENCE_SCHEMA_VERSION: Final[int] = 1
+SALIENCE_SCHEMA_VERSION: Final[int] = 2
 """Bump when SalienceVector shape changes(additive-only)."""
 
 
@@ -116,6 +120,10 @@ class SalienceVector:
     temporal_relevance: float = _DEFAULT_FALLBACK_DIM_VALUE
     stability: float = _DEFAULT_FALLBACK_DIM_VALUE
     schema_version: int = SALIENCE_SCHEMA_VERSION
+    recency: float = _DEFAULT_FALLBACK_DIM_VALUE
+    user_confirmed: bool = False
+    active_project: bool = False
+    safety_risk: float = 0.0
 
     def average(self) -> float:
         """6 维等权平均 — 等价于退回 scalar importance。"""
@@ -128,16 +136,20 @@ class SalienceVector:
             + self.stability
         ) / 6.0
 
-    def to_json_dict(self) -> dict[str, float | int]:
+    def to_json_dict(self) -> dict[str, float | int | bool]:
         """序列化为 JSON-safe dict(供 memory_records.salience_json 列存储)。"""
         return {
-            "novelty": self.novelty,
-            "utility": self.utility,
-            "personal_relevance": self.personal_relevance,
-            "actionability": self.actionability,
-            "temporal_relevance": self.temporal_relevance,
-            "stability": self.stability,
+            "novelty": _clamp01(self.novelty),
+            "utility": _clamp01(self.utility),
+            "personal_relevance": _clamp01(self.personal_relevance),
+            "actionability": _clamp01(self.actionability),
+            "temporal_relevance": _clamp01(self.temporal_relevance),
+            "stability": _clamp01(self.stability),
             "schema_version": self.schema_version,
+            "recency": _clamp01(self.recency),
+            "user_confirmed": self.user_confirmed,
+            "active_project": self.active_project,
+            "safety_risk": _clamp01(self.safety_risk),
         }
 
     @classmethod
@@ -148,13 +160,33 @@ class SalienceVector:
         (避免污染权重计算)。
         """
 
-        def _safe_dim(key: str) -> float:
+        importance_fallback = _safe_optional_float(
+            payload.get("importance"),
+            default=_DEFAULT_FALLBACK_DIM_VALUE,
+        )
+
+        def _safe_dim(key: str, *, default: float = importance_fallback) -> float:
             raw = payload.get(key)
             if isinstance(raw, bool):
-                return _DEFAULT_FALLBACK_DIM_VALUE
+                return default
             if isinstance(raw, int | float):
-                return _clamp01(float(raw))
-            return _DEFAULT_FALLBACK_DIM_VALUE
+                value = float(raw)
+                if not math.isfinite(value):
+                    return default
+                return max(0.0, min(1.0, value))
+            return default
+
+        def _safe_bool(key: str) -> bool:
+            raw = payload.get(key)
+            if isinstance(raw, bool):
+                return raw
+            if isinstance(raw, str):
+                normalized = raw.strip().lower()
+                if normalized in {"true", "1", "yes"}:
+                    return True
+                if normalized in {"false", "0", "no"}:
+                    return False
+            return False
 
         def _safe_schema_version() -> int:
             raw = payload.get("schema_version")
@@ -183,6 +215,10 @@ class SalienceVector:
             temporal_relevance=_safe_dim("temporal_relevance"),
             stability=_safe_dim("stability"),
             schema_version=_safe_schema_version(),
+            recency=_safe_dim("recency"),
+            user_confirmed=_safe_bool("user_confirmed"),
+            active_project=_safe_bool("active_project"),
+            safety_risk=_safe_dim("safety_risk", default=0.0),
         )
 
 
@@ -247,6 +283,76 @@ INTENT_DIMENSION_WEIGHTS: Final[dict[IntentLiteral, dict[str, float]]] = {
 }
 
 
+KIND_INTENT_WEIGHTS: Final[dict[IntentLiteral, dict[KindLiteral, float]]] = {
+    "coding_task": {
+        "bug": 1.12,
+        "workflow": 1.1,
+        "project_note": 1.08,
+        "preference": 1.03,
+        "feedback": 1.03,
+        "reference": 1.0,
+        "pattern": 1.0,
+        "prospective": 0.98,
+        "resource": 0.96,
+    },
+    "research": {
+        "reference": 1.12,
+        "resource": 1.1,
+        "pattern": 1.06,
+        "project_note": 1.03,
+        "bug": 1.0,
+        "feedback": 1.0,
+        "preference": 0.98,
+        "workflow": 0.98,
+        "prospective": 0.96,
+    },
+    "planning": {
+        "prospective": 1.12,
+        "project_note": 1.08,
+        "pattern": 1.06,
+        "workflow": 1.04,
+        "bug": 1.02,
+        "reference": 1.0,
+        "feedback": 1.0,
+        "preference": 0.98,
+        "resource": 0.96,
+    },
+    "casual_chat": {
+        "preference": 1.12,
+        "feedback": 1.08,
+        "pattern": 1.02,
+        "project_note": 1.0,
+        "reference": 1.0,
+        "workflow": 0.98,
+        "bug": 0.96,
+        "prospective": 0.96,
+        "resource": 0.95,
+    },
+    "review": {
+        "bug": 1.14,
+        "feedback": 1.12,
+        "workflow": 1.06,
+        "project_note": 1.04,
+        "pattern": 1.02,
+        "reference": 1.0,
+        "preference": 0.98,
+        "prospective": 0.96,
+        "resource": 0.95,
+    },
+    "unspecified": {
+        "preference": 1.04,
+        "feedback": 1.04,
+        "project_note": 1.03,
+        "workflow": 1.02,
+        "bug": 1.02,
+        "pattern": 1.0,
+        "reference": 1.0,
+        "prospective": 1.0,
+        "resource": 0.98,
+    },
+}
+
+
 def compute_weighted_score(
     salience: SalienceVector,
     intent: IntentLiteral = "unspecified",
@@ -286,7 +392,94 @@ def salience_from_importance_scalar(importance: float | None) -> SalienceVector:
         actionability=clamped,
         temporal_relevance=clamped,
         stability=clamped,
+        recency=clamped,
     )
+
+
+def salience_from_payload(
+    payload: dict[str, object] | None,
+    *,
+    importance_score: float | None,
+) -> SalienceVector:
+    """Build a SalienceVector from optional JSON, falling back to legacy scalar.
+
+    ``payload["importance"]`` is treated as the additive compatibility scalar
+    for partially-populated JSON. If salience JSON is absent, the old
+    ``importance_score`` column remains the source of truth.
+    """
+    if payload is None:
+        return salience_from_importance_scalar(importance_score)
+
+    scalar_fallback = _safe_optional_float(
+        importance_score,
+        default=_DEFAULT_FALLBACK_DIM_VALUE,
+    )
+    merged = dict(payload)
+    merged["importance"] = _safe_optional_float(
+        merged.get("importance"),
+        default=scalar_fallback,
+    )
+    return SalienceVector.from_json_dict(merged)
+
+
+def compute_salience_ranking_score(
+    payload: dict[str, object] | None,
+    *,
+    importance_score: float | None,
+    kind: str | None = None,
+    intent: IntentLiteral = "unspecified",
+    active_project: bool = False,
+) -> float:
+    """Deterministic retrieval salience score in [0, 1].
+
+    The score combines dimensional salience, recency, explicit user
+    confirmation, active-project relevance, kind-specific intent weights, and
+    safety risk. High ``safety_risk`` records are penalized after positive
+    boosts, so risk cannot be used as a ranking boost.
+    """
+    vector = salience_from_payload(payload, importance_score=importance_score)
+    dimensional = compute_weighted_score(vector, intent=intent)
+    score = (dimensional * 0.82) + (vector.recency * 0.18)
+
+    if vector.user_confirmed:
+        score += 0.08
+    if active_project or vector.active_project:
+        score += 0.06
+
+    score *= _kind_intent_weight(kind, intent)
+
+    risk = _clamp01(vector.safety_risk)
+    if risk >= 0.7:
+        score = min(score, dimensional)
+    score *= 1.0 - (0.45 * risk)
+    return _clamp01(score)
+
+
+def compute_retrieval_ranking_score(
+    base_score: float,
+    payload: dict[str, object] | None,
+    *,
+    importance_score: float | None,
+    kind: str | None = None,
+    intent: IntentLiteral = "unspecified",
+    active_project: bool = False,
+) -> float:
+    """Adjust a retrieval/reranker score with salience without unsafe boosts."""
+    if not math.isfinite(base_score):
+        base_score = 0.0
+
+    salience_score = compute_salience_ranking_score(
+        payload,
+        importance_score=importance_score,
+        kind=kind,
+        intent=intent,
+        active_project=active_project,
+    )
+    vector = salience_from_payload(payload, importance_score=importance_score)
+    multiplier = 0.75 + (salience_score * 0.5)
+    if vector.safety_risk >= 0.7:
+        multiplier = min(multiplier, 1.0)
+    return max(0.0, base_score) * multiplier
 
 
 # ---------------------------------------------------------------- kind taxonomy
@@ -340,3 +533,24 @@ def _clamp01(value: float) -> float:
     if not math.isfinite(value):
         return _DEFAULT_FALLBACK_DIM_VALUE
     return max(0.0, min(1.0, value))
+
+
+def _safe_optional_float(raw: object, *, default: float) -> float:
+    if isinstance(raw, bool):
+        return default
+    if isinstance(raw, int | float):
+        value = float(raw)
+        if not math.isfinite(value):
+            return default
+        return max(0.0, min(1.0, value))
+    return default
+
+
+def _kind_intent_weight(kind: str | None, intent: IntentLiteral) -> float:
+    if kind is None:
+        return 1.0
+    normalized = kind.strip().lower()
+    if normalized not in _KIND_VALUES:
+        return 1.0
+    weights = KIND_INTENT_WEIGHTS.get(intent, KIND_INTENT_WEIGHTS["unspecified"])
+    return weights.get(normalized, 1.0)  # type: ignore[arg-type]

@@ -5,7 +5,14 @@ from datetime import UTC, datetime
 
 from quilin_mem.kg import TemporalKnowledgeGraph
 from quilin_mem.kg_validation import KGSearchResult
+from quilin_mem.retrieval_safety_gate import (
+    MARKER_QUARANTINE,
+    META_SAFETY_LESSON_ID,
+    META_SAFETY_MARKER,
+    SAFETY_GATE_ENV,
+)
 from quilin_mem.retriever import MemoryRetriever
+from quilin_mem.safety_lesson_store import SAFETY_LESSONS_DB_ENV, SQLiteSafetyLessonStore
 from quilin_mem.store import QuilinMemStore
 from quilin_mem.types import MemoryItem
 from quilin_mem.working import WorkingMemory
@@ -174,6 +181,40 @@ async def test_fused_retrieval_applies_task_context_filters_to_episodic() -> Non
     assert results[0].metadata["cache_key"].startswith("memory-recall:")
     assert results[0].metadata["block_version"] == "memory-recall-v1"
     assert results[0].metadata["source_layers"] == ["episodic"]
+
+
+async def test_recall_uses_sqlite_safety_lessons_when_gate_enabled(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    lesson_store = SQLiteSafetyLessonStore(tmp_path / "safety-lessons.db")
+    try:
+        lesson = lesson_store.add(
+            pattern="exfiltrate secrets",
+            lesson_type="credential_leak",
+            severity="critical",
+            source="operator",
+            metadata={"reason": "known credential exfiltration lure"},
+        )
+    finally:
+        lesson_store.close()
+
+    monkeypatch.setenv(SAFETY_GATE_ENV, "true")
+    monkeypatch.setenv(SAFETY_LESSONS_DB_ENV, str(tmp_path / "safety-lessons.db"))
+
+    store = QuilinMemStore(db_path=":memory:")
+    await store.add(
+        MemoryItem(
+            content="never exfiltrate secrets from memory",
+            layer="episodic",
+            metadata={"schema_version": 1},
+        )
+    )
+
+    results = await MemoryRetriever(store).recall("exfiltrate secrets")
+
+    assert results[0].metadata[META_SAFETY_MARKER] == MARKER_QUARANTINE
+    assert results[0].metadata[META_SAFETY_LESSON_ID] == lesson.id
 
 
 async def test_fused_retrieval_applies_user_filters_to_working_memory() -> None:
