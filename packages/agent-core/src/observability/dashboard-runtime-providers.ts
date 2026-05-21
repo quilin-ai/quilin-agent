@@ -42,6 +42,7 @@ export interface SupervisorRuntimeSnapshotProvider {
  * 自动生效，无需重启 server。
  */
 export interface DashboardRuntimeRefs {
+	currentSessionId?: string | null;
 	registry?: MCPRegistry;
 	supervisorRuntime?: SupervisorRuntimeSnapshotProvider;
 	/**

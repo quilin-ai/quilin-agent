@@ -30,27 +30,6 @@ import type {
 	Turn,
 } from "./schemas.js";
 
-interface MessageTokenUsage {
-	readonly response?: number;
-	readonly thinking?: number;
-}
-
-function messageTokenTotal(message: unknown): number {
-	if (
-		message == null ||
-		typeof message !== "object" ||
-		!("tokens" in message)
-	) {
-		return 0;
-	}
-
-	const tokens = (message as { readonly tokens?: MessageTokenUsage }).tokens;
-	if (tokens == null) {
-		return 0;
-	}
-	return (tokens.response ?? 0) + (tokens.thinking ?? 0);
-}
-
 export interface V2RuntimeAdapterOptions {
 	readonly refs: DashboardRuntimeRefs;
 	readonly checkpoint: SQLiteCheckpoint;
@@ -93,7 +72,7 @@ export class V2RuntimeAdapter implements V2Runtime {
 		return {
 			version: "0.0.3",
 			startedAt: this.startedAtIso,
-			currentSessionId: process.env.QUILIN_SESSION_ID || "main-repl",
+			currentSessionId: this.refs.currentSessionId ?? null,
 			currentAgentId: "main",
 			agents: [...agents],
 			memory,
@@ -122,10 +101,7 @@ export class V2RuntimeAdapter implements V2Runtime {
 					title: s.lastMessage || "Quilin Session",
 					agentId: "main",
 					turnsCount: turnsCount || s.messageCount || 0,
-					tokensTotal: state.messages.reduce(
-						(acc, m) => acc + messageTokenTotal(m),
-						0,
-					),
+					tokensTotal: 0,
 					startedAt: state.createdAt || s.lastActiveAt,
 					lastTurnAt: state.lastActiveAt || s.lastActiveAt,
 					status: "active",
@@ -177,10 +153,7 @@ export class V2RuntimeAdapter implements V2Runtime {
 			title: s.lastMessage || "Quilin Session",
 			agentId: "main",
 			turnsCount: turnsCount || s.messageCount || 0,
-			tokensTotal: state.messages.reduce(
-				(acc, m) => acc + messageTokenTotal(m),
-				0,
-			),
+			tokensTotal: 0,
 			startedAt: state.createdAt || s.lastActiveAt,
 			lastTurnAt: state.lastActiveAt || s.lastActiveAt,
 			status: "active",
@@ -536,8 +509,12 @@ export class V2RuntimeAdapter implements V2Runtime {
 		return agents;
 	}
 
-	authorize(_input: AuthorizePost): AuthorizeResult {
-		return { kind: "ok" };
+	authorize(input: AuthorizePost): AuthorizeResult {
+		return {
+			kind: "not_found",
+			code: "agent_not_found",
+			message: `No pending authorization request found for ${input.requestId}.`,
+		};
 	}
 
 	subscribeSse(

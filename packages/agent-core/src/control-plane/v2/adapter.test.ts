@@ -52,6 +52,27 @@ describe("V2RuntimeAdapter config bridge", () => {
 		});
 	});
 
+	it("reports the late-bound live REPL session id in runtime snapshots", async () => {
+		const config = userConfigSchema.parse({});
+		const refs = {
+			currentSessionId: "live-session-123",
+		} satisfies DashboardRuntimeRefs;
+		const adapter = makeAdapter(config, { refs });
+
+		await expect(adapter.getRuntimeSnapshot()).resolves.toMatchObject({
+			currentSessionId: "live-session-123",
+		});
+	});
+
+	it("reports null instead of a fake session id before REPL publishes one", async () => {
+		const config = userConfigSchema.parse({});
+		const adapter = makeAdapter(config);
+
+		await expect(adapter.getRuntimeSnapshot()).resolves.toMatchObject({
+			currentSessionId: null,
+		});
+	});
+
 	it("rejects critical config writes until a WriteAuthority gate is wired", () => {
 		const config = userConfigSchema.parse({});
 		const adapter = makeAdapter(config);
@@ -109,11 +130,7 @@ describe("V2RuntimeAdapter live data mapping", () => {
 		const config = userConfigSchema.parse({});
 		const state = {
 			messages: [
-				{
-					role: "user",
-					content: "hello",
-					tokens: { response: 4, thinking: 6 },
-				},
+				{ role: "user", content: "hello" },
 				{ role: "assistant", content: "hi" },
 				{ role: "tool", content: "internal result" },
 			],
@@ -139,7 +156,7 @@ describe("V2RuntimeAdapter live data mapping", () => {
 		expect(sessions.items[0]).toMatchObject({
 			id: "session-1",
 			turnsCount: 1,
-			tokensTotal: 10,
+			tokensTotal: 0,
 		});
 
 		const detail = await adapter.getSession("session-1");
@@ -233,5 +250,17 @@ describe("V2RuntimeAdapter live data mapping", () => {
 				avgLatencyMs: 0,
 			},
 		]);
+	});
+
+	it("reports missing authorization requests instead of approving blindly", () => {
+		const config = userConfigSchema.parse({});
+		const adapter = makeAdapter(config);
+
+		expect(
+			adapter.authorize({ requestId: "missing", decision: "approve" }),
+		).toMatchObject({
+			kind: "not_found",
+			code: "agent_not_found",
+		});
 	});
 });

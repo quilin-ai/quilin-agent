@@ -1018,7 +1018,9 @@ export async function main(options: MainOptions = {}): Promise<void> {
 		// 晚绑定的运行时引用。`startRepl` 内 `onRuntimeReady` 触发后填充。
 		// Provider 闭包每次请求都读这个对象，字段切到真值后面板自动接通，
 		// 无需重启 dashboard server。详见 QUI-105 round 2。
-		const dashboardRuntimeRefs: DashboardRuntimeRefs = {};
+		const dashboardRuntimeRefs: DashboardRuntimeRefs = {
+			currentSessionId: sessionId ?? null,
+		};
 		// Start web control plane / dashboard (test env skips)
 		if (process.env.NODE_ENV !== "test") {
 			try {
@@ -1252,6 +1254,7 @@ export async function main(options: MainOptions = {}): Promise<void> {
 					idleRunner.setWriteAuthority(authority);
 				},
 				onRuntimeReady: (runtime) => {
+					dashboardRuntimeRefs.currentSessionId = runtime.sessionId;
 					// Late-bind runtime sources so the dashboard tasks / memory /
 					// tools panels start serving real data once REPL has its
 					// MCPRegistry + SupervisorRuntime constructed. The memory

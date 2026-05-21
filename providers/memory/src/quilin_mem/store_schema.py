@@ -283,6 +283,18 @@ def _ensure_memory_record_columns(
           AND trim(forget_after) != ''
         """
     )
+    # dogfood 2026-05-21 fix:历史 deleted=1 + forget_after IS NULL 的记录
+    # 之前漏 backfill,导致 memory_recover 找不到(7d 窗口判定需 archived_at)。
+    # 用 last_accessed / created_at 作 fallback。这些记录在 v1 时 forget_after
+    # 字段还不存在,所以走 fallback。
+    conn.execute(
+        """
+        UPDATE memory_records
+        SET archived_at = COALESCE(last_accessed, created_at)
+        WHERE deleted = 1
+          AND archived_at IS NULL
+        """
+    )
 
 
 def _ensure_versioning_tables(conn: sqlite3.Connection) -> None:

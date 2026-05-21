@@ -437,6 +437,11 @@ class QuilinMemStore:
                     return
 
                 deleted_at = _utcnow()
+                # dogfood 2026-05-21 发现的 bug:`forget_after` 之前写成
+                # `deleted_at.isoformat()` 等于 `archived_at`,GC 用
+                # `forget_after < now` 会立即清理。正确语义:`forget_after`
+                # = 软删除窗口结束时间(deleted_at + DEFAULT_RECOVERY_WINDOW)。
+                forget_after = deleted_at + DEFAULT_RECOVERY_WINDOW
                 self._record_history_snapshot_locked(
                     memory_id=memory_id,
                     record=_row_to_record(row, now=_utcnow),
@@ -449,7 +454,7 @@ class QuilinMemStore:
                     SET deleted = 1, archived_at = ?, forget_after = ?, recovered_at = NULL
                     WHERE id = ? AND deleted = 0 AND is_latest = 1
                     """,
-                    (deleted_at.isoformat(), deleted_at.isoformat(), memory_id),
+                    (deleted_at.isoformat(), forget_after.isoformat(), memory_id),
                 )
                 self._conn.execute(
                     "DELETE FROM memory_records_fts WHERE id = ?",
@@ -712,6 +717,9 @@ class QuilinMemStore:
                         label_kind="clear",
                         snapshot_at=clear_at,
                     )
+                # dogfood 2026-05-21 fix:forget_after = clear_at + recovery window
+                # 不是 clear_at 自身(那会让 GC 立即清理)
+                clear_forget_after = clear_at + DEFAULT_RECOVERY_WINDOW
                 cursor = self._conn.execute(
                     """
                     UPDATE memory_records
@@ -723,7 +731,7 @@ class QuilinMemStore:
                     """,
                     (
                         clear_at.isoformat(),
-                        clear_at.isoformat(),
+                        clear_forget_after.isoformat(),
                         resolved_layer,
                         clear_at.isoformat(),
                     ),

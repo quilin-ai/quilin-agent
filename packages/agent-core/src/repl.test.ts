@@ -79,10 +79,7 @@ const registryServerToolsById = new Map<string, ToolWithMetadata[]>();
 const registryChangeListeners: Array<() => void> = [];
 
 function setProcessTty(
-	stream:
-		| typeof process.stdin
-		| typeof process.stderr
-		| typeof process.stdout,
+	stream: typeof process.stdin | typeof process.stderr | typeof process.stdout,
 	value: boolean,
 ): () => void {
 	const descriptor = Object.getOwnPropertyDescriptor(stream, "isTTY");
@@ -582,9 +579,7 @@ describe("startRepl", () => {
 		expect(typeof builtinOptions?.subagentSpawn?.getLoopConfig).toBe(
 			"function",
 		);
-		expect(typeof builtinOptions?.configView?.getRuntimeState).toBe(
-			"function",
-		);
+		expect(typeof builtinOptions?.configView?.getRuntimeState).toBe("function");
 		expect(builtinOptions?.sessionList?.checkpoint).toBeDefined();
 		expect(mockRegistryRegisterBuiltin).toHaveBeenNthCalledWith(
 			1,
@@ -611,6 +606,25 @@ describe("startRepl", () => {
 			createdAt: expect.any(String),
 			lastActiveAt: expect.any(String),
 		});
+	});
+
+	it("passes the resolved generated session id to runtime-ready hooks", async () => {
+		mockQuestion.mockResolvedValueOnce("/exit");
+		const onRuntimeReady = vi.fn();
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: createMockProvider(() => createMockLanguageModel()),
+			modelId: "deepseek-chat",
+			onRuntimeReady,
+		});
+
+		expect(onRuntimeReady).toHaveBeenCalledWith(
+			expect.objectContaining({
+				sessionId: "00000000-0000-0000-0000-000000000000",
+			}),
+		);
 	});
 
 	it("emits provider run records through the DeepSeek runtime control plane", async () => {
@@ -3042,152 +3056,151 @@ describe("startRepl", () => {
 		expect(capturedMessages[1]).toEqual(expect.any(String));
 	});
 
-		it("/resume lists sessions in a table", async () => {
-			mockCheckpointListSessions.mockResolvedValue([
-				{
-					sessionId: "session-u1",
-					lastMessage: "帮我查一下关于 AIHOT 的最新...",
-					messageCount: 5,
-					lastActiveAt: "2026-04-15T15:30:00.000Z",
-				},
-				{
-					sessionId: "session-u2",
-					lastMessage: "怎么优化 SQLite 查询性能？",
-					messageCount: 3,
-					lastActiveAt: "2026-04-15T10:15:00.000Z",
-				},
-			]);
-			mockQuestion
-				.mockResolvedValueOnce("/resume")
-				.mockResolvedValueOnce("/exit");
-
-			const { startRepl } = await import("./repl.js");
-
-			await startRepl({
-				provider: createMockProvider(() => createMockLanguageModel()),
-				modelId: "deepseek-chat",
-			});
-
-			expect(mockCheckpointListSessions).toHaveBeenCalledTimes(1);
-			const writes = stderrWriteSpy.mock.calls
-				.map(([value]) => String(value))
-				.join("");
-			expect(writes).toContain("04-15 15:30");
-			expect(writes).toContain("04-15 10:15");
-			expect(writes).toContain("帮我查一下关于 AIHOT 的最新...");
-			expect(writes).toContain("怎么优化 SQLite 查询性能？");
-			expect(writes).toContain("输入 /resume <编号> 恢复会话");
-		});
-
-		it("/resume shows empty message when no sessions exist", async () => {
-			mockCheckpointListSessions.mockResolvedValue([]);
-			mockQuestion
-				.mockResolvedValueOnce("/resume")
-				.mockResolvedValueOnce("/exit");
-
-			const { startRepl } = await import("./repl.js");
-
-			await startRepl({
-				provider: createMockProvider(() => createMockLanguageModel()),
-				modelId: "deepseek-chat",
-			});
-
-			expect(stderrWriteSpy).toHaveBeenCalledWith("No saved sessions found.\n");
-		});
-
-		it("/resume <number> restores a session and replaces current messages", async () => {
-			mockCheckpointListSessions.mockResolvedValue([
-				{
-					sessionId: "target-session",
-					lastMessage: "target message",
-					messageCount: 4,
-					lastActiveAt: "2026-04-15T15:30:00.000Z",
-				},
-			]);
-			mockCheckpointLoad.mockResolvedValue({
-				messages: [
-					{ role: "system", content: "other system prompt" },
-					{ role: "user", content: "restored question" },
-					{ role: "assistant", content: "restored answer" },
-				],
-				isTerminal: false,
-				turnCount: 2,
-				createdAt: "2026-04-15T15:00:00.000Z",
+	it("/resume lists sessions in a table", async () => {
+		mockCheckpointListSessions.mockResolvedValue([
+			{
+				sessionId: "session-u1",
+				lastMessage: "帮我查一下关于 AIHOT 的最新...",
+				messageCount: 5,
 				lastActiveAt: "2026-04-15T15:30:00.000Z",
-			});
-			mockQuestion
-				.mockResolvedValueOnce("/resume 1")
-				.mockResolvedValueOnce("follow-up")
-				.mockResolvedValueOnce("/exit");
-			mockRunAgentLoop.mockImplementation(async (_config, messages) => {
-				capturedMessages.push(structuredClone(messages));
-				return "ok";
-			});
+			},
+			{
+				sessionId: "session-u2",
+				lastMessage: "怎么优化 SQLite 查询性能？",
+				messageCount: 3,
+				lastActiveAt: "2026-04-15T10:15:00.000Z",
+			},
+		]);
+		mockQuestion
+			.mockResolvedValueOnce("/resume")
+			.mockResolvedValueOnce("/exit");
 
-			const { startRepl } = await import("./repl.js");
+		const { startRepl } = await import("./repl.js");
 
-			await startRepl({
-				provider: createMockProvider(() => createMockLanguageModel()),
-				modelId: "deepseek-chat",
-			});
+		await startRepl({
+			provider: createMockProvider(() => createMockLanguageModel()),
+			modelId: "deepseek-chat",
+		});
 
-			expect(mockCheckpointSave).toHaveBeenCalledWith(
-				expect.objectContaining({ isTerminal: true }),
-			);
-			expect(mockCheckpointLoad).toHaveBeenCalledWith("target-session");
-			expect(stderrWriteSpy).toHaveBeenCalledWith(
-				"Resumed session target-session (2 messages).\n\n",
-			);
-			expect(capturedMessages[0]).toEqual([
+		expect(mockCheckpointListSessions).toHaveBeenCalledTimes(1);
+		const writes = stderrWriteSpy.mock.calls
+			.map(([value]) => String(value))
+			.join("");
+		expect(writes).toContain("04-15 15:30");
+		expect(writes).toContain("04-15 10:15");
+		expect(writes).toContain("帮我查一下关于 AIHOT 的最新...");
+		expect(writes).toContain("怎么优化 SQLite 查询性能？");
+		expect(writes).toContain("输入 /resume <编号> 恢复会话");
+	});
+
+	it("/resume shows empty message when no sessions exist", async () => {
+		mockCheckpointListSessions.mockResolvedValue([]);
+		mockQuestion
+			.mockResolvedValueOnce("/resume")
+			.mockResolvedValueOnce("/exit");
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: createMockProvider(() => createMockLanguageModel()),
+			modelId: "deepseek-chat",
+		});
+
+		expect(stderrWriteSpy).toHaveBeenCalledWith("No saved sessions found.\n");
+	});
+
+	it("/resume <number> restores a session and replaces current messages", async () => {
+		mockCheckpointListSessions.mockResolvedValue([
+			{
+				sessionId: "target-session",
+				lastMessage: "target message",
+				messageCount: 4,
+				lastActiveAt: "2026-04-15T15:30:00.000Z",
+			},
+		]);
+		mockCheckpointLoad.mockResolvedValue({
+			messages: [
+				{ role: "system", content: "other system prompt" },
 				{ role: "user", content: "restored question" },
 				{ role: "assistant", content: "restored answer" },
-				{ role: "user", content: "follow-up" },
-			]);
+			],
+			isTerminal: false,
+			turnCount: 2,
+			createdAt: "2026-04-15T15:00:00.000Z",
+			lastActiveAt: "2026-04-15T15:30:00.000Z",
+		});
+		mockQuestion
+			.mockResolvedValueOnce("/resume 1")
+			.mockResolvedValueOnce("follow-up")
+			.mockResolvedValueOnce("/exit");
+		mockRunAgentLoop.mockImplementation(async (_config, messages) => {
+			capturedMessages.push(structuredClone(messages));
+			return "ok";
 		});
 
-		it("/resume <number> shows error for out-of-range index", async () => {
-			mockCheckpointListSessions.mockResolvedValue([
-				{
-					sessionId: "session-u1",
-					lastMessage: "hello",
-					messageCount: 2,
-					lastActiveAt: "2026-04-15T15:30:00.000Z",
-				},
-			]);
-			mockQuestion
-				.mockResolvedValueOnce("/resume 5")
-				.mockResolvedValueOnce("/exit");
+		const { startRepl } = await import("./repl.js");
 
-			const { startRepl } = await import("./repl.js");
-
-			await startRepl({
-				provider: createMockProvider(() => createMockLanguageModel()),
-				modelId: "deepseek-chat",
-			});
-
-			expect(stderrWriteSpy).toHaveBeenCalledWith(
-				"Session number 5 out of range (1-1).\n",
-			);
+		await startRepl({
+			provider: createMockProvider(() => createMockLanguageModel()),
+			modelId: "deepseek-chat",
 		});
 
-		it("/resume <number> shows error for invalid number format", async () => {
-			mockCheckpointListSessions.mockResolvedValue([]);
-			mockQuestion
-				.mockResolvedValueOnce("/resume abc")
-				.mockResolvedValueOnce("/exit");
+		expect(mockCheckpointSave).toHaveBeenCalledWith(
+			expect.objectContaining({ isTerminal: true }),
+		);
+		expect(mockCheckpointLoad).toHaveBeenCalledWith("target-session");
+		expect(stderrWriteSpy).toHaveBeenCalledWith(
+			"Resumed session target-session (2 messages).\n\n",
+		);
+		expect(capturedMessages[0]).toEqual([
+			{ role: "user", content: "restored question" },
+			{ role: "assistant", content: "restored answer" },
+			{ role: "user", content: "follow-up" },
+		]);
+	});
 
-			const { startRepl } = await import("./repl.js");
+	it("/resume <number> shows error for out-of-range index", async () => {
+		mockCheckpointListSessions.mockResolvedValue([
+			{
+				sessionId: "session-u1",
+				lastMessage: "hello",
+				messageCount: 2,
+				lastActiveAt: "2026-04-15T15:30:00.000Z",
+			},
+		]);
+		mockQuestion
+			.mockResolvedValueOnce("/resume 5")
+			.mockResolvedValueOnce("/exit");
 
-			await startRepl({
-				provider: createMockProvider(() => createMockLanguageModel()),
-				modelId: "deepseek-chat",
-			});
+		const { startRepl } = await import("./repl.js");
 
-			expect(stderrWriteSpy).toHaveBeenCalledWith(
-				"Invalid session number: abc\n",
-			);
+		await startRepl({
+			provider: createMockProvider(() => createMockLanguageModel()),
+			modelId: "deepseek-chat",
 		});
 
+		expect(stderrWriteSpy).toHaveBeenCalledWith(
+			"Session number 5 out of range (1-1).\n",
+		);
+	});
+
+	it("/resume <number> shows error for invalid number format", async () => {
+		mockCheckpointListSessions.mockResolvedValue([]);
+		mockQuestion
+			.mockResolvedValueOnce("/resume abc")
+			.mockResolvedValueOnce("/exit");
+
+		const { startRepl } = await import("./repl.js");
+
+		await startRepl({
+			provider: createMockProvider(() => createMockLanguageModel()),
+			modelId: "deepseek-chat",
+		});
+
+		expect(stderrWriteSpy).toHaveBeenCalledWith(
+			"Invalid session number: abc\n",
+		);
+	});
 
 	it("/status shows MCP server details when capabilitiesStatus is available", async () => {
 		mockQuestion
@@ -3308,9 +3321,7 @@ describe("startRepl", () => {
 				"Recall memory from the MCP server.",
 			),
 		]);
-		mockQuestion
-			.mockResolvedValueOnce("/mcp")
-			.mockResolvedValueOnce("/exit");
+		mockQuestion.mockResolvedValueOnce("/mcp").mockResolvedValueOnce("/exit");
 
 		const { startRepl } = await import("./repl.js");
 
@@ -3338,9 +3349,7 @@ describe("startRepl", () => {
 	});
 
 	it("/mcp shows empty message when no servers registered", async () => {
-		mockQuestion
-			.mockResolvedValueOnce("/mcp")
-			.mockResolvedValueOnce("/exit");
+		mockQuestion.mockResolvedValueOnce("/mcp").mockResolvedValueOnce("/exit");
 
 		const { startRepl } = await import("./repl.js");
 
@@ -3349,9 +3358,7 @@ describe("startRepl", () => {
 			modelId: "deepseek-chat",
 		});
 
-		expect(stderrWriteSpy).toHaveBeenCalledWith(
-			"No MCP servers registered.\n",
-		);
+		expect(stderrWriteSpy).toHaveBeenCalledWith("No MCP servers registered.\n");
 	});
 
 	describe("self-evolution proposal review slash commands", () => {
@@ -3434,10 +3441,7 @@ describe("startRepl", () => {
 				},
 			);
 			const defaultApplyApproved = vi.fn(
-				async (
-					_authority: unknown,
-					_options: unknown,
-				) => ({
+				async (_authority: unknown, _options: unknown) => ({
 					applied: state.filter((record) => record.status === "approved"),
 					skipped: [],
 					failed: [],
@@ -3541,9 +3545,7 @@ describe("startRepl", () => {
 			expect(writes).toContain("Pending proposals (1 of 3)");
 			expect(writes).toContain("proposal-111");
 			expect(writes).not.toContain("proposal-222");
-			expect(writes).toContain(
-				"Showing first 1; pass --limit 3 to see all.",
-			);
+			expect(writes).toContain("Showing first 1; pass --limit 3 to see all.");
 		});
 
 		it("/proposal-approve transitions a pending proposal when --yes is provided", async () => {
@@ -3586,9 +3588,7 @@ describe("startRepl", () => {
 				buildProposal({ proposalId: "proposal-confirmcanc-x" }),
 			]);
 			mockQuestion
-				.mockResolvedValueOnce(
-					"/proposal-approve proposal-confirmcanc-x",
-				)
+				.mockResolvedValueOnce("/proposal-approve proposal-confirmcanc-x")
 				.mockResolvedValueOnce("n")
 				.mockResolvedValueOnce("/exit");
 
@@ -3607,9 +3607,7 @@ describe("startRepl", () => {
 		it("/proposal-approve reports when the proposal does not exist", async () => {
 			const proposalStore = createFakeProposalStore([]);
 			mockQuestion
-				.mockResolvedValueOnce(
-					"/proposal-approve proposal-missing00-x --yes",
-				)
+				.mockResolvedValueOnce("/proposal-approve proposal-missing00-x --yes")
 				.mockResolvedValueOnce("/exit");
 
 			const { startRepl } = await import("./repl.js");
@@ -3701,9 +3699,7 @@ describe("startRepl", () => {
 
 		it("/proposal-apply renders apply outcomes for approved proposals", async () => {
 			const applyMock = vi.fn(async () => ({
-				applied: [
-					{ proposalId: "proposal-applied001-x" },
-				],
+				applied: [{ proposalId: "proposal-applied001-x" }],
 				skipped: [
 					{
 						proposalId: "proposal-skipped001-x",
@@ -3738,9 +3734,7 @@ describe("startRepl", () => {
 
 			expect(applyMock).toHaveBeenCalledTimes(1);
 			const callArgs = (applyMock.mock.calls[0] ?? []) as readonly unknown[];
-			const authorityArg = callArgs[0] as
-				| { authorize?: unknown }
-				| undefined;
+			const authorityArg = callArgs[0] as { authorize?: unknown } | undefined;
 			const optionsArg = callArgs[1];
 			expect(authorityArg).toBeDefined();
 			expect(typeof authorityArg?.authorize).toBe("function");
@@ -3753,9 +3747,7 @@ describe("startRepl", () => {
 			const writes = stderrWriteSpy.mock.calls
 				.map((call) => String(call[0]))
 				.join("");
-			expect(writes).toContain(
-				"Apply outcomes: applied=1 skipped=1 failed=1",
-			);
+			expect(writes).toContain("Apply outcomes: applied=1 skipped=1 failed=1");
 			expect(writes).toContain("proposal-app");
 			expect(writes).toContain("proposal-ski");
 			expect(writes).toContain("proposal-fai");
@@ -3945,14 +3937,18 @@ describe("startRepl", () => {
 			// 干扰编辑器和 grep；混入 NUL/BEL/BS/LF/CR/ESC/DEL。
 			const c0 = (...codes: readonly number[]): string =>
 				String.fromCharCode(...codes);
-			const raw =
-				`abc${c0(0x00)}def${c0(0x07)}g${c0(0x08)}h${c0(0x0a)}i${c0(0x0d)}j${c0(0x1b)}k${c0(0x7f)}l`;
+			const raw = `abc${c0(0x00)}def${c0(0x07)}g${c0(0x08)}h${c0(0x0a)}i${c0(0x0d)}j${c0(0x1b)}k${c0(0x7f)}l`;
 			const cleaned = sanitizeProposalReason(raw);
 			// All C0/DEL chars become spaces and the consecutive whitespace is
 			// collapsed to single spaces.
 			// 所有 C0/DEL 字符变为空格，连续空白被折叠为单个空格。
 			expect(cleaned).toBe("abc def g h i j k l");
-			expect(cleaned).not.toMatch(/[\x00-\x1f\x7f]/u);
+			expect(
+				[...cleaned].some((char) => {
+					const code = char.charCodeAt(0);
+					return code <= 0x1f || code === 0x7f;
+				}),
+			).toBe(false);
 		});
 
 		// Cross-review round 2 MEDIUM finding (sanitizeProposalReason length cap):
@@ -4160,4 +4156,4 @@ describe("startRepl", () => {
 			});
 		});
 	});
-	});
+});

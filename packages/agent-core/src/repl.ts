@@ -217,6 +217,7 @@ const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
  * 把这些运行时对象塞进 `startRepl` 的入参。
  */
 export interface ReplRuntimeRefs {
+	readonly sessionId: string;
 	readonly registry: MCPRegistry;
 	readonly supervisorRuntime: SupervisorRuntimeControlPlane;
 }
@@ -2387,9 +2388,14 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 	const supervisorRuntime =
 		providedSupervisorRuntime ??
 		new InProcessSupervisorRuntime({ maxActiveRuns: 6 });
+	const resolvedSessionId = sessionId ?? crypto.randomUUID();
 	if (onRuntimeReady != null) {
 		try {
-			onRuntimeReady({ registry, supervisorRuntime });
+			onRuntimeReady({
+				sessionId: resolvedSessionId,
+				registry,
+				supervisorRuntime,
+			});
 		} catch (error) {
 			logger.warn(
 				{ err: error },
@@ -2397,7 +2403,6 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 			);
 		}
 	}
-	const resolvedSessionId = sessionId ?? crypto.randomUUID();
 	// L3a observer bridge — resolved lazily because the underlying
 	// MCP transport for `quilin-mem` is not connected until syncRuntimeSurface
 	// runs the registry. The bridge is constructed at most once per session,
