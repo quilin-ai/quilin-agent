@@ -116,20 +116,7 @@ class ConsolidationLogStore:
 
     def append(self, proposal: ConsolidationProposal) -> int:
         """Persist one proposal. Returns its rowid."""
-        actions_json = json.dumps(
-            [
-                {
-                    "kind": a.kind,
-                    "target_layer": a.target_layer,
-                    "reason": a.reason,
-                    "dry_run": a.dry_run,
-                    "writes_semantic": a.writes_semantic,
-                    "writes_skill": a.writes_skill,
-                    "metadata": a.metadata,
-                }
-                for a in proposal.actions
-            ]
-        )
+        actions_json = json.dumps(_log_actions_for_proposal(proposal), ensure_ascii=False)
         with self._txn():
             cursor = self._conn.execute(
                 """
@@ -200,6 +187,43 @@ class ConsolidationLogStore:
                 ON consolidation_log(created_at DESC)
                 """
             )
+
+
+def _log_actions_for_proposal(proposal: ConsolidationProposal) -> list[dict[str, object]]:
+    actions: list[dict[str, object]] = [
+        {
+            "kind": a.kind,
+            "target_layer": a.target_layer,
+            "reason": a.reason,
+            "dry_run": a.dry_run,
+            "writes_semantic": a.writes_semantic,
+            "writes_skill": a.writes_skill,
+            "metadata": a.metadata,
+        }
+        for a in proposal.actions
+    ]
+    actions.extend(
+        {
+            "kind": "reflect-insight",
+            "target_layer": "semantic",
+            "tier": "semantic",
+            "deleteIds": [],
+            "insertContent": reflection.proposedContent,
+            "reason": reflection.reason,
+            "score": reflection.confidence,
+            "memoryIds": list(reflection.sourceIds),
+            "dry_run": proposal.dry_run,
+            "writes_semantic": False,
+            "writes_skill": False,
+            "metadata": {
+                "schema_version": reflection.schema_version,
+                "requires_approval": reflection.requiresApproval,
+                "reflect_model": reflection.reflectModel,
+            },
+        }
+        for reflection in proposal.reflections
+    )
+    return actions
 
 
 def _row_to_entry(row: sqlite3.Row) -> ConsolidationLogEntry:

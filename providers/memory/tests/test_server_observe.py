@@ -14,12 +14,14 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 import pytest
 from mcp.types import CallToolRequest, CallToolRequestParams
 
 from quilin_mem.observer import L3aObserver, ObserverConfig
 from quilin_mem.server import MemoryOperationError, create_server
+from quilin_mem.store import QuilinMemStore
 
 
 def _decode_call_tool_result(result: object) -> dict[str, object]:
@@ -64,7 +66,7 @@ def _llm_json_caller(_base_url: str, _api_key: str, _payload: bytes) -> str:
 
 
 @pytest.fixture
-def server_no_api_key() -> object:
+async def server_no_api_key() -> AsyncIterator[object]:
     """Server with an observer factory whose ObserverConfig has no api_key."""
 
     def factory() -> L3aObserver:
@@ -73,11 +75,12 @@ def server_no_api_key() -> object:
             _llm_caller=_llm_json_caller,
         )
 
-    return create_server(observer_factory=factory)
+    async with _observe_test_server(observer_factory=factory) as server:
+        yield server
 
 
 @pytest.fixture
-def server_with_api_key() -> object:
+async def server_with_api_key() -> AsyncIterator[object]:
     """Server with an observer factory whose ObserverConfig has an api_key.
 
     profile_updater_factory returns None to avoid touching ~/.quilin/user.md
@@ -92,10 +95,26 @@ def server_with_api_key() -> object:
             _llm_caller=_llm_json_caller,
         )
 
-    return create_server(
+    async with _observe_test_server(
         observer_factory=factory,
         profile_updater_factory=lambda: None,
-    )
+    ) as server:
+        yield server
+
+
+@asynccontextmanager
+async def _observe_test_server(
+    *,
+    observer_factory: object | None = None,
+    profile_updater_factory: object | None = None,
+) -> AsyncIterator[object]:
+    """Build a server backed by an in-memory memory DB for observe tests."""
+    async with QuilinMemStore(db_path=":memory:") as store:
+        yield create_server(
+            store=store,
+            observer_factory=observer_factory,
+            profile_updater_factory=profile_updater_factory,
+        )
 
 
 @pytest.fixture
@@ -117,8 +136,8 @@ async def shared_observer_server() -> AsyncIterator[tuple[object, list[L3aObserv
         constructed.append(observer)
         return observer
 
-    server = create_server(observer_factory=factory)
-    yield server, constructed
+    async with _observe_test_server(observer_factory=factory) as server:
+        yield server, constructed
 
 
 async def test_memory_observe_returns_deterministic_only_when_under_frequency(
@@ -176,6 +195,171 @@ async def test_memory_observe_no_api_key_does_not_raise(
             assert metadata.get("source") != "l3a_observer"
 
 
+async def test_memory_observe_archives_each_turn_as_raw_observation() -> None:
+    """Dogfood gate: five observed turns must leave five raw evidence rows."""
+
+    def factory() -> L3aObserver:
+        return L3aObserver(
+            ObserverConfig(api_key="", frequency=10),
+            _llm_caller=_llm_json_caller,
+        )
+
+    async with QuilinMemStore(db_path=":memory:") as store:
+        server = create_server(store=store, observer_factory=factory)
+
+        for turn_idx in range(5):
+            await _call_tool_request(
+                server,
+                "memory_observe",
+                {
+                    "user_text": f"turn {turn_idx}: I prefer concise Chinese updates",
+                    "assistant_text": "Acknowledged.",
+                    "user_id": "alice",
+                    "session_id": "dogfood-session",
+                },
+            )
+
+        row = store._conn.execute(  # type: ignore[attr-defined]
+            "SELECT COUNT(*) AS n FROM memory_observations"
+        ).fetchone()
+
+    assert int(row["n"]) >= 5
+
+
+async def test_memory_observe_archives_source_event_id_and_bounded_metadata() -> None:
+    """Archived raw observations retain bounded turn metadata and event ids."""
+
+    def factory() -> L3aObserver:
+        return L3aObserver(
+            ObserverConfig(api_key="", frequency=10),
+            _llm_caller=_llm_json_caller,
+        )
+
+    async with QuilinMemStore(db_path=":memory:") as store:
+        server = create_server(store=store, observer_factory=factory)
+        await _call_tool_request(
+            server,
+            "memory_observe",
+            {
+                "user_text": "remember this trace",
+                "assistant_text": "ok",
+                "user_id": "alice",
+                "session_id": "dogfood-session",
+                "metadata": {
+                    "turn_id": "turn-123",
+                    "nested": {"source": "test"},
+                },
+            },
+        )
+        row = store._conn.execute(  # type: ignore[attr-defined]
+            """
+            SELECT source_event_id, metadata_json
+            FROM memory_observations
+            ORDER BY created_at DESC
+            LIMIT 1
+            """
+        ).fetchone()
+
+    metadata = json.loads(row["metadata_json"])
+    assert row["source_event_id"] == "turn-123"
+    assert metadata["turn_metadata"] == {
+        "turn_id": "turn-123",
+        "nested": {"source": "test"},
+    }
+
+
+async def test_memory_observe_drops_oversized_archive_metadata() -> None:
+    """Oversized turn metadata should not make raw observation archival fail."""
+
+    def factory() -> L3aObserver:
+        return L3aObserver(
+            ObserverConfig(api_key="", frequency=10),
+            _llm_caller=_llm_json_caller,
+        )
+
+    async with QuilinMemStore(db_path=":memory:") as store:
+        server = create_server(store=store, observer_factory=factory)
+        await _call_tool_request(
+            server,
+            "memory_observe",
+                {
+                    "user_text": "metadata is too large",
+                    "assistant_text": "ok",
+                    "metadata": {f"k{i}": "x" * 200 for i in range(32)},
+                },
+            )
+        row = store._conn.execute(  # type: ignore[attr-defined]
+            """
+            SELECT source_event_id, metadata_json
+            FROM memory_observations
+            ORDER BY created_at DESC
+            LIMIT 1
+            """
+        ).fetchone()
+
+    metadata = json.loads(row["metadata_json"])
+    assert row["source_event_id"] is None
+    assert "turn_metadata" not in metadata
+    assert "metadata" in metadata["turn_metadata_dropped"]
+
+
+async def test_memory_observe_continues_when_raw_archive_fails() -> None:
+    """Raw evidence archival is best-effort and must not block observation."""
+    from quilin_mem import server as server_module
+
+    observer = L3aObserver(
+        ObserverConfig(api_key="", frequency=10),
+        _llm_caller=_llm_json_caller,
+    )
+    store = QuilinMemStore(db_path=":memory:")
+    await store.close()
+
+    payload = json.loads(
+        await server_module._memory_observe_with_observer(
+            observer,
+            user_text="hello",
+            assistant_text="world",
+            user_id="alice",
+            session_id="session-A",
+            store=store,
+        )
+    )
+
+    assert payload["candidates"] == []
+
+
+async def test_memory_observe_continues_when_archive_store_bootstrap_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Store construction failure should not block observe_safely."""
+    from quilin_mem import server as server_module
+
+    class BrokenStore:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("store unavailable")
+
+    def factory() -> L3aObserver:
+        return L3aObserver(
+            ObserverConfig(api_key="", frequency=10),
+            _llm_caller=_llm_json_caller,
+        )
+
+    monkeypatch.setattr(server_module, "QuilinMemStore", BrokenStore)
+    server = create_server(observer_factory=factory)
+    result = _decode_call_tool_result(
+        await _call_tool_request(
+            server,
+            "memory_observe",
+            {
+                "user_text": "hello",
+                "assistant_text": "world",
+            },
+        )
+    )
+
+    assert result["candidates"] == []
+
+
 async def test_memory_observe_validates_text_length() -> None:
     """The helper raises MemoryOperationError on oversized text inputs.
 
@@ -210,18 +394,19 @@ async def test_memory_observe_observer_errors_yield_empty_candidates() -> None:
         async def observe(self, _turn: object) -> list[object]:
             raise RuntimeError("simulated observer failure with /private/path/leak")
 
-    server = create_server(observer_factory=lambda: BrokenObserver())  # type: ignore[arg-type]
-
-    result = _decode_call_tool_result(
-        await _call_tool_request(
-            server,
-            "memory_observe",
-            {
-                "user_text": "hello",
-                "assistant_text": "world",
-            },
+    async with _observe_test_server(
+        observer_factory=lambda: BrokenObserver(),  # type: ignore[arg-type]
+    ) as server:
+        result = _decode_call_tool_result(
+            await _call_tool_request(
+                server,
+                "memory_observe",
+                {
+                    "user_text": "hello",
+                    "assistant_text": "world",
+                },
+            )
         )
-    )
 
     # observe_safely catches everything; tool returns an empty candidate list.
     assert result["candidates"] == []
@@ -241,18 +426,17 @@ async def test_memory_observe_default_env_config(monkeypatch: pytest.MonkeyPatch
     monkeypatch.delenv("QUILIN_OBSERVER_MODEL", raising=False)
     monkeypatch.delenv("QUILIN_OBSERVER_BASE_URL", raising=False)
 
-    server = create_server()
-
-    result = _decode_call_tool_result(
-        await _call_tool_request(
-            server,
-            "memory_observe",
-            {
-                "user_text": "I prefer direct corrections",
-                "assistant_text": "Acknowledged.",
-            },
+    async with _observe_test_server() as server:
+        result = _decode_call_tool_result(
+            await _call_tool_request(
+                server,
+                "memory_observe",
+                {
+                    "user_text": "I prefer direct corrections",
+                    "assistant_text": "Acknowledged.",
+                },
+            )
         )
-    )
 
     assert "candidates" in result
     # Without api_key, no L3a candidates can ever appear.
@@ -291,19 +475,18 @@ async def test_memory_observe_observer_factory_failure_falls_back_to_env(
     def broken_factory() -> L3aObserver:
         raise RuntimeError("factory blew up")
 
-    server = create_server(observer_factory=broken_factory)
-
-    # Should still respond (fell back to default observer with no api_key)
-    result = _decode_call_tool_result(
-        await _call_tool_request(
-            server,
-            "memory_observe",
-            {
-                "user_text": "hello",
-                "assistant_text": "world",
-            },
+    async with _observe_test_server(observer_factory=broken_factory) as server:
+        # Should still respond (fell back to default observer with no api_key)
+        result = _decode_call_tool_result(
+            await _call_tool_request(
+                server,
+                "memory_observe",
+                {
+                    "user_text": "hello",
+                    "assistant_text": "world",
+                },
+            )
         )
-    )
 
     assert "candidates" in result
 
@@ -318,23 +501,22 @@ async def test_memory_observe_profile_factory_returns_wrong_type() -> None:
             _llm_caller=_llm_json_caller,
         )
 
-    server = create_server(
+    async with _observe_test_server(
         observer_factory=factory,
         profile_updater_factory=lambda: "not an updater",  # type: ignore[arg-type,return-value]
-    )
-
-    # Server resolves observer without throwing; the wrong-type updater is
-    # rejected and observer is wired with profile_updater=None.
-    result = _decode_call_tool_result(
-        await _call_tool_request(
-            server,
-            "memory_observe",
-            {
-                "user_text": "hello",
-                "assistant_text": "world",
-            },
+    ) as server:
+        # Server resolves observer without throwing; the wrong-type updater is
+        # rejected and observer is wired with profile_updater=None.
+        result = _decode_call_tool_result(
+            await _call_tool_request(
+                server,
+                "memory_observe",
+                {
+                    "user_text": "hello",
+                    "assistant_text": "world",
+                },
+            )
         )
-    )
     assert "candidates" in result
 
 
@@ -350,21 +532,20 @@ async def test_memory_observe_profile_factory_raises_is_swallowed() -> None:
     def broken_pf_factory() -> object:
         raise RuntimeError("profile updater bootstrap blew up")
 
-    server = create_server(
+    async with _observe_test_server(
         observer_factory=factory,
         profile_updater_factory=broken_pf_factory,
-    )
-
-    result = _decode_call_tool_result(
-        await _call_tool_request(
-            server,
-            "memory_observe",
-            {
-                "user_text": "hi",
-                "assistant_text": "ok",
-            },
+    ) as server:
+        result = _decode_call_tool_result(
+            await _call_tool_request(
+                server,
+                "memory_observe",
+                {
+                    "user_text": "hi",
+                    "assistant_text": "ok",
+                },
+            )
         )
-    )
     assert "candidates" in result
 
 
@@ -380,18 +561,17 @@ async def test_memory_observe_session_key_normalizes_blank_ids() -> None:
         constructed.append(observer)
         return observer
 
-    server = create_server(observer_factory=factory)
-
-    # Both calls have neither user_id nor session_id → same cache key.
-    for _ in range(2):
-        await _call_tool_request(
-            server,
-            "memory_observe",
-            {
-                "user_text": "hi",
-                "assistant_text": "ok",
-            },
-        )
+    async with _observe_test_server(observer_factory=factory) as server:
+        # Both calls have neither user_id nor session_id → same cache key.
+        for _ in range(2):
+            await _call_tool_request(
+                server,
+                "memory_observe",
+                {
+                    "user_text": "hi",
+                    "assistant_text": "ok",
+                },
+            )
 
     assert len(constructed) == 1
 
@@ -465,50 +645,49 @@ async def test_memory_observe_evicts_oldest_observer_when_cache_is_full(
         constructed.append(observer)
         return observer
 
-    server = create_server(observer_factory=factory)
+    async with _observe_test_server(observer_factory=factory) as server:
+        # Five distinct (user_id, session_id) keys — exceeds the cap of 4.
+        for i in range(5):
+            await _call_tool_request(
+                server,
+                "memory_observe",
+                {
+                    "user_text": f"hi {i}",
+                    "assistant_text": "ack",
+                    "user_id": f"user-{i}",
+                    "session_id": f"session-{i}",
+                },
+            )
 
-    # Five distinct (user_id, session_id) keys — exceeds the cap of 4.
-    for i in range(5):
+        # Five fresh observers were constructed (one per distinct key).
+        assert len(constructed) == 5
+
+        # Re-request key 0 — it must have been evicted (it was the oldest),
+        # so the factory is invoked again, giving us a 6th instance.
         await _call_tool_request(
             server,
             "memory_observe",
             {
-                "user_text": f"hi {i}",
+                "user_text": "hi 0 again",
                 "assistant_text": "ack",
-                "user_id": f"user-{i}",
-                "session_id": f"session-{i}",
+                "user_id": "user-0",
+                "session_id": "session-0",
             },
         )
+        assert len(constructed) == 6
 
-    # Five fresh observers were constructed (one per distinct key).
-    assert len(constructed) == 5
-
-    # Re-request key 0 — it must have been evicted (it was the oldest),
-    # so the factory is invoked again, giving us a 6th instance.
-    await _call_tool_request(
-        server,
-        "memory_observe",
-        {
-            "user_text": "hi 0 again",
-            "assistant_text": "ack",
-            "user_id": "user-0",
-            "session_id": "session-0",
-        },
-    )
-    assert len(constructed) == 6
-
-    # In contrast, the most recently used key (4) should still be cached:
-    # re-requesting it should NOT increment the constructed count.
-    await _call_tool_request(
-        server,
-        "memory_observe",
-        {
-            "user_text": "hi 4 again",
-            "assistant_text": "ack",
-            "user_id": "user-4",
-            "session_id": "session-4",
-        },
-    )
+        # In contrast, the most recently used key (4) should still be cached:
+        # re-requesting it should NOT increment the constructed count.
+        await _call_tool_request(
+            server,
+            "memory_observe",
+            {
+                "user_text": "hi 4 again",
+                "assistant_text": "ack",
+                "user_id": "user-4",
+                "session_id": "session-4",
+            },
+        )
     assert len(constructed) == 6
 
 
@@ -538,50 +717,49 @@ async def test_memory_observe_cache_stays_bounded_with_many_sessions(
         constructed.append(observer)
         return observer
 
-    server = create_server(observer_factory=factory)
+    async with _observe_test_server(observer_factory=factory) as server:
+        # 257 unique sessions — exceeds the cap by 1.
+        total = 257
+        for i in range(total):
+            await _call_tool_request(
+                server,
+                "memory_observe",
+                {
+                    "user_text": f"hi {i}",
+                    "assistant_text": "ack",
+                    "user_id": f"user-{i}",
+                    "session_id": f"session-{i}",
+                },
+            )
 
-    # 257 unique sessions — exceeds the cap by 1.
-    total = 257
-    for i in range(total):
+        # 257 distinct keys → 257 observers constructed so far.
+        assert len(constructed) == total
+
+        # Re-request the oldest key (i=0). It must have been evicted (the
+        # 257th insert pushed the cache past 256, evicting key 0).
         await _call_tool_request(
             server,
             "memory_observe",
             {
-                "user_text": f"hi {i}",
+                "user_text": "hi 0 again",
                 "assistant_text": "ack",
-                "user_id": f"user-{i}",
-                "session_id": f"session-{i}",
+                "user_id": "user-0",
+                "session_id": "session-0",
             },
         )
+        assert len(constructed) == total + 1
 
-    # 257 distinct keys → 257 observers constructed so far.
-    assert len(constructed) == total
-
-    # Re-request the oldest key (i=0). It must have been evicted (the
-    # 257th insert pushed the cache past 256, evicting key 0).
-    await _call_tool_request(
-        server,
-        "memory_observe",
-        {
-            "user_text": "hi 0 again",
-            "assistant_text": "ack",
-            "user_id": "user-0",
-            "session_id": "session-0",
-        },
-    )
-    assert len(constructed) == total + 1
-
-    # Re-request the most-recently-inserted key (i=256). It must still
-    # be cached → factory not invoked again.
-    await _call_tool_request(
-        server,
-        "memory_observe",
-        {
-            "user_text": "hi 256 again",
-            "assistant_text": "ack",
-            "user_id": f"user-{total - 1}",
-            "session_id": f"session-{total - 1}",
-        },
-    )
+        # Re-request the most-recently-inserted key (i=256). It must still
+        # be cached → factory not invoked again.
+        await _call_tool_request(
+            server,
+            "memory_observe",
+            {
+                "user_text": "hi 256 again",
+                "assistant_text": "ack",
+                "user_id": f"user-{total - 1}",
+                "session_id": f"session-{total - 1}",
+            },
+        )
     # Constructed count stays at total + 1 — no new observer.
     assert len(constructed) == total + 1

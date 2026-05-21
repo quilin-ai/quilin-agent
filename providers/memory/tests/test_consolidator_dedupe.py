@@ -387,3 +387,50 @@ async def test_reflect_strategy_uses_store_episodic_records_when_budget_allows()
         )
 
     assert len(proposal.reflections) == 1
+
+
+async def test_reflect_strategy_wire_contains_only_real_reflector_output() -> None:
+    base = datetime(2026, 5, 20, tzinfo=UTC)
+    budget = IdleBudgetProvider(enabled=True, token_budget=10_000)
+    async with QuilinMemStore(db_path=":memory:") as store:
+        for idx in range(4):
+            await store.add(
+                MemoryItem(
+                    id=f"real-reflect-{idx}",
+                    content=(
+                        f"Real reflector evidence {idx} repeats review approval context "
+                        f"and implementation trace details for insight {idx}."
+                    ),
+                    layer="episodic",
+                    metadata={"schema_version": 1, "source": "observer"},
+                    created_at=base + timedelta(minutes=idx),
+                )
+            )
+
+        proposal = Consolidator(
+            budget,
+            store=store,
+            reflector=Reflector(ReflectorConfig(min_info_gain_score=0.1)),
+        ).propose(strategy="reflect", estimated_tokens=100)
+
+    payload = proposal.to_wire_dict()
+    reflect_items = [item for item in payload["proposals"] if item["kind"] == "reflect-insight"]
+
+    assert proposal.actions == []
+    assert len(reflect_items) == 1
+    assert reflect_items[0]["memoryIds"] == [
+        "real-reflect-0",
+        "real-reflect-1",
+        "real-reflect-2",
+        "real-reflect-3",
+    ]
+    assert "insertContent" in reflect_items[0]
+
+
+def test_kg_prune_strategy_without_concrete_candidates_returns_no_stub() -> None:
+    budget = IdleBudgetProvider(enabled=True, token_budget=10_000)
+
+    proposal = Consolidator(budget).propose(strategy="kg-prune", estimated_tokens=100)
+
+    assert proposal.actions == []
+    assert proposal.to_wire_dict()["proposals"] == []

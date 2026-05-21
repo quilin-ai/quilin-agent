@@ -5,7 +5,7 @@ from quilin_mem.idle_budget import IdleBudgetProvider
 from quilin_mem.reflector import Reflector
 
 
-def test_propose_returns_reviewable_proposal_subset_without_mutating_storage() -> None:
+def test_propose_without_store_returns_empty_preview_without_mutating_storage() -> None:
     budget = IdleBudgetProvider(enabled=True, token_budget=10_000)
 
     proposal = Consolidator(budget).propose(
@@ -18,12 +18,12 @@ def test_propose_returns_reviewable_proposal_subset_without_mutating_storage() -
     proposal_types = {item["kind"] for item in proposals}
 
     assert proposal_types <= {"dedupe", "kg-prune", "reflect-insight"}
-    assert {"dedupe", "kg-prune", "reflect-insight"} & proposal_types
+    assert proposals == []
     assert payload["dryRun"] is True
     assert payload["writesPerformed"] == 0
 
 
-def test_propose_includes_dedupe_and_kg_prune_as_preview_only_actions() -> None:
+def test_kg_prune_without_concrete_candidates_is_not_emitted() -> None:
     budget = IdleBudgetProvider(enabled=True, token_budget=10_000)
 
     proposal = Consolidator(budget).propose(
@@ -32,10 +32,7 @@ def test_propose_includes_dedupe_and_kg_prune_as_preview_only_actions() -> None:
     )
     proposals = proposal.to_wire_dict()["proposals"]
 
-    kg_prune = next(item for item in proposals if item["kind"] == "kg-prune")
-
-    assert kg_prune["tier"] == "episodic"
-    assert kg_prune["deleteIds"] == []
+    assert all(item["kind"] != "kg-prune" for item in proposals)
 
 
 def test_budget_denial_skips_expensive_llm_reflection() -> None:

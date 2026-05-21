@@ -20,6 +20,26 @@ from quilin_mem.idle_budget import (
 from quilin_mem.reranker import LearnableReranker
 
 
+def _proposal_with_actions(
+    actions: list[ConsolidationAction],
+    *,
+    granted: bool,
+) -> ConsolidationProposal:
+    budget = (
+        IdleBudgetProvider(enabled=True, token_budget=10_000).acquire("test", 100)
+        if granted
+        else IdleBudgetDenied(task="test", estimated_tokens=100)
+    )
+    return ConsolidationProposal(
+        task="test",
+        dry_run=True,
+        budget=budget,
+        actions=actions,
+        writes_performed=0,
+        created_at=datetime(2026, 5, 1, tzinfo=UTC),
+    )
+
+
 def test_default_consolidator_proposes_dry_run_actions_without_writes() -> None:
     now = datetime(2026, 4, 24, tzinfo=UTC)
     proposal = Consolidator().propose(now=now)
@@ -30,15 +50,11 @@ def test_default_consolidator_proposes_dry_run_actions_without_writes() -> None:
     assert proposal.dry_run is True
     assert proposal.budget.decision == "denied"
     assert proposal.writes_performed == 0
-    # QUI-187 cross-review Reviewer F REAL (2026-05-20):recompress_verbatim
-    # placeholder 已从 _proposal_actions 移除(它经 to_wire_dict 默认 fallback
-    # 错标 kind="reflect-insight" 导致 UI 误导)。docs/03-memory line 274 设计的
-    # verbatim 差分再压缩仍在 ConsolidationActionKind Literal union 中,等真实
-    # 实现路径接入时再恢复此 placeholder action。
-    assert [action.kind for action in proposal.actions] == [
-        "reflect",
-        "prune_kg",
-    ]
+    # QUI-202: reflect / kg-prune no longer emit placeholder actions.
+    # Real reflect proposals come from Reflector.propose via
+    # ConsolidationProposal.reflections; kg-prune waits for concrete stale
+    # edge candidates.
+    assert proposal.actions == []
     assert all(action.dry_run for action in proposal.actions)
     assert all(not action.writes_semantic for action in proposal.actions)
     assert all(not action.writes_skill for action in proposal.actions)
@@ -144,14 +160,9 @@ def test_auto_schedule_calls_update_recall_weights_when_budget_denied() -> None:
     proposal = c.auto_schedule(interval_hours=1, now=now)
     assert proposal is not None
 
-    # Budget denied => scaling factor 0.3
+    # No concrete consolidation action => no synthetic recall weight updates.
     updates = c._update_recall_weights(proposal)
-    assert len(updates) > 0
-    for update in updates:
-        assert isinstance(update, RecallWeightsUpdate)
-        assert isinstance(update.source_prior_key, str)
-        assert isinstance(update.prior_delta, float)
-        assert isinstance(update.reason, str)
+    assert updates == []
 
 
 def test_auto_schedule_calls_update_recall_weights_when_budget_granted() -> None:
@@ -164,7 +175,7 @@ def test_auto_schedule_calls_update_recall_weights_when_budget_granted() -> None
     assert proposal.budget.granted is True
 
     updates = c._update_recall_weights(proposal)
-    assert len(updates) > 0
+    assert updates == []
 
 
 # ---------------------------------------------------------------------------
@@ -174,8 +185,21 @@ def test_auto_schedule_calls_update_recall_weights_when_budget_granted() -> None
 
 def test_update_recall_weights_produces_expected_deltas_per_action() -> None:
     c = Consolidator()
-
-    proposal = c.propose(task="test", now=datetime(2026, 5, 1, tzinfo=UTC))
+    proposal = _proposal_with_actions(
+        [
+            ConsolidationAction(
+                kind="reflect",
+                target_layer="semantic",
+                reason="real reflection proposal",
+            ),
+            ConsolidationAction(
+                kind="prune_kg",
+                target_layer="episodic",
+                reason="real stale edge cleanup proposal",
+            ),
+        ],
+        granted=False,
+    )
     updates = c._update_recall_weights(proposal)
 
     # Verify all consolidation actions map to weight updates
@@ -197,8 +221,16 @@ def test_update_recall_weights_produces_expected_deltas_per_action() -> None:
 
 def test_update_recall_weights_scales_down_when_budget_denied() -> None:
     c = Consolidator()
-
-    proposal = c.propose(task="test", now=datetime(2026, 5, 1, tzinfo=UTC))
+    proposal = _proposal_with_actions(
+        [
+            ConsolidationAction(
+                kind="reflect",
+                target_layer="semantic",
+                reason="real reflection proposal",
+            )
+        ],
+        granted=False,
+    )
     assert proposal.budget.granted is False
 
     updates = c._update_recall_weights(proposal)
@@ -209,10 +241,17 @@ def test_update_recall_weights_scales_down_when_budget_denied() -> None:
 
 
 def test_update_recall_weights_full_scale_when_budget_granted() -> None:
-    budget = IdleBudgetProvider(enabled=True, token_budget=10_000)
-    c = Consolidator(budget)
-
-    proposal = c.propose(task="test", estimated_tokens=100, now=datetime(2026, 5, 1, tzinfo=UTC))
+    c = Consolidator()
+    proposal = _proposal_with_actions(
+        [
+            ConsolidationAction(
+                kind="reflect",
+                target_layer="skill",
+                reason="real skill reflection proposal",
+            )
+        ],
+        granted=True,
+    )
     assert proposal.budget.granted is True
 
     updates = c._update_recall_weights(proposal)
@@ -225,8 +264,16 @@ def test_update_recall_weights_full_scale_when_budget_granted() -> None:
 
 def test_update_recall_weights_each_update_has_reason() -> None:
     c = Consolidator()
-
-    proposal = c.propose(task="test", now=datetime(2026, 5, 1, tzinfo=UTC))
+    proposal = _proposal_with_actions(
+        [
+            ConsolidationAction(
+                kind="reflect",
+                target_layer="semantic",
+                reason="real reflection proposal",
+            )
+        ],
+        granted=False,
+    )
     updates = c._update_recall_weights(proposal)
 
     for update in updates:
@@ -246,7 +293,16 @@ def test_update_recall_weights_applies_priors_to_reranker() -> None:
     budget = IdleBudgetProvider(enabled=True, token_budget=10_000)
     c = Consolidator(budget, reranker=reranker)
 
-    proposal = c.propose(task="test", estimated_tokens=100, now=datetime(2026, 5, 1, tzinfo=UTC))
+    proposal = _proposal_with_actions(
+        [
+            ConsolidationAction(
+                kind="reflect",
+                target_layer="semantic",
+                reason="real reflection proposal",
+            )
+        ],
+        granted=True,
+    )
     c._update_recall_weights(proposal)
 
     # Verify at least one source prior changed
@@ -265,7 +321,7 @@ def test_update_recall_weights_noop_when_no_reranker() -> None:
     # Should not raise — graceful no-op when _reranker is None
     updates = c._update_recall_weights(proposal)
     assert isinstance(updates, list)
-    assert len(updates) > 0
+    assert updates == []
 
 
 def test_update_recall_weights_prior_values_stay_in_bounds() -> None:
@@ -368,7 +424,16 @@ def test_update_recall_weights_noop_when_source_priors_not_dict() -> None:
     budget = IdleBudgetProvider(enabled=True, token_budget=10_000)
     c = Consolidator(budget, reranker=reranker)
 
-    proposal = c.propose(task="test", estimated_tokens=100, now=datetime(2026, 5, 1, tzinfo=UTC))
+    proposal = _proposal_with_actions(
+        [
+            ConsolidationAction(
+                kind="reflect",
+                target_layer="semantic",
+                reason="real reflection proposal",
+            )
+        ],
+        granted=True,
+    )
 
     # Should not raise — graceful no-op when _source_priors is not a dict
     updates = c._update_recall_weights(proposal)

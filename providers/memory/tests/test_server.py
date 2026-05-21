@@ -1024,10 +1024,12 @@ async def test_default_server_instances_do_not_share_state(
 
 async def test_consolidation_log_recent_tool_returns_empty_when_no_entries(
     server: object,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Fresh server with no prior consolidation activity → entries=[] + total=0."""
     import json
 
+    monkeypatch.setenv("QUILIN_ENV", "test")
     result = _decode_call_tool_result(
         await server.call_tool("consolidation_log_recent", {"limit": 10})  # type: ignore[attr-defined]
     )

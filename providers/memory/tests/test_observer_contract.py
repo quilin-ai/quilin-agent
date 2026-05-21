@@ -1547,7 +1547,9 @@ def _llm_caller_network_error(base_url: str, api_key: str, payload: bytes) -> st
 # -- ObserverConfig tests --
 
 
-def test_observer_config_defaults() -> None:
+def test_observer_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("QUILIN_OBSERVER_MODEL", raising=False)
     cfg = ObserverConfig()
     assert cfg.model == "deepseek-v4-flash"
     assert cfg.api_key == ""

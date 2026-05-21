@@ -713,33 +713,13 @@ class Consolidator:
         *,
         strategy: ConsolidationStrategy,
     ) -> list[ConsolidationAction]:
-        blocked = budget.decision == "denied"
-        metadata: dict[str, object] = {
-            "schema_version": CONSOLIDATOR_SCHEMA_VERSION,
-            "budget_decision": budget.decision,
-        }
-        if blocked:
-            metadata["blocked_reason"] = budget.reason
+        del budget, strategy
 
         actions: list[ConsolidationAction] = []
-        if strategy in {"reflect", "all"}:
-            actions.append(
-                ConsolidationAction(
-                    kind="reflect",
-                    target_layer="semantic",
-                    reason="propose stable episodic reflections for future WriteAuthority review",
-                    metadata=dict(metadata),
-                )
-            )
-        if strategy in {"kg-prune", "all"}:
-            actions.append(
-                ConsolidationAction(
-                    kind="prune_kg",
-                    target_layer="episodic",
-                    reason="propose stale temporal edge cleanup without mutating the graph",
-                    metadata=dict(metadata),
-                )
-            )
+        # QUI-202: reflect / kg-prune must not emit empty placeholder proposals.
+        # Real reflection proposals are produced by `_reflection_proposals()` and
+        # serialized from `ConsolidationProposal.reflections`. KG prune will only
+        # return actions once a concrete stale-edge detector is wired.
         # QUI-187 cross-review Reviewer F REAL (2026-05-20):recompress_verbatim
         # placeholder action 之前会经 to_wire_dict 默认 fallback 错标成
         # kind="reflect-insight",前端 KIND_STYLES["reflect-insight"] 用蓝色

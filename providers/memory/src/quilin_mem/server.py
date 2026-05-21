@@ -7,6 +7,7 @@ import secrets
 from collections import OrderedDict
 from contextlib import asynccontextmanager
 from datetime import datetime
+from os import PathLike
 from typing import Any
 
 from mcp.server.fastmcp import Context, FastMCP
@@ -430,12 +431,20 @@ async def _memory_consolidate_plan_with_store(
     batch_judge = None
     if not _env_flag_disabled("QUILIN_DEDUPE_BATCH_ENABLED"):
         batch_judge = _DeepseekBatchJudge().judge_batch
+    log_store: ConsolidationLogStore | None = None
+    log_db_path = _log_store_db_path_for_store(store)
+    if log_db_path is not None:
+        try:
+            log_store = ConsolidationLogStore(log_db_path)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("memory_consolidate_plan log_store bootstrap failed", error=str(exc))
     try:
         proposal = Consolidator(
             budget_provider=budget_provider,
             store=store,
             dedupe_judge=dedupe_judge,
             batch_judge=batch_judge,
+            log_store=log_store,
         ).propose(
             strategy=strategy,
             tier=tier,
@@ -444,6 +453,12 @@ async def _memory_consolidate_plan_with_store(
         )
     except Exception as exc:
         _raise_memory_operation_error("memory_consolidate_plan", exc)
+    finally:
+        if log_store is not None:
+            try:
+                log_store.close()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("memory_consolidate_plan log_store close failed", error=str(exc))
 
     return json.dumps({**proposal.to_wire_dict(), **_trace_payload(trace_context)})
 
@@ -550,6 +565,41 @@ def _validate_observe_text(text: str, field: str) -> str:
     return text
 
 
+def _observation_source_event_id(metadata: dict[str, object] | None) -> str | None:
+    if not metadata:
+        return None
+    for key in ("source_event_id", "turn_id", "trace_id", "event_id"):
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _log_store_db_path_for_store(store: QuilinMemStore) -> str | None:
+    db_path = getattr(store, "_db_path", None)
+    if db_path == ":memory:":
+        return None
+    if isinstance(db_path, str):
+        return db_path
+    if isinstance(db_path, PathLike):
+        return os.fspath(db_path)
+    return None
+
+
+def _bounded_observe_turn_metadata(metadata: dict[str, object] | None) -> dict[str, object] | None:
+    if metadata is None:
+        return None
+
+    normalized = dict(metadata)
+    _validate_metadata_value(normalized, depth=1)
+    encoded = json.dumps(normalized, ensure_ascii=False).encode("utf-8")
+    if len(encoded) > MAX_TOOL_METADATA_BYTES:
+        raise ValueError(
+            f"memory_observe metadata must be at most {MAX_TOOL_METADATA_BYTES} bytes"
+        )
+    return normalized
+
+
 def _build_observer_session_key(
     user_id: str | None,
     session_id: str | None,
@@ -570,6 +620,7 @@ async def _memory_observe_with_observer(
     assistant_text: str,
     user_id: str | None,
     session_id: str | None,
+    store: QuilinMemStore | None = None,
     metadata: dict[str, object] | None = None,
     trace_context: TraceContext | None = None,
 ) -> str:
@@ -592,6 +643,31 @@ async def _memory_observe_with_observer(
     if safe_assistant_text.strip():
         combined_content_parts.append(f"[assistant]: {safe_assistant_text.strip()}")
     combined_content = "\n".join(combined_content_parts) or "(empty turn)"
+    if store is not None:
+        observation_metadata: dict[str, object] = {
+            "source": "memory_observe",
+            "schema_version": 1,
+        }
+        if user_id and user_id.strip():
+            observation_metadata["user_id"] = user_id.strip()
+        if session_id and session_id.strip():
+            observation_metadata["session_id"] = session_id.strip()
+        if metadata:
+            try:
+                observation_metadata["turn_metadata"] = _bounded_observe_turn_metadata(metadata)
+            except ValueError as exc:
+                observation_metadata["turn_metadata_dropped"] = str(exc)
+        try:
+            await store.record_observation(
+                content=combined_content,
+                source_event_id=_observation_source_event_id(metadata),
+                observed_at=None,
+                actor_id=user_id.strip() if user_id and user_id.strip() else None,
+                role="user",
+                metadata=observation_metadata,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("memory_observe observation archive failed", error=str(exc))
 
     turn_input: ObservationTurnInput = {
         "content": combined_content,
@@ -1141,12 +1217,18 @@ def create_server(
         """
         parent_trace = _trace_context_from_context(ctx)
         observer = resolve_observer(user_id, session_id)
+        try:
+            archive_store = await resolve_store(ctx)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("memory_observe archive store bootstrap failed", error=str(exc))
+            archive_store = None
         return await _memory_observe_with_observer(
             observer,
             user_text=user_text,
             assistant_text=assistant_text,
             user_id=user_id,
             session_id=session_id,
+            store=archive_store,
             metadata=metadata,
             trace_context=_child_trace_context(parent_trace),
         )
@@ -1191,8 +1273,11 @@ def create_server(
         Returns:
             JSON string suitable for `JSON.parse` on the TS side.
         """
-        del ctx  # unused
-        with ConsolidationLogStore() as store:
+        memory_store = await resolve_store(ctx)
+        log_db_path = _log_store_db_path_for_store(memory_store)
+        if log_db_path is None:
+            return json.dumps({"available": True, "total": 0, "entries": []})
+        with ConsolidationLogStore(log_db_path) as store:
             entries = store.list_recent(limit=limit)
             total = store.count()
         return json.dumps(
