@@ -38,6 +38,7 @@ import {
 import { installSighupHandler } from "./config/sighup-handler.js";
 import type { UserConfigLoadResult } from "./config/user-config.js";
 import { startControlPlaneServer } from "./control-plane/handler.js";
+import { V2RuntimeAdapter } from "./control-plane/v2/adapter.js";
 import {
 	normalizeProviderError,
 	ProviderControlPlaneLLMClient,
@@ -1022,8 +1023,15 @@ export async function main(options: MainOptions = {}): Promise<void> {
 		if (process.env.NODE_ENV !== "test") {
 			try {
 				const dashboardCheckpoint = new SQLiteCheckpoint();
+				const v2Adapter = new V2RuntimeAdapter({
+					refs: dashboardRuntimeRefs,
+					checkpoint: dashboardCheckpoint,
+					getUserConfig: () => userRuntime.result.config,
+					getCapabilitiesRuntime: () => capabilitiesHotReload.getRuntime(),
+				});
 				const cpServer = await startControlPlaneServer({
 					checkpoint: dashboardCheckpoint,
+					v2Runtime: v2Adapter,
 					// Wire dashboard data providers so the 7-panel UI returns real
 					// data instead of empty placeholders. Sessions come from the
 					// SQLite checkpoint store. Tasks / memory / tools read from
@@ -1114,7 +1122,7 @@ export async function main(options: MainOptions = {}): Promise<void> {
 									if (mems.length > 0)
 										memoryCtx =
 											"\n[Memories]\n" +
-											mems.map((m) => "- " + m.content).join("\n") +
+											mems.map((m) => `- ${m.content}`).join("\n") +
 											"\n[/Memories]\n";
 									be.close();
 								} catch {
