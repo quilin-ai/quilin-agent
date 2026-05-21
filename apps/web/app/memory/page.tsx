@@ -717,32 +717,7 @@ export default function MemoryPage() {
 											<span className="cn">
 												{TIER_LABELS[tier]?.cn ?? tier} · {TIER_LABELS[tier]?.en ?? tier}
 												{TIER_DESCRIPTIONS[tier] != null ? (
-													<span
-														data-testid={`tier-info-${tier}`}
-														title={TIER_DESCRIPTIONS[tier]}
-														role="img"
-														aria-label={`${TIER_LABELS[tier]?.cn ?? tier} 层说明`}
-														style={{
-															display: "inline-flex",
-															alignItems: "center",
-															justifyContent: "center",
-															marginLeft: 6,
-															width: 16,
-															height: 16,
-															borderRadius: "50%",
-															border: "1px solid var(--fg-muted)",
-															color: "var(--fg-muted)",
-															fontSize: 10,
-															fontFamily: "serif",
-															fontStyle: "italic",
-															fontWeight: 700,
-															cursor: "help",
-															verticalAlign: "middle",
-															lineHeight: 1,
-														}}
-													>
-														!
-													</span>
+													<TierInfoIcon tier={tier} description={TIER_DESCRIPTIONS[tier]} />
 												) : null}
 											</span>
 											<span className="right">{records.length} 条</span>
@@ -1400,4 +1375,85 @@ function computeStalenessDays(createdAt: string | null): number | null {
 	} catch {
 		return null;
 	}
+}
+
+/**
+ * 4 个 tier 标题旁的圆圈叹号 info icon。点击或 hover 弹出 popover 显示
+ * tier 的概念说明。比 native title 属性显眼得多,移动端 click 也能用。
+ */
+interface TierInfoIconProps {
+	readonly tier: string;
+	readonly description: string;
+}
+
+function TierInfoIcon({ tier, description }: TierInfoIconProps): React.ReactElement {
+	const [open, setOpen] = useState(false);
+	return (
+		// biome-ignore lint/a11y/noStaticElementInteractions: hover wrap 仅承载 popover 显隐,真交互在内部 <button>
+		<span
+			data-testid={`tier-info-${tier}`}
+			style={{
+				display: "inline-block",
+				position: "relative",
+				marginLeft: 6,
+				verticalAlign: "middle",
+			}}
+			onMouseEnter={() => setOpen(true)}
+			onMouseLeave={() => setOpen(false)}
+		>
+			<button
+				type="button"
+				onClick={() => setOpen((v) => !v)}
+				aria-expanded={open}
+				aria-label={`${tier} 层说明`}
+				style={{
+					display: "inline-flex",
+					alignItems: "center",
+					justifyContent: "center",
+					width: 18,
+					height: 18,
+					borderRadius: "50%",
+					border: "1px solid var(--fg-muted)",
+					background: open ? "var(--accent-vermillion)" : "var(--bg)",
+					color: open ? "var(--bg)" : "var(--fg-muted)",
+					fontSize: 11,
+					fontFamily: "serif",
+					fontStyle: "italic",
+					fontWeight: 700,
+					cursor: "pointer",
+					lineHeight: 1,
+					padding: 0,
+					transition: "background 120ms, color 120ms",
+				}}
+			>
+				!
+			</button>
+			{open ? (
+				<div
+					role="tooltip"
+					data-testid={`tier-info-${tier}-popover`}
+					style={{
+						position: "absolute",
+						top: "calc(100% + 6px)",
+						left: 0,
+						zIndex: 50,
+						minWidth: 320,
+						maxWidth: 420,
+						padding: "12px 14px",
+						background: "var(--bg)",
+						border: "1px solid var(--border)",
+						borderRadius: 6,
+						boxShadow: "0 4px 12px rgba(0, 0, 0, 0.15)",
+						fontSize: 12,
+						lineHeight: 1.6,
+						color: "var(--fg)",
+						whiteSpace: "pre-wrap",
+						fontFamily: '"Noto Sans SC", sans-serif',
+					}}
+				>
+					{description}
+				</div>
+			) : null}
+		</span>
+	);
 }
