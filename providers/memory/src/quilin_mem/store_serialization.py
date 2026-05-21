@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from .store_schema import DEFAULT_MEMORY_METADATA
-from .types import VALID_MEMORY_TIERS, MemoryRecord, MemoryTier
+from .types import VALID_MEMORY_TIERS, MemoryRecord, MemoryTier, coerce_memory_kind_for_read
 
 LEGACY_MEMORY_TIER_ALIASES: dict[str, MemoryTier] = {
     "short": "working",
@@ -124,7 +124,7 @@ def row_to_record(row: sqlite3.Row, *, now: Callable[[], datetime]) -> MemoryRec
         last_writer_session_id=row_get(row, "last_writer_session_id"),
         project_scope=row_get(row, "project_scope"),
         salience=deserialize_json_object(row_get(row, "salience_json")),
-        kind=row_get(row, "kind"),
+        kind=coerce_memory_kind_for_read(row_get(row, "kind")),
         deadline_at=parse_optional_datetime(row_get(row, "deadline_at")),
         prospective_action=row_get(row, "prospective_action"),
         resource_pointer=deserialize_json_object(row_get(row, "resource_pointer_json")),

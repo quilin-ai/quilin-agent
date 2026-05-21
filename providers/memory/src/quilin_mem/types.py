@@ -90,12 +90,32 @@ def validate_memory_layer(layer: str) -> MemoryLayer:
 
 
 def validate_memory_kind(kind: str | None) -> MemoryKind | None:
+    """Strict validation for INSERT/UPDATE paths — raises on unknown kinds.
+
+    Used by ``MemoryItem.__init__`` to reject writes carrying bogus kinds.
+    """
     if kind is None:
         return None
     normalized = kind.strip().lower()
     if normalized not in VALID_MEMORY_KINDS:
         valid_kinds = ", ".join(VALID_MEMORY_KINDS)
         raise ValueError(f"Invalid memory kind: {kind}. Expected one of: {valid_kinds}")
+    return cast(MemoryKind, normalized)
+
+
+def coerce_memory_kind_for_read(kind: str | None) -> MemoryKind | None:
+    """Lenient coercion for READ/DESERIALIZE paths — returns None on unknowns.
+
+    实测 2026-05-21:e2e subagent 误注入 ``kind='user'`` 让整个 ``memory_recall``
+    crash with HTTP 502。Deserialization 不能让一条 DB row 的 legacy/typo'd
+    kind 拖死整个 list — invalid kinds 静默 drop 到 None,其他字段照常 load。
+    Insert/update 路径仍走严格 ``validate_memory_kind`` 防止新 invalid 进 DB。
+    """
+    if kind is None:
+        return None
+    normalized = kind.strip().lower()
+    if normalized not in VALID_MEMORY_KINDS:
+        return None
     return cast(MemoryKind, normalized)
 
 

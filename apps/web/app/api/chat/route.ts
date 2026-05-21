@@ -897,11 +897,18 @@ export async function POST(req: Request): Promise<Response> {
 		const narrateAsideTool = makeNarrateAsideTool({ sessionId, service });
 		const catalog = await getToolsCatalog();
 		const builtinTools = catalog.adapted;
-		// QUI-205 dogfood 2 fix(2026-05-21):Web chat 没有像 REPL 那样
-		// 用 MCPObserverBridge 把每轮 chat 自动喂给 quilin-mem `memory_observe`,
-		// 所以 Web 端 memory_observations 表不会增长。这里拿 raw observe tool
-		// 引用,在 streamText onFinish 里 best-effort 调用 — 失败不阻塞 chat。
-		const observeTool = catalog.rawTools.find((t) => t.name === "quilin-mem/memory_observe");
+		// QUI-205 dogfood 2 fix(2026-05-21,iter 2):第一版尝试调 `memory_observe`,
+		// 但 e2e 实证发现该 tool 在 `INTERNAL_MCP_TOOL_NAMES`(packages/agent-core/
+		// src/tools/mcp-client.ts)被过滤掉,catalog.rawTools 永远找不到。这是
+		// 有意设计 — `memory_observe` 是 internal observer 用,LLM 不可见。
+		//
+		// Workaround:改用 `memory_store`(已 publicly expose)直接把 user 消息
+		// 存为 working tier 记忆 — 等效于 observer 写入路径的入口,记忆从
+		// Web 对话进 DB 后,后续 consolidator + reflector 链路照常触发升 tier。
+		// 失败 best-effort 不阻塞 chat。
+		const observeTool = catalog.rawTools.find(
+			(t) => t.name === "quilin-mem/memory_store" || t.name === "quilin-mem__memory_store",
+		);
 		// 抽取最后一条 user message 用于 observer payload
 		const lastUserMessageText = (() => {
 			for (let i = modelMessages.length - 1; i >= 0; i -= 1) {
@@ -998,19 +1005,25 @@ export async function POST(req: Request): Promise<Response> {
 					abortSignal,
 					onFinish: async (event: { text?: string }) => {
 						releaseToolCallSlot();
-						// QUI-205 dogfood 2 fix:把每轮 chat 喂给 quilin-mem
-						// `memory_observe`,best-effort 不阻塞流式响应。
+						// QUI-205 dogfood 2 fix(iter 3):memory_store payload shape
+						// 是 `{content, tier}`。把 user 消息 + assistant 回复拼成
+						// observation 内容,存 working tier — 这是 catalog 暴露的
+						// 等效 observer 路径(memory_observe 被 INTERNAL filter)。
 						if (observeTool != null && lastUserMessageText.length > 0) {
 							try {
 								const assistantText = typeof event.text === "string" ? event.text : "";
+								const observation =
+									assistantText.length > 0
+										? `[user]: ${lastUserMessageText}\n[assistant]: ${assistantText}`
+										: `[user]: ${lastUserMessageText}`;
 								await observeTool.execute({
-									turn: {
-										user: lastUserMessageText,
-										assistant: assistantText,
-									},
+									content: observation,
+									tier: "working",
 									metadata: {
-										client: "web",
-										session_id: sessionId,
+										schema_version: 1,
+										source: "web_chat_observer",
+										last_writer_client: "web",
+										last_writer_session_id: sessionId,
 									},
 								});
 							} catch {

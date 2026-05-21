@@ -198,19 +198,7 @@ export function KnowledgeGraphView({ onSelectMemory }: KnowledgeGraphViewProps) 
 		);
 	}
 	if (data.edges.length === 0) {
-		return (
-			<div data-testid="kg-view-empty" style={{ padding: 24, color: "var(--fg-muted)" }}>
-				<p>知识图谱为空 · KG is empty.</p>
-				<p style={{ fontSize: 12, marginTop: 8 }}>
-					让 agent 调一次 <code>memory_backfill_kg</code> MCP 工具(dry_run: false) 把现有
-					memory_records 灌进 KG 后再回来。
-				</p>
-				<p style={{ fontSize: 12, marginTop: 8 }}>
-					Have the agent run <code>memory_backfill_kg</code> (dry_run: false) on the existing memory
-					records, then revisit this tab.
-				</p>
-			</div>
-		);
+		return <KgEmptyState onBackfilled={() => void fetchGraph()} />;
 	}
 
 	return (
@@ -229,6 +217,90 @@ export function KnowledgeGraphView({ onSelectMemory }: KnowledgeGraphViewProps) 
 				<Controls />
 				<MiniMap pannable zoomable />
 			</ReactFlow>
+		</div>
+	);
+}
+
+/**
+ * 知识图谱空状态:不再让用户去手动调 MCP tool,直接在 UI 加 "立即灌入" 按钮。
+ */
+interface KgEmptyStateProps {
+	readonly onBackfilled: () => void;
+}
+
+function KgEmptyState({ onBackfilled }: KgEmptyStateProps) {
+	const [running, setRunning] = useState(false);
+	const [result, setResult] = useState<string | null>(null);
+	const [err, setErr] = useState<string | null>(null);
+
+	const triggerBackfill = useCallback(async () => {
+		setRunning(true);
+		setErr(null);
+		setResult(null);
+		try {
+			const res = await fetch("/api/memory/backfill-kg", {
+				method: "POST",
+				cache: "no-store",
+			});
+			const body = (await res.json().catch(() => null)) as
+				| { ok: true; data: { backfilled: number; edges: number } }
+				| { ok: false; error: { code: string; message: string } }
+				| null;
+			if (body == null || !body.ok) {
+				const msg = body != null && !body.ok ? body.error.message : `HTTP ${res.status}`;
+				throw new Error(msg);
+			}
+			setResult(`已灌入 ${body.data.backfilled} 条记忆,生成 ${body.data.edges} 条图谱关系`);
+			onBackfilled();
+		} catch (e) {
+			setErr(e instanceof Error ? e.message : String(e));
+		} finally {
+			setRunning(false);
+		}
+	}, [onBackfilled]);
+
+	return (
+		<div data-testid="kg-view-empty" style={{ padding: 24, color: "var(--fg-muted)" }}>
+			<p style={{ color: "var(--fg)" }}>知识图谱还是空的。</p>
+			<p style={{ fontSize: 12, marginTop: 8 }}>
+				图谱节点 = 记忆里出现的实体(人、地点、概念),边 =
+				它们之间的关系。需要先把现有记忆灌进图谱,才能看到节点。
+			</p>
+			<button
+				type="button"
+				onClick={() => void triggerBackfill()}
+				disabled={running}
+				data-testid="kg-backfill-button"
+				style={{
+					marginTop: 16,
+					padding: "8px 16px",
+					background: running ? "var(--bg-soft)" : "var(--accent-vermillion)",
+					color: running ? "var(--fg-muted)" : "var(--bg)",
+					border: "1px solid var(--accent-vermillion)",
+					borderRadius: 6,
+					cursor: running ? "not-allowed" : "pointer",
+					fontSize: 12,
+					fontFamily: '"Noto Sans SC", sans-serif',
+				}}
+			>
+				{running ? "灌入中…" : "立即灌入 · backfill from memory_records"}
+			</button>
+			{result != null ? (
+				<p
+					data-testid="kg-backfill-success"
+					style={{ marginTop: 12, color: "var(--accent-vermillion)", fontSize: 12 }}
+				>
+					✓ {result}
+				</p>
+			) : null}
+			{err != null ? (
+				<p
+					data-testid="kg-backfill-error"
+					style={{ marginTop: 12, color: "var(--destructive, #d97706)", fontSize: 12 }}
+				>
+					✗ 灌入失败:{err}
+				</p>
+			) : null}
 		</div>
 	);
 }
