@@ -285,7 +285,22 @@ export async function POST(request: Request): Promise<Response> {
 		}
 		const execute = body.execute === true;
 		const tier = body.tier;
-		const strategy = body.strategy;
+		// QUI-208 dogfood fix (2026-05-21):前端历史上传过两类 strategy:
+		// - top-level ConsolidationStrategy: `dedupe | reflect | kg-prune | all`
+		// - dedupe sub-strategy: `exact | embedding | llm`
+		// 后端 memory_consolidate_plan 只认 top-level,sub-strategy 会触发
+		// Pydantic literal_error → 502。这里做兼容映射:sub-strategy 视为
+		// 隐含 `dedupe` 顶层,直接传给后端不会爆。
+		const SUB_STRATEGIES = new Set(["exact", "embedding", "llm"]);
+		const TOP_STRATEGIES = new Set(["dedupe", "reflect", "kg-prune", "all"]);
+		let strategy = body.strategy;
+		if (strategy != null && SUB_STRATEGIES.has(strategy)) {
+			// dedupe sub-strategy → 隐含 top-level=dedupe
+			strategy = "dedupe";
+		} else if (strategy != null && !TOP_STRATEGIES.has(strategy)) {
+			// 未知 strategy → 不透传(let backend default to "all")
+			strategy = undefined;
+		}
 
 		const catalog = await getToolsCatalog();
 		// Prefer the new Consolidator tool. During the migration window we
