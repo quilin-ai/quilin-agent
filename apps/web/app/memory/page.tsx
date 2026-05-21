@@ -157,6 +157,7 @@ interface ConflictVersion {
 
 interface ConflictDraft {
 	readonly memoryId: string;
+	readonly conflictToken: string | null;
 	readonly baseContent: string | null;
 	readonly versionA: ConflictVersion;
 	readonly versionB: ConflictVersion;
@@ -182,7 +183,13 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 function pickStringValue(value: unknown): string | null {
-	return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+	return typeof value === "string" ? value : null;
+}
+
+function pickNonEmptyStringValue(value: unknown): string | null {
+	if (typeof value !== "string") return null;
+	const trimmed = value.trim();
+	return trimmed.length > 0 ? trimmed : null;
 }
 
 function pickContentFromUnknown(value: unknown): string | null {
@@ -207,7 +214,7 @@ function pickContentFromUnknown(value: unknown): string | null {
 function pickLabelFromUnknown(value: unknown): string | null {
 	if (!isPlainObject(value)) return null;
 	for (const key of ["label", "client_id", "client", "writer", "source", "role"]) {
-		const found = pickStringValue(value[key]);
+		const found = pickNonEmptyStringValue(value[key]);
 		if (found != null) return found;
 	}
 	return null;
@@ -281,6 +288,12 @@ function extractConflictDraft(record: MemoryRecord): ConflictDraft {
 
 	return {
 		memoryId: record.id,
+		conflictToken:
+			typeof metadata.conflict_token === "string"
+				? metadata.conflict_token
+				: typeof metadata.conflictToken === "string"
+					? metadata.conflictToken
+					: null,
 		baseContent,
 		versionA: {
 			label: pickLabelFromUnknown(sourceA) ?? "A · current",
@@ -519,11 +532,14 @@ export default function MemoryPage() {
 					memoryId: string;
 					choice: ConflictChoice;
 					mergedContent?: string;
+					conflictToken?: string;
 				} = {
 					memoryId: record.id,
 					choice,
 				};
 				if (mergedContent != null) body.mergedContent = mergedContent;
+				const token = extractConflictDraft(record).conflictToken;
+				if (token != null) body.conflictToken = token;
 				const res = await fetch("/api/memory/resolve-conflict", {
 					method: "POST",
 					headers: { "content-type": "application/json" },

@@ -201,8 +201,26 @@ function buildConflictFixture(): MemoryWire {
 					},
 				],
 				conflict_with_client: "cli",
+				conflict_token: "conflict-token-keep",
 			},
 			version: 8,
+			isLatest: true,
+			lastWriterClient: "web",
+		},
+		{
+			id: "conflict-empty",
+			content: "candidate from web",
+			tier: "semantic",
+			layer: "semantic",
+			createdAt: "2026-05-21T08:03:00Z",
+			metadata: {
+				conflict_resolution_pending: true,
+				conflict_current_content: "",
+				conflict_candidate_content: "candidate from web",
+				conflict_with_client: "cli",
+				conflict_token: "conflict-token-empty",
+			},
+			version: 9,
 			isLatest: true,
 			lastWriterClient: "web",
 		},
@@ -219,6 +237,7 @@ function buildConflictFixture(): MemoryWire {
 					current: { content: "项目计划要先做后端 daemon。" },
 					candidate: { content: "项目计划要先做 Web UI。" },
 				},
+				conflict_token: "conflict-token-merge",
 			},
 			version: 3,
 			isLatest: true,
@@ -798,6 +817,13 @@ test.describe("Memory · CRUD + dedupe (mocked)", () => {
 		await expect(page.getByTestId("memory-conflict-dialog")).toHaveCount(0);
 		await expect(page.getByTestId("memory-action-message")).toContainText("冲突已处理");
 
+		await page.getByTestId("memory-conflict-open-conflict-empty").click();
+		const emptyDialog = page.getByTestId("memory-conflict-dialog");
+		await expect(emptyDialog.getByTestId("memory-conflict-version-a")).not.toContainText(
+			"candidate from web",
+		);
+		await emptyDialog.getByTestId("memory-conflict-cancel").click();
+
 		await page.getByTestId("memory-conflict-open-conflict-merge").click();
 		const mergeDialog = page.getByTestId("memory-conflict-dialog");
 		await expect(mergeDialog).toBeVisible();
@@ -812,11 +838,16 @@ test.describe("Memory · CRUD + dedupe (mocked)", () => {
 		await expect(page.getByTestId("memory-conflict-dialog")).toHaveCount(0);
 
 		expect(posts).toEqual([
-			{ memoryId: "conflict-keep", choice: "keep_b" },
+			{
+				memoryId: "conflict-keep",
+				choice: "keep_b",
+				conflictToken: "conflict-token-keep",
+			},
 			{
 				memoryId: "conflict-merge",
 				choice: "merge_manual",
 				mergedContent: "项目计划先交付 Web 冲突 UI,再补 daemon 收敛。",
+				conflictToken: "conflict-token-merge",
 			},
 		]);
 	});

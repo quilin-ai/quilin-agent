@@ -286,6 +286,7 @@ async def test_predictive_warmer_writes_evidence_cache_with_24h_forget_after(
         clock=lambda: NOW,
         recent_query_limit=5,
         evidence_limit=3,
+        dry_run=False,
     )
 
     result = await job.run(_context(job.id))
@@ -313,6 +314,40 @@ async def test_predictive_warmer_writes_evidence_cache_with_24h_forget_after(
     finally:
         conn.close()
     assert "valid_to" not in columns
+
+
+@pytest.mark.asyncio
+async def test_predictive_warmer_dry_run_plans_without_writing(
+    tmp_path: Path,
+) -> None:
+    memory_db = tmp_path / "memory.db"
+    async with QuilinMemStore(str(memory_db)) as store:
+        await store.store(
+            "daemon predictive dry run should not write warm cache",
+            tier="episodic",
+            kind="project_note",
+        )
+        await store.record_observation(
+            content="Should predictive dry run prepare context?",
+            role="user",
+            observed_at=NOW - timedelta(minutes=5),
+        )
+
+    job_cls = getattr(daemon_main, "PredictiveWarmerJob", None)
+    assert job_cls is not None
+    job = job_cls(
+        store_factory=lambda: QuilinMemStore(str(memory_db)),
+        clock=lambda: NOW,
+        dry_run=True,
+    )
+
+    result = await job.run(_context(job.id))
+
+    assert result.status == "succeeded"
+    assert result.data["dry_run"] is True
+    assert result.data["written"] == 0
+    assert result.data["skipped_reason"] == "dry_run"
+    assert _predictive_warm_rows(memory_db) == []
 
 
 def test_initial_idle_jobs_include_predictive_warmer() -> None:

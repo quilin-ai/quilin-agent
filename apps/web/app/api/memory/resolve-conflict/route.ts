@@ -12,6 +12,8 @@ interface ResolveConflictBody {
 	readonly decision?: string;
 	readonly mergedContent?: string;
 	readonly merged_content?: string;
+	readonly conflictToken?: string;
+	readonly conflict_token?: string;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -32,6 +34,7 @@ function parseResolveConflictBody(value: unknown):
 			readonly memoryId: string;
 			readonly choice: ConflictChoice;
 			readonly mergedContent?: string;
+			readonly conflictToken?: string;
 	  }
 	| { readonly ok: false; readonly message: string } {
 	if (!isObject(value)) {
@@ -51,9 +54,18 @@ function parseResolveConflictBody(value: unknown):
 	if (choice === "merge_manual" && mergedContent == null) {
 		return { ok: false, message: "merge_manual requires mergedContent or merged_content" };
 	}
-	return mergedContent == null
-		? { ok: true, memoryId, choice }
-		: { ok: true, memoryId, choice, mergedContent };
+	const conflictToken =
+		pickNonEmptyString(body.conflictToken) ?? pickNonEmptyString(body.conflict_token);
+	if (conflictToken == null) {
+		return { ok: false, message: "expected non-empty conflictToken or conflict_token" };
+	}
+	return {
+		ok: true,
+		memoryId,
+		choice,
+		...(mergedContent == null ? {} : { mergedContent }),
+		...(conflictToken == null ? {} : { conflictToken }),
+	};
 }
 
 function parseToolContent(content: string): unknown {
@@ -67,10 +79,25 @@ function parseToolContent(content: string): unknown {
 }
 
 function inferResolved(parsed: unknown): boolean {
-	if (!isObject(parsed)) return true;
+	if (!isObject(parsed)) return false;
 	if (typeof parsed.resolved === "boolean") return parsed.resolved;
-	if (typeof parsed.ok === "boolean") return parsed.ok;
-	return true;
+	return parsed.ok === true;
+}
+
+function providerFailureMessage(parsed: unknown): string {
+	if (!isObject(parsed)) {
+		return "memory_resolve_conflict did not resolve the conflict";
+	}
+	if (typeof parsed.message === "string" && parsed.message.trim().length > 0) {
+		return parsed.message.trim();
+	}
+	if (typeof parsed.error === "string" && parsed.error.trim().length > 0) {
+		return parsed.error.trim();
+	}
+	if (isObject(parsed.error) && typeof parsed.error.message === "string") {
+		return parsed.error.message;
+	}
+	return "memory_resolve_conflict did not resolve the conflict";
 }
 
 export async function POST(request: Request): Promise<Response> {
@@ -126,12 +153,16 @@ export async function POST(request: Request): Promise<Response> {
 			memory_id: string;
 			decision: ConflictChoice;
 			merged_content?: string;
+			conflict_token?: string;
 		} = {
 			memory_id: parsedBody.memoryId,
 			decision: parsedBody.choice,
 		};
 		if (parsedBody.mergedContent != null) {
 			toolArgs.merged_content = parsedBody.mergedContent;
+		}
+		if (parsedBody.conflictToken != null) {
+			toolArgs.conflict_token = parsedBody.conflictToken;
 		}
 
 		const result = await activeTool.execute(toolArgs);
@@ -149,13 +180,33 @@ export async function POST(request: Request): Promise<Response> {
 		}
 
 		const output = parseToolContent(result.content);
+		const resolved = inferResolved(output);
+		if (!resolved) {
+			return Response.json(
+				{
+					ok: false,
+					error: {
+						code: "memory_conflict_not_resolved",
+						message: providerFailureMessage(output),
+					},
+					data: {
+						memoryId: parsedBody.memoryId,
+						choice: parsedBody.choice,
+						resolved: false,
+						toolName: activeTool.name,
+						result: output,
+					},
+				},
+				{ status: 409, headers: { "cache-control": "no-store" } },
+			);
+		}
 		return Response.json(
 			{
 				ok: true,
 				data: {
 					memoryId: parsedBody.memoryId,
 					choice: parsedBody.choice,
-					resolved: inferResolved(output),
+					resolved,
 					toolName: activeTool.name,
 					result: output,
 				},

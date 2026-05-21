@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -42,6 +43,7 @@ export interface OnboardingPreviewBundle {
 }
 
 export interface OnboardingApprovalRequest {
+	readonly approvalToken: string | null;
 	readonly tool: string;
 	readonly riskLevel: string;
 	readonly origin: string;
@@ -60,6 +62,7 @@ export interface OnboardingInstallResult {
 
 export interface OnboardingInstallInput {
 	readonly confirmed?: boolean;
+	readonly approvalToken?: string;
 	readonly maxSnippetChars?: number;
 }
 
@@ -67,6 +70,12 @@ interface OnboardingRoots {
 	readonly homeDir: string;
 	readonly projectRoot: string;
 }
+
+const APPROVAL_TOKEN_TTL_MS = 5 * 60 * 1000;
+const pendingApprovals = new Map<
+	string,
+	{ readonly bundle: OnboardingPreviewBundle; readonly expiresAt: number }
+>();
 
 function resolveRepoRoot(): string {
 	let current = resolve(process.cwd());
@@ -239,11 +248,44 @@ function buildInstallWriteRequest(previews: OnboardingPreviewBundle["previews"])
 	};
 }
 
+function issueApprovalToken(bundle: OnboardingPreviewBundle): string {
+	const now = Date.now();
+	for (const [token, approval] of pendingApprovals) {
+		if (approval.expiresAt <= now) {
+			pendingApprovals.delete(token);
+		}
+	}
+	const token = randomUUID();
+	pendingApprovals.set(token, {
+		bundle,
+		expiresAt: now + APPROVAL_TOKEN_TTL_MS,
+	});
+	return token;
+}
+
+export function issueOnboardingApprovalToken(bundle: OnboardingPreviewBundle): string {
+	return issueApprovalToken(bundle);
+}
+
+function consumeApprovalToken(token: string | undefined): OnboardingPreviewBundle | null {
+	if (token == null || token.trim().length === 0) {
+		return null;
+	}
+	const approval = pendingApprovals.get(token);
+	pendingApprovals.delete(token);
+	if (approval == null || approval.expiresAt <= Date.now()) {
+		return null;
+	}
+	return approval.bundle;
+}
+
 function approvalRequestFromDecision(
 	request: WriteRequest,
 	prompt: string,
+	approvalToken: string | null,
 ): OnboardingApprovalRequest {
 	return {
+		approvalToken,
 		tool: request.tool,
 		riskLevel: request.riskLevel,
 		origin: request.origin,
@@ -259,7 +301,8 @@ export async function installOnboardingSoulImport(
 	const bundle = buildOnboardingPreviewBundle({
 		maxSnippetChars: input.maxSnippetChars,
 	});
-	const request = buildInstallWriteRequest(bundle.previews);
+	let installBundle = bundle;
+	let request = buildInstallWriteRequest(installBundle.previews);
 
 	if (input.confirmed !== true) {
 		const decision = new WriteAuthority({ mode: "ask", actor: "web-onboarding" }).decide(request);
@@ -270,11 +313,24 @@ export async function installOnboardingSoulImport(
 		return {
 			installed: false,
 			needsApproval: true,
-			approvalRequest: approvalRequestFromDecision(request, prompt),
-			previews: bundle.previews,
+			approvalRequest: approvalRequestFromDecision(request, prompt, null),
+			previews: installBundle.previews,
 			written: [],
 		};
 	}
+
+	const approvedBundle = consumeApprovalToken(input.approvalToken);
+	if (approvedBundle == null) {
+		return {
+			installed: false,
+			needsApproval: true,
+			approvalRequest: null,
+			previews: installBundle.previews,
+			written: [],
+		};
+	}
+	installBundle = approvedBundle;
+	request = buildInstallWriteRequest(installBundle.previews);
 
 	const authority = new WriteAuthority({
 		mode: "ask",
@@ -287,26 +343,34 @@ export async function installOnboardingSoulImport(
 		return {
 			installed: false,
 			needsApproval: true,
-			approvalRequest: approvalRequestFromDecision(request, prompt),
-			previews: bundle.previews,
+			approvalRequest: approvalRequestFromDecision(
+				request,
+				prompt,
+				issueApprovalToken(installBundle),
+			),
+			previews: installBundle.previews,
 			written: [],
 		};
 	}
 
-	writeSoulConfig(bundle.configs.soul, bundle.previews.soul.path);
-	writeUserProfile(bundle.configs.user, bundle.previews.user.path);
-	mkdirSync(dirname(bundle.previews.project.path), { recursive: true });
-	writeFileSync(bundle.previews.project.path, bundle.previews.project.content, "utf8");
+	writeSoulConfig(installBundle.configs.soul, installBundle.previews.soul.path);
+	writeUserProfile(installBundle.configs.user, installBundle.previews.user.path);
+	mkdirSync(dirname(installBundle.previews.project.path), { recursive: true });
+	writeFileSync(
+		installBundle.previews.project.path,
+		installBundle.previews.project.content,
+		"utf8",
+	);
 
 	return {
 		installed: true,
 		needsApproval: false,
 		approvalRequest: null,
-		previews: bundle.previews,
+		previews: installBundle.previews,
 		written: [
-			{ kind: "soul", path: bundle.previews.soul.path },
-			{ kind: "user", path: bundle.previews.user.path },
-			{ kind: "project", path: bundle.previews.project.path },
+			{ kind: "soul", path: installBundle.previews.soul.path },
+			{ kind: "user", path: installBundle.previews.user.path },
+			{ kind: "project", path: installBundle.previews.project.path },
 		],
 	};
 }

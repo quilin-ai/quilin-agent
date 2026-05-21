@@ -21,6 +21,7 @@ interface Snippet {
 }
 
 interface ScanData {
+	readonly approvalToken: string;
 	readonly scan: {
 		readonly frameworks: Record<string, FrameworkScan>;
 		readonly personaSnippets: readonly Snippet[];
@@ -37,6 +38,7 @@ interface InstallData {
 	readonly installed: boolean;
 	readonly needsApproval: boolean;
 	readonly approvalRequest: {
+		readonly approvalToken: string | null;
 		readonly prompt: string;
 		readonly detail: string;
 	} | null;
@@ -109,11 +111,24 @@ export default function OnboardingPage() {
 	}
 
 	async function install() {
+		if (scanData == null) {
+			return;
+		}
 		setBusy(true);
 		setError(null);
 		try {
-			const data = await postJson<InstallData>("/api/onboarding/install", { confirmed: true });
+			const data = await postJson<InstallData>("/api/onboarding/install", {
+				confirmed: true,
+				approvalToken: scanData.approvalToken,
+			});
 			setInstallData(data);
+			if (data.needsApproval && data.approvalRequest == null) {
+				setError(
+					"Approval token expired or no longer matches the preview. Start a fresh scan before installing.",
+				);
+				setScanData(null);
+				setStep("welcome");
+			}
 		} catch (installError) {
 			setError(installError instanceof Error ? installError.message : String(installError));
 		} finally {

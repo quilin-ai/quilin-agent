@@ -183,6 +183,44 @@ async def test_memory_store_tool_accepts_structured_memory_fields(server: object
     assert record["resource_pointer"] == {"uri": "file:///tmp/note.md"}
 
 
+async def test_memory_resolve_conflict_tool_uses_real_store(
+    server: object,
+    store: QuilinMemStore,
+) -> None:
+    record = await store.store(
+        "server conflict previous",
+        metadata={"schema_version": 1},
+        last_writer_client="cli",
+        project_scope="project:alpha",
+    )
+    await store.update(
+        record.id,
+        "server conflict candidate",
+        last_writer_client="web",
+        project_scope="project:alpha",
+    )
+    pending = await store.get(record.id)
+    assert pending is not None
+    conflict_token = pending.metadata["conflict_token"]
+    assert isinstance(conflict_token, str)
+
+    result = _decode_call_tool_result(
+        await server.call_tool(  # type: ignore[attr-defined]
+            "memory_resolve_conflict",
+            {
+                "memory_id": record.id,
+                "decision": "keep_a",
+                "conflict_token": conflict_token,
+            },
+        )
+    )
+
+    assert result["resolved"] is True
+    resolved_record = result["record"]
+    assert resolved_record["content"] == "server conflict previous"
+    assert resolved_record["metadata"].get("conflict_resolution_pending") is not True
+
+
 async def test_memory_recall_tool_filters_by_project_scope_with_legacy_fallback(
     server: object,
 ) -> None:

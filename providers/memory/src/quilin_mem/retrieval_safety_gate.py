@@ -666,13 +666,14 @@ class RetrievalSafetyGate:
           (truncated to ``MAX_AUTO_LEARN_PATTERN_CHARS``).
         - ``metadata.attack_pattern``: the strategy that fired
           (``low_confidence_recall`` / ``consensus_disagree`` / ``poisoning_match``).
-        - ``metadata.sample_queries``: the triggering query (last 5 are kept).
+        - ``metadata.sample_query_signature``: stable hash of the triggering
+          query; the raw query is not persisted.
         - ``metadata.sample_records_signature``: stable SHA-1 hash of the
           first 200 chars of every suspect record, for dedupe / audit.
         - ``metadata.learned_at``: ISO timestamp.
 
         当 ``scrub`` 中任一策略检测到可疑 item 时调,自动生成一条 SafetyLesson 写库,
-        包含触发的攻击类别 / 触发 query / 受害 record 签名 / 学习时间。
+        包含触发的攻击类别 / query 签名(不落原文) / 受害 record 签名 / 学习时间。
 
         We skip auto-learn when:
         - ``config.auto_learn_attacks`` is false
@@ -712,8 +713,6 @@ class RetrievalSafetyGate:
                 return None
 
         signature = _sample_records_signature(suspicious_records)
-        sample_queries = [query] if isinstance(query, str) and query.strip() else []
-
         lesson = SafetyLesson(
             id=f"auto-{attack_pattern}-{uuid4().hex[:12]}",
             pattern=pattern,
@@ -724,7 +723,7 @@ class RetrievalSafetyGate:
             source="retrieval_safety_gate_auto",
             metadata={
                 "attack_pattern": attack_pattern,
-                "sample_queries": sample_queries,
+                "sample_query_signature": _sample_query_signature(query),
                 "sample_records_signature": list(signature),
                 "learned_at": datetime.now(UTC).isoformat(),
                 "tags": ["auto_learn", attack_pattern],
@@ -814,6 +813,18 @@ def _sample_records_signature(records: Sequence[MemoryItem]) -> tuple[str, ...]:
         ).hexdigest()[:16]
         out.append(digest)
     return tuple(out)
+
+
+def _sample_query_signature(query: str) -> str | None:
+    """Hash the triggering query without persisting raw user text."""
+
+    cleaned = " ".join(query.split())
+    if not cleaned:
+        return None
+    return hashlib.sha1(  # noqa: S324 — stable audit signature, not security
+        cleaned[:200].encode("utf-8", errors="replace"),
+        usedforsecurity=False,
+    ).hexdigest()[:16]
 
 
 __all__ = [

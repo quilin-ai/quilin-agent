@@ -200,6 +200,169 @@ async def test_recall_for_session_returns_latest_first(tmp_path) -> None:
         os.environ.pop("QUILIN_MEM_DB_PATH", None)
 
 
+@pytest.mark.asyncio
+async def test_recall_for_session_limit_one_returns_latest_primary_match(tmp_path) -> None:
+    db_path = tmp_path / "quilin_mem.db"
+    os.environ["QUILIN_MEM_DB_PATH"] = str(db_path)
+    try:
+        store = QuilinMemStore(db_path=str(db_path))
+        try:
+            writer = DepartureContextWriter(store=store)
+            await writer.extract_and_write(
+                "session-latest",
+                [ConversationTurn(role="user", content="old departure marker")],
+                now=datetime(2026, 5, 1, tzinfo=UTC),
+            )
+            await writer.extract_and_write(
+                "session-latest",
+                [ConversationTurn(role="user", content="new departure marker")],
+                now=datetime(2026, 5, 21, tzinfo=UTC),
+            )
+
+            results = await writer.recall_for_session("session-latest", limit=1)
+
+            assert len(results) == 1
+            assert results[0].metadata.get("extracted_at") == "2026-05-21T00:00:00+00:00"
+            assert "new departure marker" in results[0].content
+        finally:
+            await store.close()
+    finally:
+        os.environ.pop("QUILIN_MEM_DB_PATH", None)
+
+
+@pytest.mark.asyncio
+async def test_recall_for_session_limit_one_returns_latest_with_many_primary_matches(
+    tmp_path,
+) -> None:
+    db_path = tmp_path / "quilin_mem.db"
+    os.environ["QUILIN_MEM_DB_PATH"] = str(db_path)
+    try:
+        store = QuilinMemStore(db_path=str(db_path))
+        try:
+            writer = DepartureContextWriter(store=store)
+            base = datetime(2026, 5, 1, tzinfo=UTC)
+            for index in range(40):
+                await writer.extract_and_write(
+                    "session-many",
+                    [ConversationTurn(role="user", content=f"departure marker {index}")],
+                    now=base + timedelta(days=index),
+                )
+
+            results = await writer.recall_for_session("session-many", limit=1)
+
+            assert len(results) == 1
+            assert results[0].metadata.get("extracted_at") == "2026-06-09T00:00:00+00:00"
+            assert "departure marker 39" in results[0].content
+        finally:
+            await store.close()
+    finally:
+        os.environ.pop("QUILIN_MEM_DB_PATH", None)
+
+
+@pytest.mark.asyncio
+async def test_recall_for_session_falls_back_to_metadata_session_id(tmp_path) -> None:
+    db_path = tmp_path / "quilin_mem.db"
+    os.environ["QUILIN_MEM_DB_PATH"] = str(db_path)
+    try:
+        store = QuilinMemStore(db_path=str(db_path))
+        try:
+            await store.store(
+                "[departure summary] legacy metadata-only session",
+                tier=DEPARTURE_CONTEXT_LAYER,
+                kind=DEPARTURE_CONTEXT_KIND,
+                metadata={
+                    "schema_version": 1,
+                    "source": DEPARTURE_CONTEXT_SOURCE,
+                    "session_id": "legacy-session",
+                    "extracted_at": "2026-05-21T12:00:00+00:00",
+                },
+            )
+            writer = DepartureContextWriter(store=store)
+
+            results = await writer.recall_for_session("legacy-session", limit=3)
+
+            assert len(results) == 1
+            assert "legacy metadata-only session" in results[0].content
+        finally:
+            await store.close()
+    finally:
+        os.environ.pop("QUILIN_MEM_DB_PATH", None)
+
+
+@pytest.mark.asyncio
+async def test_recall_for_session_metadata_fallback_survives_noisy_episodic_rows(
+    tmp_path,
+) -> None:
+    db_path = tmp_path / "quilin_mem.db"
+    os.environ["QUILIN_MEM_DB_PATH"] = str(db_path)
+    try:
+        store = QuilinMemStore(db_path=str(db_path))
+        try:
+            for index in range(40):
+                await store.store(
+                    f"ordinary episodic row {index}",
+                    tier=DEPARTURE_CONTEXT_LAYER,
+                    metadata={"schema_version": 1, "source": "ordinary"},
+                )
+            await store.store(
+                "[departure summary] legacy noisy metadata-only session",
+                tier=DEPARTURE_CONTEXT_LAYER,
+                kind=DEPARTURE_CONTEXT_KIND,
+                metadata={
+                    "schema_version": 1,
+                    "source": DEPARTURE_CONTEXT_SOURCE,
+                    "session_id": "legacy-noisy-session",
+                    "extracted_at": "2026-05-21T12:00:00+00:00",
+                },
+            )
+            writer = DepartureContextWriter(store=store)
+
+            results = await writer.recall_for_session("legacy-noisy-session", limit=1)
+
+            assert len(results) == 1
+            assert "legacy noisy metadata-only session" in results[0].content
+        finally:
+            await store.close()
+    finally:
+        os.environ.pop("QUILIN_MEM_DB_PATH", None)
+
+
+@pytest.mark.asyncio
+async def test_recall_for_session_limit_one_returns_latest_with_many_metadata_matches(
+    tmp_path,
+) -> None:
+    db_path = tmp_path / "quilin_mem.db"
+    os.environ["QUILIN_MEM_DB_PATH"] = str(db_path)
+    try:
+        store = QuilinMemStore(db_path=str(db_path))
+        try:
+            base = datetime(2026, 5, 1, tzinfo=UTC)
+            for index in range(40):
+                observed_at = (base + timedelta(days=index)).isoformat()
+                await store.store(
+                    f"[departure summary] legacy marker {index}",
+                    tier=DEPARTURE_CONTEXT_LAYER,
+                    kind=DEPARTURE_CONTEXT_KIND,
+                    metadata={
+                        "schema_version": 1,
+                        "source": DEPARTURE_CONTEXT_SOURCE,
+                        "session_id": "legacy-many-session",
+                        "extracted_at": observed_at,
+                    },
+                )
+            writer = DepartureContextWriter(store=store)
+
+            results = await writer.recall_for_session("legacy-many-session", limit=1)
+
+            assert len(results) == 1
+            assert results[0].metadata.get("extracted_at") == "2026-06-09T00:00:00+00:00"
+            assert "legacy marker 39" in results[0].content
+        finally:
+            await store.close()
+    finally:
+        os.environ.pop("QUILIN_MEM_DB_PATH", None)
+
+
 def test_is_idle_threshold_respects_idle_minutes() -> None:
     writer = DepartureContextWriter(
         store=None,

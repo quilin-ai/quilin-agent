@@ -80,6 +80,15 @@ class MemoryStore(Protocol):
         project_scope: str | None = None,
     ) -> None: ...
 
+    async def resolve_conflict(
+        self,
+        memory_id: str,
+        decision: str,
+        *,
+        merged_content: str | None = None,
+        conflict_token: str | None = None,
+    ) -> MemoryItem | None: ...
+
     async def delete(self, memory_id: str) -> None: ...
 
     async def preview_delete(self, memory_id: str) -> DestructiveImpactPreview: ...
@@ -326,6 +335,22 @@ class QuilinMemStore:
 
                 now = _utcnow()
                 metadata = _deserialize_metadata(row["metadata_json"])
+                existing_writer_client = (
+                    str(row["last_writer_client"]) if row["last_writer_client"] else None
+                )
+                existing_writer_session_id = (
+                    str(row["last_writer_session_id"]) if row["last_writer_session_id"] else None
+                )
+                resolved_writer_client = last_writer_client or existing_writer_client
+                if last_writer_session_id is not None:
+                    resolved_writer_session_id = last_writer_session_id
+                elif (
+                    last_writer_client is not None
+                    and last_writer_client != existing_writer_client
+                ):
+                    resolved_writer_session_id = None
+                else:
+                    resolved_writer_session_id = existing_writer_session_id
                 conflict = self._detect_conflict_locked(
                     row,
                     last_writer_client=last_writer_client,
@@ -333,10 +358,43 @@ class QuilinMemStore:
                     at=now,
                 )
                 if conflict:
+                    conflict_detected_at = now.isoformat()
                     metadata["conflict_resolution_pending"] = True
                     metadata["conflict_with_client"] = str(row["last_writer_client"])
                     if row["last_writer_session_id"]:
                         metadata["conflict_with_session_id"] = str(row["last_writer_session_id"])
+                    else:
+                        metadata.pop("conflict_with_session_id", None)
+                    metadata["conflict_current_content"] = str(row["content"])
+                    metadata["conflict_candidate_content"] = content
+                    metadata["conflict_base_content"] = str(row["content"])
+                    metadata["conflict_detected_at"] = conflict_detected_at
+                    metadata["conflict_token"] = stable_hash(
+                        dumps_json(
+                            {
+                                "candidate_content": content,
+                                "candidate_session": last_writer_session_id,
+                                "candidate_writer": last_writer_client,
+                                "current_content": str(row["content"]),
+                                "detected_at": conflict_detected_at,
+                                "memory_id": memory_id,
+                                "previous_session": row["last_writer_session_id"],
+                                "previous_writer": row["last_writer_client"],
+                            }
+                        )
+                    )
+                elif metadata.get("conflict_resolution_pending") is True:
+                    for key in (
+                        "conflict_resolution_pending",
+                        "conflict_with_client",
+                        "conflict_with_session_id",
+                        "conflict_current_content",
+                        "conflict_candidate_content",
+                        "conflict_base_content",
+                        "conflict_detected_at",
+                        "conflict_token",
+                    ):
+                        metadata.pop(key, None)
 
                 validate_semantic_ingestion_contract(
                     layer=validate_memory_layer(row["tier"]),
@@ -358,8 +416,8 @@ class QuilinMemStore:
                         metadata_json = ?,
                         last_accessed = ?,
                         last_written_at = ?,
-                        last_writer_client = COALESCE(?, last_writer_client),
-                        last_writer_session_id = COALESCE(?, last_writer_session_id),
+                        last_writer_client = ?,
+                        last_writer_session_id = ?,
                         project_scope = COALESCE(?, project_scope)
                     WHERE id = ? AND deleted = 0 AND is_latest = 1
                     """,
@@ -368,8 +426,8 @@ class QuilinMemStore:
                         _serialize_metadata(metadata),
                         now.isoformat(),
                         now.isoformat(),
-                        last_writer_client,
-                        last_writer_session_id,
+                        resolved_writer_client,
+                        resolved_writer_session_id,
                         project_scope,
                         memory_id,
                     ),
@@ -382,6 +440,163 @@ class QuilinMemStore:
                     """,
                     (content, _build_keywords(content), memory_id),
                 )
+
+    async def resolve_conflict(
+        self,
+        memory_id: str,
+        decision: str,
+        *,
+        merged_content: str | None = None,
+        conflict_token: str | None = None,
+    ) -> MemoryItem | None:
+        return await asyncio.to_thread(
+            self._resolve_conflict_sync,
+            memory_id,
+            decision,
+            merged_content,
+            conflict_token,
+        )
+
+    def _resolve_conflict_sync(
+        self,
+        memory_id: str,
+        decision: str,
+        merged_content: str | None,
+        conflict_token: str | None,
+    ) -> MemoryItem | None:
+        normalized_decision = decision.strip().lower()
+        if normalized_decision not in {"keep_a", "keep_b", "merge_manual"}:
+            raise ValueError("decision must be keep_a, keep_b, or merge_manual")
+        if normalized_decision == "merge_manual" and not (merged_content or "").strip():
+            raise ValueError("merge_manual requires merged_content")
+
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            with self._conn:
+                row = self._conn.execute(
+                    f"""
+                    SELECT {record_columns()}
+                    FROM memory_records
+                    WHERE id = ? AND deleted = 0 AND is_latest = 1
+                    """,
+                    (memory_id,),
+                ).fetchone()
+                if row is None:
+                    return None
+
+                now = _utcnow()
+                metadata = _deserialize_metadata(row["metadata_json"])
+                if metadata.get("conflict_resolution_pending") is not True:
+                    return None
+                expected_conflict_token = metadata.get("conflict_token")
+                if not (
+                    isinstance(expected_conflict_token, str)
+                    and expected_conflict_token.strip()
+                    and conflict_token == expected_conflict_token
+                ):
+                    return None
+                if (
+                    "conflict_current_content" not in metadata
+                    or "conflict_candidate_content" not in metadata
+                ):
+                    return None
+                current_raw = metadata["conflict_current_content"]
+                candidate_raw = metadata["conflict_candidate_content"]
+                if not isinstance(current_raw, str) or not isinstance(candidate_raw, str):
+                    return None
+                current_content = current_raw
+                candidate_content = candidate_raw
+                previous_writer_client = metadata.get("conflict_with_client")
+                previous_writer_session_id = metadata.get("conflict_with_session_id")
+                resolved_writer_client = (
+                    str(row["last_writer_client"]) if row["last_writer_client"] else None
+                )
+                resolved_writer_session_id = (
+                    str(row["last_writer_session_id"]) if row["last_writer_session_id"] else None
+                )
+                if normalized_decision == "keep_a":
+                    resolved_content = current_content
+                    resolved_writer_client = (
+                        str(previous_writer_client).strip()
+                        if isinstance(previous_writer_client, str)
+                        and previous_writer_client.strip()
+                        else None
+                    )
+                    resolved_writer_session_id = (
+                        str(previous_writer_session_id).strip()
+                        if isinstance(previous_writer_session_id, str)
+                        and previous_writer_session_id.strip()
+                        else None
+                    )
+                elif normalized_decision == "keep_b":
+                    resolved_content = candidate_content
+                else:
+                    resolved_content = str(merged_content).strip()
+
+                validate_semantic_ingestion_contract(
+                    layer=validate_memory_layer(row["tier"]),
+                    content_type=row["content_type"],
+                    metadata=metadata,
+                    content=resolved_content,
+                )
+                for key in (
+                    "conflict_resolution_pending",
+                    "conflict_with_client",
+                    "conflict_with_session_id",
+                    "conflict_current_content",
+                    "conflict_candidate_content",
+                    "conflict_base_content",
+                    "conflict_detected_at",
+                    "conflict_token",
+                ):
+                    metadata.pop(key, None)
+
+                self._record_history_snapshot_locked(
+                    memory_id=memory_id,
+                    record=_row_to_record(row, now=_utcnow),
+                    label_kind="conflict_resolve",
+                    snapshot_at=now,
+                )
+                self._conn.execute(
+                    """
+                    UPDATE memory_records
+                    SET content = ?,
+                        embedding_json = NULL,
+                        metadata_json = ?,
+                        last_accessed = ?,
+                        last_written_at = ?,
+                        last_writer_client = ?,
+                        last_writer_session_id = ?
+                    WHERE id = ? AND deleted = 0 AND is_latest = 1
+                    """,
+                    (
+                        resolved_content,
+                        _serialize_metadata(metadata),
+                        now.isoformat(),
+                        now.isoformat(),
+                        resolved_writer_client,
+                        resolved_writer_session_id,
+                        memory_id,
+                    ),
+                )
+                self._conn.execute(
+                    """
+                    UPDATE memory_records_fts
+                    SET content = ?, keywords = ?
+                    WHERE id = ?
+                    """,
+                    (resolved_content, _build_keywords(resolved_content), memory_id),
+                )
+
+                resolved_row = self._conn.execute(
+                    f"""
+                    SELECT {record_columns()}
+                    FROM memory_records
+                    WHERE id = ? AND deleted = 0 AND is_latest = 1
+                    """,
+                    (memory_id,),
+                ).fetchone()
+                return _row_to_record(resolved_row, now=_utcnow) if resolved_row else None
 
     def _detect_conflict_locked(
         self,

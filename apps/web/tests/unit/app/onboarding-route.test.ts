@@ -67,6 +67,7 @@ describe("POST /api/onboarding/scan", () => {
 		expect(response.status).toBe(200);
 		expect(body.ok).toBe(true);
 		const data = body.data as {
+			approvalToken: string;
 			scan: {
 				frameworks: Record<string, { present: boolean }>;
 				personaSnippets: Array<{ text: string }>;
@@ -75,6 +76,7 @@ describe("POST /api/onboarding/scan", () => {
 			};
 			previews: Record<"soul" | "user" | "project", { path: string; content: string }>;
 		};
+		expect(data.approvalToken).toEqual(expect.any(String));
 		expect(Object.keys(data.scan.frameworks).sort()).toEqual([
 			"claude-code",
 			"codex",
@@ -116,7 +118,13 @@ describe("POST /api/onboarding/install", () => {
 		expect(body.ok).toBe(true);
 		const data = body.data as {
 			needsApproval: boolean;
-			approvalRequest: { tool: string; riskLevel: string; origin: string; prompt: string };
+			approvalRequest: {
+				tool: string;
+				riskLevel: string;
+				origin: string;
+				prompt: string;
+				approvalToken: string | null;
+			};
 		};
 		expect(data.needsApproval).toBe(true);
 		expect(data.approvalRequest).toEqual(
@@ -126,13 +134,14 @@ describe("POST /api/onboarding/install", () => {
 				origin: "install",
 			}),
 		);
+		expect(data.approvalRequest.approvalToken).toBe(null);
 		expect(data.approvalRequest.prompt).toContain("WriteAuthority");
 		expect(existsSync(join(homeDir, ".quilin", "soul.md"))).toBe(false);
 		expect(existsSync(join(homeDir, ".quilin", "user.md"))).toBe(false);
 		expect(existsSync(join(projectRoot, "QUILIN.md"))).toBe(false);
 	});
 
-	it("writes soul.md, user.md, and QUILIN.md only after explicit confirmation", async () => {
+	it("rejects confirmed install without a server-issued approval token", async () => {
 		writeText(join(homeDir, ".codex", "AGENTS.md"), "You are concise. User prefers TDD.");
 		writeText(join(projectRoot, "AGENTS.md"), "Do not submit commits.");
 
@@ -149,10 +158,139 @@ describe("POST /api/onboarding/install", () => {
 		expect(response.status).toBe(200);
 		expect(body.ok).toBe(true);
 		const data = body.data as { installed: boolean; needsApproval: boolean };
-		expect(data.installed).toBe(true);
-		expect(data.needsApproval).toBe(false);
-		expect(readFileSync(join(homeDir, ".quilin", "soul.md"), "utf8")).toContain("concise");
-		expect(readFileSync(join(homeDir, ".quilin", "user.md"), "utf8")).toContain("TDD");
-		expect(readFileSync(join(projectRoot, "QUILIN.md"), "utf8")).toContain("Do not submit commits");
+		expect(data.installed).toBe(false);
+		expect(data.needsApproval).toBe(true);
+		expect((body.data as { approvalRequest: unknown }).approvalRequest).toBe(null);
+		expect(existsSync(join(homeDir, ".quilin", "soul.md"))).toBe(false);
+		expect(existsSync(join(homeDir, ".quilin", "user.md"))).toBe(false);
+		expect(existsSync(join(projectRoot, "QUILIN.md"))).toBe(false);
+	});
+
+	it("does not mint a reusable approval token after a forged confirmed install", async () => {
+		writeText(join(homeDir, ".codex", "AGENTS.md"), "You are concise. User prefers TDD.");
+		writeText(join(projectRoot, "AGENTS.md"), "Do not submit commits.");
+
+		const { POST } = await import("@/app/api/onboarding/install/route");
+		const forgedResponse = await POST(
+			new Request("http://localhost/api/onboarding/install", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ confirmed: true, approvalToken: "forged-token" }),
+			}),
+		);
+		const forgedBody = await jsonBody(forgedResponse);
+
+		expect(forgedResponse.status).toBe(200);
+		expect(forgedBody.ok).toBe(true);
+		const forgedData = forgedBody.data as {
+			installed: boolean;
+			needsApproval: boolean;
+			approvalRequest: unknown;
+		};
+		expect(forgedData.installed).toBe(false);
+		expect(forgedData.needsApproval).toBe(true);
+		expect(forgedData.approvalRequest).toBe(null);
+		expect(existsSync(join(homeDir, ".quilin", "soul.md"))).toBe(false);
+		expect(existsSync(join(homeDir, ".quilin", "user.md"))).toBe(false);
+		expect(existsSync(join(projectRoot, "QUILIN.md"))).toBe(false);
+	});
+
+	it("does not allow install endpoint to mint a reusable approval token", async () => {
+		writeText(join(homeDir, ".codex", "AGENTS.md"), "You are concise. User prefers TDD.");
+		writeText(join(projectRoot, "AGENTS.md"), "Do not submit commits.");
+
+		const { POST } = await import("@/app/api/onboarding/install/route");
+		const approvalResponse = await POST(
+			new Request("http://localhost/api/onboarding/install", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({}),
+			}),
+		);
+		const approvalBody = await jsonBody(approvalResponse);
+		const approvalData = approvalBody.data as {
+			approvalRequest: { approvalToken: string | null };
+		};
+		expect(approvalData.approvalRequest.approvalToken).toBe(null);
+
+		const response = await POST(
+			new Request("http://localhost/api/onboarding/install", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({
+					confirmed: true,
+					approvalToken: "missing-scan-token",
+				}),
+			}),
+		);
+		const body = await jsonBody(response);
+
+		expect(response.status).toBe(200);
+		expect(body.ok).toBe(true);
+		const data = body.data as { installed: boolean; needsApproval: boolean };
+		expect(data.installed).toBe(false);
+		expect(data.needsApproval).toBe(true);
+		expect(existsSync(join(homeDir, ".quilin", "soul.md"))).toBe(false);
+		expect(existsSync(join(homeDir, ".quilin", "user.md"))).toBe(false);
+		expect(existsSync(join(projectRoot, "QUILIN.md"))).toBe(false);
+	});
+
+	it("writes the scanned preview bundle when sources change before confirmation", async () => {
+		writeText(
+			join(homeDir, ".codex", "AGENTS.md"),
+			"You are preview version one. User prefers durable previews.",
+		);
+		writeText(join(projectRoot, "AGENTS.md"), "Project guide version one.");
+
+		const { POST: scanPost } = await import("@/app/api/onboarding/scan/route");
+		const { POST: installPost } = await import("@/app/api/onboarding/install/route");
+		const scanResponse = await scanPost(
+			new Request("http://localhost/api/onboarding/scan", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({}),
+			}),
+		);
+		const scanBody = await jsonBody(scanResponse);
+		const scanData = scanBody.data as {
+			approvalToken: string;
+			previews: Record<"soul" | "user" | "project", { content: string }>;
+		};
+
+		writeText(
+			join(homeDir, ".codex", "AGENTS.md"),
+			"You are preview version two. User prefers changed content.",
+		);
+		writeText(join(projectRoot, "AGENTS.md"), "Project guide version two.");
+		const response = await installPost(
+			new Request("http://localhost/api/onboarding/install", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({
+					confirmed: true,
+					approvalToken: scanData.approvalToken,
+				}),
+			}),
+		);
+		const body = await jsonBody(response);
+
+		expect(response.status).toBe(200);
+		expect(body.ok).toBe(true);
+		expect((body.data as { installed: boolean }).installed).toBe(true);
+		expect(readFileSync(join(homeDir, ".quilin", "soul.md"), "utf8")).toBe(
+			scanData.previews.soul.content,
+		);
+		expect(readFileSync(join(homeDir, ".quilin", "user.md"), "utf8")).toBe(
+			scanData.previews.user.content,
+		);
+		expect(readFileSync(join(projectRoot, "QUILIN.md"), "utf8")).toBe(
+			scanData.previews.project.content,
+		);
+		expect(readFileSync(join(projectRoot, "QUILIN.md"), "utf8")).toContain(
+			"Project guide version one",
+		);
+		expect(readFileSync(join(projectRoot, "QUILIN.md"), "utf8")).not.toContain(
+			"Project guide version two",
+		);
 	});
 });

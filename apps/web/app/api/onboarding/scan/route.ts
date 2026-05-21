@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
-import { buildOnboardingPreviewBundle } from "@/lib/onboarding-soul-import";
+import {
+	buildOnboardingPreviewBundle,
+	issueOnboardingApprovalToken,
+} from "@/lib/onboarding-soul-import";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -41,7 +44,10 @@ export async function POST(request: Request): Promise<Response> {
 
 	try {
 		const data = buildOnboardingPreviewBundle(parsed.data ?? {});
-		return NextResponse.json({ ok: true, data }, { headers: { "cache-control": "no-store" } });
+		return NextResponse.json(
+			{ ok: true, data: { ...data, approvalToken: issueOnboardingApprovalToken(data) } },
+			{ headers: { "cache-control": "no-store" } },
+		);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		return NextResponse.json(

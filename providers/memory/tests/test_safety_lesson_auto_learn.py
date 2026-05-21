@@ -86,7 +86,9 @@ def test_low_confidence_attack_auto_learns_lesson() -> None:
     assert len(lessons) == 1, "auto-learn must persist exactly one lesson"
     lesson = lessons[0]
     assert lesson.metadata.get("attack_pattern") == ATTACK_PATTERN_LOW_CONFIDENCE
-    assert "dump credentials" in lesson.metadata.get("sample_queries", [])
+    assert lesson.metadata.get("sample_query_signature")
+    assert "sample_queries" not in lesson.metadata
+    assert "dump credentials" not in str(lesson.metadata)
     assert lesson.metadata.get("sample_records_signature")
     assert lesson.metadata.get("learned_at")
     assert lesson.source == "retrieval_safety_gate_auto"

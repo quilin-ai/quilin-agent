@@ -1239,16 +1239,23 @@ class PredictiveWarmerJob:
         clock: Callable[[], datetime] | None = None,
         recent_query_limit: int = 12,
         evidence_limit: int = 5,
+        dry_run: bool | None = None,
     ) -> None:
         self._store_factory = store_factory
         self._clock = clock or (lambda: datetime.now(UTC))
         self._recent_query_limit = max(1, recent_query_limit)
         self._evidence_limit = max(1, evidence_limit)
+        self._dry_run = dry_run
 
     async def run(self, context: JobContext) -> JobResult:
         from .store import QuilinMemStore
 
         now = _coerce_utc(self._clock())
+        dry_run = (
+            self._dry_run
+            if self._dry_run is not None
+            else _is_truthy(os.environ.get("QUILIN_DAEMON_DRY_RUN", "true"))
+        )
         store = (self._store_factory or QuilinMemStore)()
         data: dict[str, object] = {
             "queries_seen": 0,
@@ -1257,6 +1264,7 @@ class PredictiveWarmerJob:
             "skipped_reason": None,
             "expiry_field": "forget_after",
             "ttl_hours": 24,
+            "dry_run": dry_run,
         }
         try:
             queries = _recent_user_queries_from_store(
@@ -1294,6 +1302,10 @@ class PredictiveWarmerJob:
             if not evidence:
                 data["skipped_reason"] = "no_relevant_evidence"
                 return JobResult.succeeded("no evidence to warm", data=data)
+            if dry_run:
+                data["skipped_reason"] = "dry_run"
+                data["valid_until"] = (now + PREDICTIVE_WARM_TTL).isoformat()
+                return JobResult.succeeded("predictive warm planned (dry_run)", data=data)
 
             warm_id = _insert_predictive_warm(
                 store,

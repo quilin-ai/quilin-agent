@@ -9,6 +9,7 @@ export const dynamic = "force-dynamic";
 const InstallBodySchema = z
 	.object({
 		confirmed: z.boolean().optional(),
+		approvalToken: z.string().min(1).optional(),
 		maxSnippetChars: z.number().int().min(256).max(20_000).optional(),
 	})
 	.optional();

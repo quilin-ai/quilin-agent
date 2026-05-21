@@ -222,6 +222,7 @@ async def test_predictive_warm_records_are_boosted_for_related_queries(tmp_path)
         clock=lambda: NOW,
         recent_query_limit=5,
         evidence_limit=3,
+        dry_run=False,
     )
     await job.run(_context(job.id))
 
@@ -262,6 +263,7 @@ async def test_predictive_warm_records_do_not_pollute_unrelated_queries(tmp_path
         clock=lambda: NOW,
         recent_query_limit=5,
         evidence_limit=3,
+        dry_run=False,
     )
     await job.run(_context(job.id))
 
@@ -292,6 +294,7 @@ async def test_expired_predictive_warm_records_are_hidden_from_retrieval(tmp_pat
         clock=lambda: NOW,
         recent_query_limit=5,
         evidence_limit=3,
+        dry_run=False,
     )
     await job.run(_context(job.id))
 

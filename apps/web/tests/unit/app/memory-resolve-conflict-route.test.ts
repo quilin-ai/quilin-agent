@@ -37,12 +37,19 @@ describe("POST /api/memory/resolve-conflict", () => {
 		}));
 		mockCatalog.rawTools = [{ name: "quilin-mem/memory_resolve_conflict", execute }];
 
-		const res = await POST(buildPostRequest({ memoryId: "conflict-1", choice: "keep_b" }));
+		const res = await POST(
+			buildPostRequest({
+				memoryId: "conflict-1",
+				choice: "keep_b",
+				conflictToken: "conflict-token-1",
+			}),
+		);
 
 		expect(res.status).toBe(200);
 		expect(execute).toHaveBeenCalledWith({
 			memory_id: "conflict-1",
 			decision: "keep_b",
+			conflict_token: "conflict-token-1",
 		});
 		const body = (await res.json()) as {
 			ok: true;
@@ -60,7 +67,10 @@ describe("POST /api/memory/resolve-conflict", () => {
 	});
 
 	it("falls back to resolve_conflict during provider rename windows", async () => {
-		const execute = vi.fn(async () => ({ content: "{}", isError: false }));
+		const execute = vi.fn(async () => ({
+			content: JSON.stringify({ ok: true, resolved: true }),
+			isError: false,
+		}));
 		mockCatalog.rawTools = [{ name: "quilin-mem/resolve_conflict", execute }];
 
 		const res = await POST(
@@ -68,6 +78,7 @@ describe("POST /api/memory/resolve-conflict", () => {
 				memory_id: "conflict-2",
 				choice: "merge_manual",
 				mergedContent: "用户偏好中文摘要,但需要保留详细上下文。",
+				conflictToken: "conflict-token-2",
 			}),
 		);
 
@@ -76,6 +87,7 @@ describe("POST /api/memory/resolve-conflict", () => {
 			memory_id: "conflict-2",
 			decision: "merge_manual",
 			merged_content: "用户偏好中文摘要,但需要保留详细上下文。",
+			conflict_token: "conflict-token-2",
 		});
 		const body = (await res.json()) as {
 			ok: true;
@@ -94,10 +106,94 @@ describe("POST /api/memory/resolve-conflict", () => {
 	});
 
 	it("returns 503 when no conflict resolution tool is loaded", async () => {
-		const res = await POST(buildPostRequest({ memoryId: "conflict-4", choice: "keep_a" }));
+		const res = await POST(
+			buildPostRequest({
+				memoryId: "conflict-4",
+				choice: "keep_a",
+				conflictToken: "conflict-token-4",
+			}),
+		);
 
 		expect(res.status).toBe(503);
 		const body = (await res.json()) as { ok: false; error: { code: string } };
 		expect(body.error.code).toBe("memory_resolve_conflict_unavailable");
+	});
+
+	it("does not report success when the provider returns unresolved", async () => {
+		const execute = vi.fn(async () => ({
+			content: JSON.stringify({
+				ok: false,
+				resolved: false,
+				memory_id: "missing-conflict",
+			}),
+			isError: false,
+		}));
+		mockCatalog.rawTools = [{ name: "quilin-mem/memory_resolve_conflict", execute }];
+
+		const res = await POST(
+			buildPostRequest({
+				memoryId: "missing-conflict",
+				choice: "keep_a",
+				conflictToken: "missing-conflict-token",
+			}),
+		);
+
+		expect(res.status).toBe(409);
+		const body = (await res.json()) as {
+			ok: false;
+			error: { code: string; message: string };
+			data: { resolved: boolean };
+		};
+		expect(body.ok).toBe(false);
+		expect(body.error.code).toBe("memory_conflict_not_resolved");
+		expect(body.data.resolved).toBe(false);
+	});
+
+	it("requires a conflict token for every resolve request", async () => {
+		const res = await POST(buildPostRequest({ memoryId: "conflict-5", choice: "keep_b" }));
+
+		expect(res.status).toBe(400);
+		const body = (await res.json()) as { ok: false; error: { code: string } };
+		expect(body.error.code).toBe("invalid_body");
+	});
+
+	it("treats ambiguous provider output as unresolved", async () => {
+		const execute = vi.fn(async () => ({
+			content: "{}",
+			isError: false,
+		}));
+		mockCatalog.rawTools = [{ name: "quilin-mem/memory_resolve_conflict", execute }];
+
+		const res = await POST(
+			buildPostRequest({
+				memoryId: "conflict-6",
+				choice: "keep_a",
+				conflictToken: "conflict-token-6",
+			}),
+		);
+
+		expect(res.status).toBe(409);
+		const body = (await res.json()) as { ok: false; error: { code: string } };
+		expect(body.error.code).toBe("memory_conflict_not_resolved");
+	});
+
+	it("treats plain-text provider output as unresolved", async () => {
+		const execute = vi.fn(async () => ({
+			content: "resolved",
+			isError: false,
+		}));
+		mockCatalog.rawTools = [{ name: "quilin-mem/memory_resolve_conflict", execute }];
+
+		const res = await POST(
+			buildPostRequest({
+				memoryId: "conflict-7",
+				choice: "keep_a",
+				conflictToken: "conflict-token-7",
+			}),
+		);
+
+		expect(res.status).toBe(409);
+		const body = (await res.json()) as { ok: false; error: { code: string } };
+		expect(body.error.code).toBe("memory_conflict_not_resolved");
 	});
 });

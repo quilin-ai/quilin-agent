@@ -348,19 +348,30 @@ class DepartureContextWriter:
         # Empty query → all rows in the layer, then filter by session id in
         # memory. We over-fetch a healthy multiple of ``limit`` so dedupe /
         # ordering stays stable even on noisy databases.
+        fetch_limit = max(limit * 64, 256)
         items = await self._store.search(
             query="",
-            limit=max(limit * 16, 32),
+            limit=fetch_limit,
             filters={
                 "layer": DEPARTURE_CONTEXT_LAYER,
                 "last_writer_session_id": session_id,
+                "metadata": {"source": DEPARTURE_CONTEXT_SOURCE},
             },
         )
-        matched = [
-            item
-            for item in items
-            if item.metadata.get("source") == DEPARTURE_CONTEXT_SOURCE
-        ]
+        matched = list(items)
+        if not matched:
+            fallback_items = await self._store.search(
+                query="",
+                limit=fetch_limit,
+                filters={
+                    "layer": DEPARTURE_CONTEXT_LAYER,
+                    "metadata": {
+                        "source": DEPARTURE_CONTEXT_SOURCE,
+                        "session_id": session_id,
+                    },
+                },
+            )
+            matched = list(fallback_items)
         matched.sort(
             key=lambda r: cast(str, r.metadata.get("extracted_at", "")),
             reverse=True,

@@ -465,6 +465,38 @@ async def _memory_store_with_store(
     return json.dumps({"id": record.id, **_trace_payload(trace_context)})
 
 
+async def _memory_resolve_conflict_with_store(
+    store: QuilinMemStore,
+    memory_id: str,
+    decision: str,
+    merged_content: str | None = None,
+    conflict_token: str | None = None,
+    *,
+    trace_context: TraceContext | None = None,
+) -> str:
+    try:
+        resolved = await store.resolve_conflict(
+            memory_id,
+            decision,
+            merged_content=merged_content,
+            conflict_token=conflict_token,
+        )
+    except Exception as exc:
+        _raise_memory_operation_error("memory_resolve_conflict", exc)
+
+    payload: dict[str, object] = {
+        "ok": resolved is not None,
+        "resolved": resolved is not None,
+        "memory_id": memory_id,
+        "decision": decision,
+    }
+    if resolved is not None:
+        payload["record"] = resolved.to_wire_dict()
+    if trace_context is not None:
+        payload["traceparent"] = trace_context.traceparent
+    return json.dumps(payload, ensure_ascii=False)
+
+
 async def _memory_consolidate_plan_with_store(
     store: QuilinMemStore,
     *,
@@ -1088,6 +1120,25 @@ def create_server(
             deadline_at,
             prospective_action,
             resource_pointer,
+            trace_context=_child_trace_context(parent_trace),
+        )
+
+    @server.tool(name="memory_resolve_conflict")
+    async def memory_resolve_conflict_tool(
+        memory_id: str,
+        decision: str,
+        merged_content: str | None = None,
+        conflict_token: str | None = None,
+        ctx: Context[object, Any, object] | None = None,
+    ) -> str:
+        """Resolve a pending multi-client conflict on a memory record."""
+        parent_trace = _trace_context_from_context(ctx)
+        return await _memory_resolve_conflict_with_store(
+            await resolve_store(ctx),
+            memory_id,
+            decision,
+            merged_content,
+            conflict_token,
             trace_context=_child_trace_context(parent_trace),
         )
 
