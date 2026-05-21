@@ -181,8 +181,11 @@ export default function MemoryPage() {
 
 	const visibleTiers = useMemo(() => {
 		if (memory == null) return [];
-		const keys = Object.keys(memory.byTier);
-		return keys.sort((a, b) => {
+		// QUI dogfood fix(2026-05-21):始终显示 4 层(working/episodic/semantic/skill),
+		// 即使某层 0 记录也要 listed —— 让 user 直观看到 4 层架构。空层显示 "暂无"。
+		const dbKeys = new Set(Object.keys(memory.byTier));
+		const merged = new Set<string>([...TIER_ORDER, ...dbKeys]);
+		return Array.from(merged).sort((a, b) => {
 			const ia = TIER_ORDER.indexOf(a);
 			const ib = TIER_ORDER.indexOf(b);
 			if (ia === -1 && ib === -1) return a.localeCompare(b);
@@ -203,7 +206,11 @@ export default function MemoryPage() {
 				needle.length === 0
 					? [...all]
 					: all.filter((r) => r.content.toLowerCase().includes(needle));
-			if (filtered.length > 0) out.set(tier, filtered);
+			// 关键:即使 filtered 为空也加入 map,让空层显示 "暂无" 而不是消失。
+			// 但有过滤词时(needle.length > 0)空层就不显示,避免噪音。
+			if (filtered.length > 0 || (needle.length === 0 && TIER_ORDER.includes(tier))) {
+				out.set(tier, filtered);
+			}
 		}
 		return out;
 	}, [memory, visibleTiers, filter, tierFilter]);
@@ -697,6 +704,27 @@ export default function MemoryPage() {
 											</span>
 											<span className="right">{records.length} 条</span>
 										</div>
+										{records.length === 0 ? (
+											<div
+												data-testid={`memory-tier-empty-${tier}`}
+												style={{
+													padding: "12px 10px",
+													color: "var(--fg-muted)",
+													fontStyle: "italic",
+													fontSize: 12,
+													borderBottom: "1px dashed var(--border)",
+												}}
+											>
+												暂无{TIER_LABELS[tier]?.cn ?? tier}层记忆。
+												{tier === "skill"
+													? "技能层用于沉淀可复用流程,Consolidator 升级或灵魂导入会写入。"
+													: tier === "semantic"
+														? "语义层是反思后稳定下来的事实,LLM 会在合适时机升级写入。"
+														: tier === "episodic"
+															? "情景层是具体对话片段,Reflector 自动从工作层升级。"
+															: ""}
+											</div>
+										) : null}
 										{records.map((record) => {
 											const expanded = expandedId === record.id;
 											const contentToShow =
