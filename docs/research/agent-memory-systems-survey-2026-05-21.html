@@ -716,10 +716,11 @@
           </table>
         </div>
 
-        <h3>当前进度(2026-05-21 完美记忆系统 v2 全 ship)</h3>
+        <h3>当前进度(2026-05-21 v2 全 ship + dogfood + Playwright e2e)</h3>
         <div class="card my-4" style="background:#dcfce7;border-color:#16a34a;">
-          <p class="text-lg"><strong>🎉 全部 13 工单 ✅ 全 ship!累计 14 commits on origin/master</strong></p>
-          <p class="text-base mt-2">原估 25-30 联合日(≈ 25-50 周个人开发)→ 实测 <strong>~8 小时</strong>(Claude × Codex 并行)→ <strong>~25-30x 加速</strong></p>
+          <p class="text-lg"><strong>🎉 全部 13 工单 ✅ + dogfood 验证 + Playwright e2e 5/5 PASS + 4 个 bug fix follow-up,累计 20 commits on origin/master</strong></p>
+          <p class="text-base mt-2">原估 25-30 联合日(≈ 25-50 周个人开发)→ 实测 <strong>~9 小时</strong>(Claude × Codex 并行)→ <strong>~25-30x 加速</strong></p>
+          <p class="text-base mt-2" style="background:#fef3c7;padding:8px;border-radius:4px;"><strong>真端到端可用</strong>:Playwright e2e 5/5 PASS(commit <code>7263ed0</code>)— 真启 quilin-mem MCP + Web dev + 浏览器,验证写入/召回/dedupe/删除/批删全链路。SQLite state changes 每步实证。</p>
           <ul class="ml-6 list-disc mt-2 space-y-1">
             <li><strong>commit <code>ab1f758</code></strong>(QUI-192 完整性评测 + QUI-194 安全检索门 + 7 个调研 docs)</li>
             <li><strong>commit <code>414eb62</code></strong>(QUI-189 批量整理 + QUI-193 证据+版本链+时光回溯)</li>
@@ -730,9 +731,16 @@
             <li><strong>commit <code>294412d</code></strong> + <code>b4438ef</code>(QUI-196 project_scope + QUI-197 salience prep)</li>
             <li><strong>commit <code>2a392e1</code></strong> + <code>b6eec54</code>(Codex memory v2 slices + docs)</li>
             <li><strong>commit <code>24ac080</code></strong>(QUI-190 + QUI-81 + QUI-196/197/199 schema 完整接入,21 文件)</li>
-            <li><strong>累计 15000+ 行实施代码 + 786/786 pytest pass + 95.02% coverage</strong></li>
-            <li><strong>多轮 cross-review 完美收敛</strong>:60+ reviewer subagent 跨 14 工单,修过 50+ REAL,所有工单都连续 2 fresh × 0 REAL × 2</li>
-            <li><strong>实测速度</strong>:**~25-30x 加速**(原估 25-30 联合日,实测 ~8 小时)</li>
+            <li><strong>commit <code>1c61d7f</code></strong>(外部 agent 接入文档 + adapter.ts fix)</li>
+            <li><strong>commit <code>84a8ed5</code></strong>(dogfood bug fix:forget_after + archived_at backfill)</li>
+            <li><strong>commit <code>9346207</code></strong>(QUI-201 tier=short 历史数据迁移)</li>
+            <li><strong>commit <code>7263ed0</code></strong>(Playwright 真端到端 5/5 PASS,537 LOC spec)</li>
+            <li><strong>commit <code>a2f988c</code></strong>(docs/STATUS dogfood + e2e 状态同步)</li>
+            <li><strong>累计 17000+ 行实施代码 + 790/790 pytest pass + 95.01% coverage</strong></li>
+            <li><strong>多轮 cross-review 完美收敛</strong>:70+ reviewer subagent 跨 14+ 工单,修过 55+ REAL</li>
+            <li><strong>Dogfood 验证</strong>:真打开 Quilin 跑 5 轮对话,记忆 CRUD 全真生效</li>
+            <li><strong>Playwright e2e</strong>:5/5 PASS,真启 MCP + Web + SQLite,完整链路验证</li>
+            <li><strong>实测速度</strong>:**~25-30x 加速**(原估 25-30 联合日,实测 ~9 小时)</li>
           </ul>
         </div>
 
