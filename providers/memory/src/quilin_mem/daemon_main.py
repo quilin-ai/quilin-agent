@@ -33,6 +33,7 @@ import os
 import signal
 import sqlite3
 import sys
+from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -85,6 +86,42 @@ class _TokenUsageSnapshot:
     tokens_used: int
     source: str
     error: str | None = None
+
+
+PREDICTIVE_WARM_KIND = "predictive_warm"
+PREDICTIVE_WARM_TTL = timedelta(hours=24)
+_PREDICTIVE_WARM_STOP_TERMS = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "are",
+        "context",
+        "do",
+        "for",
+        "how",
+        "i",
+        "in",
+        "is",
+        "it",
+        "of",
+        "on",
+        "or",
+        "prepare",
+        "should",
+        "the",
+        "to",
+        "what",
+        "with",
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _RecentUserQuery:
+    query_id: str
+    content: str
+    observed_at: datetime
 
 
 class _IncrementalBackfillStore:
@@ -204,6 +241,247 @@ def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
         (table_name,),
     ).fetchone()
     return row is not None
+
+
+def _parse_datetime(raw_value: object, *, fallback: datetime) -> datetime:
+    if not isinstance(raw_value, str) or not raw_value.strip():
+        return fallback
+    try:
+        return _coerce_utc(datetime.fromisoformat(raw_value))
+    except ValueError:
+        return fallback
+
+
+def _deserialize_metadata(metadata_json: object) -> dict[str, object]:
+    if not isinstance(metadata_json, str) or not metadata_json:
+        return {}
+    try:
+        loaded = json.loads(metadata_json)
+    except json.JSONDecodeError:
+        return {}
+    return dict(loaded) if isinstance(loaded, dict) else {}
+
+
+def _metadata_marks_user_query(metadata: dict[str, object]) -> bool:
+    role = str(metadata.get("role", "")).strip().lower()
+    if role == "user":
+        return True
+    query_role = str(metadata.get("query_role", "")).strip().lower()
+    if query_role == "user":
+        return True
+    source = str(metadata.get("source", "")).strip().lower()
+    if source in {"conversation_user", "memory_recall_query", "user_query", "user_turn"}:
+        return True
+    return metadata.get("is_user_query") is True
+
+
+def _recent_user_queries_from_store(
+    store: Any,
+    *,
+    limit: int,
+    now: datetime,
+) -> list[_RecentUserQuery]:
+    if limit <= 0:
+        return []
+
+    conn = getattr(store, "_conn", None)
+    if conn is None:
+        return []
+
+    lock = getattr(store, "_lock", None)
+    seen: set[str] = set()
+    queries: list[_RecentUserQuery] = []
+
+    def add_query(query_id: object, content: object, observed_at: object) -> None:
+        if not isinstance(content, str):
+            return
+        normalized = " ".join(content.split())
+        if not normalized:
+            return
+        dedupe_key = normalized.lower()
+        if dedupe_key in seen:
+            return
+        seen.add(dedupe_key)
+        queries.append(
+            _RecentUserQuery(
+                query_id=str(query_id),
+                content=normalized,
+                observed_at=_parse_datetime(observed_at, fallback=now),
+            )
+        )
+
+    cm = lock if lock is not None else contextlib.nullcontext()
+    with cm:
+        if _table_exists(conn, "memory_observations"):
+            rows = conn.execute(
+                """
+                SELECT id, content, observed_at
+                FROM memory_observations
+                WHERE lower(COALESCE(role, '')) = 'user'
+                ORDER BY observed_at DESC, rowid DESC
+                LIMIT ?
+                """,
+                (limit * 4,),
+            ).fetchall()
+            for row in rows:
+                add_query(row["id"], row["content"], row["observed_at"])
+                if len(queries) >= limit:
+                    return queries
+
+        if _table_exists(conn, "memory_records"):
+            rows = conn.execute(
+                """
+                SELECT id, content, created_at, metadata_json
+                FROM memory_records
+                WHERE deleted = 0
+                  AND is_latest = 1
+                  AND (kind IS NULL OR kind != ?)
+                ORDER BY created_at DESC, rowid DESC
+                LIMIT ?
+                """,
+                (PREDICTIVE_WARM_KIND, limit * 4),
+            ).fetchall()
+            for row in rows:
+                metadata = _deserialize_metadata(row["metadata_json"])
+                if not _metadata_marks_user_query(metadata):
+                    continue
+                add_query(row["id"], row["content"], row["created_at"])
+                if len(queries) >= limit:
+                    break
+
+    return queries
+
+
+def _predictive_query_terms(queries: Sequence[_RecentUserQuery]) -> list[str]:
+    from .store_search import extract_search_terms
+
+    counter: Counter[str] = Counter()
+    for query in queries:
+        counter.update(
+            term
+            for term in extract_search_terms(query.content)
+            if len(term) > 1 and term not in _PREDICTIVE_WARM_STOP_TERMS
+        )
+    return [term for term, _count in counter.most_common(12)]
+
+
+def _excerpt(content: str, *, max_length: int = 220) -> str:
+    collapsed = " ".join(content.split())
+    if len(collapsed) <= max_length:
+        return collapsed
+    return f"{collapsed[: max_length - 1]}..."
+
+
+def _build_predictive_warm_content(
+    *,
+    predicted_query: str,
+    evidence: Sequence[Any],
+) -> str:
+    lines = [
+        "Prepared predictive context for likely next user query.",
+        f"Likely query: {predicted_query}",
+        "Evidence cache:",
+    ]
+    for item in evidence:
+        lines.append(f"- {item.id}: {_excerpt(item.content)}")
+    return "\n".join(lines)
+
+
+def _active_predictive_warm_exists(store: Any, *, predicted_query: str, now: datetime) -> bool:
+    conn = getattr(store, "_conn", None)
+    if conn is None:
+        return False
+
+    lock = getattr(store, "_lock", None)
+    cm = lock if lock is not None else contextlib.nullcontext()
+    with cm:
+        rows = conn.execute(
+            """
+            SELECT metadata_json, forget_after, recovered_at
+            FROM memory_records
+            WHERE kind = ?
+              AND deleted = 0
+              AND is_latest = 1
+            ORDER BY rowid DESC
+            LIMIT 50
+            """,
+            (PREDICTIVE_WARM_KIND,),
+        ).fetchall()
+
+    for row in rows:
+        metadata = _deserialize_metadata(row["metadata_json"])
+        if metadata.get("predicted_query") != predicted_query:
+            continue
+        forget_after = _parse_datetime(row["forget_after"], fallback=now + PREDICTIVE_WARM_TTL)
+        if row["recovered_at"] is not None or forget_after > now:
+            return True
+    return False
+
+
+def _insert_predictive_warm(
+    store: Any,
+    *,
+    context: JobContext,
+    predicted_query: str,
+    queries: Sequence[_RecentUserQuery],
+    evidence: Sequence[Any],
+    query_terms: Sequence[str],
+    now: datetime,
+) -> str:
+    from .store_records import insert_memory
+    from .store_search import build_keywords
+    from .types import MemoryItem
+
+    expires_at = now + PREDICTIVE_WARM_TTL
+    metadata: dict[str, object] = {
+        "schema_version": 1,
+        "source": "daemon_predictive_warmer",
+        "run_id": context.run_id,
+        "predicted_query": predicted_query,
+        "query_terms": list(query_terms),
+        "recent_query_ids": [query.query_id for query in queries],
+        "evidence_ids": [item.id for item in evidence],
+        "evidence_count": len(evidence),
+        "expires_at": expires_at.isoformat(),
+        "expiry_field": "forget_after",
+        "preanswer": False,
+    }
+    record = MemoryItem(
+        content=_build_predictive_warm_content(
+            predicted_query=predicted_query,
+            evidence=evidence,
+        ),
+        layer="episodic",
+        metadata=metadata,
+        created_at=now,
+        last_accessed=now,
+        importance_score=0.95,
+        salience={
+            "schema_version": 2,
+            "utility": 0.86,
+            "personal_relevance": 0.75,
+            "actionability": 0.82,
+            "temporal_relevance": 0.92,
+            "stability": 0.35,
+        },
+        kind=PREDICTIVE_WARM_KIND,
+    )
+
+    conn = store._conn
+    lock = getattr(store, "_lock", None)
+    cm = lock if lock is not None else contextlib.nullcontext()
+    with cm:
+        conn.execute("BEGIN IMMEDIATE")
+        with conn:
+            insert_memory(
+                conn,
+                record,
+                build_keywords=build_keywords,
+                source_event_id=context.run_id,
+                forget_after=expires_at,
+                strength=0.35,
+            )
+    return record.id
 
 
 def _metric_tokens_for_day(
@@ -938,6 +1216,111 @@ class SkillCandidateProposerJob:
         )
 
 
+class PredictiveWarmerJob:
+    """Idle-time predictive warmer: prepare short-lived evidence caches only.
+
+    It never answers the predicted query. It reads recent user query observations,
+    precomputes likely context from existing memory, and stores an expiring
+    ``predictive_warm`` record for the retriever to reuse if the user asks a
+    related follow-up.
+    """
+
+    id = "predictive_warmer"
+    interval_seconds = 900.0  # 15 minutes
+    estimated_tokens = 200
+    estimated_cost = 0.0
+    max_retries = 1
+    backoff_seconds = 30.0
+
+    def __init__(
+        self,
+        *,
+        store_factory: Callable[[], Any] | None = None,
+        clock: Callable[[], datetime] | None = None,
+        recent_query_limit: int = 12,
+        evidence_limit: int = 5,
+    ) -> None:
+        self._store_factory = store_factory
+        self._clock = clock or (lambda: datetime.now(UTC))
+        self._recent_query_limit = max(1, recent_query_limit)
+        self._evidence_limit = max(1, evidence_limit)
+
+    async def run(self, context: JobContext) -> JobResult:
+        from .store import QuilinMemStore
+
+        now = _coerce_utc(self._clock())
+        store = (self._store_factory or QuilinMemStore)()
+        data: dict[str, object] = {
+            "queries_seen": 0,
+            "evidence_count": 0,
+            "written": 0,
+            "skipped_reason": None,
+            "expiry_field": "forget_after",
+            "ttl_hours": 24,
+        }
+        try:
+            queries = _recent_user_queries_from_store(
+                store,
+                limit=self._recent_query_limit,
+                now=now,
+            )
+            data["queries_seen"] = len(queries)
+            if not queries:
+                data["skipped_reason"] = "no_recent_user_queries"
+                return JobResult.succeeded("no recent user queries", data=data)
+
+            predicted_query = queries[0].content
+            query_terms = _predictive_query_terms(queries)
+            if _active_predictive_warm_exists(store, predicted_query=predicted_query, now=now):
+                data["skipped_reason"] = "already_warm"
+                data["predicted_query"] = predicted_query
+                return JobResult.succeeded("predictive warm already active", data=data)
+
+            evidence = await store.search(
+                predicted_query,
+                limit=max(self._evidence_limit * 3, self._evidence_limit),
+                filters={"layer": "episodic"},
+            )
+            query_ids = {query.query_id for query in queries}
+            evidence = [
+                item
+                for item in evidence
+                if item.kind != PREDICTIVE_WARM_KIND
+                and item.id not in query_ids
+                and not _metadata_marks_user_query(dict(item.metadata))
+            ][: self._evidence_limit]
+            data["evidence_count"] = len(evidence)
+            data["predicted_query"] = predicted_query
+            if not evidence:
+                data["skipped_reason"] = "no_relevant_evidence"
+                return JobResult.succeeded("no evidence to warm", data=data)
+
+            warm_id = _insert_predictive_warm(
+                store,
+                context=context,
+                predicted_query=predicted_query,
+                queries=queries,
+                evidence=evidence,
+                query_terms=query_terms,
+                now=now,
+            )
+            data["written"] = 1
+            data["memory_id"] = warm_id
+            data["valid_until"] = (now + PREDICTIVE_WARM_TTL).isoformat()
+            _log_event(
+                {
+                    "event": "predictive_warmer.written",
+                    "job_id": context.job_id,
+                    "run_id": context.run_id,
+                    **data,
+                }
+            )
+            return JobResult.succeeded("predictive warm cache written", data=data)
+        finally:
+            with contextlib.suppress(Exception):
+                await _close_resource(store)
+
+
 class TokenBudgetMonitorJob:
     """监控当日 token 用量,接近上限时记录 warning(写 memory)。"""
 
@@ -1068,10 +1451,22 @@ class TokenBudgetMonitorJob:
         return min(1.0, max(0.0, ratio))
 
 
+def _register_initial_idle_jobs(daemon: QuilinDaemon) -> None:
+    daemon.register(MemoryReflectJob())
+    daemon.register(MemoryConsolidateJob())
+    daemon.register(KGBackfillJob())
+    daemon.register(TokenBudgetMonitorJob())
+    daemon.register(PredictiveWarmerJob())
+    # QUI-198 disk-write gap fix (2026-05-21):skill proposer 写盘 job。
+    # 默认 case_provider=None → 每次 tick 走 "no_cases" 路径(空闲)。
+    # 真启用需注入 case_provider + CRITICAL gate(operator opt-in)。
+    daemon.register(SkillCandidateProposerJob())
+
+
 async def run_daemon_loop() -> None:
     """Long-running event loop.
 
-    1. 实例化 QuilinDaemon + register 3 jobs
+    1. 实例化 QuilinDaemon + register initial idle jobs
     2. 起 signal handler(SIGINT/SIGTERM 优雅停)
     3. 主 tick:每 N 秒检查 next_run_at,到点 daemon.run_once()
     4. 失败 retry / budget gate / lease 由 daemon 自管
@@ -1088,14 +1483,7 @@ async def run_daemon_loop() -> None:
     tick_seconds = float(os.environ.get("QUILIN_DAEMON_TICK_SECONDS", "30"))
 
     # 注册初始 idle job
-    daemon.register(MemoryReflectJob())
-    daemon.register(MemoryConsolidateJob())
-    daemon.register(KGBackfillJob())
-    daemon.register(TokenBudgetMonitorJob())
-    # QUI-198 disk-write gap fix (2026-05-21):skill proposer 写盘 job。
-    # 默认 case_provider=None → 每次 tick 走 "no_cases" 路径(空闲)。
-    # 真启用需注入 case_provider + CRITICAL gate(operator opt-in)。
-    daemon.register(SkillCandidateProposerJob())
+    _register_initial_idle_jobs(daemon)
 
     daemon.start()
     _log_event(

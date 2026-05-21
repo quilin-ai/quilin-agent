@@ -24,6 +24,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -31,6 +32,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol, cast
+from uuid import uuid4
 
 from .types import MemoryItem, MemoryMetadata, memory_item_with
 
@@ -39,6 +41,15 @@ DEFAULT_CONSENSUS_TOP_K = 3
 SAFETY_GATE_ENV = "QUILIN_RETRIEVAL_SAFETY_ENABLED"
 SAFETY_GATE_THRESHOLD_ENV = "QUILIN_RETRIEVAL_SAFETY_THRESHOLD"
 SAFETY_GATE_TOP_K_ENV = "QUILIN_RETRIEVAL_SAFETY_TOP_K"
+SAFETY_GATE_AUTO_LEARN_ENV = "QUILIN_RETRIEVAL_SAFETY_AUTO_LEARN"
+DEFAULT_AUTO_LEARN_MIN_CONTENT = 8
+MAX_AUTO_LEARN_PATTERN_CHARS = 120
+
+# Attack pattern labels for auto-learned SafetyLessons.
+# 自动学习时给 lesson 打的攻击类别标签,方便后续审计 / 召回。
+ATTACK_PATTERN_LOW_CONFIDENCE = "low_confidence_recall"
+ATTACK_PATTERN_CONSENSUS_DISAGREE = "consensus_disagree"
+ATTACK_PATTERN_POISONING = "poisoning_match"
 
 # Metadata key vocabulary (deliberately namespaced to avoid clashes with retriever)
 META_RETRIEVAL_CONFIDENCE = "retrieval_confidence"
@@ -223,12 +234,21 @@ class SafetyGateConfig:
     """Gate-wide tuning knobs.
 
     `enabled` defaults to `os.environ[QUILIN_RETRIEVAL_SAFETY_ENABLED] == "true"`.
+    `auto_learn_attacks` controls whether the gate writes a new SafetyLesson
+    when one of the three strategies (low_confidence / consensus / poisoning)
+    detects an attack-like pattern; default true so the gate keeps learning
+    whenever it is enabled.
+
+    ``auto_learn_attacks`` 控制三种策略发现攻击时是否自动写入新的 SafetyLesson;
+    默认 True,只要 gate 启用就一直学。这是 audit P2 #11 的核心行为。
     """
 
     enabled: bool = False
     low_confidence_threshold: float = DEFAULT_LOW_CONFIDENCE_THRESHOLD
     consensus_top_k: int = DEFAULT_CONSENSUS_TOP_K
     consensus_disagreement_threshold: float = 0.35
+    auto_learn_attacks: bool = True
+    auto_learn_min_content_chars: int = DEFAULT_AUTO_LEARN_MIN_CONTENT
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -265,6 +285,7 @@ def load_config_from_env() -> SafetyGateConfig:
             SAFETY_GATE_THRESHOLD_ENV, DEFAULT_LOW_CONFIDENCE_THRESHOLD
         ),
         consensus_top_k=_env_int(SAFETY_GATE_TOP_K_ENV, DEFAULT_CONSENSUS_TOP_K),
+        auto_learn_attacks=_env_bool(SAFETY_GATE_AUTO_LEARN_ENV, default=True),
     )
 
 
@@ -431,20 +452,70 @@ class RetrievalSafetyGate:
         1. poisoning_quarantine first (cheap, lesson-driven)
         2. low_confidence_filter second (cheap, score-driven)
         3. consensus_check last (expensive, LLM-driven; only top-K)
+
+        When ``config.auto_learn_attacks`` is true (default), every strategy
+        that detects an attack-like signal also writes a SafetyLesson via
+        ``_record_attack_lesson`` so future recalls quarantine matching items
+        on the cheap fast path. See audit P2 #11.
+
+        当 ``config.auto_learn_attacks`` = True(默认)时,三种策略发现攻击
+        都会自动通过 ``_record_attack_lesson`` 写一条新的 SafetyLesson,后续
+        recall 命中相同 pattern 时走 quarantine 快路径。
         """
 
         if not self._config.enabled or not items:
             return list(items)
 
         stage_a = self.poisoning_quarantine(items, self._lesson_store.list_lessons())
+        if self._config.auto_learn_attacks:
+            for item in stage_a:
+                if item.metadata.get(META_SAFETY_MARKER) == MARKER_QUARANTINE:
+                    self._record_attack_lesson(
+                        query=query,
+                        suspicious_records=[item],
+                        reason=str(
+                            item.metadata.get(META_QUARANTINE_REASON)
+                            or "auto-learn: poisoning_quarantine match"
+                        ),
+                        attack_pattern=ATTACK_PATTERN_POISONING,
+                    )
+
         stage_b = self.low_confidence_filter(
             stage_a, threshold=self._config.low_confidence_threshold
         )
+        if self._config.auto_learn_attacks:
+            low_conf_items = [
+                item
+                for item in stage_b
+                if item.metadata.get(META_RETRIEVAL_CONFIDENCE) == CONFIDENCE_LOW
+                and item.metadata.get(META_SAFETY_MARKER) == MARKER_INSUFFICIENT_EVIDENCE
+            ]
+            if low_conf_items:
+                self._record_attack_lesson(
+                    query=query,
+                    suspicious_records=low_conf_items,
+                    reason="auto-learn: low-confidence recall pattern repeated",
+                    attack_pattern=ATTACK_PATTERN_LOW_CONFIDENCE,
+                )
+
         stage_c = self.consensus_check(
             query,
             stage_b,
             k=self._config.consensus_top_k,
         )
+        if self._config.auto_learn_attacks:
+            disagree_items = [
+                item
+                for item in stage_c
+                if item.metadata.get(META_CONSENSUS) == CONSENSUS_DISAGREE
+            ]
+            if disagree_items:
+                self._record_attack_lesson(
+                    query=query,
+                    suspicious_records=disagree_items,
+                    reason="auto-learn: top-K consensus disagreement",
+                    attack_pattern=ATTACK_PATTERN_CONSENSUS_DISAGREE,
+                )
         return stage_c
 
     # ------------------------------------------------------------------ strategies
@@ -578,6 +649,95 @@ class RetrievalSafetyGate:
 
         self._lesson_store.record_lesson(lesson)
 
+    def _record_attack_lesson(
+        self,
+        *,
+        query: str,
+        suspicious_records: Sequence[MemoryItem],
+        reason: str,
+        attack_pattern: str,
+    ) -> SafetyLesson | None:
+        """Auto-learn a SafetyLesson from a freshly detected attack.
+
+        Called from ``scrub`` after each strategy flags suspect items. The
+        lesson contains:
+
+        - ``pattern``: a stable substring derived from the suspect content
+          (truncated to ``MAX_AUTO_LEARN_PATTERN_CHARS``).
+        - ``metadata.attack_pattern``: the strategy that fired
+          (``low_confidence_recall`` / ``consensus_disagree`` / ``poisoning_match``).
+        - ``metadata.sample_queries``: the triggering query (last 5 are kept).
+        - ``metadata.sample_records_signature``: stable SHA-1 hash of the
+          first 200 chars of every suspect record, for dedupe / audit.
+        - ``metadata.learned_at``: ISO timestamp.
+
+        当 ``scrub`` 中任一策略检测到可疑 item 时调,自动生成一条 SafetyLesson 写库,
+        包含触发的攻击类别 / 触发 query / 受害 record 签名 / 学习时间。
+
+        We skip auto-learn when:
+        - ``config.auto_learn_attacks`` is false
+        - the suspect record content is too short to form a useful pattern
+        - a recently learned lesson already matches the same content (dedupe)
+
+        Returns the lesson (or None when skipped).
+        """
+
+        if not self._config.auto_learn_attacks:
+            return None
+        if not suspicious_records:
+            return None
+
+        primary = suspicious_records[0]
+        content = primary.content.strip()
+        if len(content) < self._config.auto_learn_min_content_chars:
+            return None
+
+        pattern = _derive_auto_learn_pattern(content)
+        if not pattern:
+            return None
+
+        # Dedupe across the whole auto-learn corpus: if any auto-learned
+        # lesson already matches the same content, skip — regardless of which
+        # strategy first caught it. This prevents the cascade where a
+        # low-confidence lesson causes the next recall to fire a poisoning
+        # auto-learn for the same payload.
+        try:
+            existing = tuple(self._lesson_store.list_lessons())
+        except Exception:  # noqa: BLE001 — store unavailable degrades to no-op
+            existing = ()
+        for prior in existing:
+            if prior.source != "retrieval_safety_gate_auto":
+                continue
+            if prior.matches(content):
+                return None
+
+        signature = _sample_records_signature(suspicious_records)
+        sample_queries = [query] if isinstance(query, str) and query.strip() else []
+
+        lesson = SafetyLesson(
+            id=f"auto-{attack_pattern}-{uuid4().hex[:12]}",
+            pattern=pattern,
+            reason=reason,
+            tags=("auto_learn", attack_pattern),
+            lesson_type="poisoning",
+            severity="medium",
+            source="retrieval_safety_gate_auto",
+            metadata={
+                "attack_pattern": attack_pattern,
+                "sample_queries": sample_queries,
+                "sample_records_signature": list(signature),
+                "learned_at": datetime.now(UTC).isoformat(),
+                "tags": ["auto_learn", attack_pattern],
+            },
+            enabled=True,
+            is_regex=False,
+        )
+        try:
+            self._lesson_store.record_lesson(lesson)
+        except Exception:  # noqa: BLE001 — never let auto-learn crash the gate
+            return None
+        return lesson
+
 
 class _GatedRetrieverProxy:
     """Lightweight attribute-forwarding proxy that scrubs `retrieve` / `recall`.
@@ -617,7 +777,49 @@ class _GatedRetrieverProxy:
         return self._gate.scrub(query, list(items))
 
 
+def _derive_auto_learn_pattern(content: str) -> str:
+    """Pick a stable substring of ``content`` usable as a SafetyLesson pattern.
+
+    We take the **first** non-whitespace stretch of the content (which usually
+    carries the attacker payload, e.g. "ignore previous instructions ...") and
+    truncate to ``MAX_AUTO_LEARN_PATTERN_CHARS``. Returning a long pattern keeps
+    later substring match precise without dragging in noise.
+
+    Empty / whitespace-only content yields an empty string so the caller skips
+    auto-learn.
+
+    取 ``content`` 第一段非空内容并截断,作为后续 substring match 的 pattern;
+    空内容返回空串让 caller 跳过 auto-learn。
+    """
+
+    cleaned = " ".join(content.split())
+    if not cleaned:
+        return ""
+    if len(cleaned) <= MAX_AUTO_LEARN_PATTERN_CHARS:
+        return cleaned
+    return cleaned[:MAX_AUTO_LEARN_PATTERN_CHARS]
+
+
+def _sample_records_signature(records: Sequence[MemoryItem]) -> tuple[str, ...]:
+    """Return a list of SHA-1 prefixes per record content for audit / dedupe.
+
+    每条受害 record 取前 200 字符算 SHA-1,取前 16 hex,够 collide-safe + 紧凑。
+    """
+
+    out: list[str] = []
+    for record in records:
+        digest = hashlib.sha1(  # noqa: S324 — stable signature, not a security primitive
+            record.content[:200].encode("utf-8", errors="replace"),
+            usedforsecurity=False,
+        ).hexdigest()[:16]
+        out.append(digest)
+    return tuple(out)
+
+
 __all__ = [
+    "ATTACK_PATTERN_CONSENSUS_DISAGREE",
+    "ATTACK_PATTERN_LOW_CONFIDENCE",
+    "ATTACK_PATTERN_POISONING",
     "CONFIDENCE_LOW",
     "CONSENSUS_AGREE",
     "CONSENSUS_DISAGREE",
@@ -633,6 +835,7 @@ __all__ = [
     "META_SAFETY_LESSON_ID",
     "META_SAFETY_MARKER",
     "RetrievalSafetyGate",
+    "SAFETY_GATE_AUTO_LEARN_ENV",
     "SAFETY_GATE_ENV",
     "SafetyGateConfig",
     "SafetyLesson",

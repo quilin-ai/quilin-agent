@@ -358,7 +358,11 @@ function serializeFrontmatter(
  * to keep thing lighthearted and non-security-relevant.
  */
 function pickRandom<T>(items: readonly T[]): T {
-	return items[Math.floor(Math.random() * items.length)];
+	const item = items[Math.floor(Math.random() * items.length)];
+	if (item === undefined) {
+		throw new Error("Cannot pick a random item from an empty list");
+	}
+	return item;
 }
 
 // ---------------------------------------------------------------------------

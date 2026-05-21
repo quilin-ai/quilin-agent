@@ -25,6 +25,8 @@ MemoryKind = Literal[
     "workflow",
     "prospective",
     "resource",
+    "departure_context",
+    "predictive_warm",
 ]
 VALID_MEMORY_KINDS: tuple[MemoryKind, ...] = (
     "preference",
@@ -36,6 +38,8 @@ VALID_MEMORY_KINDS: tuple[MemoryKind, ...] = (
     "workflow",
     "prospective",
     "resource",
+    "departure_context",
+    "predictive_warm",
 )
 
 

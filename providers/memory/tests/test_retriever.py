@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import sqlite3
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
+from quilin_mem import daemon_main
+from quilin_mem.daemon import BudgetLease, JobContext
 from quilin_mem.kg import TemporalKnowledgeGraph
 from quilin_mem.kg_validation import KGSearchResult
 from quilin_mem.retrieval_safety_gate import (
@@ -16,6 +19,21 @@ from quilin_mem.safety_lesson_store import SAFETY_LESSONS_DB_ENV, SQLiteSafetyLe
 from quilin_mem.store import QuilinMemStore
 from quilin_mem.types import MemoryItem
 from quilin_mem.working import WorkingMemory
+
+NOW = datetime(2026, 5, 21, 10, 30, tzinfo=UTC)
+
+
+def _context(job_id: str) -> JobContext:
+    return JobContext(
+        job_id=job_id,
+        run_id=f"{job_id}-run",
+        started_at=NOW,
+        token_budget=100_000,
+        cost_budget=1.0,
+        token_lease=BudgetLease(kind="token", granted=100_000),
+        cost_lease=BudgetLease(kind="cost", granted=1.0),
+        heartbeat=lambda _at=None: None,
+    )
 
 
 async def test_bm25_fts_retriever_returns_episodic_without_vectors() -> None:
@@ -181,6 +199,119 @@ async def test_fused_retrieval_applies_task_context_filters_to_episodic() -> Non
     assert results[0].metadata["cache_key"].startswith("memory-recall:")
     assert results[0].metadata["block_version"] == "memory-recall-v1"
     assert results[0].metadata["source_layers"] == ["episodic"]
+
+
+async def test_predictive_warm_records_are_boosted_for_related_queries(tmp_path) -> None:
+    memory_db = tmp_path / "memory.db"
+    async with QuilinMemStore(str(memory_db)) as store:
+        await store.store(
+            "daemon predictive warmer background note",
+            tier="episodic",
+            kind="project_note",
+        )
+        await store.record_observation(
+            content="How should daemon predictive warmer prepare context?",
+            role="user",
+            observed_at=NOW - timedelta(minutes=2),
+        )
+
+    job_cls = getattr(daemon_main, "PredictiveWarmerJob", None)
+    assert job_cls is not None
+    job = job_cls(
+        store_factory=lambda: QuilinMemStore(str(memory_db)),
+        clock=lambda: NOW,
+        recent_query_limit=5,
+        evidence_limit=3,
+    )
+    await job.run(_context(job.id))
+
+    async with QuilinMemStore(str(memory_db)) as store:
+        results = await MemoryRetriever(store).retrieve(
+            "daemon predictive warmer context",
+            limit=2,
+        )
+
+    assert results[0].kind == "predictive_warm"
+    assert results[0].metadata["source"] == "bm25_fts"
+    assert results[0].metadata["memory_source"] == "daemon_predictive_warmer"
+
+
+async def test_predictive_warm_records_do_not_pollute_unrelated_queries(tmp_path) -> None:
+    memory_db = tmp_path / "memory.db"
+    async with QuilinMemStore(str(memory_db)) as store:
+        await store.store(
+            "daemon predictive warmer background note",
+            tier="episodic",
+            kind="project_note",
+        )
+        await store.store(
+            "release checklist approval notes",
+            tier="episodic",
+            kind="workflow",
+        )
+        await store.record_observation(
+            content="How should daemon predictive warmer prepare context?",
+            role="user",
+            observed_at=NOW - timedelta(minutes=2),
+        )
+
+    job_cls = getattr(daemon_main, "PredictiveWarmerJob", None)
+    assert job_cls is not None
+    job = job_cls(
+        store_factory=lambda: QuilinMemStore(str(memory_db)),
+        clock=lambda: NOW,
+        recent_query_limit=5,
+        evidence_limit=3,
+    )
+    await job.run(_context(job.id))
+
+    async with QuilinMemStore(str(memory_db)) as store:
+        results = await MemoryRetriever(store).retrieve("release checklist", limit=3)
+
+    assert [item.content for item in results] == ["release checklist approval notes"]
+
+
+async def test_expired_predictive_warm_records_are_hidden_from_retrieval(tmp_path) -> None:
+    memory_db = tmp_path / "memory.db"
+    async with QuilinMemStore(str(memory_db)) as store:
+        await store.store(
+            "daemon predictive warmer background note",
+            tier="episodic",
+            kind="project_note",
+        )
+        await store.record_observation(
+            content="How should daemon predictive warmer prepare context?",
+            role="user",
+            observed_at=NOW - timedelta(minutes=2),
+        )
+
+    job_cls = getattr(daemon_main, "PredictiveWarmerJob", None)
+    assert job_cls is not None
+    job = job_cls(
+        store_factory=lambda: QuilinMemStore(str(memory_db)),
+        clock=lambda: NOW,
+        recent_query_limit=5,
+        evidence_limit=3,
+    )
+    await job.run(_context(job.id))
+
+    conn = sqlite3.connect(memory_db)
+    try:
+        conn.execute(
+            "UPDATE memory_records SET forget_after = ? WHERE kind = 'predictive_warm'",
+            ((NOW - timedelta(seconds=1)).isoformat(),),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    async with QuilinMemStore(str(memory_db)) as store:
+        results = await MemoryRetriever(store).retrieve(
+            "daemon predictive warmer context",
+            limit=3,
+        )
+
+    assert all(item.kind != "predictive_warm" for item in results)
 
 
 async def test_recall_uses_sqlite_safety_lessons_when_gate_enabled(

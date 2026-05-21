@@ -15,7 +15,7 @@ vi.mock("@/lib/tools-loader", () => ({
 	getToolsCatalog: () => Promise.resolve(mockCatalog),
 }));
 
-import { DELETE } from "@/app/api/memory/route";
+import { DELETE, GET } from "@/app/api/memory/route";
 
 function buildRequest(url: string): Request {
 	return new Request(url, { method: "DELETE" });
@@ -23,6 +23,92 @@ function buildRequest(url: string): Request {
 
 afterEach(() => {
 	mockCatalog.rawTools = [];
+});
+
+describe("GET /api/memory", () => {
+	it("normalizes v2 memory fields from memory_recall wire payload", async () => {
+		mockCatalog.rawTools = [
+			{
+				name: "quilin-mem/memory_recall",
+				execute: async () => ({
+					isError: false,
+					content: JSON.stringify({
+						records: [
+							{
+								id: "mem-v2",
+								content: "用户希望被称呼为孟哥",
+								tier: "semantic",
+								layer: "semantic",
+								created_at: "2026-05-21T10:00:00+00:00",
+								metadata: { schema_version: 1 },
+								version: 2,
+								parent_id: "mem-v1",
+								is_latest: true,
+								supersedes_json: '["mem-v1"]',
+								last_writer_client: "web",
+								last_writer_session_id: "session-1",
+								project_scope: "/repo/quilin-agent",
+								salience: {
+									novelty: 0.7,
+									utility: 0.9,
+									urgency: 0.2,
+									reliability: 0.8,
+									recency: 0.6,
+									scope: 0.5,
+								},
+								kind: "preference",
+								importance_score: 0.88,
+							},
+						],
+					}),
+				}),
+			},
+		];
+
+		const res = await GET();
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as {
+			ok: true;
+			data: {
+				records: Array<{
+					version: number | null;
+					parentId: string | null;
+					isLatest: boolean | null;
+					supersedesJson: unknown;
+					lastWriterClient: string | null;
+					lastWriterSessionId: string | null;
+					projectScope: string | null;
+					salience: Record<string, unknown> | null;
+					kind: string | null;
+					importanceScore: number | null;
+				}>;
+			};
+		};
+
+		expect(body.data.records[0]).toEqual(
+			expect.objectContaining({
+				version: 2,
+				parentId: "mem-v1",
+				isLatest: true,
+				supersedesJson: ["mem-v1"],
+				lastWriterClient: "web",
+				lastWriterSessionId: "session-1",
+				projectScope: "/repo/quilin-agent",
+				kind: "preference",
+				importanceScore: 0.88,
+			}),
+		);
+		expect(body.data.records[0]?.salience).toEqual(
+			expect.objectContaining({
+				novelty: 0.7,
+				utility: 0.9,
+				urgency: 0.2,
+				reliability: 0.8,
+				recency: 0.6,
+				scope: 0.5,
+			}),
+		);
+	});
 });
 
 describe("DELETE /api/memory", () => {

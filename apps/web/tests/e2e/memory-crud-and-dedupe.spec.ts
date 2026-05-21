@@ -173,6 +173,60 @@ function buildLargeDedupeFixture(count = 160): MemoryWire {
 	return buildMemoryWire(records);
 }
 
+function buildConflictFixture(): MemoryWire {
+	return buildMemoryWire([
+		{
+			id: "conflict-keep",
+			content: "用户偏好英文详细解释。",
+			tier: "semantic",
+			layer: "semantic",
+			createdAt: "2026-05-21T08:00:00Z",
+			metadata: {
+				conflict_resolution_pending: true,
+				base_record: {
+					id: "conflict-keep",
+					version: 7,
+					content: "用户偏好中文摘要。",
+				},
+				writes: [
+					{
+						client_id: "cli",
+						base_version: 7,
+						content: "用户偏好中文摘要和短回复。",
+					},
+					{
+						client_id: "web",
+						base_version: 7,
+						content: "用户偏好英文详细解释。",
+					},
+				],
+				conflict_with_client: "cli",
+			},
+			version: 8,
+			isLatest: true,
+			lastWriterClient: "web",
+		},
+		{
+			id: "conflict-merge",
+			content: "项目计划要先做 Web UI。",
+			tier: "semantic",
+			layer: "semantic",
+			createdAt: "2026-05-21T08:05:00Z",
+			metadata: {
+				conflict_resolution_pending: true,
+				conflict: {
+					base: { content: "项目计划要先做核心 loop。" },
+					current: { content: "项目计划要先做后端 daemon。" },
+					candidate: { content: "项目计划要先做 Web UI。" },
+				},
+			},
+			version: 3,
+			isLatest: true,
+			lastWriterClient: "web",
+		},
+	]);
+}
+
 /**
  * Mutable in-memory fixture for tests that need to model delete side effects.
  * Tests share a fresh instance via `installMemoryRoutes(page, store)`.
@@ -709,6 +763,62 @@ test.describe("Memory · CRUD + dedupe (mocked)", () => {
 		]) {
 			await expect(page.getByTestId(`memory-${id}`)).toHaveCount(0);
 		}
+	});
+
+	test("conflict modal resolves keep and manual merge choices", async ({ page }) => {
+		const store = new FakeMemoryStore(buildConflictFixture().data.records);
+		await installMemoryRoutes(page, store);
+		const posts: unknown[] = [];
+
+		await page.route("**/api/memory/resolve-conflict", async (route: Route) => {
+			const body = (route.request().postDataJSON() ?? {}) as Record<string, unknown>;
+			posts.push(body);
+			await route.fulfill({
+				status: 200,
+				contentType: "application/json",
+				body: JSON.stringify({
+					ok: true,
+					data: {
+						memoryId: body.memoryId ?? body.memory_id,
+						choice: body.choice,
+						resolved: true,
+					},
+				}),
+			});
+		});
+
+		await page.goto("/memory");
+		await page.getByTestId("memory-conflict-open-conflict-keep").click();
+		const keepDialog = page.getByTestId("memory-conflict-dialog");
+		await expect(keepDialog).toBeVisible();
+		await expect(keepDialog).toContainText("用户偏好中文摘要和短回复。");
+		await expect(keepDialog).toContainText("用户偏好英文详细解释。");
+
+		await keepDialog.getByTestId("memory-conflict-keep-b").click();
+		await expect(page.getByTestId("memory-conflict-dialog")).toHaveCount(0);
+		await expect(page.getByTestId("memory-action-message")).toContainText("冲突已处理");
+
+		await page.getByTestId("memory-conflict-open-conflict-merge").click();
+		const mergeDialog = page.getByTestId("memory-conflict-dialog");
+		await expect(mergeDialog).toBeVisible();
+		await expect(mergeDialog).toContainText("项目计划要先做后端 daemon。");
+		await expect(mergeDialog).toContainText("项目计划要先做 Web UI。");
+
+		await mergeDialog.getByTestId("memory-conflict-merge-manual").click();
+		await mergeDialog
+			.getByTestId("memory-conflict-manual-textarea")
+			.fill("项目计划先交付 Web 冲突 UI,再补 daemon 收敛。");
+		await mergeDialog.getByTestId("memory-conflict-submit-manual").click();
+		await expect(page.getByTestId("memory-conflict-dialog")).toHaveCount(0);
+
+		expect(posts).toEqual([
+			{ memoryId: "conflict-keep", choice: "keep_b" },
+			{
+				memoryId: "conflict-merge",
+				choice: "merge_manual",
+				mergedContent: "项目计划先交付 Web 冲突 UI,再补 daemon 收敛。",
+			},
+		]);
 	});
 
 	test("empty store shows empty placeholder, hides dedupe button", async ({ page }) => {

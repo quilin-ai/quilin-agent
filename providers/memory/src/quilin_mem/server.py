@@ -6,7 +6,7 @@ import os
 import secrets
 from collections import OrderedDict
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import UTC, datetime
 from os import PathLike
 from typing import Any
 
@@ -36,9 +36,10 @@ from .prospective import (
 )
 from .retrieval_profile import RetrievalProfileStore
 from .retriever import MemoryRetriever
+from .salience import DEFAULT_STALENESS_THRESHOLD_DAYS
 from .scratchpad import ScratchpadStore
 from .store import QuilinMemStore
-from .types import MemoryKind, MemoryLayer, MemoryTier
+from .types import MemoryItem, MemoryKind, MemoryLayer, MemoryTier
 
 MAX_RECALL_QUERY_LENGTH = 512
 MAX_TOOL_METADATA_DEPTH = 4
@@ -49,6 +50,7 @@ MAX_OBSERVE_TEXT_LENGTH = 32 * 1024  # cap per-text field at 32KB
 DEFAULT_OBSERVER_FREQUENCY = 10
 DEFAULT_OBSERVER_BASE_URL = "https://api.deepseek.com/v1/chat/completions"
 DEFAULT_OBSERVER_MODEL = "deepseek-v4-flash"
+STALENESS_THRESHOLD_DAYS_ENV = "QUILIN_STALENESS_THRESHOLD_DAYS"
 # User-triggered MCP previews must fail fast enough to degrade to exact-only
 # before the stdio caller gives up. Background daemon paths can still use the
 # batch judge's longer default timeout.
@@ -181,6 +183,59 @@ def _parse_tool_datetime(value: str | None, *, field_name: str) -> datetime | No
     return datetime.fromisoformat(value)
 
 
+def _staleness_threshold_days_from_env() -> int:
+    raw_value = os.environ.get(STALENESS_THRESHOLD_DAYS_ENV)
+    if raw_value is None or not raw_value.strip():
+        return DEFAULT_STALENESS_THRESHOLD_DAYS
+    try:
+        return int(raw_value)
+    except ValueError:
+        return DEFAULT_STALENESS_THRESHOLD_DAYS
+
+
+def _normalize_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _stale_age_days(
+    created_at: datetime,
+    *,
+    now: datetime,
+    threshold_days: int,
+) -> int | None:
+    if threshold_days <= 0:
+        return None
+    age = _normalize_utc(now) - _normalize_utc(created_at)
+    if age.total_seconds() < 0:
+        return None
+    days = max(int(age.total_seconds() // 86400), 1)
+    if days < threshold_days:
+        return None
+    return days
+
+
+def _memory_recall_record_to_wire_dict(
+    record: MemoryItem,
+    *,
+    now: datetime,
+    staleness_threshold_days: int,
+) -> dict[str, object]:
+    payload = record.to_wire_dict()
+    stale_days = _stale_age_days(
+        record.created_at,
+        now=now,
+        threshold_days=staleness_threshold_days,
+    )
+    if stale_days is not None:
+        payload["content"] = (
+            f"<system-reminder>这条记忆来自 {stale_days} 天前,信息可能已过时</system-reminder>\n"
+            f"{payload['content']}"
+        )
+    return payload
+
+
 def _is_blank_string(value: object) -> bool:
     return not isinstance(value, str) or not value.strip()
 
@@ -279,7 +334,18 @@ async def _memory_recall_with_store(
         finally:
             _lesson_store.close()
 
-    payload: dict[str, object] = {"records": [r.to_wire_dict() for r in results]}
+    staleness_now = datetime.now(UTC)
+    staleness_threshold_days = _staleness_threshold_days_from_env()
+    payload: dict[str, object] = {
+        "records": [
+            _memory_recall_record_to_wire_dict(
+                record,
+                now=staleness_now,
+                staleness_threshold_days=staleness_threshold_days,
+            )
+            for record in results
+        ]
+    }
     if trace_context is not None:
         payload["traceparent"] = trace_context.traceparent
 

@@ -63,6 +63,7 @@ KindLiteral = Literal[
     "workflow",  # 操作步骤序列(QUI-198 trajectory_compressor 出处)
     "prospective",  # 前瞻 / 待办 / deadline(QUI-199)
     "resource",  # 资源指针 / 多模态附件占位
+    "predictive_warm",  # 预测预热缓存 / short-lived evidence cache
 ]
 
 _KIND_VALUES: Final[frozenset[str]] = frozenset(
@@ -76,6 +77,7 @@ _KIND_VALUES: Final[frozenset[str]] = frozenset(
         "workflow",
         "prospective",
         "resource",
+        "predictive_warm",
     }
 )
 
@@ -294,6 +296,7 @@ KIND_INTENT_WEIGHTS: Final[dict[IntentLiteral, dict[KindLiteral, float]]] = {
         "pattern": 1.0,
         "prospective": 0.98,
         "resource": 0.96,
+        "predictive_warm": 1.08,
     },
     "research": {
         "reference": 1.12,
@@ -305,6 +308,7 @@ KIND_INTENT_WEIGHTS: Final[dict[IntentLiteral, dict[KindLiteral, float]]] = {
         "preference": 0.98,
         "workflow": 0.98,
         "prospective": 0.96,
+        "predictive_warm": 1.06,
     },
     "planning": {
         "prospective": 1.12,
@@ -316,6 +320,7 @@ KIND_INTENT_WEIGHTS: Final[dict[IntentLiteral, dict[KindLiteral, float]]] = {
         "feedback": 1.0,
         "preference": 0.98,
         "resource": 0.96,
+        "predictive_warm": 1.08,
     },
     "casual_chat": {
         "preference": 1.12,
@@ -327,6 +332,7 @@ KIND_INTENT_WEIGHTS: Final[dict[IntentLiteral, dict[KindLiteral, float]]] = {
         "bug": 0.96,
         "prospective": 0.96,
         "resource": 0.95,
+        "predictive_warm": 1.02,
     },
     "review": {
         "bug": 1.14,
@@ -338,6 +344,7 @@ KIND_INTENT_WEIGHTS: Final[dict[IntentLiteral, dict[KindLiteral, float]]] = {
         "preference": 0.98,
         "prospective": 0.96,
         "resource": 0.95,
+        "predictive_warm": 1.06,
     },
     "unspecified": {
         "preference": 1.04,
@@ -349,6 +356,7 @@ KIND_INTENT_WEIGHTS: Final[dict[IntentLiteral, dict[KindLiteral, float]]] = {
         "reference": 1.0,
         "prospective": 1.0,
         "resource": 0.98,
+        "predictive_warm": 1.08,
     },
 }
 

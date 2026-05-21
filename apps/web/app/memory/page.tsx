@@ -133,6 +133,36 @@ interface DedupeErrorResponse {
 	readonly error: { readonly code: string; readonly message: string };
 }
 
+type ConflictChoice = "keep_a" | "keep_b" | "merge_manual";
+
+interface ResolveConflictResponse {
+	readonly ok: true;
+	readonly data: {
+		readonly memoryId: string;
+		readonly choice: ConflictChoice;
+		readonly resolved: boolean;
+		readonly toolName?: string;
+	};
+}
+
+interface ResolveConflictErrorResponse {
+	readonly ok: false;
+	readonly error: { readonly code: string; readonly message: string };
+}
+
+interface ConflictVersion {
+	readonly label: string;
+	readonly content: string;
+}
+
+interface ConflictDraft {
+	readonly memoryId: string;
+	readonly baseContent: string | null;
+	readonly versionA: ConflictVersion;
+	readonly versionB: ConflictVersion;
+	readonly mergeSeed: string;
+}
+
 interface BatchDeleteResponse {
 	readonly ok: true;
 	readonly data: {
@@ -145,6 +175,126 @@ interface BatchDeleteResponse {
 interface BatchDeleteErrorResponse {
 	readonly ok: false;
 	readonly error: { readonly code: string; readonly message: string };
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+	return value != null && typeof value === "object" && !Array.isArray(value);
+}
+
+function pickStringValue(value: unknown): string | null {
+	return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function pickContentFromUnknown(value: unknown): string | null {
+	const direct = pickStringValue(value);
+	if (direct != null) return direct;
+	if (!isPlainObject(value)) return null;
+	for (const key of [
+		"content",
+		"text",
+		"body",
+		"value",
+		"current_content",
+		"candidate_content",
+		"merged_content",
+	]) {
+		const found = pickStringValue(value[key]);
+		if (found != null) return found;
+	}
+	return null;
+}
+
+function pickLabelFromUnknown(value: unknown): string | null {
+	if (!isPlainObject(value)) return null;
+	for (const key of ["label", "client_id", "client", "writer", "source", "role"]) {
+		const found = pickStringValue(value[key]);
+		if (found != null) return found;
+	}
+	return null;
+}
+
+function pickObject(value: unknown): Record<string, unknown> | null {
+	return isPlainObject(value) ? value : null;
+}
+
+function pickArray(value: unknown): readonly unknown[] {
+	return Array.isArray(value) ? value : [];
+}
+
+function hasPendingConflict(record: MemoryRecord): boolean {
+	return record.metadata?.conflict_resolution_pending === true;
+}
+
+function extractConflictDraft(record: MemoryRecord): ConflictDraft {
+	const metadata = record.metadata ?? {};
+	const conflict = pickObject(metadata.conflict);
+	const writes =
+		pickArray(metadata.writes).length > 0
+			? pickArray(metadata.writes)
+			: pickArray(conflict?.writes);
+	const writeA = writes[0] ?? null;
+	const writeB = writes[1] ?? null;
+
+	const baseSource =
+		conflict?.base ??
+		conflict?.base_record ??
+		conflict?.baseRecord ??
+		metadata.base ??
+		metadata.base_record ??
+		metadata.baseRecord ??
+		null;
+	const sourceA =
+		conflict?.current ??
+		conflict?.a ??
+		conflict?.left ??
+		metadata.current ??
+		metadata.current_record ??
+		metadata.currentRecord ??
+		metadata.conflict_current ??
+		writeA;
+	const sourceB =
+		conflict?.candidate ??
+		conflict?.b ??
+		conflict?.right ??
+		metadata.candidate ??
+		metadata.candidate_record ??
+		metadata.candidateRecord ??
+		metadata.conflict_candidate ??
+		writeB;
+
+	const versionAContent =
+		pickContentFromUnknown(sourceA) ??
+		pickContentFromUnknown(metadata.current_content) ??
+		pickContentFromUnknown(metadata.conflict_current_content) ??
+		pickContentFromUnknown(writeA) ??
+		record.content;
+	const versionBContent =
+		pickContentFromUnknown(sourceB) ??
+		pickContentFromUnknown(metadata.candidate_content) ??
+		pickContentFromUnknown(metadata.conflict_candidate_content) ??
+		pickContentFromUnknown(writeB) ??
+		record.content;
+	const baseContent =
+		pickContentFromUnknown(baseSource) ??
+		pickContentFromUnknown(metadata.base_content) ??
+		pickContentFromUnknown(metadata.conflict_base_content);
+
+	return {
+		memoryId: record.id,
+		baseContent,
+		versionA: {
+			label: pickLabelFromUnknown(sourceA) ?? "A · current",
+			content: versionAContent,
+		},
+		versionB: {
+			label: pickLabelFromUnknown(sourceB) ?? "B · candidate",
+			content: versionBContent,
+		},
+		mergeSeed:
+			versionAContent === versionBContent
+				? versionAContent
+				: `${versionAContent}\n\n${versionBContent}`,
+	};
 }
 
 export default function MemoryPage() {
@@ -161,6 +311,7 @@ export default function MemoryPage() {
 	const [pendingAction, setPendingAction] = useState<string | null>(null);
 	const [actionMessage, setActionMessage] = useState<string | null>(null);
 	const [dedupePreview, setDedupePreview] = useState<ConsolidatePreview | null>(null);
+	const [conflictRecord, setConflictRecord] = useState<MemoryRecord | null>(null);
 	const [confirmDelete, setConfirmDelete] = useState(false);
 
 	const loadMemory = useCallback(async () => {
@@ -358,6 +509,43 @@ export default function MemoryPage() {
 			setPendingAction(null);
 		}
 	}, [loadMemory]);
+
+	const handleResolveConflict = useCallback(
+		async (record: MemoryRecord, choice: ConflictChoice, mergedContent?: string) => {
+			setPendingAction("resolve-conflict");
+			setActionMessage(null);
+			try {
+				const body: {
+					memoryId: string;
+					choice: ConflictChoice;
+					mergedContent?: string;
+				} = {
+					memoryId: record.id,
+					choice,
+				};
+				if (mergedContent != null) body.mergedContent = mergedContent;
+				const res = await fetch("/api/memory/resolve-conflict", {
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify(body),
+					cache: "no-store",
+				});
+				const json = (await res.json()) as ResolveConflictResponse | ResolveConflictErrorResponse;
+				if (!json.ok) {
+					setActionMessage(`冲突处理失败 · ${json.error.message}`);
+				} else {
+					setActionMessage(`冲突已处理 · ${json.data.choice}`);
+					setConflictRecord(null);
+					await loadMemory();
+				}
+			} catch (e) {
+				setActionMessage(`冲突处理失败 · ${e instanceof Error ? e.message : String(e)}`);
+			} finally {
+				setPendingAction(null);
+			}
+		},
+		[loadMemory],
+	);
 
 	return (
 		<>
@@ -840,6 +1028,31 @@ export default function MemoryPage() {
 														</div>
 														{expanded ? <MemoryDetailPanel record={record} /> : null}
 													</button>
+													{hasPendingConflict(record) ? (
+														<button
+															type="button"
+															onClick={(e) => {
+																e.stopPropagation();
+																setConflictRecord(record);
+															}}
+															disabled={pendingAction != null}
+															data-testid={`memory-conflict-open-${record.id}`}
+															style={{
+																flexShrink: 0,
+																marginTop: 2,
+																padding: "4px 8px",
+																border: "1px solid #cf7e1f",
+																background: "rgba(207, 126, 31, 0.08)",
+																color: "#cf7e1f",
+																fontFamily: '"Noto Sans SC", sans-serif',
+																fontSize: 11,
+																cursor: pendingAction != null ? "not-allowed" : "pointer",
+																opacity: pendingAction != null ? 0.6 : 1,
+															}}
+														>
+															处理冲突
+														</button>
+													) : null}
 												</div>
 											);
 										})}
@@ -941,6 +1154,18 @@ export default function MemoryPage() {
 									pendingAction={pendingAction}
 									onCancel={() => setDedupePreview(null)}
 									onConfirm={() => void handleDedupeExecute()}
+								/>
+							) : null}
+
+							{conflictRecord != null ? (
+								<ConflictDialog
+									key={conflictRecord.id}
+									record={conflictRecord}
+									pendingAction={pendingAction}
+									onCancel={() => setConflictRecord(null)}
+									onResolve={(choice, mergedContent) =>
+										void handleResolveConflict(conflictRecord, choice, mergedContent)
+									}
 								/>
 							) : null}
 						</>
@@ -1214,6 +1439,288 @@ function ConsolidatePreviewModal({
 						}}
 					>
 						{pendingAction === "dedupe-execute" ? "整理中…" : "执行整理"}
+					</button>
+				</div>
+			</div>
+		</div>
+	);
+}
+
+interface ConflictDialogProps {
+	readonly record: MemoryRecord;
+	readonly pendingAction: string | null;
+	readonly onCancel: () => void;
+	readonly onResolve: (choice: ConflictChoice, mergedContent?: string) => void;
+}
+
+function ConflictDialog({
+	record,
+	pendingAction,
+	onCancel,
+	onResolve,
+}: ConflictDialogProps): React.ReactElement {
+	const draft = useMemo(() => extractConflictDraft(record), [record]);
+	const [manualMode, setManualMode] = useState(false);
+	const [manualContent, setManualContent] = useState(draft.mergeSeed);
+	const resolving = pendingAction === "resolve-conflict";
+	const manualReady = manualContent.trim().length > 0;
+	return (
+		<div
+			data-testid="memory-conflict-dialog"
+			role="dialog"
+			aria-modal="true"
+			aria-label="处理记忆冲突"
+			style={{
+				position: "fixed",
+				inset: 0,
+				background: "rgba(0,0,0,0.5)",
+				display: "flex",
+				alignItems: "center",
+				justifyContent: "center",
+				zIndex: 100,
+			}}
+		>
+			<div
+				style={{
+					background: "var(--bg)",
+					border: "1px solid #cf7e1f",
+					padding: "20px 24px",
+					width: "min(760px, calc(100vw - 32px))",
+					maxHeight: "84vh",
+					overflowY: "auto",
+				}}
+			>
+				<h2
+					style={{
+						margin: 0,
+						marginBottom: 12,
+						fontFamily: '"Noto Sans SC", sans-serif',
+						fontSize: 16,
+						color: "var(--fg)",
+					}}
+				>
+					处理记忆冲突
+				</h2>
+				<p
+					style={{
+						marginTop: 0,
+						color: "var(--fg-muted)",
+						fontFamily: '"JetBrains Mono", monospace',
+						fontSize: 11,
+						lineHeight: 1.6,
+					}}
+				>
+					id={draft.memoryId.slice(0, 16)} · 选择 keep_a / keep_b,或手动合并后提交
+				</p>
+
+				{draft.baseContent != null ? (
+					<div
+						data-testid="memory-conflict-base"
+						style={{
+							marginBottom: 12,
+							padding: "8px 10px",
+							border: "1px dashed var(--border)",
+							color: "var(--fg-muted)",
+							fontFamily: '"Noto Sans SC", sans-serif',
+							fontSize: 12,
+							lineHeight: 1.6,
+							whiteSpace: "pre-wrap",
+						}}
+					>
+						<strong style={{ color: "var(--fg)" }}>base</strong>
+						<br />
+						{draft.baseContent}
+					</div>
+				) : null}
+
+				<div
+					style={{
+						display: "grid",
+						gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+						gap: 12,
+					}}
+				>
+					<div
+						data-testid="memory-conflict-version-a"
+						style={{
+							border: "1px solid var(--border)",
+							padding: "10px 12px",
+						}}
+					>
+						<div
+							style={{
+								marginBottom: 6,
+								color: "var(--fg-muted)",
+								fontFamily: '"JetBrains Mono", monospace',
+								fontSize: 11,
+							}}
+						>
+							A · {draft.versionA.label}
+						</div>
+						<div
+							style={{
+								whiteSpace: "pre-wrap",
+								color: "var(--fg)",
+								fontFamily: '"Noto Sans SC", sans-serif',
+								fontSize: 12,
+								lineHeight: 1.6,
+							}}
+						>
+							{draft.versionA.content}
+						</div>
+					</div>
+
+					<div
+						data-testid="memory-conflict-version-b"
+						style={{
+							border: "1px solid var(--border)",
+							padding: "10px 12px",
+						}}
+					>
+						<div
+							style={{
+								marginBottom: 6,
+								color: "var(--fg-muted)",
+								fontFamily: '"JetBrains Mono", monospace',
+								fontSize: 11,
+							}}
+						>
+							B · {draft.versionB.label}
+						</div>
+						<div
+							style={{
+								whiteSpace: "pre-wrap",
+								color: "var(--fg)",
+								fontFamily: '"Noto Sans SC", sans-serif',
+								fontSize: 12,
+								lineHeight: 1.6,
+							}}
+						>
+							{draft.versionB.content}
+						</div>
+					</div>
+				</div>
+
+				<div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
+					<button
+						type="button"
+						onClick={() => onResolve("keep_a")}
+						disabled={pendingAction != null}
+						data-testid="memory-conflict-keep-a"
+						style={{
+							padding: "6px 12px",
+							border: "1px solid var(--border)",
+							background: "transparent",
+							color: "var(--fg)",
+							fontFamily: '"Noto Sans SC", sans-serif',
+							fontSize: 12,
+							cursor: pendingAction != null ? "not-allowed" : "pointer",
+						}}
+					>
+						保留 A · keep_a
+					</button>
+					<button
+						type="button"
+						onClick={() => onResolve("keep_b")}
+						disabled={pendingAction != null}
+						data-testid="memory-conflict-keep-b"
+						style={{
+							padding: "6px 12px",
+							border: "1px solid var(--accent-vermillion)",
+							background: "var(--accent-vermillion)",
+							color: "var(--bg)",
+							fontFamily: '"Noto Sans SC", sans-serif',
+							fontSize: 12,
+							cursor: pendingAction != null ? "not-allowed" : "pointer",
+						}}
+					>
+						保留 B · keep_b
+					</button>
+					<button
+						type="button"
+						onClick={() => setManualMode(true)}
+						disabled={pendingAction != null}
+						data-testid="memory-conflict-merge-manual"
+						style={{
+							padding: "6px 12px",
+							border: "1px solid #cf7e1f",
+							background: manualMode ? "rgba(207, 126, 31, 0.1)" : "transparent",
+							color: "#cf7e1f",
+							fontFamily: '"Noto Sans SC", sans-serif',
+							fontSize: 12,
+							cursor: pendingAction != null ? "not-allowed" : "pointer",
+						}}
+					>
+						手动合并 · merge_manual
+					</button>
+				</div>
+
+				{manualMode ? (
+					<div style={{ marginTop: 12 }}>
+						<textarea
+							value={manualContent}
+							onChange={(e) => setManualContent(e.target.value)}
+							disabled={pendingAction != null}
+							data-testid="memory-conflict-manual-textarea"
+							style={{
+								width: "100%",
+								minHeight: 140,
+								padding: "8px 10px",
+								border: "1px solid var(--border)",
+								background: "transparent",
+								color: "var(--fg)",
+								fontFamily: '"Noto Sans SC", sans-serif',
+								fontSize: 12,
+								lineHeight: 1.6,
+								resize: "vertical",
+							}}
+						/>
+						<div
+							style={{
+								display: "flex",
+								justifyContent: "flex-end",
+								marginTop: 8,
+							}}
+						>
+							<button
+								type="button"
+								onClick={() => onResolve("merge_manual", manualContent.trim())}
+								disabled={pendingAction != null || !manualReady}
+								data-testid="memory-conflict-submit-manual"
+								style={{
+									padding: "6px 12px",
+									border: "1px solid #cf7e1f",
+									background: "#cf7e1f",
+									color: "var(--bg)",
+									fontFamily: '"Noto Sans SC", sans-serif',
+									fontSize: 12,
+									cursor: pendingAction != null || !manualReady ? "not-allowed" : "pointer",
+									opacity: pendingAction != null || !manualReady ? 0.5 : 1,
+								}}
+							>
+								{resolving ? "提交中…" : "提交合并"}
+							</button>
+						</div>
+					</div>
+				) : null}
+
+				<div style={{ display: "flex", justifyContent: "flex-end", marginTop: 16 }}>
+					<button
+						type="button"
+						onClick={onCancel}
+						disabled={pendingAction != null}
+						data-testid="memory-conflict-cancel"
+						style={{
+							padding: "6px 12px",
+							border: "1px solid var(--border)",
+							background: "transparent",
+							color: "var(--fg-muted)",
+							fontFamily: '"Noto Sans SC", sans-serif',
+							fontSize: 12,
+							cursor: pendingAction != null ? "not-allowed" : "pointer",
+						}}
+					>
+						取消
 					</button>
 				</div>
 			</div>

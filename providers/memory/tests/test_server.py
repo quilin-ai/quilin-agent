@@ -5,6 +5,7 @@ import json
 import sqlite3
 import time
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from mcp.types import CallToolRequest, CallToolRequestParams
@@ -20,6 +21,7 @@ from quilin_mem.safety_lesson_store import SAFETY_LESSONS_DB_ENV, SQLiteSafetyLe
 from quilin_mem.scratchpad import ScratchpadStore
 from quilin_mem.server import create_server
 from quilin_mem.store import QuilinMemStore
+from quilin_mem.types import MemoryItem
 
 SEMANTIC_METADATA = {
     "schema_version": 1,
@@ -373,6 +375,48 @@ async def test_memory_recall_tool_returns_records(server: object) -> None:
         assert record["metadata"]["cache_key"].startswith("memory-recall:")
         assert "score" in record["metadata"]
         assert "source_layers" in record["metadata"]
+
+
+async def test_memory_recall_wraps_stale_record_content_with_system_reminder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("QUILIN_STALENESS_THRESHOLD_DAYS", "30")
+    stale_created_at = datetime.now(UTC) - timedelta(days=45, hours=1)
+    async with QuilinMemStore(db_path=":memory:") as store:
+        await store.add(
+            MemoryItem(
+                content="legacy deployment preference",
+                layer="working",
+                created_at=stale_created_at,
+            )
+        )
+
+        result = json.loads(await server_module._memory_recall_with_store(store, "legacy"))
+
+    content = result["records"][0]["content"]
+    assert content.startswith(
+        "<system-reminder>这条记忆来自 45 天前,信息可能已过时</system-reminder>\n"
+    )
+    assert content.endswith("legacy deployment preference")
+
+
+async def test_memory_recall_does_not_wrap_fresh_record_content(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("QUILIN_STALENESS_THRESHOLD_DAYS", "30")
+    fresh_created_at = datetime.now(UTC) - timedelta(days=5)
+    async with QuilinMemStore(db_path=":memory:") as store:
+        await store.add(
+            MemoryItem(
+                content="current deployment preference",
+                layer="working",
+                created_at=fresh_created_at,
+            )
+        )
+
+        result = json.loads(await server_module._memory_recall_with_store(store, "current"))
+
+    assert result["records"][0]["content"] == "current deployment preference"
 
 
 class _FakeMeta:

@@ -24,6 +24,8 @@ RECALL_QUERY_EXPANSIONS = (
 MAX_EXPANDED_QUERY_TERMS = 64
 RERANK_POOL_MIN_SIZE = 50
 RERANK_POOL_MULTIPLIER = 8
+PREDICTIVE_WARM_KIND = "predictive_warm"
+PREDICTIVE_WARM_RANKING_MULTIPLIER = 1.18
 
 
 def build_keywords(content: str) -> str:
@@ -357,12 +359,15 @@ def _row_ranking_score(row: sqlite3.Row, index: int) -> float:
     # The base score is a tiny stable tie-breaker preserving SQL relevance when
     # salience is equal; the multiplier comes from salience/importance.
     base_score = max(0.0, 1.0 - (index * 0.000001))
-    return compute_retrieval_ranking_score(
+    score = compute_retrieval_ranking_score(
         base_score,
         _row_salience_payload(row),
         importance_score=_row_float(row, "importance_score", default=0.5),
         kind=_row_str(row, "kind"),
     )
+    if _row_str(row, "kind") == PREDICTIVE_WARM_KIND:
+        return score * PREDICTIVE_WARM_RANKING_MULTIPLIER
+    return score
 
 
 def _row_salience_payload(row: sqlite3.Row) -> dict[str, object] | None:

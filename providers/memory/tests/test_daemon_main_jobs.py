@@ -10,7 +10,8 @@ from typing import Any
 
 import pytest
 
-from quilin_mem.daemon import BudgetLease, JobContext
+from quilin_mem import daemon_main
+from quilin_mem.daemon import BudgetLease, DaemonConfig, JobContext, QuilinDaemon
 from quilin_mem.daemon_main import KGBackfillJob, TokenBudgetMonitorJob, _log_event
 from quilin_mem.kg_extractor import ExtractedTriple
 from quilin_mem.store import QuilinMemStore
@@ -244,6 +245,85 @@ def _memory_warning_rows(path: Path) -> list[sqlite3.Row]:
     ).fetchall()
     conn.close()
     return rows
+
+
+def _predictive_warm_rows(path: Path) -> list[sqlite3.Row]:
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        """
+        SELECT content, tier, kind, metadata_json, forget_after
+        FROM memory_records
+        WHERE kind = 'predictive_warm'
+        ORDER BY rowid ASC
+        """
+    ).fetchall()
+    conn.close()
+    return rows
+
+
+@pytest.mark.asyncio
+async def test_predictive_warmer_writes_evidence_cache_with_24h_forget_after(
+    tmp_path: Path,
+) -> None:
+    memory_db = tmp_path / "memory.db"
+    async with QuilinMemStore(str(memory_db)) as store:
+        await store.store(
+            "daemon backend predictive warmer should prepare retrieval evidence",
+            tier="episodic",
+            kind="project_note",
+        )
+        await store.record_observation(
+            content="How should daemon predictive warmer prepare context?",
+            role="user",
+            observed_at=NOW - timedelta(minutes=5),
+        )
+
+    job_cls = getattr(daemon_main, "PredictiveWarmerJob", None)
+    assert job_cls is not None
+    job = job_cls(
+        store_factory=lambda: QuilinMemStore(str(memory_db)),
+        clock=lambda: NOW,
+        recent_query_limit=5,
+        evidence_limit=3,
+    )
+
+    result = await job.run(_context(job.id))
+
+    assert result.status == "succeeded"
+    assert result.data["written"] == 1
+    rows = _predictive_warm_rows(memory_db)
+    assert len(rows) == 1
+    assert rows[0]["tier"] == "episodic"
+    assert rows[0]["kind"] == "predictive_warm"
+    assert rows[0]["forget_after"] == (NOW + timedelta(hours=24)).isoformat()
+    assert "Prepared predictive context" in rows[0]["content"]
+    assert "daemon backend predictive warmer" in rows[0]["content"]
+
+    metadata = json.loads(rows[0]["metadata_json"])
+    assert metadata["source"] == "daemon_predictive_warmer"
+    assert metadata["expires_at"] == (NOW + timedelta(hours=24)).isoformat()
+    assert metadata["predicted_query"] == "How should daemon predictive warmer prepare context?"
+    assert metadata["evidence_count"] == 1
+    assert metadata["preanswer"] is False
+
+    conn = sqlite3.connect(memory_db)
+    try:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(memory_records)")}
+    finally:
+        conn.close()
+    assert "valid_to" not in columns
+
+
+def test_initial_idle_jobs_include_predictive_warmer() -> None:
+    register = getattr(daemon_main, "_register_initial_idle_jobs", None)
+    assert register is not None
+    daemon = QuilinDaemon(config=DaemonConfig())
+
+    register(daemon)
+
+    state = daemon._jobs["predictive_warmer"]
+    assert state.job.interval_seconds == 900.0
 
 
 @pytest.mark.asyncio
