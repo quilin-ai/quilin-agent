@@ -128,4 +128,8 @@ def row_to_record(row: sqlite3.Row, *, now: Callable[[], datetime]) -> MemoryRec
         deadline_at=parse_optional_datetime(row_get(row, "deadline_at")),
         prospective_action=row_get(row, "prospective_action"),
         resource_pointer=deserialize_json_object(row_get(row, "resource_pointer_json")),
+        version=int(row_get(row, "version") or 1),
+        parent_id=row_get(row, "parent_id"),
+        is_latest=bool(1 if row_get(row, "is_latest") is None else row_get(row, "is_latest")),
+        supersedes_json=row_get(row, "supersedes_json"),
     )

@@ -15,6 +15,7 @@
  *   §2.5  batch delete   → "batch delete via select-all"
  *   §2.6  dedupe preview → "dedupe preview shows three proposal kinds"
  *   §2.7  dedupe execute → "dedupe execute closes modal and refreshes list"
+ *   §7.5  high-priority → large dataset, recover round trip, 9→3 execute
  *   §2.8  empty store    → "empty store shows empty placeholder, hides dedupe button"
  *   §2.9  MCP off        → "MCP not connected shows reason banner"
  *   §2.10 dedupe 503     → "dedupe backend missing surfaces preview-failed message"
@@ -23,7 +24,7 @@
  *   §2.1 chat-triggered memory_store — 需要 live LLM + MCP,Live 手测
  *   §2.3 inline edit — 当前 UI 没有编辑入口(GAP-4 follow-up)
  */
-import { type Page, type Route, expect, test } from "@playwright/test";
+import { expect, type Page, type Route, test } from "@playwright/test";
 
 // ---------- wire fixtures ----------
 
@@ -34,6 +35,16 @@ interface FixtureRecord {
 	readonly layer: string | null;
 	readonly createdAt: string | null;
 	readonly metadata: Record<string, unknown> | null;
+	readonly version?: number | null;
+	readonly parentId?: string | null;
+	readonly isLatest?: boolean | null;
+	readonly lastWriterClient?: string | null;
+	readonly projectScope?: string | null;
+	readonly salience?: Record<string, unknown> | null;
+	readonly kind?: string | null;
+	readonly importanceScore?: number | null;
+	readonly archivedAt?: string | null;
+	readonly recoveredAt?: string | null;
 }
 
 interface MemoryWire {
@@ -45,6 +56,18 @@ interface MemoryWire {
 		readonly byTier: Record<string, readonly FixtureRecord[]>;
 		readonly counts: Record<string, number>;
 	};
+}
+
+function buildMemoryWire(records: readonly FixtureRecord[]): MemoryWire {
+	const byTier: Record<string, FixtureRecord[]> = {};
+	for (const r of records) {
+		const key = r.layer ?? r.tier;
+		if (byTier[key] == null) byTier[key] = [];
+		byTier[key].push(r);
+	}
+	const counts: Record<string, number> = { total: records.length };
+	for (const [k, v] of Object.entries(byTier)) counts[k] = v.length;
+	return { ok: true, data: { available: true, records, byTier, counts } };
 }
 
 /**
@@ -94,15 +117,60 @@ function buildListFixture(): MemoryWire {
 			metadata: null,
 		},
 	];
-	const byTier: Record<string, FixtureRecord[]> = {};
-	for (const r of records) {
-		const key = r.layer ?? r.tier;
-		if (byTier[key] == null) byTier[key] = [];
-		byTier[key].push(r);
+	return buildMemoryWire(records);
+}
+
+function buildNineDuplicateFixture(): MemoryWire {
+	const groups: ReadonlyArray<readonly [string, string, string[]]> = [
+		[
+			"meng",
+			"老孟",
+			[
+				"老孟在凌晨 2 点处理紧急上线",
+				"孟哥(老孟)昨晚 2am 处理 prod 故障",
+				"老孟习惯凌晨工作,2 am 还在写代码",
+			],
+		],
+		[
+			"ming",
+			"小明",
+			["小明喜欢喝咖啡,下午 3 点必喝一杯", "小明每天下午都要喝咖啡", "小明咖啡成瘾,午后两点开始喝"],
+		],
+		["hua", "小花", ["小花喜欢加班到很晚", "小花经常 deep work 到深夜", "小花夜猫子,半夜还在干活"]],
+	];
+	const records = groups.flatMap(([slug, persona, contents]) =>
+		contents.map((content, index) => ({
+			id: `dedupe-${slug}-${index + 1}`,
+			content: `语义层 · ${content}`,
+			tier: "semantic",
+			layer: "semantic",
+			createdAt: `2026-05-18T03:0${index}:00Z`,
+			metadata: { persona, fixture: "nine-duplicate-dedupe" },
+			version: 1,
+			isLatest: true,
+			kind: "user",
+		})),
+	);
+	return buildMemoryWire(records);
+}
+
+function buildLargeDedupeFixture(count = 160): MemoryWire {
+	const records: FixtureRecord[] = [];
+	for (let i = 0; i < count; i += 1) {
+		const group = Math.floor(i / 4);
+		records.push({
+			id: `large-dedupe-${String(i + 1).padStart(3, "0")}`,
+			content: `语义层 · 大数据集 dedupe fixture 第 ${group} 组重复记忆变体 ${i % 4}`,
+			tier: "semantic",
+			layer: "semantic",
+			createdAt: `2026-05-18T04:${String(i % 60).padStart(2, "0")}:00Z`,
+			metadata: { group, fixture: "large-dedupe" },
+			version: 1,
+			isLatest: true,
+			kind: "user",
+		});
 	}
-	const counts: Record<string, number> = { total: records.length };
-	for (const [k, v] of Object.entries(byTier)) counts[k] = v.length;
-	return { ok: true, data: { available: true, records, byTier, counts } };
+	return buildMemoryWire(records);
 }
 
 /**
@@ -111,21 +179,14 @@ function buildListFixture(): MemoryWire {
  */
 class FakeMemoryStore {
 	private records: FixtureRecord[];
+	private readonly archived = new Map<string, FixtureRecord>();
 
 	constructor(seed: readonly FixtureRecord[]) {
 		this.records = [...seed];
 	}
 
 	snapshot(): MemoryWire {
-		const byTier: Record<string, FixtureRecord[]> = {};
-		for (const r of this.records) {
-			const key = r.layer ?? r.tier;
-			if (byTier[key] == null) byTier[key] = [];
-			byTier[key].push(r);
-		}
-		const counts: Record<string, number> = { total: this.records.length };
-		for (const [k, v] of Object.entries(byTier)) counts[k] = v.length;
-		return { ok: true, data: { available: true, records: this.records, byTier, counts } };
+		return buildMemoryWire(this.records);
 	}
 
 	delete(ids: readonly string[]): { requested: number; deleted: number; failed: number } {
@@ -134,11 +195,24 @@ class FakeMemoryStore {
 		this.records = this.records.filter((r) => {
 			if (idSet.has(r.id)) {
 				deleted += 1;
+				this.archived.set(r.id, {
+					...r,
+					archivedAt: r.archivedAt ?? "2026-05-21T00:00:00Z",
+					recoveredAt: null,
+				});
 				return false;
 			}
 			return true;
 		});
 		return { requested: ids.length, deleted, failed: ids.length - deleted };
+	}
+
+	recover(id: string, recoveredAt = "2026-05-21T00:05:00Z"): boolean {
+		const record = this.archived.get(id);
+		if (record == null) return false;
+		this.archived.delete(id);
+		this.records.push({ ...record, recoveredAt });
+		return true;
 	}
 
 	count(): number {
@@ -233,6 +307,51 @@ function buildConsolidatePlan(): ConsolidatePlan {
 		totalDelete: 3,
 		totalKeep: 1,
 		totalInsert: 1,
+	};
+}
+
+function buildNineToThreePlan(): ConsolidatePlan {
+	const groups = ["meng", "ming", "hua"];
+	return {
+		proposals: groups.map((slug) => ({
+			kind: "dedupe",
+			tier: "semantic",
+			keepId: `dedupe-${slug}-1`,
+			deleteIds: [`dedupe-${slug}-2`, `dedupe-${slug}-3`],
+			reason: "三条语义重复 · 保留规范记忆",
+			strategy: "embedding",
+			score: 0.94,
+			memoryIds: [`dedupe-${slug}-1`, `dedupe-${slug}-2`, `dedupe-${slug}-3`],
+		})),
+		totalDelete: 6,
+		totalKeep: 3,
+		totalInsert: 0,
+	};
+}
+
+function buildLargeDedupePlan(): ConsolidatePlan {
+	const proposals: Array<ConsolidatePlan["proposals"][number]> = [];
+	for (let group = 0; group < 40; group += 1) {
+		const base = group * 4;
+		const ids = [0, 1, 2, 3].map(
+			(offset) => `large-dedupe-${String(base + offset + 1).padStart(3, "0")}`,
+		);
+		proposals.push({
+			kind: "dedupe",
+			tier: "semantic",
+			keepId: ids[0],
+			deleteIds: ids.slice(1),
+			reason: "大数据集重复簇 · 保留第一条",
+			strategy: "embedding",
+			score: 0.91,
+			memoryIds: ids,
+		});
+	}
+	return {
+		proposals,
+		totalDelete: 120,
+		totalKeep: 40,
+		totalInsert: 0,
 	};
 }
 
@@ -417,6 +536,179 @@ test.describe("Memory · CRUD + dedupe (mocked)", () => {
 		await expect(page.getByTestId("memory-rec-semantic-2")).toHaveCount(0);
 		await expect(page.getByTestId("memory-rec-semantic-3")).toHaveCount(0);
 		await expect(page.getByTestId("memory-rec-semantic-1")).toBeVisible();
+	});
+
+	test("dedupe preview handles 150+ records without timeout", async ({ page }) => {
+		const store = new FakeMemoryStore(buildLargeDedupeFixture().data.records);
+		await installMemoryRoutes(page, store);
+		let previewCalls = 0;
+
+		await page.route("**/api/memory/dedupe", async (route: Route) => {
+			const body = (route.request().postDataJSON() ?? {}) as Record<string, unknown>;
+			expect(body.execute).toBe(false);
+			previewCalls += 1;
+			await route.fulfill({
+				status: 200,
+				contentType: "application/json",
+				body: JSON.stringify({
+					ok: true,
+					data: { executed: false, plan: buildLargeDedupePlan() },
+				}),
+			});
+		});
+
+		await page.goto("/memory");
+		await expect(page.getByTestId("memory-filter")).toBeVisible();
+		expect(store.count()).toBe(160);
+
+		await page.getByTestId("memory-dedupe-button").click();
+
+		const modal = page.getByTestId("memory-dedupe-preview");
+		await expect(modal).toBeVisible({ timeout: 5_000 });
+		await expect(modal.getByTestId("memory-dedupe-delete-count")).toHaveText("120");
+		await expect(modal.getByTestId("memory-dedupe-keep-count")).toHaveText("40");
+		await expect(modal.getByTestId("memory-dedupe-insert-count")).toHaveText("0");
+		expect(previewCalls).toBe(1);
+		expect(store.count()).toBe(160);
+	});
+
+	test("recover API round trip restores a soft-deleted memory within seven days", async ({
+		page,
+	}) => {
+		const store = new FakeMemoryStore(buildListFixture().data.records);
+		await installMemoryRoutes(page, store);
+		const targetId = "rec-semantic-2";
+
+		await page.route("**/api/memory/recover", async (route: Route) => {
+			const body = (route.request().postDataJSON() ?? {}) as Record<string, unknown>;
+			const memoryId =
+				typeof body.memory_id === "string"
+					? body.memory_id
+					: typeof body.memoryId === "string"
+						? body.memoryId
+						: "";
+			const recovered = store.recover(memoryId);
+			await route.fulfill({
+				status: recovered ? 200 : 404,
+				contentType: "application/json",
+				body: JSON.stringify(
+					recovered
+						? { ok: true, data: { memory_id: memoryId, recovered: true } }
+						: {
+								ok: false,
+								error: { code: "memory_recover_failed", message: "memory not recoverable" },
+							},
+				),
+			});
+		});
+
+		await page.goto("/memory");
+		await expect(page.getByTestId(`memory-${targetId}`)).toBeVisible();
+
+		await page.getByTestId(`memory-checkbox-${targetId}`).click();
+		await page.getByTestId("memory-batch-delete").click();
+		await page.getByTestId("memory-confirm-delete-confirm").click();
+		await expect(page.getByTestId(`memory-${targetId}`)).toHaveCount(0);
+		expect(store.count()).toBe(4);
+
+		const recoverResult = await page.evaluate(async (memoryId) => {
+			const res = await fetch("/api/memory/recover", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ memory_id: memoryId }),
+			});
+			return { status: res.status, body: await res.json() };
+		}, targetId);
+
+		expect(recoverResult).toMatchObject({
+			status: 200,
+			body: { ok: true, data: { memory_id: targetId, recovered: true } },
+		});
+		expect(store.count()).toBe(5);
+
+		await page.reload();
+		const restoredRow = page.getByTestId(`memory-${targetId}`);
+		await expect(restoredRow).toBeVisible();
+		await restoredRow.getByRole("button").click();
+		await expect(page.getByTestId(`memory-detail-${targetId}`)).toContainText("已恢复");
+	});
+
+	test("dedupe execute merges nine duplicate memories into three canonical records", async ({
+		page,
+	}) => {
+		const store = new FakeMemoryStore(buildNineDuplicateFixture().data.records);
+		const plan = buildNineToThreePlan();
+		await installMemoryRoutes(page, store);
+		const executeValues: unknown[] = [];
+
+		await page.route("**/api/memory/dedupe", async (route: Route) => {
+			const body = (route.request().postDataJSON() ?? {}) as Record<string, unknown>;
+			executeValues.push(body.execute);
+			if (body.execute === true) {
+				const deleteIds = plan.proposals.flatMap((proposal) => proposal.deleteIds);
+				const result = store.delete(deleteIds);
+				await route.fulfill({
+					status: 200,
+					contentType: "application/json",
+					body: JSON.stringify({
+						ok: true,
+						data: {
+							executed: true,
+							plan,
+							deleted: result.deleted,
+							failed: result.failed,
+							skippedInsert: 0,
+							results: deleteIds.map((id) => ({
+								id,
+								kind: "dedupe",
+								ok: true,
+								error: null,
+							})),
+						},
+					}),
+				});
+				return;
+			}
+			await route.fulfill({
+				status: 200,
+				contentType: "application/json",
+				body: JSON.stringify({
+					ok: true,
+					data: { executed: false, plan },
+				}),
+			});
+		});
+
+		await page.goto("/memory");
+		await expect(page.getByTestId("memory-filter")).toBeVisible();
+		expect(store.count()).toBe(9);
+
+		await page.getByTestId("memory-dedupe-button").click();
+		const modal = page.getByTestId("memory-dedupe-preview");
+		await expect(modal).toBeVisible();
+		await expect(modal.getByTestId("memory-dedupe-delete-count")).toHaveText("6");
+		await expect(modal.getByTestId("memory-dedupe-keep-count")).toHaveText("3");
+
+		await page.getByTestId("memory-dedupe-confirm").click();
+
+		await expect(page.getByTestId("memory-dedupe-preview")).toHaveCount(0);
+		await expect(page.getByTestId("memory-action-message")).toContainText("已删除 6 条");
+		expect(store.count()).toBe(3);
+		expect(executeValues).toEqual([false, true]);
+
+		for (const id of ["dedupe-meng-1", "dedupe-ming-1", "dedupe-hua-1"]) {
+			await expect(page.getByTestId(`memory-${id}`)).toBeVisible();
+		}
+		for (const id of [
+			"dedupe-meng-2",
+			"dedupe-meng-3",
+			"dedupe-ming-2",
+			"dedupe-ming-3",
+			"dedupe-hua-2",
+			"dedupe-hua-3",
+		]) {
+			await expect(page.getByTestId(`memory-${id}`)).toHaveCount(0);
+		}
 	});
 
 	test("empty store shows empty placeholder, hides dedupe button", async ({ page }) => {

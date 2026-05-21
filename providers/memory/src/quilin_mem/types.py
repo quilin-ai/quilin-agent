@@ -141,6 +141,10 @@ class MemoryItem:
     deadline_at: datetime | None = None
     prospective_action: str | None = None
     resource_pointer: dict[str, object] | None = None
+    version: int = 1
+    parent_id: str | None = None
+    is_latest: bool = True
+    supersedes_json: str | None = None
 
     def __init__(
         self,
@@ -164,6 +168,10 @@ class MemoryItem:
         deadline_at: datetime | None = None,
         prospective_action: str | None = None,
         resource_pointer: dict[str, object] | None = None,
+        version: int = 1,
+        parent_id: str | None = None,
+        is_latest: bool = True,
+        supersedes_json: str | None = None,
     ) -> None:
         resolved_layer = validate_memory_layer(tier or layer)
         created = created_at or _utcnow()
@@ -195,6 +203,10 @@ class MemoryItem:
             "resource_pointer",
             dict(resource_pointer) if resource_pointer is not None else None,
         )
+        object.__setattr__(self, "version", max(1, int(version)))
+        object.__setattr__(self, "parent_id", parent_id)
+        object.__setattr__(self, "is_latest", bool(is_latest))
+        object.__setattr__(self, "supersedes_json", supersedes_json)
 
     @property
     def tier(self) -> MemoryTier:
@@ -225,6 +237,10 @@ class MemoryItem:
             "resource_pointer": (
                 dict(self.resource_pointer) if self.resource_pointer is not None else None
             ),
+            "version": self.version,
+            "parent_id": self.parent_id,
+            "is_latest": self.is_latest,
+            "supersedes_json": self.supersedes_json,
         }
         if include_legacy_tier:
             payload["tier"] = self.layer
@@ -277,6 +293,10 @@ class MemoryItem:
             ),
             prospective_action=cast(str | None, payload.get("prospective_action")),
             resource_pointer=cast(dict[str, object] | None, payload.get("resource_pointer")),
+            version=int(cast(int | float, payload.get("version", 1))),
+            parent_id=cast(str | None, payload.get("parent_id")),
+            is_latest=bool(cast(bool | int, payload.get("is_latest", True))),
+            supersedes_json=cast(str | None, payload.get("supersedes_json")),
         )
 
 

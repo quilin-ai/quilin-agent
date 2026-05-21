@@ -19,7 +19,7 @@ interface MemoryRecord {
 	readonly version?: number | null;
 	readonly parentId?: string | null;
 	readonly isLatest?: boolean | null;
-	readonly supersedesJson?: Record<string, unknown> | null;
+	readonly supersedesJson?: Record<string, unknown> | readonly unknown[] | string | null;
 	readonly lastWriterClient?: string | null;
 	readonly lastWriterSessionId?: string | null;
 	readonly projectScope?: string | null;

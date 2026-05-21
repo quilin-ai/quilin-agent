@@ -27,11 +27,16 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import json
 import os
 import signal
+import sqlite3
 import sys
-from datetime import datetime
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from .daemon import (
@@ -40,6 +45,16 @@ from .daemon import (
     JobResult,
     QuilinDaemon,
 )
+
+# QUI-202/QUI-189 wire (2026-05-21):2 个 idle job 从 stub 接到真 backend。
+# Reflector.propose() 是 sync,吃 episodic_records Sequence,返
+# ReflectionProposal list(planning only,不写 DB)。真 commit 走
+# Reflector.commit_insight() + WriteAuthorityGate,daemon 默认 dry_run
+# 不 commit(等显式 opt-in 接 WriteAuthority 实例)。
+# Consolidator.propose(strategy="dedupe") 是 sync,返 ConsolidationProposal
+# (含 dedupe groups + memory_ids)。真 commit 复用 web route 的
+# executeDeletions 等价路径:遍历 actions 的 delete_ids 调
+# store.delete(memory_id)。daemon 默认 dry_run 不 delete。
 
 
 def _is_truthy(value: str | None) -> bool:
@@ -51,11 +66,334 @@ def _is_truthy(value: str | None) -> bool:
 def _log_event(event: dict[str, Any]) -> None:
     payload = {
         "service": "quilin-daemon",
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         **event,
     }
     sys.stderr.write(json.dumps(payload) + "\n")
     sys.stderr.flush()
+
+
+@dataclass(frozen=True, slots=True)
+class _TokenUsageSnapshot:
+    tokens_used: int
+    source: str
+    error: str | None = None
+
+
+class _IncrementalBackfillStore:
+    """Filtered store facade so KG backfill can keep its existing paging contract."""
+
+    def __init__(self, base_store: Any, skip_memory_ids: set[str], *, page_size: int) -> None:
+        self._base_store = base_store
+        self._skip_memory_ids = skip_memory_ids
+        self._page_size = max(1, page_size)
+        self._cache: dict[str, list[Any]] = {}
+        self.skipped_existing = 0
+
+    async def list_by_layer(
+        self,
+        layer: str,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> Sequence[Any]:
+        records = await self._records_for_layer(layer)
+        return records[max(offset, 0) : max(offset, 0) + max(limit, 0)]
+
+    async def _records_for_layer(self, layer: str) -> list[Any]:
+        if layer in self._cache:
+            return self._cache[layer]
+
+        records: list[Any] = []
+        source_offset = 0
+        skipped_existing = 0
+        while True:
+            batch = await self._base_store.list_by_layer(
+                layer,
+                limit=self._page_size,
+                offset=source_offset,
+            )
+            if not batch:
+                break
+            for record in batch:
+                if str(getattr(record, "id", "")) in self._skip_memory_ids:
+                    skipped_existing += 1
+                    continue
+                records.append(record)
+            source_offset += len(batch)
+            if len(batch) < self._page_size:
+                break
+
+        self.skipped_existing += skipped_existing
+        self._cache[layer] = records
+        return records
+
+
+async def _close_resource(resource: Any) -> None:
+    close = getattr(resource, "close", None)
+    if close is None:
+        return
+    result = close()
+    if inspect.isawaitable(result):
+        await result
+
+
+async def _memory_ids_with_edges(kg: Any) -> set[str]:
+    method = getattr(kg, "memory_ids_with_edges", None)
+    if callable(method):
+        result = method()
+        if inspect.isawaitable(result):
+            result = await result
+        return {str(memory_id) for memory_id in result if memory_id is not None}
+
+    conn = getattr(kg, "_conn", None)
+    if conn is None:
+        return set()
+
+    lock = getattr(kg, "_lock", None)
+
+    def query() -> set[str]:
+        cm = lock if lock is not None else contextlib.nullcontext()
+        with cm:
+            rows = conn.execute(
+                "SELECT DISTINCT memory_id FROM kg_edges WHERE memory_id IS NOT NULL"
+            ).fetchall()
+        return {str(row[0]) for row in rows if row[0] is not None}
+
+    return await asyncio.to_thread(query)
+
+
+def _coerce_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _day_bounds(now: datetime) -> tuple[datetime, datetime]:
+    start = _coerce_utc(now).replace(hour=0, minute=0, second=0, microsecond=0)
+    return start, start + timedelta(days=1)
+
+
+def _observability_db_path(explicit_path: str | None) -> Path:
+    if explicit_path:
+        return Path(explicit_path)
+    env_path = os.environ.get("QUILIN_OBSERVABILITY_DB_PATH")
+    if env_path:
+        return Path(env_path)
+    return Path.home() / ".quilin" / "observability.db"
+
+
+def _observability_logs_dir(explicit_dir: str | None) -> Path:
+    if explicit_dir:
+        return Path(explicit_dir)
+    env_dir = os.environ.get("QUILIN_OBSERVABILITY_LOGS_DIR")
+    if env_dir:
+        return Path(env_dir)
+    return Path(".logs")
+
+
+def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table_name,),
+    ).fetchone()
+    return row is not None
+
+
+def _metric_tokens_for_day(
+    conn: sqlite3.Connection,
+    day_start: datetime,
+    day_end: datetime,
+) -> int | None:
+    if not _table_exists(conn, "metrics_hourly"):
+        return None
+
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS row_count, COALESCE(SUM(sum), 0) AS token_sum
+        FROM metrics_hourly
+        WHERE metric_name = 'quilin_llm_tokens_total'
+          AND hour_ts >= ?
+          AND hour_ts < ?
+        """,
+        (int(day_start.timestamp()), int(day_end.timestamp())),
+    ).fetchone()
+    if row is None or int(row["row_count"]) == 0:
+        return None
+    return int(row["token_sum"] or 0)
+
+
+def _agent_run_tokens_for_day(
+    conn: sqlite3.Connection,
+    day_start: datetime,
+    day_end: datetime,
+) -> int | None:
+    if not _table_exists(conn, "agent_runs"):
+        return None
+
+    start_s = int(day_start.timestamp())
+    end_s = int(day_end.timestamp())
+    start_ms = start_s * 1000
+    end_ms = end_s * 1000
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS row_count, COALESCE(SUM(tokens_used), 0) AS token_sum
+        FROM agent_runs
+        WHERE (started_at >= ? AND started_at < ?)
+           OR (started_at >= ? AND started_at < ?)
+        """,
+        (start_ms, end_ms, start_s, end_s),
+    ).fetchone()
+    if row is None or int(row["row_count"]) == 0:
+        return None
+    return int(row["token_sum"] or 0)
+
+
+def _read_tokens_from_observability_db(path: Path, now: datetime) -> _TokenUsageSnapshot | None:
+    if not path.exists():
+        return None
+
+    day_start, day_end = _day_bounds(now)
+    try:
+        conn = sqlite3.connect(path)
+        conn.row_factory = sqlite3.Row
+        try:
+            metric_tokens = _metric_tokens_for_day(conn, day_start, day_end)
+            if metric_tokens is not None:
+                return _TokenUsageSnapshot(metric_tokens, "observability.metrics_hourly")
+            agent_run_tokens = _agent_run_tokens_for_day(conn, day_start, day_end)
+            if agent_run_tokens is not None:
+                return _TokenUsageSnapshot(agent_run_tokens, "observability.agent_runs")
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        return _TokenUsageSnapshot(
+            0,
+            "observability.db_error",
+            error=f"{type(exc).__name__}: {exc}",
+        )
+    return None
+
+
+def _read_tokens_from_trace_log(logs_dir: Path, now: datetime) -> _TokenUsageSnapshot | None:
+    log_path = logs_dir / f"traces-{_coerce_utc(now).date().isoformat()}.jsonl"
+    if not log_path.exists() or not log_path.is_file():
+        return None
+
+    tokens = 0
+    spans_seen = 0
+    try:
+        with log_path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    span = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if span.get("name") != "llm.invoke":
+                    continue
+                attrs = span.get("attributes")
+                if not isinstance(attrs, dict):
+                    continue
+                spans_seen += 1
+                for key in ("llm.tokens_input", "llm.tokens_output", "llm.tokens_thinking"):
+                    value = attrs.get(key)
+                    if isinstance(value, int | float):
+                        tokens += int(value)
+    except OSError as exc:
+        return _TokenUsageSnapshot(
+            0,
+            "observability.trace_log_error",
+            error=f"{type(exc).__name__}: {exc}",
+        )
+
+    if spans_seen == 0:
+        return None
+    return _TokenUsageSnapshot(tokens, "observability.trace_log")
+
+
+def _read_daily_token_usage(
+    *,
+    observability_db_path: str | None,
+    logs_dir: str | None,
+    now: datetime,
+) -> _TokenUsageSnapshot:
+    db_snapshot = _read_tokens_from_observability_db(
+        _observability_db_path(observability_db_path),
+        now,
+    )
+    if db_snapshot is not None and db_snapshot.source != "observability.db_error":
+        return db_snapshot
+
+    log_snapshot = _read_tokens_from_trace_log(_observability_logs_dir(logs_dir), now)
+    if log_snapshot is not None:
+        return log_snapshot
+    if db_snapshot is not None:
+        return db_snapshot
+    return _TokenUsageSnapshot(0, "observability.unavailable")
+
+
+def _warning_already_recorded(store: Any, warning_date: str) -> bool:
+    conn = getattr(store, "_conn", None)
+    if conn is None:
+        return False
+
+    lock = getattr(store, "_lock", None)
+    cm = lock if lock is not None else contextlib.nullcontext()
+    with cm:
+        rows = conn.execute(
+            """
+            SELECT metadata_json
+            FROM memory_records
+            WHERE deleted = 0 AND is_latest = 1
+            """
+        ).fetchall()
+    for row in rows:
+        try:
+            metadata = json.loads(row["metadata_json"] or "{}")
+        except (KeyError, TypeError, json.JSONDecodeError):
+            continue
+        if not isinstance(metadata, dict):
+            continue
+        if (
+            metadata.get("source") == "daemon_token_budget_monitor"
+            and metadata.get("warning_date") == warning_date
+        ):
+            return True
+    return False
+
+
+async def _write_token_budget_warning(
+    store: Any,
+    *,
+    now: datetime,
+    tokens_used: int,
+    daily_token_limit: int,
+    threshold_ratio: float,
+    usage_source: str,
+) -> None:
+    from .types import MemoryItem
+
+    warning_date = _coerce_utc(now).date().isoformat()
+    percent = round(tokens_used / daily_token_limit * 100, 1)
+    await store.add(
+        MemoryItem(
+            content=(
+                "Daemon token budget warning: "
+                f"{tokens_used} / {daily_token_limit} tokens used today ({percent}%)."
+            ),
+            layer="working",
+            metadata={
+                "schema_version": 1,
+                "source": "daemon_token_budget_monitor",
+                "warning_date": warning_date,
+                "token_usage": tokens_used,
+                "token_limit": daily_token_limit,
+                "threshold_ratio": threshold_ratio,
+                "usage_source": usage_source,
+            },
+            kind="workflow",
+            created_at=_coerce_utc(now),
+        )
+    )
 
 
 class MemoryReflectJob:
@@ -79,10 +417,74 @@ class MemoryReflectJob:
                 "run_id": context.run_id,
             }
         )
-        # TODO(QUI-202 wire):接 reflector.propose() + 写 memory_observations
-        await asyncio.sleep(0.05)
+        # QUI-202 wire:接 Reflector.propose 真路径。
+        # 当前阶段(2026-05-21):only plan,不 commit。
+        #   - Reflector.propose 是 sync,吃 episodic_records,返 ReflectionProposal list
+        #   - 真 commit 走 reflector.commit_insight(proposal, store, write_authority)
+        #     需要 WriteAuthorityGate 实例。daemon 进程默认 dry_run 不接 gate。
+        # 后续接入 WriteAuthority 后(env QUILIN_DAEMON_DRY_RUN=false + gate),
+        # 这里可调 reflector.commit_insight 真写 semantic。
+        from .reflector import Reflector
+        from .store import QuilinMemStore
+
+        dry_run = _is_truthy(os.environ.get("QUILIN_DAEMON_DRY_RUN", "true"))
+        proposals_count = 0
+        records_seen = 0
+        error: str | None = None
+
+        store: QuilinMemStore | None = None
+        try:
+            store = QuilinMemStore()
+            # _count_sync / _list_by_layer_sync 是 store 内部 sync helper,
+            # 在 daemon async 上下文里直接调安全(短查询,无阻塞 IO 风险)。
+            episodic_count = store._count_sync({"layer": "episodic"})
+            records_seen = episodic_count
+            if episodic_count > 0:
+                records = store._list_by_layer_sync(
+                    "episodic",
+                    limit=episodic_count,
+                    offset=0,
+                )
+                reflector = Reflector()
+                proposals = reflector.propose(records)
+                proposals_count = len(proposals)
+        except Exception as exc:  # noqa: BLE001 — best-effort,不阻塞后续 job
+            error = f"{type(exc).__name__}: {exc}"
+            _log_event(
+                {
+                    "event": "memory_reflect.error",
+                    "job_id": context.job_id,
+                    "run_id": context.run_id,
+                    "error": error,
+                }
+            )
+        finally:
+            if store is not None:
+                with contextlib.suppress(Exception):
+                    store._close_sync()
+
+        _log_event(
+            {
+                "event": "memory_reflect.done",
+                "job_id": context.job_id,
+                "run_id": context.run_id,
+                "dry_run": dry_run,
+                "records_seen": records_seen,
+                "proposals": proposals_count,
+                "promoted": 0,  # commit_insight 未接,实际未写
+                "error": error,
+            }
+        )
         return JobResult.succeeded(
-            output={"reflected": 0},
+            data={
+                "records_seen": records_seen,
+                "proposals": proposals_count,
+                "promoted": 0,
+                "dry_run": dry_run,
+                "error": error,
+            },
+            # Reflector.propose 本身不消耗 LLM(deterministic info-gain gate);
+            # 只有 commit_insight 调 LLM_caller 才花 token。这里返 0 是准的。
             tokens_used=0,
             cost_used=0.0,
         )
@@ -109,11 +511,116 @@ class MemoryConsolidateJob:
                 "run_id": context.run_id,
             }
         )
-        # TODO(QUI-189 wire):调 Consolidator.propose(strategy="dedupe")
-        # 在 dry_run 模式下只 plan 不 execute(WriteAuthority gate)
-        await asyncio.sleep(0.05)
+        # QUI-189 wire:接 Consolidator.propose(strategy="dedupe") 真路径。
+        # Consolidator.propose 是 sync,返 ConsolidationProposal(含 dedupe groups)。
+        #   - dry_run=true(默认):only plan,不动 DB
+        #   - dry_run=false:遍历 proposal.actions,对每个 dedupe action 调
+        #     store.delete(delete_id) 真合并(等价 web route executeDeletions)
+        # IdleBudgetProvider 默认 enabled=False 会让 dedupe 永远拒,daemon 这里
+        # 注入 enabled=True 跟 web 的 user-triggered preview 路径对齐(参见
+        # server._memory_consolidate_plan_with_store)。
+        from .consolidator import (
+            DEFAULT_PER_PAIR_FALLBACK_MAX_RECORDS,
+            Consolidator,
+            _DeepseekBatchJudge,
+            _DeepseekConsolidationJudge,
+            _env_flag_disabled,
+        )
+        from .idle_budget import IdleBudgetProvider
+        from .store import QuilinMemStore
+
+        dry_run = _is_truthy(os.environ.get("QUILIN_DAEMON_DRY_RUN", "true"))
+        proposals_count = 0
+        delete_candidates = 0
+        writes_performed = 0
+        error: str | None = None
+
+        store: QuilinMemStore | None = None
+        try:
+            store = QuilinMemStore()
+            budget_provider = IdleBudgetProvider(enabled=True, token_budget=1_000_000)
+            # batch judge 优先,失败 fallback per-pair。无 DEEPSEEK_API_KEY 时
+            # 两条 judge 都会返 distinct / ok=False,降级走 exact-only 路径。
+            dedupe_judge = _DeepseekConsolidationJudge().judge
+            batch_judge = None
+            if not _env_flag_disabled("QUILIN_DEDUPE_BATCH_ENABLED"):
+                batch_judge = _DeepseekBatchJudge().judge_batch
+
+            consolidator = Consolidator(
+                budget_provider=budget_provider,
+                store=store,
+                dedupe_judge=dedupe_judge,
+                batch_judge=batch_judge,
+                batch_max_calls=1,
+                per_pair_fallback_max_records=DEFAULT_PER_PAIR_FALLBACK_MAX_RECORDS,
+            )
+            proposal = consolidator.propose(
+                strategy="dedupe",
+                task="quilin_mem.daemon.memory_consolidate",
+            )
+            proposals_count = len(proposal.actions)
+            for action in proposal.actions:
+                if action.kind != "dedupe":
+                    continue
+                raw_delete_ids = action.metadata.get("delete_ids")
+                if not isinstance(raw_delete_ids, list | tuple):
+                    continue
+                delete_candidates += len(raw_delete_ids)
+                if dry_run:
+                    continue
+                # Real-execute path:逐条 store.delete,任一失败不阻塞其余。
+                for delete_id in raw_delete_ids:
+                    if not isinstance(delete_id, str):
+                        continue
+                    try:
+                        store._delete_sync(delete_id)
+                        writes_performed += 1
+                    except Exception as exc:  # noqa: BLE001
+                        _log_event(
+                            {
+                                "event": "memory_consolidate.delete_failed",
+                                "memory_id": delete_id,
+                                "error": f"{type(exc).__name__}: {exc}",
+                            }
+                        )
+        except Exception as exc:  # noqa: BLE001 — best-effort,不阻塞后续 job
+            error = f"{type(exc).__name__}: {exc}"
+            _log_event(
+                {
+                    "event": "memory_consolidate.error",
+                    "job_id": context.job_id,
+                    "run_id": context.run_id,
+                    "error": error,
+                }
+            )
+        finally:
+            if store is not None:
+                with contextlib.suppress(Exception):
+                    store._close_sync()
+
+        _log_event(
+            {
+                "event": "memory_consolidate.done",
+                "job_id": context.job_id,
+                "run_id": context.run_id,
+                "dry_run": dry_run,
+                "proposals": proposals_count,
+                "delete_candidates": delete_candidates,
+                "executed": writes_performed,
+                "error": error,
+            }
+        )
         return JobResult.succeeded(
-            output={"deduped": 0},
+            data={
+                "proposals": proposals_count,
+                "delete_candidates": delete_candidates,
+                "executed": writes_performed,
+                "dry_run": dry_run,
+                "error": error,
+            },
+            # Batch LLM judge 实际 token 消耗在 _DeepseekBatchJudge 内部,
+            # 没暴露 caller-visible counter。这里返 estimated_tokens 占位,
+            # daemon budget gate 用的是 job.estimated_tokens 不是 result。
             tokens_used=0,
             cost_used=0.0,
         )
@@ -134,6 +641,25 @@ class KGBackfillJob:
     max_retries = 2
     backoff_seconds = 120.0
 
+    def __init__(
+        self,
+        *,
+        store_factory: Callable[[], Any] | None = None,
+        kg_factory: Callable[[], Any] | None = None,
+        extractor_fn: Callable[..., Any] | None = None,
+        batch_size: int = 100,
+        max_records: int | None = None,
+        dry_run: bool | None = None,
+        incremental: bool = True,
+    ) -> None:
+        self._store_factory = store_factory
+        self._kg_factory = kg_factory
+        self._extractor_fn = extractor_fn
+        self._batch_size = batch_size
+        self._max_records = max_records
+        self._dry_run = dry_run
+        self._incremental = incremental
+
     async def run(self, context: JobContext) -> JobResult:
         _log_event(
             {
@@ -145,12 +671,82 @@ class KGBackfillJob:
         # TODO(QUI-205 wire):调 memory_backfill_kg(incremental=True)
         # 跟踪 last_kg_update timestamp,只 process 新 record
         # WriteAuthority gate:idle 路径 origin="idle" 走 AUTO 默认放行
-        await asyncio.sleep(0.05)
-        return JobResult.succeeded(
-            output={"backfilled": 0, "edges": 0},
-            tokens_used=0,
-            cost_used=0.0,
+        from .kg import TemporalKnowledgeGraph
+        from .kg_backfill import backfill_kg_from_memory
+        from .store import QuilinMemStore
+
+        dry_run = (
+            self._dry_run
+            if self._dry_run is not None
+            else _is_truthy(
+                os.environ.get("QUILIN_DAEMON_KG_DRY_RUN")
+                or os.environ.get("QUILIN_DAEMON_DRY_RUN")
+            )
         )
+        store = (self._store_factory or QuilinMemStore)()
+        kg = (self._kg_factory or TemporalKnowledgeGraph)()
+        skipped_existing = 0
+        try:
+            incremental_store: _IncrementalBackfillStore | None = None
+            backfill_store = store
+            if self._incremental:
+                existing_memory_ids = await _memory_ids_with_edges(kg)
+                if existing_memory_ids:
+                    incremental_store = _IncrementalBackfillStore(
+                        store,
+                        existing_memory_ids,
+                        page_size=self._batch_size,
+                    )
+                    backfill_store = incremental_store
+
+            result = await backfill_kg_from_memory(
+                store=backfill_store,
+                kg=kg,
+                batch_size=self._batch_size,
+                max_records=self._max_records,
+                dry_run=dry_run,
+                extractor_fn=self._extractor_fn,
+            )
+            if incremental_store is not None:
+                skipped_existing = incremental_store.skipped_existing
+            data = {
+                **result.to_dict(),
+                "incremental": self._incremental,
+                "skipped_existing": skipped_existing,
+            }
+            _log_event(
+                {
+                    "event": "kg_backfill.done",
+                    "job_id": context.job_id,
+                    "run_id": context.run_id,
+                    **data,
+                }
+            )
+            return JobResult.succeeded(
+                (
+                    f"processed {result.processed} memory records, "
+                    f"added {result.edges_added} KG edges"
+                ),
+                data=data,
+                tokens_used=0,
+                cost_used=0.0,
+            )
+        except Exception as exc:  # noqa: BLE001
+            error = f"{type(exc).__name__}: {exc}"
+            _log_event(
+                {
+                    "event": "kg_backfill.error",
+                    "job_id": context.job_id,
+                    "run_id": context.run_id,
+                    "error": error,
+                }
+            )
+            return JobResult.failed(type(exc).__name__, message=str(exc))
+        finally:
+            with contextlib.suppress(Exception):
+                await _close_resource(kg)
+            with contextlib.suppress(Exception):
+                await _close_resource(store)
 
 
 class TokenBudgetMonitorJob:
@@ -163,19 +759,124 @@ class TokenBudgetMonitorJob:
     max_retries = 1
     backoff_seconds = 15.0
 
+    def __init__(
+        self,
+        *,
+        store_factory: Callable[[], Any] | None = None,
+        observability_db_path: str | None = None,
+        logs_dir: str | None = None,
+        daily_token_limit: int | None = None,
+        warning_threshold_ratio: float | None = None,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
+        self._store_factory = store_factory
+        self._observability_db_path = observability_db_path
+        self._logs_dir = logs_dir
+        self._daily_token_limit = daily_token_limit
+        self._warning_threshold_ratio = warning_threshold_ratio
+        self._clock = clock or (lambda: datetime.now(UTC))
+
     async def run(self, context: JobContext) -> JobResult:
+        now = self._clock()
+        daily_token_limit = self._resolve_daily_token_limit()
+        warning_threshold_ratio = self._resolve_warning_threshold_ratio()
+        usage = _read_daily_token_usage(
+            observability_db_path=self._observability_db_path,
+            logs_dir=self._logs_dir,
+            now=now,
+        )
+        threshold_tokens = int(daily_token_limit * warning_threshold_ratio)
+        warning_written = False
+        warning_reason: str | None = None
+
         _log_event(
             {
                 "event": "token_budget_monitor.tick",
                 "job_id": context.job_id,
                 "run_id": context.run_id,
+                "tokens_used_today": usage.tokens_used,
+                "usage_source": usage.source,
+                "daily_token_limit": daily_token_limit,
+                "warning_threshold_ratio": warning_threshold_ratio,
+                "usage_error": usage.error,
+            }
+        )
+
+        if daily_token_limit <= 0:
+            warning_reason = "budget_disabled"
+        elif usage.tokens_used < threshold_tokens:
+            warning_reason = "below_threshold"
+        else:
+            from .store import QuilinMemStore
+
+            warning_date = _coerce_utc(now).date().isoformat()
+            store = (self._store_factory or QuilinMemStore)()
+            try:
+                if _warning_already_recorded(store, warning_date):
+                    warning_reason = "already_recorded"
+                else:
+                    await _write_token_budget_warning(
+                        store,
+                        now=now,
+                        tokens_used=usage.tokens_used,
+                        daily_token_limit=daily_token_limit,
+                        threshold_ratio=warning_threshold_ratio,
+                        usage_source=usage.source,
+                    )
+                    warning_written = True
+                    warning_reason = "written"
+            finally:
+                with contextlib.suppress(Exception):
+                    await _close_resource(store)
+
+        data = {
+            "checked": True,
+            "tokens_used_today": usage.tokens_used,
+            "usage_source": usage.source,
+            "usage_error": usage.error,
+            "daily_token_limit": daily_token_limit,
+            "warning_threshold_ratio": warning_threshold_ratio,
+            "warning_threshold_tokens": threshold_tokens,
+            "warning_written": warning_written,
+            "warning_reason": warning_reason,
+        }
+        _log_event(
+            {
+                "event": "token_budget_monitor.done",
+                "job_id": context.job_id,
+                "run_id": context.run_id,
+                **data,
             }
         )
         return JobResult.succeeded(
-            output={"checked": True},
+            "checked token budget",
+            data=data,
             tokens_used=0,
             cost_used=0.0,
         )
+
+    def _resolve_daily_token_limit(self) -> int:
+        if self._daily_token_limit is not None:
+            return max(0, self._daily_token_limit)
+        raw = os.environ.get("QUILIN_DAEMON_DAILY_TOKEN_LIMIT") or os.environ.get(
+            "QUILIN_DAEMON_TOKEN_BUDGET",
+            "100000",
+        )
+        try:
+            return max(0, int(raw))
+        except ValueError:
+            return 100_000
+
+    def _resolve_warning_threshold_ratio(self) -> float:
+        if self._warning_threshold_ratio is not None:
+            ratio = self._warning_threshold_ratio
+        else:
+            raw = os.environ.get("QUILIN_DAEMON_TOKEN_WARNING_RATIO", "0.8")
+            try:
+                ratio = float(raw)
+            except ValueError:
+                ratio = 0.8
+        return min(1.0, max(0.0, ratio))
 
 
 async def run_daemon_loop() -> None:
@@ -186,9 +887,12 @@ async def run_daemon_loop() -> None:
     3. 主 tick:每 N 秒检查 next_run_at,到点 daemon.run_once()
     4. 失败 retry / budget gate / lease 由 daemon 自管
     """
+    # dogfood fix 2026-05-21:DaemonConfig 字段是 `*_per_run`(daemon.py:68),
+    # 不是 `token_budget/cost_budget`。前一版 ship 时写错 kwarg,daemon 真启动
+    # 会 TypeError 立即崩 — subagent 1 报告发现。
     config = DaemonConfig(
-        token_budget=int(os.environ.get("QUILIN_DAEMON_TOKEN_BUDGET", "100000")),
-        cost_budget=float(os.environ.get("QUILIN_DAEMON_COST_BUDGET", "1.0")),
+        token_budget_per_run=int(os.environ.get("QUILIN_DAEMON_TOKEN_BUDGET", "100000")),
+        cost_budget_per_run=float(os.environ.get("QUILIN_DAEMON_COST_BUDGET", "1.0")),
         lease_ttl_seconds=int(os.environ.get("QUILIN_DAEMON_LEASE_TTL", "120")),
     )
     daemon = QuilinDaemon(config=config, logger=_log_event)
@@ -207,8 +911,8 @@ async def run_daemon_loop() -> None:
             "jobs": list(daemon._jobs.keys()),
             "tick_seconds": tick_seconds,
             "config": {
-                "token_budget": config.token_budget,
-                "cost_budget": config.cost_budget,
+                "token_budget_per_run": config.token_budget_per_run,
+                "cost_budget_per_run": config.cost_budget_per_run,
             },
         }
     )

@@ -42,7 +42,7 @@ export interface MemoryRecord {
 	readonly version: number | null;
 	readonly parentId: string | null;
 	readonly isLatest: boolean | null;
-	readonly supersedesJson: Record<string, unknown> | null;
+	readonly supersedesJson: Record<string, unknown> | readonly unknown[] | string | null;
 	readonly lastWriterClient: string | null;
 	readonly lastWriterSessionId: string | null;
 	readonly projectScope: string | null;
@@ -115,6 +115,24 @@ function pickRecord(value: unknown, indexHint: number): MemoryRecord | null {
 			? (v as Record<string, unknown>)
 			: null;
 	};
+	const pickJsonLike = (
+		key: string,
+	): Record<string, unknown> | readonly unknown[] | string | null => {
+		const v = obj[key];
+		if (v == null) return null;
+		if (typeof v === "object") {
+			return Array.isArray(v) ? v : (v as Record<string, unknown>);
+		}
+		if (typeof v !== "string" || v.length === 0) return null;
+		try {
+			const parsed = JSON.parse(v) as unknown;
+			if (Array.isArray(parsed)) return parsed;
+			if (parsed != null && typeof parsed === "object") return parsed as Record<string, unknown>;
+		} catch {
+			// Keep legacy string payloads visible instead of silently dropping them.
+		}
+		return v;
+	};
 	return {
 		id,
 		content,
@@ -125,7 +143,7 @@ function pickRecord(value: unknown, indexHint: number): MemoryRecord | null {
 		version: pickNumber("version"),
 		parentId: pickString(obj, "parent_id") ?? pickString(obj, "parentId"),
 		isLatest: pickBool("is_latest") ?? pickBool("isLatest"),
-		supersedesJson: pickObject("supersedes_json") ?? pickObject("supersedesJson"),
+		supersedesJson: pickJsonLike("supersedes_json") ?? pickJsonLike("supersedesJson"),
 		lastWriterClient: pickString(obj, "last_writer_client") ?? pickString(obj, "lastWriterClient"),
 		lastWriterSessionId:
 			pickString(obj, "last_writer_session_id") ?? pickString(obj, "lastWriterSessionId"),

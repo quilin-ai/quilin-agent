@@ -93,7 +93,7 @@ async def test_schema_backfills_legacy_records_with_default_safe_values(
     }
 
 
-async def test_old_memory_item_wire_payload_round_trips_without_new_fields(
+async def test_old_memory_item_wire_payload_round_trips_with_safe_version_defaults(
     tmp_path: Path,
 ) -> None:
     store = QuilinMemStore(db_path=str(tmp_path / "payload.db"))
@@ -113,17 +113,11 @@ async def test_old_memory_item_wire_payload_round_trips_without_new_fields(
         **memory.to_wire_dict(),
         "last_accessed": fetched.last_accessed.isoformat(),
         "access_count": 1,
+        "version": 1,
+        "parent_id": None,
+        "supersedes_json": None,
+        "is_latest": True,
     }
-    assert {
-        "version",
-        "parent_id",
-        "supersedes_json",
-        "is_latest",
-        "source_event_id",
-        "evidence_hash",
-        "forget_after",
-        "strength",
-    }.isdisjoint(fetched.to_wire_dict())
 
 
 async def test_record_observation_persists_raw_evidence_with_hash(tmp_path: Path) -> None:
@@ -213,12 +207,22 @@ async def test_supersede_creates_new_version_and_hides_old_from_retrieval(
     assert new_id == "version-2"
     old_version = await store.get_version_info(old.id)
     new_version = await store.get_version_info(new_id)
+    fetched_new = await store.get(new_id)
     assert old_version.is_latest is False
     assert new_version.version == 2
     assert new_version.parent_id == old.id
     assert new_version.supersedes == [old.id]
     assert new_version.source_event_id == "turn-003"
     assert new_version.evidence_hash == "hash-003"
+    assert fetched_new is not None
+    assert fetched_new.version == 2
+    assert fetched_new.parent_id == old.id
+    assert fetched_new.is_latest is True
+    assert fetched_new.supersedes_json == f'["{old.id}"]'
+    assert fetched_new.to_wire_dict()["version"] == 2
+    assert fetched_new.to_wire_dict()["parent_id"] == old.id
+    assert fetched_new.to_wire_dict()["is_latest"] is True
+    assert fetched_new.to_wire_dict()["supersedes_json"] == f'["{old.id}"]'
 
     results = await store.search("answers")
     assert [item.id for item in results] == [new_id]
