@@ -10,7 +10,7 @@ import pytest
 
 from quilin_mem.scratchpad import ScratchpadStore
 from quilin_mem.server import create_server
-from quilin_mem.store import QuilinMemStore
+from quilin_mem.store import DEFAULT_RECOVERY_WINDOW, QuilinMemStore
 from quilin_mem.store_schema import ensure_store_schema
 
 
@@ -183,9 +183,6 @@ async def test_recover_memory_restores_archived_record_to_current_indexes(
     # dogfood 2026-05-21 fix:`forget_after` 是软删除窗口结束时间(archived_at
     # + recovery_window),不是 archived_at 自身。修复前的语义会让 GC
     # 用 `forget_after < now` 立即清理。
-    from datetime import datetime
-    from quilin_mem.store import DEFAULT_RECOVERY_WINDOW
-
     archived_at_dt = datetime.fromisoformat(row["archived_at"])
     expected_forget_after = (archived_at_dt + DEFAULT_RECOVERY_WINDOW).isoformat()
     assert row["forget_after"] == expected_forget_after

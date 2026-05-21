@@ -63,13 +63,20 @@ def _is_truthy(value: str | None) -> bool:
     return value.strip().lower() in ("1", "true", "yes", "on")
 
 
+def _json_default(value: object) -> object:
+    if isinstance(value, datetime):
+        normalized = value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+        return normalized.isoformat().replace("+00:00", "Z")
+    return str(value)
+
+
 def _log_event(event: dict[str, Any]) -> None:
     payload = {
         "service": "quilin-daemon",
         "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         **event,
     }
-    sys.stderr.write(json.dumps(payload) + "\n")
+    sys.stderr.write(json.dumps(payload, default=_json_default) + "\n")
     sys.stderr.flush()
 
 
@@ -749,6 +756,188 @@ class KGBackfillJob:
                 await _close_resource(store)
 
 
+class _NoopWriteAuthorityGate:
+    """Default WriteAuthority gate for daemon use.
+
+    Under dry_run(daemon default)nothing reaches disk, so a permissive gate
+    is safe and keeps the gate-call instrumented in logs. When the operator
+    opts into real writes(``QUILIN_DAEMON_DRY_RUN=false``)they must supply
+    a real CRITICAL gate via :class:`SkillCandidateProposerJob`'s factory
+    parameter — we deliberately refuse to ship a "yes-man" default into the
+    write path.
+
+    daemon 默认 dry_run 路径用的占位 gate。真启用写盘必须显式注入 CRITICAL gate,
+    避免静默放过 skill_create / origin="proposal" 这类高风险操作。
+    """
+
+    def __init__(self, *, allow: bool) -> None:
+        self._allow = allow
+
+    def authorize(self, _request: dict[str, object]) -> dict[str, object]:
+        return {"allowed": self._allow}
+
+
+class SkillCandidateProposerJob:
+    """Periodically propose SKILL.md candidates and route writes through
+    WriteAuthority.
+
+    Wiring strategy:
+
+    * The daemon does not yet own a store-backed ``TrajectoryCase`` pipeline
+      (the observer collects raw turns; the compressor expects buffered
+      ``ObservationTurn`` sequences). To avoid faking that pipeline, we accept
+      an injectable ``case_provider`` callable returning a sequence of
+      :class:`TrajectoryCase`. When the provider is unset or returns an
+      empty list, we log "no cases" and skip — no fake propose path.
+    * Writes always traverse ``write_authority``. When ``QUILIN_DAEMON_DRY_RUN``
+      is truthy(daemon default), the writer is invoked with ``dry_run=True``
+      so it only authorises + logs; nothing reaches disk.
+
+    周期触发 SKILL.md 候选写盘任务。daemon 当前没有 store-backed 的
+    ``TrajectoryCase`` 流水线(observer 只采原始 turn,compressor 吃缓冲),
+    所以这里要求显式注入 ``case_provider``,缺省返回空列表 + 日志告警,而不是
+    伪造数据触发写盘。``QUILIN_DAEMON_DRY_RUN`` 默认 truthy,写盘只授权 + 记日志。
+    """
+
+    id = "skill_candidate_proposer"
+    interval_seconds = 3600.0  # 60 minutes — propose conservatively
+    estimated_tokens = 2000
+    estimated_cost = 0.001
+    max_retries = 1
+    backoff_seconds = 90.0
+
+    def __init__(
+        self,
+        *,
+        case_provider: Callable[[], Sequence[Any]] | None = None,
+        proposer_factory: Callable[[], Any] | None = None,
+        writer_factory: Callable[[], Any] | None = None,
+        write_authority_factory: Callable[[], Any] | None = None,
+        dry_run: bool | None = None,
+    ) -> None:
+        self._case_provider = case_provider
+        self._proposer_factory = proposer_factory
+        self._writer_factory = writer_factory
+        self._write_authority_factory = write_authority_factory
+        self._dry_run = dry_run
+
+    async def run(self, context: JobContext) -> JobResult:
+        from .skill_proposer import (
+            SkillProposer,
+            SkillProposerWriter,
+        )
+
+        dry_run = (
+            self._dry_run
+            if self._dry_run is not None
+            else _is_truthy(os.environ.get("QUILIN_DAEMON_DRY_RUN", "true"))
+        )
+
+        _log_event(
+            {
+                "event": "skill_candidate_proposer.start",
+                "job_id": context.job_id,
+                "run_id": context.run_id,
+                "dry_run": dry_run,
+            }
+        )
+
+        cases = list(self._case_provider() if self._case_provider is not None else ())
+        if not cases:
+            _log_event(
+                {
+                    "event": "skill_candidate_proposer.no_cases",
+                    "job_id": context.job_id,
+                    "run_id": context.run_id,
+                    "dry_run": dry_run,
+                    "note": (
+                        "No TrajectoryCase provider wired — daemon does not yet have a "
+                        "store-backed pipeline. Inject case_provider to enable."
+                    ),
+                }
+            )
+            return JobResult.succeeded(
+                "no cases — nothing to propose",
+                data={
+                    "cases_seen": 0,
+                    "proposals": 0,
+                    "written": 0,
+                    "denied": 0,
+                    "dry_run": dry_run,
+                },
+                tokens_used=0,
+                cost_used=0.0,
+            )
+
+        proposer = (self._proposer_factory or SkillProposer)()
+        writer = (self._writer_factory or SkillProposerWriter)()
+        gate_factory = self._write_authority_factory or (
+            # Default daemon gate:dry_run path → allow(safe, no disk write).
+            # Real-write path → DENY by default until operator wires a CRITICAL gate.
+            lambda: _NoopWriteAuthorityGate(allow=dry_run)
+        )
+        gate = gate_factory()
+
+        proposals = proposer.propose(cases)
+        written = 0
+        denied = 0
+        write_results: list[dict[str, object]] = []
+        error: str | None = None
+        try:
+            for proposal in proposals:
+                result = await writer.write_candidate_to_disk(
+                    proposal,
+                    write_authority=gate,
+                    dry_run=dry_run,
+                )
+                write_results.append(
+                    {
+                        "skill_name": proposal.name,
+                        "reason": result.reason,
+                        "path": str(result.path) if result.path is not None else None,
+                        "bytes_written": result.bytes_written,
+                    }
+                )
+                if result.reason == "written":
+                    written += 1
+                elif result.reason == "denied":
+                    denied += 1
+        except Exception as exc:  # noqa: BLE001 — best-effort,不阻塞后续 job
+            error = f"{type(exc).__name__}: {exc}"
+            _log_event(
+                {
+                    "event": "skill_candidate_proposer.error",
+                    "job_id": context.job_id,
+                    "run_id": context.run_id,
+                    "error": error,
+                }
+            )
+
+        data: dict[str, object] = {
+            "cases_seen": len(cases),
+            "proposals": len(proposals),
+            "written": written,
+            "denied": denied,
+            "dry_run": dry_run,
+            "results": write_results,
+            "error": error,
+        }
+        _log_event(
+            {
+                "event": "skill_candidate_proposer.done",
+                "job_id": context.job_id,
+                "run_id": context.run_id,
+                **data,
+            }
+        )
+        return JobResult.succeeded(
+            f"proposed {len(proposals)} skill candidates (written={written}, denied={denied})",
+            data=data,
+            tokens_used=0,
+            cost_used=0.0,
+        )
+
+
 class TokenBudgetMonitorJob:
     """监控当日 token 用量,接近上限时记录 warning(写 memory)。"""
 
@@ -898,11 +1087,15 @@ async def run_daemon_loop() -> None:
     daemon = QuilinDaemon(config=config, logger=_log_event)
     tick_seconds = float(os.environ.get("QUILIN_DAEMON_TICK_SECONDS", "30"))
 
-    # 注册 4 初始 job
+    # 注册初始 idle job
     daemon.register(MemoryReflectJob())
     daemon.register(MemoryConsolidateJob())
     daemon.register(KGBackfillJob())
     daemon.register(TokenBudgetMonitorJob())
+    # QUI-198 disk-write gap fix (2026-05-21):skill proposer 写盘 job。
+    # 默认 case_provider=None → 每次 tick 走 "no_cases" 路径(空闲)。
+    # 真启用需注入 case_provider + CRITICAL gate(operator opt-in)。
+    daemon.register(SkillCandidateProposerJob())
 
     daemon.start()
     _log_event(

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ConsolidationTimelineView } from "@/components/memory/ConsolidationTimelineView";
+import { EvidenceGraphView } from "@/components/memory/EvidenceGraphView";
 import { KnowledgeGraphView } from "@/components/memory/KnowledgeGraphView";
 import { AppHeader } from "@/components/shell/AppHeader";
 import { RailStrip } from "@/components/shell/RailStrip";
@@ -153,7 +154,7 @@ export default function MemoryPage() {
 	const [filter, setFilter] = useState("");
 	const [tierFilter, setTierFilter] = useState<string>("all");
 	const [expandedId, setExpandedId] = useState<string | null>(null);
-	const [view, setView] = useState<"list" | "graph" | "timeline">("list");
+	const [view, setView] = useState<"list" | "graph" | "timeline" | "evidence">("list");
 	// Selection lives outside the records loop so it survives re-renders;
 	// using a Set gives us O(1) membership checks for the checkbox state.
 	const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
@@ -483,6 +484,28 @@ export default function MemoryPage() {
 							>
 								整合时间线 · timeline
 							</button>
+							<button
+								type="button"
+								role="tab"
+								aria-selected={view === "evidence"}
+								data-testid="memory-tab-evidence"
+								onClick={() => setView("evidence")}
+								style={{
+									padding: "8px 16px",
+									background: "transparent",
+									border: "none",
+									borderBottom:
+										view === "evidence"
+											? "2px solid var(--accent-vermillion)"
+											: "2px solid transparent",
+									color: view === "evidence" ? "var(--fg)" : "var(--fg-muted)",
+									cursor: "pointer",
+									fontFamily: '"Noto Sans SC", sans-serif',
+									fontSize: 13,
+								}}
+							>
+								证据图 · evidence
+							</button>
 						</div>
 					</div>
 
@@ -493,6 +516,10 @@ export default function MemoryPage() {
 					) : view === "timeline" ? (
 						<div style={{ marginTop: 20 }}>
 							<ConsolidationTimelineView />
+						</div>
+					) : view === "evidence" ? (
+						<div style={{ marginTop: 20 }}>
+							<EvidenceGraphView memoryId={expandedId} />
 						</div>
 					) : loading && memory == null ? (
 						<p style={{ color: "var(--fg-muted)", marginTop: 24 }}>加载中 · loading…</p>

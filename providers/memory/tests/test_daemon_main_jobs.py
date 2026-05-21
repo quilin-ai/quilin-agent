@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 
 from quilin_mem.daemon import BudgetLease, JobContext
-from quilin_mem.daemon_main import KGBackfillJob, TokenBudgetMonitorJob
+from quilin_mem.daemon_main import KGBackfillJob, TokenBudgetMonitorJob, _log_event
 from quilin_mem.kg_extractor import ExtractedTriple
 from quilin_mem.store import QuilinMemStore
 
@@ -29,6 +29,24 @@ def _context(job_id: str) -> JobContext:
         cost_lease=BudgetLease(kind="cost", granted=1.0),
         heartbeat=lambda _at=None: None,
     )
+
+
+def test_daemon_entrypoint_logger_serializes_datetime_fields(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _log_event(
+        {
+            "event": "daemon.job_succeeded",
+            "next_run_at": NOW,
+            "nested": {"finished_at": NOW},
+        }
+    )
+
+    payload = json.loads(capsys.readouterr().err)
+
+    assert payload["event"] == "daemon.job_succeeded"
+    assert payload["next_run_at"] == "2026-05-21T10:30:00Z"
+    assert payload["nested"]["finished_at"] == "2026-05-21T10:30:00Z"
 
 
 @dataclass(frozen=True, slots=True)

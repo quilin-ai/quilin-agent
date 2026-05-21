@@ -1414,7 +1414,189 @@ def create_server(
             await kg.close()
         return json.dumps(result.to_dict())
 
+    @server.tool(name="memory_evidence_graph")
+    async def memory_evidence_graph_tool(
+        memory_id: str,
+        ctx: Context[object, Any, object] | None = None,
+    ) -> str:
+        """Build evidence graph for one memory record(QUI-199 evidence viz).
+
+        Walks supersede chain(parent_id / supersedes_json),evidence sources
+        (`memory_sources` → `memory_observations`),and returns reactflow-ready
+        JSON for the Web `/memory` page evidence visualization tab.
+
+        Args:
+            memory_id: Target memory record id(from memory_recall list).
+
+        Returns:
+            JSON `{nodes:[{id, kind, label, ...}], edges:[{from, to, kind}]}` —
+            kinds:
+            - `memory` — the target memory record + its older versions
+            - `observation` — raw conversation turn(memory_observations row)
+            - `source` — memory_sources linkage
+            edge kinds:
+            - `supersedes` — newer version → older version
+            - `source_of` — observation → memory (raw evidence)
+            - `evidence_of` — memory_source link
+
+        构建一条记忆的"证据图":版本链 + 原始观察 + 出处。让 Web 用户
+        直观看到这条记忆的来龙去脉。
+        """
+        store = await resolve_store(ctx)
+        try:
+            graph = await _build_evidence_graph(store, memory_id)
+        except Exception as exc:
+            _raise_memory_operation_error("memory_evidence_graph", exc)
+        return json.dumps(graph)
+
     return server
+
+
+async def _build_evidence_graph(
+    store: QuilinMemStore,
+    memory_id: str,
+) -> dict[str, Any]:
+    """Helper:walk supersede chain + sources + observations → reactflow JSON."""
+    nodes: list[dict[str, Any]] = []
+    edges: list[dict[str, Any]] = []
+    seen_memory_ids: set[str] = set()
+    seen_obs_ids: set[str] = set()
+
+    def query_chain() -> tuple[
+        list[dict[str, Any]],
+        list[dict[str, Any]],
+        list[dict[str, Any]],
+    ]:
+        conn = store._conn  # noqa: SLF001 — daemon read-only access
+        records: list[dict[str, Any]] = []
+        sources: list[dict[str, Any]] = []
+        observations: list[dict[str, Any]] = []
+
+        # Walk up the supersede chain(parent_id)
+        cursor_id: str | None = memory_id
+        depth = 0
+        while cursor_id is not None and depth < 32:
+            row = conn.execute(
+                """
+                SELECT id, content, tier, version, parent_id, is_latest,
+                       last_writer_client, created_at
+                FROM memory_records
+                WHERE id = ?
+                """,
+                (cursor_id,),
+            ).fetchone()
+            if row is None:
+                break
+            rec = dict(row)
+            records.append(rec)
+            cursor_id = rec.get("parent_id")
+            depth += 1
+
+        # Pull sources + observations for all records in chain
+        if records:
+            ids_tuple = tuple(r["id"] for r in records)
+            placeholders = ",".join("?" * len(ids_tuple))
+            source_rows = conn.execute(
+                f"""
+                SELECT id, memory_record_id, observation_id, source_type, source_uri
+                FROM memory_sources
+                WHERE memory_record_id IN ({placeholders})
+                """,  # noqa: S608 — placeholders bound below
+                ids_tuple,
+            ).fetchall()
+            sources = [dict(r) for r in source_rows]
+
+            obs_ids = {s["observation_id"] for s in sources if s["observation_id"]}
+            if obs_ids:
+                obs_placeholders = ",".join("?" * len(obs_ids))
+                obs_rows = conn.execute(
+                    f"""
+                    SELECT id, content, role, observed_at, actor_id
+                    FROM memory_observations
+                    WHERE id IN ({obs_placeholders})
+                    """,  # noqa: S608
+                    tuple(obs_ids),
+                ).fetchall()
+                observations = [dict(r) for r in obs_rows]
+
+        return records, sources, observations
+
+    records, sources, observations = await asyncio.to_thread(query_chain)
+
+    # Build nodes for memory records(supersede chain)
+    for rec in records:
+        if rec["id"] in seen_memory_ids:
+            continue
+        seen_memory_ids.add(rec["id"])
+        label = (rec["content"] or "")[:60]
+        if len(rec["content"] or "") > 60:
+            label += "…"
+        nodes.append(
+            {
+                "id": rec["id"],
+                "kind": "memory",
+                "label": f"v{rec.get('version') or 1}: {label}",
+                "tier": rec["tier"],
+                "is_latest": bool(rec.get("is_latest", 1)),
+                "last_writer_client": rec.get("last_writer_client"),
+                "created_at": rec.get("created_at"),
+            }
+        )
+
+    # Edges: parent_id chain → supersedes
+    for rec in records:
+        if rec.get("parent_id") and rec["parent_id"] in seen_memory_ids:
+            edges.append(
+                {
+                    "id": f"sup-{rec['id']}",
+                    "from": rec["id"],
+                    "to": rec["parent_id"],
+                    "kind": "supersedes",
+                }
+            )
+
+    # Build nodes for observations + edges
+    for obs in observations:
+        if obs["id"] in seen_obs_ids:
+            continue
+        seen_obs_ids.add(obs["id"])
+        label = (obs["content"] or "")[:80]
+        if len(obs["content"] or "") > 80:
+            label += "…"
+        nodes.append(
+            {
+                "id": obs["id"],
+                "kind": "observation",
+                "label": label,
+                "role": obs.get("role"),
+                "observed_at": obs.get("observed_at"),
+            }
+        )
+
+    # Edges: source links observation → memory
+    for src in sources:
+        obs_id = src.get("observation_id")
+        rec_id = src.get("memory_record_id")
+        if obs_id and rec_id and obs_id in seen_obs_ids and rec_id in seen_memory_ids:
+            edges.append(
+                {
+                    "id": f"src-{src['id']}",
+                    "from": obs_id,
+                    "to": rec_id,
+                    "kind": "source_of",
+                }
+            )
+
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "counts": {
+            "memories": len(seen_memory_ids),
+            "observations": len(seen_obs_ids),
+            "supersedes_edges": sum(1 for e in edges if e["kind"] == "supersedes"),
+            "source_edges": sum(1 for e in edges if e["kind"] == "source_of"),
+        },
+    }
 
 
 mcp = create_server()
