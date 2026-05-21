@@ -56,6 +56,21 @@ const TIER_LABELS: Record<string, { readonly cn: string; readonly en: string }> 
 	skill: { cn: "技能", en: "skill" },
 };
 
+/**
+ * 每个 tier 的概念说明,作为 info icon tooltip 显示。
+ * User 要求:让用户直观看到 4 层负责的部分和概念。
+ */
+const TIER_DESCRIPTIONS: Record<string, string> = {
+	working:
+		"工作层 / Working Memory\n刚刚发生的临时记忆,LLM 在对话当下直接用。容量小、易失,几分钟到几天后被 Reflector 升级到情景层或清理掉。\n\n类比:你脑子里『我刚才说了啥』的短期缓存。",
+	episodic:
+		"情景层 / Episodic Memory\n具体时间地点发生过的事件片段。Reflector 从工作层自动升级(比如对话超过 N 轮 + 信息量足够)。容量中等、半永久。\n\n类比:你能回忆『上周三跟谁吃了什么饭』的具体经历。",
+	semantic:
+		"语义层 / Semantic Memory\n反思后稳定下来的事实和概念,不绑时间。Consolidator 从情景层抽取共性(比如多次见面提到的偏好)。容量大、永久。\n\n类比:你知道『我喜欢用 Vim 编辑器』这种抽象事实,不需要记得哪天告诉过别人。",
+	skill:
+		"技能层 / Skill Memory\n可复用的流程和工作方法。Consolidator 从重复成功任务提取(QUI-198 trajectory_compressor),或者灵魂导入时填充(QUI-81)。\n\n类比:你的『骑车 / 编程 / 烹饪』这种程序性记忆 —— 不是事实,是怎么做的步骤。",
+};
+
 function formatTimestamp(iso: string | null): string {
 	if (iso == null) return "—";
 	try {
@@ -701,6 +716,34 @@ export default function MemoryPage() {
 										<div className="q-section-title">
 											<span className="cn">
 												{TIER_LABELS[tier]?.cn ?? tier} · {TIER_LABELS[tier]?.en ?? tier}
+												{TIER_DESCRIPTIONS[tier] != null ? (
+													<span
+														data-testid={`tier-info-${tier}`}
+														title={TIER_DESCRIPTIONS[tier]}
+														role="img"
+														aria-label={`${TIER_LABELS[tier]?.cn ?? tier} 层说明`}
+														style={{
+															display: "inline-flex",
+															alignItems: "center",
+															justifyContent: "center",
+															marginLeft: 6,
+															width: 16,
+															height: 16,
+															borderRadius: "50%",
+															border: "1px solid var(--fg-muted)",
+															color: "var(--fg-muted)",
+															fontSize: 10,
+															fontFamily: "serif",
+															fontStyle: "italic",
+															fontWeight: 700,
+															cursor: "help",
+															verticalAlign: "middle",
+															lineHeight: 1,
+														}}
+													>
+														!
+													</span>
+												) : null}
 											</span>
 											<span className="right">{records.length} 条</span>
 										</div>

@@ -199,6 +199,33 @@ install-local:
 prod:
     LOG_LEVEL=info QUILIN_ENV=prod QUILIN_RUNTIME_MODE=service bun run packages/agent-core/dist/index.js
 
+# ============ quilin-daemon 常驻后台服务 ============
+# QUI-188:idle scheduler 框架(memory reflect / consolidate / KG backfill /
+# token budget monitor),自演进记忆链路在 daemon 跑,不靠 LLM 主动调 tool。
+# 默认 OFF(QUILIN_DAEMON_ENABLED=true 才启动)。
+
+# 前台运行(日志打到 stderr,Ctrl+C 优雅停止)
+daemon:
+    cd providers/memory && QUILIN_DAEMON_ENABLED=true QUILIN_ENV=dev uv run python -m quilin_mem.daemon_main
+
+# 后台运行(写 /tmp/quilin-daemon.log + PID 文件)
+daemon-start:
+    @if [ -f /tmp/quilin-daemon.pid ] && kill -0 $$(cat /tmp/quilin-daemon.pid) 2>/dev/null; then \
+        echo "quilin-daemon already running (PID $$(cat /tmp/quilin-daemon.pid))"; \
+        exit 1; \
+    fi
+    cd providers/memory && QUILIN_DAEMON_ENABLED=true QUILIN_ENV=dev nohup uv run python -m quilin_mem.daemon_main > /tmp/quilin-daemon.log 2>&1 & echo $$! > /tmp/quilin-daemon.pid
+    @sleep 1 && echo "quilin-daemon started (PID $$(cat /tmp/quilin-daemon.pid)) — log: /tmp/quilin-daemon.log"
+
+# 优雅停止
+daemon-stop:
+    @if [ ! -f /tmp/quilin-daemon.pid ]; then echo "no /tmp/quilin-daemon.pid — daemon not running?"; exit 0; fi
+    @PID=$$(cat /tmp/quilin-daemon.pid); if kill -0 $$PID 2>/dev/null; then kill -TERM $$PID && echo "SIGTERM to PID $$PID, wait up to 10s..."; for i in 1 2 3 4 5 6 7 8 9 10; do sleep 1; if ! kill -0 $$PID 2>/dev/null; then echo "stopped"; break; fi; done; kill -0 $$PID 2>/dev/null && (echo "still alive, SIGKILL"; kill -KILL $$PID); else echo "PID $$PID not alive"; fi; rm -f /tmp/quilin-daemon.pid
+
+# 状态查询
+daemon-status:
+    @if [ -f /tmp/quilin-daemon.pid ] && kill -0 $$(cat /tmp/quilin-daemon.pid) 2>/dev/null; then echo "quilin-daemon RUNNING (PID $$(cat /tmp/quilin-daemon.pid))"; echo "log: /tmp/quilin-daemon.log"; tail -5 /tmp/quilin-daemon.log; else echo "quilin-daemon NOT running"; fi
+
 # ============ 内部 ============
 
 _start-core:
