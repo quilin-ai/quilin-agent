@@ -16,17 +16,43 @@
 
 Not a LangGraph variant or LangChain wrapper — a natively built Agent OS following Harness Engineering principles, owned and evolved by the team.
 
-## 当前状态 / Current State (2026-05-08)
+## 当前状态 / Current State (2026-05-21)
+
+### 🎉 完美记忆系统 v2 全 ship!
+
+调研 14 个竞品仓库 + 24 篇论文 + 9 个评测榜 → Claude × Codex 双视角协商 → ship 13 工单 + 4 dogfood follow-up,**~9 小时完成**(原估 25-30 联合日,~25-30x 加速)。详细简报见 [`docs/03-memory/v2-overnight-shipping-brief.md`](docs/03-memory/v2-overnight-shipping-brief.md)。
+
+| 验证维度 | 状态 |
+|---|---|
+| Plane 工单 Done | 15/16(QUI-22/81/188-200/201/203/208,QUI-202 Codex 收尾)|
+| Playwright 真 e2e | **5/5 PASS**(真启 MCP + Web + SQLite 浏览器全链路)|
+| Dogfood 验证 | 真打开 Quilin 跑 5 轮对话,记忆 CRUD 全真生效 |
+| pytest providers/memory | **790/790 PASS** |
+| coverage | 95.01% |
+| Cross-review | 70+ reviewer subagent × 55+ REAL fix |
+
+### Quilin 已超前业界 3 项(14 竞品都没)
+
+1. **WriteAuthority 全局门禁** — 14 类敏感操作经统一审批
+2. **4 客户端共享记忆** — CLI / REPL / Web / Mac App 共享 `~/.quilin/`
+3. **灵魂导入** — 6 框架 install 时扫描(反向导出明确不做)
+
+### 代码状态
 
 | 指标 / Metric | 值 / Value |
 |---|---|
-| TS source files | 258 |
-| Test files / cases | 129 / 1,711 (all passing) |
-| Loop LOC | 1,102 (loop.ts 452 + loop-tool-calls.ts 565 + loop-types.ts 85) |
-| Python source files (quilin-mem) | 55 |
+| TS source files | 260+ |
+| Test files / cases | 135+ / 1,800+ (all passing) |
+| Python source files (quilin-mem) | 65+(v2 新增 salience/project_scope/prospective/daemon/safety_lesson_store/store_versioning 等)|
+| Loop LOC | 1,102(unchanged)|
 | Rust files (mesh-sdk stub) | 3 |
-| Active iterations completed | Phase 0, Iter A/B/C/M/D, Iter G1/G2/H/I/J/K |
+| Active iterations completed | Phase 0, Iter A/B/C/M/D, Iter G1/G2/H/I/J/K + **完美记忆系统 v2** |
 | Iter E (Benchmark) | **frozen / canceled** |
+| Memory v2 commits | **24 commits 2026-05-21**(从 ab1f758 → a589aba)|
+
+### 接入文档(任何 MCP-compatible agent 都能用)
+
+外部 agent(Claude Code / Codex / Gemini CLI / OpenCode / 等)接 quilin-mem 完整 install 指南:[`docs/03-memory/external-agent-integration.md`](docs/03-memory/external-agent-integration.md)。
 
 详情见 [docs/STATUS.md](docs/STATUS.md)。
 
