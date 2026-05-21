@@ -895,7 +895,37 @@ export async function POST(req: Request): Promise<Response> {
 		const askUserQuestionTool = makeAskUserQuestionTool({ sessionId, service });
 		const requestApprovalTool = makeRequestApprovalTool({ sessionId, service });
 		const narrateAsideTool = makeNarrateAsideTool({ sessionId, service });
-		const builtinTools = (await getToolsCatalog()).adapted;
+		const catalog = await getToolsCatalog();
+		const builtinTools = catalog.adapted;
+		// QUI-205 dogfood 2 fix(2026-05-21):Web chat 没有像 REPL 那样
+		// 用 MCPObserverBridge 把每轮 chat 自动喂给 quilin-mem `memory_observe`,
+		// 所以 Web 端 memory_observations 表不会增长。这里拿 raw observe tool
+		// 引用,在 streamText onFinish 里 best-effort 调用 — 失败不阻塞 chat。
+		const observeTool = catalog.rawTools.find((t) => t.name === "quilin-mem/memory_observe");
+		// 抽取最后一条 user message 用于 observer payload
+		const lastUserMessageText = (() => {
+			for (let i = modelMessages.length - 1; i >= 0; i -= 1) {
+				const m = modelMessages[i];
+				if (m == null || m.role !== "user") continue;
+				const content = (m as { content?: unknown }).content;
+				if (typeof content === "string") return content;
+				if (Array.isArray(content)) {
+					for (const part of content) {
+						if (
+							part != null &&
+							typeof part === "object" &&
+							"type" in part &&
+							(part as { type?: string }).type === "text"
+						) {
+							const text = (part as { text?: unknown }).text;
+							if (typeof text === "string") return text;
+						}
+					}
+				}
+				return "";
+			}
+			return "";
+		})();
 		// Path B server-side approval gate — wrap the highest-risk builtin
 		// tools so an approval prompt fires AUTOMATICALLY before they run,
 		// regardless of whether the LLM remembered to call request_approval
@@ -966,7 +996,29 @@ export async function POST(req: Request): Promise<Response> {
 					},
 					stopWhen: stepCountIs(15),
 					abortSignal,
-					onFinish: releaseToolCallSlot,
+					onFinish: async (event: { text?: string }) => {
+						releaseToolCallSlot();
+						// QUI-205 dogfood 2 fix:把每轮 chat 喂给 quilin-mem
+						// `memory_observe`,best-effort 不阻塞流式响应。
+						if (observeTool != null && lastUserMessageText.length > 0) {
+							try {
+								const assistantText = typeof event.text === "string" ? event.text : "";
+								await observeTool.execute({
+									turn: {
+										user: lastUserMessageText,
+										assistant: assistantText,
+									},
+									metadata: {
+										client: "web",
+										session_id: sessionId,
+									},
+								});
+							} catch {
+								// best-effort: swallow observer failures(Observer is never
+								// supposed to block chat,QUI-202 isolation 设计)
+							}
+						}
+					},
 					onError: releaseToolCallSlot,
 				});
 			} catch (err) {
