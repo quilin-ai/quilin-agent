@@ -300,7 +300,13 @@ function buildSystemPromptWithTools(intentRewrite: UserIntentRewrite | null = nu
 		"- 当用户要求『整理 / 清理 / 去重』记忆,或你通过 `quilin-mem__memory_recall` 看到明显重复 / 过期 / 互相矛盾的条目时,**主动调用 `quilin-mem__memory_delete(memory_id)` 把多余的删掉**,不要只口头说『我看到重复了』。\n" +
 		"- 删的优先级:完全重复 > 已过期(用户后续推翻的) > 被新条目覆盖(同一事实更精确的版本) > 无信息量(噪声 / 测试残留)。\n" +
 		"- 删完用 `memory_recall` 校验剩余条目,告诉用户『删了 N 条,剩 M 条』。\n" +
-		"- 如果不确定是否该删,先用 `ask_user_question` 让用户确认。"
+		"- 如果不确定是否该删,先用 `ask_user_question` 让用户确认。\n\n" +
+		"工具调用规范 / tool call discipline(QUI-203 dogfood fix 2026-05-21):\n" +
+		"- 工具是真实可调的 — `narrate_aside` / `ask_user_question` / `request_approval` 都通过 tool call 触发。\n" +
+		'- **绝对不要在文本回复里写 XML 字面量** 如 `<narrate_aside text="..."/>` 或 `<ask_user_question .../>`。\n' +
+		"- 想吐旁白用 `narrate_aside` tool call,**不是**写 XML 标签字符串。\n" +
+		"- 想问用户用 `ask_user_question` tool call,**不是**写 XML 标签。\n" +
+		"- XML 字面量会原样显示给用户看,破坏 UI 体验。"
 	);
 }
 
