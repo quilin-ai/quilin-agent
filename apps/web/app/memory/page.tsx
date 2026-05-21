@@ -1389,7 +1389,7 @@ interface TierInfoIconProps {
 function TierInfoIcon({ tier, description }: TierInfoIconProps): React.ReactElement {
 	const [open, setOpen] = useState(false);
 	return (
-		// biome-ignore lint/a11y/noStaticElementInteractions: hover wrap 仅承载 popover 显隐,真交互在内部 <button>
+		// biome-ignore lint/a11y/noStaticElementInteractions: hover-only wrapper,纯展示 popover,内部叹号也只是 visual。
 		<span
 			data-testid={`tier-info-${tier}`}
 			style={{
@@ -1401,11 +1401,8 @@ function TierInfoIcon({ tier, description }: TierInfoIconProps): React.ReactElem
 			onMouseEnter={() => setOpen(true)}
 			onMouseLeave={() => setOpen(false)}
 		>
-			<button
-				type="button"
-				onClick={() => setOpen((v) => !v)}
-				aria-expanded={open}
-				aria-label={`${tier} 层说明`}
+			<span
+				aria-hidden
 				style={{
 					display: "inline-flex",
 					alignItems: "center",
@@ -1420,14 +1417,13 @@ function TierInfoIcon({ tier, description }: TierInfoIconProps): React.ReactElem
 					fontFamily: "serif",
 					fontStyle: "italic",
 					fontWeight: 700,
-					cursor: "pointer",
+					cursor: "help",
 					lineHeight: 1,
-					padding: 0,
 					transition: "background 120ms, color 120ms",
 				}}
 			>
 				!
-			</button>
+			</span>
 			{open ? (
 				<div
 					role="tooltip"
