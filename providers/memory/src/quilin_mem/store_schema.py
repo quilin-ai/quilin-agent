@@ -252,6 +252,18 @@ def _ensure_memory_record_columns(
         WHERE deleted IS NULL
         """
     )
+    # dogfood 2026-05-21 fix(QUI-201):历史 `tier=short` 数据迁到 working。
+    # CHECK constraint 在 schema 创建时加,但旧 DB 在 CHECK 添加前已经有
+    # `tier=short` rows(legacy enum)。SQLite 用 PRAGMA writable_schema 临时
+    # 允许写入受 CHECK 约束的表;然后 UPDATE 后 PRAGMA integrity_check
+    # 应该过(因为新值'working' 满足约束)。
+    conn.execute(
+        """
+        UPDATE memory_records
+        SET tier = 'working'
+        WHERE tier = 'short'
+        """
+    )
     conn.execute(
         """
         UPDATE memory_records
