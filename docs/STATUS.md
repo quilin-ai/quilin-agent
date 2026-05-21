@@ -6,9 +6,45 @@ This file is the only global progress entry point under `docs/`. Component-level
 
 本文件是 `docs/` 下唯一的全局进度入口。组件级当前事实写在各 `docs/<component>/README.md`。历史快照通过 git history 追溯。任务管理与 backlog 统一迁移到 Plane；本文件只保留当前状态快照。
 
-## 2026-05-21 完美记忆系统 v2 落地进度 / Perfect Memory System v2 Shipping Progress
+## 2026-05-21 完美记忆系统 v2 落地最终状态 + dogfood + Playwright e2e
 
-实测速度修正:第一周 5/5 milestone 6 小时完成(原估 9-10 联合日),实际加速 **~10-15x**。原因:4 agent 并行(Claude 主线 + Codex 主线 + 各自 subagent)+ 严格 cross-review 无返工。
+User dogfood + Playwright e2e 验证后,做了 bug fix + follow-up 跟进。**累计 19 commits ship**,**实际产品真端到端可用**(Playwright e2e 5/5 PASS 实证)。
+
+### Dogfood 验证(2026-05-21 真打开 Quilin 跑 5 轮对话)
+
+- ✅ 存(LLM 调 memory_store → SQLite < 1s 落地)
+- ✅ 召回(跨 session 真用上,DeepSeek 返"你叫孟哥,偏好用 Vim")
+- ✅ 跨进程持久化(重启 web 后仍记得)
+- ✅ archive + recover(7 天窗口真 work)
+- ✅ 并发写(2 session 同时无冲突)
+- ✅ provider 内存稳定(76 MB)
+- ⚠️ 发现 4 个真 bug(已修 2 个,2 个立 follow-up)
+- ⚠️ 发现 Observer 自动反思链路**没接通**(memory_observations 表 0 行)— **Codex 正在 QUI-202 接通**
+
+### Playwright 端到端测试(commit 7263ed0, 5/5 PASS)
+
+| Test | 时间 | 验证 |
+|---|---|---|
+| 列表显示按 tier 分组 | 643ms | ✅ |
+| 写入 + SQLite verify | 792ms | ✅ |
+| dedupe preview 真跑 memory_consolidate_plan | 7.4s | ✅ |
+| 单删 + archived_at 落盘 | 620ms | ✅ |
+| 批删 + select-all | 1.3s | ✅ |
+
+**端到端验证结论**:浏览器 → MCP → SQLite → 召回完整链路真可用。
+
+### Dogfood follow-up Plane 工单(2026-05-21)
+
+| Plane ID | 范围 | 状态 |
+|---|---|---|
+| QUI-201 | 历史 tier=short 数据迁移 | ✅ Done(commit `9346207`)|
+| QUI-202 | Observer 自动反思接通(reflector.py 接到 consolidator) | ⏳ Codex TDD 中 |
+| QUI-203 | narrate_aside XML 字面量 fix | 📋 计划 |
+| QUI-204 | memory_consolidate_plan 大数据集 MCP stdio 超时 | 📋 计划 |
+
+### 实测速度修正
+
+实测速度修正:第一周 5/5 milestone 6 小时完成(原估 9-10 联合日),实际加速 **~10-15x**。完整 v2 + dogfood + e2e fix 累计 ~9 小时(原估 25-30 联合日),综合加速 **~25-30x**。原因:4 agent 并行(Claude 主线 + Codex 主线 + 各自 subagent)+ 严格 cross-review 无返工。
 
 Speed correction (measured): Week 1 5/5 milestones shipped in 6 hours (estimated 9-10 joint-days), actual **~10-15x speedup**. Cause: 4-agent parallelism (Claude main + Codex main + their subagents) + strict cross-review with zero rework.
 
