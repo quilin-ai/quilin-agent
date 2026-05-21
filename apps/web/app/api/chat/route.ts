@@ -1016,14 +1016,18 @@ export async function POST(req: Request): Promise<Response> {
 									assistantText.length > 0
 										? `[user]: ${lastUserMessageText}\n[assistant]: ${assistantText}`
 										: `[user]: ${lastUserMessageText}`;
+								// QUI-205 iter 4 fix(Codex subagent 3 实证根因):
+								// last_writer_client/session_id 是 memory_store 顶层参数,
+								// 不是 metadata 嵌套字段(metadata validator 会拒绝 unknown
+								// keys → record 不写)。把它们提到顶层。
 								await observeTool.execute({
 									content: observation,
 									tier: "working",
+									last_writer_client: "web",
+									last_writer_session_id: sessionId,
 									metadata: {
 										schema_version: 1,
 										source: "web_chat_observer",
-										last_writer_client: "web",
-										last_writer_session_id: sessionId,
 									},
 								});
 							} catch {

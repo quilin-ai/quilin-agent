@@ -209,22 +209,18 @@ daemon:
     cd providers/memory && QUILIN_DAEMON_ENABLED=true QUILIN_ENV=dev uv run python -m quilin_mem.daemon_main
 
 # 后台运行(写 /tmp/quilin-daemon.log + PID 文件)
+# dogfood fix 2026-05-21:multi-line `\\` 续行 + `$$` escape 在 just 里不稳,
+# 改成调独立 shell script。
 daemon-start:
-    @if [ -f /tmp/quilin-daemon.pid ] && kill -0 $$(cat /tmp/quilin-daemon.pid) 2>/dev/null; then \
-        echo "quilin-daemon already running (PID $$(cat /tmp/quilin-daemon.pid))"; \
-        exit 1; \
-    fi
-    cd providers/memory && QUILIN_DAEMON_ENABLED=true QUILIN_ENV=dev nohup uv run python -m quilin_mem.daemon_main > /tmp/quilin-daemon.log 2>&1 & echo $$! > /tmp/quilin-daemon.pid
-    @sleep 1 && echo "quilin-daemon started (PID $$(cat /tmp/quilin-daemon.pid)) — log: /tmp/quilin-daemon.log"
+    bash scripts/daemon-control.sh start
 
 # 优雅停止
 daemon-stop:
-    @if [ ! -f /tmp/quilin-daemon.pid ]; then echo "no /tmp/quilin-daemon.pid — daemon not running?"; exit 0; fi
-    @PID=$$(cat /tmp/quilin-daemon.pid); if kill -0 $$PID 2>/dev/null; then kill -TERM $$PID && echo "SIGTERM to PID $$PID, wait up to 10s..."; for i in 1 2 3 4 5 6 7 8 9 10; do sleep 1; if ! kill -0 $$PID 2>/dev/null; then echo "stopped"; break; fi; done; kill -0 $$PID 2>/dev/null && (echo "still alive, SIGKILL"; kill -KILL $$PID); else echo "PID $$PID not alive"; fi; rm -f /tmp/quilin-daemon.pid
+    bash scripts/daemon-control.sh stop
 
 # 状态查询
 daemon-status:
-    @if [ -f /tmp/quilin-daemon.pid ] && kill -0 $$(cat /tmp/quilin-daemon.pid) 2>/dev/null; then echo "quilin-daemon RUNNING (PID $$(cat /tmp/quilin-daemon.pid))"; echo "log: /tmp/quilin-daemon.log"; tail -5 /tmp/quilin-daemon.log; else echo "quilin-daemon NOT running"; fi
+    bash scripts/daemon-control.sh status
 
 # ============ 内部 ============
 

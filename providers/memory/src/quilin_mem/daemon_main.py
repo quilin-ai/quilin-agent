@@ -933,7 +933,10 @@ async def run_daemon_loop() -> None:
 
     try:
         while not stop_event.is_set():
-            now = datetime.utcnow()
+            # dogfood fix 2026-05-21:datetime.utcnow() 返 naive,但 daemon.py
+            # 内部用 datetime.now(UTC) aware,naive vs aware 比较 TypeError 崩。
+            # Codex subagent 3 实证发现 daemon 启动即崩。
+            now = datetime.now(UTC)
             for job_id in list(daemon._jobs.keys()):
                 next_at = daemon.next_run_at(job_id)
                 if next_at is not None and next_at <= now:
