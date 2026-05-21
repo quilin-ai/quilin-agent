@@ -65,6 +65,21 @@ describe("GET /api/memory/consolidations", () => {
 								writes_skill: false,
 								metadata: { source: "test" },
 							},
+							{
+								kind: "reflect-insight",
+								target_layer: "semantic",
+								tier: "semantic",
+								deleteIds: [],
+								insertContent:
+									"Recent episodic records show the user prefers concise Chinese status updates.",
+								reason: "recurring signal across episodic records",
+								score: 0.91,
+								memoryIds: ["episodic-1", "episodic-2", "episodic-3"],
+								dry_run: true,
+								writes_semantic: false,
+								writes_skill: false,
+								metadata: { reflect_model: "claude-sonnet-4-6" },
+							},
 							"bad action ignored",
 						],
 					},
@@ -85,7 +100,15 @@ describe("GET /api/memory/consolidations", () => {
 				entries: Array<{
 					id: number;
 					task: string;
-					actions: Array<{ kind: string; metadata: Record<string, unknown> | null }>;
+					actions: Array<{
+						kind: string;
+						metadata: Record<string, unknown> | null;
+						deleteIds?: string[];
+						insertContent?: string;
+						memoryIds?: string[];
+						score?: number;
+						tier?: string;
+					}>;
 				}>;
 			};
 		};
@@ -96,6 +119,16 @@ describe("GET /api/memory/consolidations", () => {
 		expect(body.data.entries[0]?.task).toBe("profile consolidation");
 		expect(body.data.entries[0]?.actions).toEqual([
 			expect.objectContaining({ kind: "promote", metadata: { source: "test" } }),
+			expect.objectContaining({
+				kind: "reflect-insight",
+				tier: "semantic",
+				deleteIds: [],
+				insertContent:
+					"Recent episodic records show the user prefers concise Chinese status updates.",
+				score: 0.91,
+				memoryIds: ["episodic-1", "episodic-2", "episodic-3"],
+				metadata: { reflect_model: "claude-sonnet-4-6" },
+			}),
 		]);
 	});
 

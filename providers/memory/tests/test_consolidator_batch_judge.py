@@ -19,6 +19,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from quilin_mem.consolidator import (
+    DEFAULT_BATCH_MAX_RECORDS,
+    DEFAULT_PER_PAIR_FALLBACK_MAX_RECORDS,
     BatchJudgeCluster,
     BatchJudgeResult,
     Consolidator,
@@ -30,7 +32,10 @@ from quilin_mem.consolidator import (
     split_records_into_batches,
 )
 from quilin_mem.idle_budget import IdleBudgetProvider
-from quilin_mem.server import _memory_consolidate_plan_with_store
+from quilin_mem.server import (
+    DEFAULT_MCP_CONSOLIDATE_BATCH_TIMEOUT_SECONDS,
+    _memory_consolidate_plan_with_store,
+)
 from quilin_mem.store import QuilinMemStore
 from quilin_mem.types import MemoryItem
 
@@ -282,6 +287,334 @@ async def test_batch_judge_api_error_without_per_pair_judge_falls_to_exact_only(
     assert groups[0]["strategy"] == "exact"
     assert groups[0]["keepId"] == "exact-new"
     assert groups[0]["deleteIds"] == ["exact-old"]
+
+
+async def test_large_batch_failure_does_not_fall_back_to_per_pair_judge() -> None:
+    """Large interactive previews must not explode into O(n^2) per-pair LLM calls.
+
+    QUI-204: when a large dataset's batch judge fails, falling back to per-pair
+    judging can exceed the MCP stdio timeout. Large datasets should degrade to
+    exact-only dedupe instead, while small datasets keep the richer per-pair
+    fallback covered by ``test_batch_judge_invalid_response_falls_back_to_per_pair``.
+    """
+    base = datetime(2026, 5, 21, tzinfo=UTC)
+    per_pair_calls: list[tuple[str, str]] = []
+
+    def failed_batch(_records: Sequence[MemoryItem]) -> BatchJudgeResult:
+        return BatchJudgeResult(ok=False, clusters=(), reason="simulated timeout")
+
+    def forbidden_per_pair(
+        left: MemoryItem,
+        right: MemoryItem,
+        _score: float,
+    ) -> DedupeJudgeResult:
+        per_pair_calls.append((left.id, right.id))
+        raise AssertionError("large dataset must not call per-pair judge")
+
+    async with QuilinMemStore(db_path=":memory:") as store:
+        # The dataset is above the default per-pair fallback cap. The first two
+        # are exact duplicates, and most pairs have gray-zone embeddings, so
+        # the old fallback would invoke the per-pair judge immediately after
+        # batch failure.
+        for idx in range(DEFAULT_PER_PAIR_FALLBACK_MAX_RECORDS + 1):
+            embedding = [1.0, 0.0] if idx == 0 else [0.6, 0.8]
+            await _store_semantic(
+                store,
+                memory_id=f"large-{idx:03d}",
+                content="large exact duplicate" if idx < 2 else f"large unique memory {idx:03d}",
+                created_at=base + timedelta(seconds=idx),
+                embedding=embedding,
+            )
+
+        proposal = Consolidator(
+            store=store,
+            budget_provider=IdleBudgetProvider(enabled=True, token_budget=10_000),
+            batch_judge=failed_batch,
+            dedupe_judge=forbidden_per_pair,
+        ).propose(strategy="dedupe", tier="semantic")
+
+    assert per_pair_calls == []
+    wire = proposal.to_wire_dict()
+    assert wire["totalDelete"] == 1
+    assert wire["proposals"][0]["strategy"] == "exact"
+
+
+async def test_memory_consolidate_plan_large_batch_failure_stays_responsive(
+    monkeypatch: Any,
+) -> None:
+    """MCP helper regression for QUI-204: large batch failure must not call
+    per-pair LLM judging inside ``memory_consolidate_plan``."""
+    monkeypatch.delenv("QUILIN_DEDUPE_API_KEY", raising=False)
+    monkeypatch.delenv("QUILIN_OBSERVER_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("QUILIN_DEDUPE_BATCH_ENABLED", raising=False)
+    monkeypatch.delenv("QUILIN_DEDUPE_PER_PAIR_FALLBACK_MAX_RECORDS", raising=False)
+
+    from quilin_mem.consolidator import _DeepseekConsolidationJudge
+
+    def forbidden_judge(
+        _self: _DeepseekConsolidationJudge,
+        left: MemoryItem,
+        right: MemoryItem,
+        _score: float,
+    ) -> DedupeJudgeResult:
+        raise AssertionError(
+            f"memory_consolidate_plan must not call per-pair judge for {left.id}/{right.id}"
+        )
+
+    monkeypatch.setattr(_DeepseekConsolidationJudge, "judge", forbidden_judge)
+
+    base = datetime(2026, 5, 21, tzinfo=UTC)
+    async with QuilinMemStore(db_path=":memory:") as store:
+        for idx in range(DEFAULT_PER_PAIR_FALLBACK_MAX_RECORDS + 1):
+            await _store_semantic(
+                store,
+                memory_id=f"mcp-large-{idx:03d}",
+                content="MCP exact duplicate" if idx < 2 else f"MCP unique memory {idx:03d}",
+                created_at=base + timedelta(seconds=idx),
+                embedding=[1.0, 0.0] if idx == 0 else [0.6, 0.8],
+            )
+
+        raw = await _memory_consolidate_plan_with_store(store, strategy="dedupe", tier="semantic")
+
+    payload = json.loads(raw)
+    assert payload["totalDelete"] == 1
+    assert payload["proposals"][0]["strategy"] == "exact"
+
+
+async def test_memory_consolidate_plan_respects_per_pair_fallback_env_override(
+    monkeypatch: Any,
+) -> None:
+    """Server wiring should honor the fallback cap env var for controlled dev runs."""
+    monkeypatch.delenv("QUILIN_DEDUPE_API_KEY", raising=False)
+    monkeypatch.delenv("QUILIN_OBSERVER_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setenv("QUILIN_DEDUPE_BATCH_ENABLED", "true")
+    monkeypatch.setenv(
+        "QUILIN_DEDUPE_PER_PAIR_FALLBACK_MAX_RECORDS",
+        str(DEFAULT_PER_PAIR_FALLBACK_MAX_RECORDS + 1),
+    )
+
+    from quilin_mem.consolidator import _DeepseekConsolidationJudge
+
+    per_pair_calls: list[tuple[str, str]] = []
+
+    def record_distinct_judge(
+        _self: _DeepseekConsolidationJudge,
+        left: MemoryItem,
+        right: MemoryItem,
+        _score: float,
+    ) -> DedupeJudgeResult:
+        per_pair_calls.append((left.id, right.id))
+        return DedupeJudgeResult(decision="distinct", reason="test env override")
+
+    monkeypatch.setattr(_DeepseekConsolidationJudge, "judge", record_distinct_judge)
+
+    base = datetime(2026, 5, 21, tzinfo=UTC)
+    async with QuilinMemStore(db_path=":memory:") as store:
+        for idx in range(DEFAULT_PER_PAIR_FALLBACK_MAX_RECORDS + 1):
+            await _store_semantic(
+                store,
+                memory_id=f"override-{idx:03d}",
+                content=f"Override unique memory {idx:03d}",
+                created_at=base + timedelta(seconds=idx),
+                embedding=[1.0, 0.0] if idx == 0 else [0.6, 0.8],
+            )
+
+        raw = await _memory_consolidate_plan_with_store(store, strategy="dedupe", tier="semantic")
+
+    assert per_pair_calls
+    payload = json.loads(raw)
+    assert payload["task"] == "quilin_mem.memory_consolidate_plan"
+
+
+async def test_memory_consolidate_plan_uses_stdio_safe_batch_timeout(
+    monkeypatch: Any,
+) -> None:
+    """MCP preview should pass a short batch HTTP timeout and then exact-only fallback."""
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    monkeypatch.delenv("QUILIN_DEDUPE_API_KEY", raising=False)
+    monkeypatch.delenv("QUILIN_OBSERVER_API_KEY", raising=False)
+    monkeypatch.delenv("QUILIN_DEDUPE_BATCH_ENABLED", raising=False)
+    monkeypatch.delenv("QUILIN_DEDUPE_MCP_BATCH_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("QUILIN_DEDUPE_PER_PAIR_FALLBACK_MAX_RECORDS", raising=False)
+
+    from quilin_mem import observer as observer_module
+    from quilin_mem.consolidator import _DeepseekConsolidationJudge
+
+    observed_timeouts: list[float] = []
+
+    def slow_batch_call(
+        _base_url: str,
+        _api_key: str,
+        _payload: bytes,
+        *,
+        timeout: float = 30.0,
+    ) -> str:
+        observed_timeouts.append(timeout)
+        raise TimeoutError("simulated slow batch call")
+
+    def forbidden_judge(
+        _self: _DeepseekConsolidationJudge,
+        left: MemoryItem,
+        right: MemoryItem,
+        _score: float,
+    ) -> DedupeJudgeResult:
+        raise AssertionError(
+            f"timed-out batch must not fall back to per-pair judge for {left.id}/{right.id}"
+        )
+
+    monkeypatch.setattr(observer_module, "_call_deepseek_api", slow_batch_call)
+    monkeypatch.setattr(_DeepseekConsolidationJudge, "judge", forbidden_judge)
+
+    base = datetime(2026, 5, 21, tzinfo=UTC)
+    async with QuilinMemStore(db_path=":memory:") as store:
+        for idx in range(DEFAULT_PER_PAIR_FALLBACK_MAX_RECORDS + 1):
+            await _store_semantic(
+                store,
+                memory_id=f"timeout-{idx:03d}",
+                content=(
+                    "Timeout exact duplicate"
+                    if idx < 2
+                    else f"Timeout unique memory {idx:03d}"
+                ),
+                created_at=base + timedelta(seconds=idx),
+                embedding=[1.0, 0.0] if idx == 0 else [0.6, 0.8],
+            )
+
+        raw = await _memory_consolidate_plan_with_store(store, strategy="dedupe", tier="semantic")
+
+    assert observed_timeouts == [float(DEFAULT_MCP_CONSOLIDATE_BATCH_TIMEOUT_SECONDS)]
+    payload = json.loads(raw)
+    assert payload["totalDelete"] == 1
+    assert payload["proposals"][0]["strategy"] == "exact"
+
+
+async def test_memory_consolidate_plan_skips_multi_batch_llm_for_stdio_budget(
+    monkeypatch: Any,
+) -> None:
+    """MCP preview should not start multiple sequential batch LLM calls."""
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    monkeypatch.delenv("QUILIN_DEDUPE_API_KEY", raising=False)
+    monkeypatch.delenv("QUILIN_OBSERVER_API_KEY", raising=False)
+    monkeypatch.delenv("QUILIN_DEDUPE_BATCH_ENABLED", raising=False)
+    monkeypatch.delenv("QUILIN_DEDUPE_MCP_BATCH_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("QUILIN_DEDUPE_PER_PAIR_FALLBACK_MAX_RECORDS", raising=False)
+
+    from quilin_mem import observer as observer_module
+    from quilin_mem.consolidator import _DeepseekConsolidationJudge
+
+    llm_calls: list[bytes] = []
+
+    def forbidden_batch_call(
+        _base_url: str,
+        _api_key: str,
+        payload: bytes,
+        *,
+        timeout: float = 30.0,
+    ) -> str:
+        llm_calls.append(payload)
+        raise AssertionError(f"multi-batch MCP preview must not call LLM timeout={timeout}")
+
+    def forbidden_judge(
+        _self: _DeepseekConsolidationJudge,
+        left: MemoryItem,
+        right: MemoryItem,
+        _score: float,
+    ) -> DedupeJudgeResult:
+        raise AssertionError(
+            f"multi-batch MCP preview must not fall back to per-pair judge for {left.id}/{right.id}"
+        )
+
+    monkeypatch.setattr(observer_module, "_call_deepseek_api", forbidden_batch_call)
+    monkeypatch.setattr(_DeepseekConsolidationJudge, "judge", forbidden_judge)
+
+    base = datetime(2026, 5, 21, tzinfo=UTC)
+    async with QuilinMemStore(db_path=":memory:") as store:
+        for idx in range(DEFAULT_BATCH_MAX_RECORDS + 1):
+            await _store_semantic(
+                store,
+                memory_id=f"multi-batch-{idx:03d}",
+                content=(
+                    "Multi-batch exact duplicate"
+                    if idx < 2
+                    else f"Multi-batch unique memory {idx:03d}"
+                ),
+                created_at=base + timedelta(seconds=idx),
+                embedding=[1.0, 0.0] if idx == 0 else [0.6, 0.8],
+            )
+
+        raw = await _memory_consolidate_plan_with_store(store, strategy="dedupe", tier="semantic")
+
+    assert llm_calls == []
+    payload = json.loads(raw)
+    assert payload["totalDelete"] == 1
+    assert payload["proposals"][0]["strategy"] == "exact"
+
+
+async def test_memory_consolidate_plan_skips_token_split_multi_batch_under_fallback_cap(
+    monkeypatch: Any,
+) -> None:
+    """Token-split multi-batch previews must exact-only even with <= fallback cap records."""
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    monkeypatch.delenv("QUILIN_DEDUPE_API_KEY", raising=False)
+    monkeypatch.delenv("QUILIN_OBSERVER_API_KEY", raising=False)
+    monkeypatch.delenv("QUILIN_DEDUPE_BATCH_ENABLED", raising=False)
+    monkeypatch.delenv("QUILIN_DEDUPE_MCP_BATCH_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("QUILIN_DEDUPE_PER_PAIR_FALLBACK_MAX_RECORDS", raising=False)
+
+    from quilin_mem import observer as observer_module
+    from quilin_mem.consolidator import _DeepseekConsolidationJudge
+
+    llm_calls: list[bytes] = []
+    per_pair_calls: list[tuple[str, str]] = []
+
+    def forbidden_batch_call(
+        _base_url: str,
+        _api_key: str,
+        payload: bytes,
+        *,
+        timeout: float = 30.0,
+    ) -> str:
+        llm_calls.append(payload)
+        raise AssertionError(f"token-split MCP preview must not call LLM timeout={timeout}")
+
+    def forbidden_judge(
+        _self: _DeepseekConsolidationJudge,
+        left: MemoryItem,
+        right: MemoryItem,
+        _score: float,
+    ) -> DedupeJudgeResult:
+        per_pair_calls.append((left.id, right.id))
+        raise AssertionError(
+            f"token-split MCP preview must not call per-pair judge for {left.id}/{right.id}"
+        )
+
+    monkeypatch.setattr(observer_module, "_call_deepseek_api", forbidden_batch_call)
+    monkeypatch.setattr(_DeepseekConsolidationJudge, "judge", forbidden_judge)
+
+    base = datetime(2026, 5, 21, tzinfo=UTC)
+    async with QuilinMemStore(db_path=":memory:") as store:
+        for idx in range(DEFAULT_PER_PAIR_FALLBACK_MAX_RECORDS):
+            await _store_semantic(
+                store,
+                memory_id=f"token-split-{idx:03d}",
+                content=(
+                    "Token-split exact duplicate " + ("x" * 6000)
+                    if idx < 2
+                    else f"Token-split unique memory {idx:03d} " + ("y" * 6000)
+                ),
+                created_at=base + timedelta(seconds=idx),
+                embedding=[1.0, 0.0] if idx == 0 else [0.6, 0.8],
+            )
+
+        raw = await _memory_consolidate_plan_with_store(store, strategy="dedupe", tier="semantic")
+
+    assert llm_calls == []
+    assert per_pair_calls == []
+    payload = json.loads(raw)
+    assert payload["totalDelete"] == 1
+    assert payload["proposals"][0]["strategy"] == "exact"
 
 
 # ---------------------------------------------------------------------------

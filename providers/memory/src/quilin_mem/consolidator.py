@@ -41,6 +41,10 @@ _WORD_RE = re.compile(r"[A-Za-z0-9_]+")
 # 替代之前 ~10 pair × 9s = 90s 超 MCP tool 30s timeout 的 per-pair 路径。
 DEFAULT_BATCH_MAX_TOKENS = 10_000
 DEFAULT_BATCH_MAX_RECORDS = 150
+# Per-pair fallback is only safe for small interactive previews. A failed batch
+# over dozens of records can explode into hundreds or thousands of LLM/embedding
+# comparisons.
+DEFAULT_PER_PAIR_FALLBACK_MAX_RECORDS = 32
 # 简化版 token 估算:平均 1 token ≈ 4 字节 UTF-8。中文 / 英文混合场景下偏保守。
 # tiktoken 依赖太重(项目里没装),用 byte-length / 4 替代,实证 9 条记忆 ~450 tokens
 # 跟 tiktoken 计数差 < 15%,完全够用。
@@ -97,7 +101,9 @@ class BatchJudgeResult:
     `ok = True` means the judge produced a valid structured response — even if
     `clusters` is empty (LLM concluded all records are distinct). `ok = False`
     signals the caller to fall back to the per-pair path (invalid JSON, API error,
-    timeout, no API key, etc.).
+    timeout, no API key, etc.). Small record sets can fall back to the
+    richer per-pair path; large record sets should degrade to exact-only so
+    user-triggered MCP previews do not blow through stdio timeouts.
     """
 
     ok: bool
@@ -106,6 +112,7 @@ class BatchJudgeResult:
 
 
 BatchDedupeJudge = Callable[[Sequence[MemoryItem]], BatchJudgeResult]
+_BatchBuildStatus = Literal["ok", "failed", "budget_exceeded"]
 
 
 @dataclass(slots=True, frozen=True)
@@ -342,8 +349,8 @@ class _DeepseekConsolidationJudge:
 # Wire shape:LLM 输入 = 全部 record id + content,返
 #   {"clusters": [{"keepId": "...", "deleteIds": [...], "reason": "..."}, ...]}
 # Consolidator 直接映射成 DedupeGroup,无需 per-pair verdict。
-# 任何失败(invalid JSON / API error / timeout / 无 key)→ ok=False,Consolidator
-# 退回 per-pair 路径,确保不丢能力。
+# 任何失败(invalid JSON / API error / timeout / 无 key)→ ok=False。Consolidator
+# 小批量退回 per-pair 路径,大批量退回 exact-only,避免 MCP stdio 超时。
 class _DeepseekBatchJudge:
     """Batch LLM-based dedupe judge (QUI-189).
 
@@ -646,6 +653,8 @@ class Consolidator:
         batch_judge: BatchDedupeJudge | None = None,
         batch_max_tokens: int = DEFAULT_BATCH_MAX_TOKENS,
         batch_max_records: int = DEFAULT_BATCH_MAX_RECORDS,
+        batch_max_calls: int | None = None,
+        per_pair_fallback_max_records: int = DEFAULT_PER_PAIR_FALLBACK_MAX_RECORDS,
         reflector: Reflector | None = None,
         reranker: object | None = None,
         log_store: ConsolidationLogStore | None = None,
@@ -659,6 +668,8 @@ class Consolidator:
         self._batch_judge = batch_judge
         self._batch_max_tokens = max(1, batch_max_tokens)
         self._batch_max_records = max(1, batch_max_records)
+        self._batch_max_calls = max(1, batch_max_calls) if batch_max_calls is not None else None
+        self._per_pair_fallback_max_records = max(1, per_pair_fallback_max_records)
         self._reflector = reflector or Reflector()
         self._reranker = reranker
         self._log_store = log_store
@@ -870,12 +881,18 @@ class Consolidator:
         direct_threshold: float,
         llm_threshold: float,
     ) -> list[DedupeGroup]:
-        # QUI-189: 优先走 batch judge。失败(invalid JSON / API error / timeout /
-        # 无 key)→ 自动 fallback per-pair,wire shape 不变。
+        # QUI-189/204: 优先走 batch judge。小集合失败(invalid JSON / API error /
+        # timeout / 无 key)→ fallback per-pair;大集合失败→ exact-only,避免 MCP
+        # stdio request 内退化成 O(n^2) LLM/embedding work。
         if self._batch_judge is not None and allow_expensive and len(records) >= 2:
-            batch_groups = self._build_layer_groups_via_batch(records)
-            if batch_groups is not None:
+            batch_status, batch_groups = self._build_layer_groups_via_batch(records)
+            if batch_status == "ok":
                 return batch_groups
+            if (
+                batch_status == "budget_exceeded"
+                or len(records) > self._per_pair_fallback_max_records
+            ):
+                return self._build_layer_groups_exact_only(records)
 
         return self._build_layer_groups_per_pair(
             records,
@@ -887,18 +904,19 @@ class Consolidator:
     def _build_layer_groups_via_batch(
         self,
         records: Sequence[MemoryItem],
-    ) -> list[DedupeGroup] | None:
+    ) -> tuple[_BatchBuildStatus, list[DedupeGroup]]:
         """Batch LLM judge path (QUI-189).
 
         Steps:
           1. Always cover exact-match dedupe locally — cheap and certain.
           2. For the remaining records, split into token/record-bounded batches.
           3. Call batch judge once per batch. Any failed batch aborts the whole
-             path → return None so caller falls back to per-pair.
+             path → return "failed" so caller can choose per-pair/exact fallback.
           4. Merge batch clusters with exact-match groups via union-find on
              record ids, preserving the existing DedupeGroup wire shape.
 
-        Returns None on any batch failure so the per-pair fallback runs.
+        Returns "budget_exceeded" before any LLM call when caller-configured
+        batch-call caps would require too many sequential calls.
         """
         assert self._batch_judge is not None
 
@@ -917,22 +935,27 @@ class Consolidator:
             if left_root != right_root:
                 parent[right_root] = left_root
 
-        # 1. Exact-match union-find. 跟 per-pair 路径完全一致,保证 wire shape 不变。
-        for i, left in enumerate(records):
-            for j in range(i + 1, len(records)):
-                right = records[j]
-                if _normalize_content(left.content) == _normalize_content(right.content):
-                    union(left.id, right.id)
-                    pair = _PairEvidence(
-                        left.id,
-                        right.id,
-                        1.0,
-                        "exact",
-                        "normalized content matches exactly",
-                        "duplicate",
-                    )
-                    exact_evidence.setdefault(left.id, pair)
-                    exact_evidence.setdefault(right.id, pair)
+        # 1. Exact-match union-find. 按 normalized content 分桶是 O(n),避免
+        #    batch path 在大集合上先做一轮 O(n^2) 成对扫描。
+        by_normalized_content: dict[str, list[MemoryItem]] = {}
+        for record in records:
+            by_normalized_content.setdefault(_normalize_content(record.content), []).append(record)
+        for exact_members in by_normalized_content.values():
+            if len(exact_members) < 2:
+                continue
+            anchor = exact_members[0]
+            for duplicate in exact_members[1:]:
+                union(anchor.id, duplicate.id)
+                pair = _PairEvidence(
+                    anchor.id,
+                    duplicate.id,
+                    1.0,
+                    "exact",
+                    "normalized content matches exactly",
+                    "duplicate",
+                )
+                exact_evidence.setdefault(anchor.id, pair)
+                exact_evidence.setdefault(duplicate.id, pair)
 
         # 2. Batch call(s). 切批保证 ≤ max_tokens / ≤ max_records。
         batches = split_records_into_batches(
@@ -940,12 +963,14 @@ class Consolidator:
             max_tokens=self._batch_max_tokens,
             max_records=self._batch_max_records,
         )
+        if self._batch_max_calls is not None and len(batches) > self._batch_max_calls:
+            return "budget_exceeded", []
         cluster_groups: list[BatchJudgeCluster] = []
         for batch in batches:
             result = self._batch_judge(batch)
             if not result.ok:
                 # Any failed batch → abort batch path, caller falls back to per-pair.
-                return None
+                return "failed", []
             cluster_groups.extend(result.clusters)
 
         # 3. Union batch clusters into the same union-find structure so exact +
@@ -1052,6 +1077,48 @@ class Consolidator:
                 )
             )
 
+        return "ok", groups
+
+    def _build_layer_groups_exact_only(
+        self,
+        records: Sequence[MemoryItem],
+    ) -> list[DedupeGroup]:
+        """Fast exact-match fallback for large interactive previews.
+
+        QUI-204: a failed batch LLM call over a large dataset must not degrade
+        into O(n^2) per-pair LLM/embedding work inside one MCP stdio request.
+        Exact duplicate grouping is deterministic, cheap, and keeps the tool
+        responsive while preserving the existing proposal wire shape.
+        """
+        by_normalized_content: dict[str, list[MemoryItem]] = {}
+        for record in records:
+            by_normalized_content.setdefault(_normalize_content(record.content), []).append(record)
+
+        groups: list[DedupeGroup] = []
+        for members in by_normalized_content.values():
+            if len(members) < 2:
+                continue
+            keep = _pick_keeper(members)
+            delete_ids = tuple(record.id for record in members if record.id != keep.id)
+            delete_ids, temporal_metadata, reason = _apply_temporal_dedupe_policy(
+                keep=keep,
+                members=members,
+                delete_ids=delete_ids,
+                decision="duplicate",
+                reason=f"精确重复; 保留最新记录 {keep.id}",
+            )
+            groups.append(
+                DedupeGroup(
+                    tier=keep.layer,
+                    keep_id=keep.id,
+                    delete_ids=delete_ids,
+                    reason=reason,
+                    strategy="exact",
+                    score=1.0,
+                    memory_ids=tuple(record.id for record in members),
+                    metadata=temporal_metadata,
+                )
+            )
         return groups
 
     def _build_layer_groups_per_pair(

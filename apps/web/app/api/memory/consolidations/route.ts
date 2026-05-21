@@ -24,7 +24,12 @@ export const dynamic = "force-dynamic";
 export interface ConsolidationAction {
 	readonly kind: string;
 	readonly target_layer: string | null;
+	readonly tier?: string;
 	readonly reason: string;
+	readonly deleteIds?: readonly string[];
+	readonly insertContent?: string;
+	readonly score?: number;
+	readonly memoryIds?: readonly string[];
 	readonly dry_run: boolean;
 	readonly writes_semantic: boolean;
 	readonly writes_skill: boolean;
@@ -73,6 +78,15 @@ function booleanField(record: Record<string, unknown>, key: string, fallback = f
 	return typeof value === "boolean" ? value : fallback;
 }
 
+function stringArrayField(
+	record: Record<string, unknown>,
+	key: string,
+): readonly string[] | undefined {
+	const value = record[key];
+	if (!Array.isArray(value)) return undefined;
+	return value.filter((item): item is string => typeof item === "string");
+}
+
 function toolErrorMessage(
 	error: { readonly message?: unknown } | undefined,
 	content: unknown,
@@ -95,10 +109,22 @@ function actionFromUnknown(value: unknown): ConsolidationAction | null {
 	if (record == null) return null;
 	const metadata = asRecord(record.metadata);
 	const targetLayer = record.target_layer;
+	const tier = record.tier;
+	const insertContent = record.insertContent;
+	const score = record.score;
 	return {
 		kind: stringField(record, "kind", "unknown"),
 		target_layer: typeof targetLayer === "string" && targetLayer.length > 0 ? targetLayer : null,
+		...(typeof tier === "string" && tier.length > 0 ? { tier } : {}),
 		reason: stringField(record, "reason"),
+		...(Array.isArray(record.deleteIds)
+			? { deleteIds: stringArrayField(record, "deleteIds") }
+			: {}),
+		...(typeof insertContent === "string" ? { insertContent } : {}),
+		...(typeof score === "number" && Number.isFinite(score) ? { score } : {}),
+		...(Array.isArray(record.memoryIds)
+			? { memoryIds: stringArrayField(record, "memoryIds") }
+			: {}),
 		dry_run: booleanField(record, "dry_run"),
 		writes_semantic: booleanField(record, "writes_semantic"),
 		writes_skill: booleanField(record, "writes_skill"),

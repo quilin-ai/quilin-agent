@@ -198,6 +198,53 @@ async def test_log_recent_reads_the_same_file_backed_store(tmp_path: Path) -> No
     assert result["entries"][0]["task"] == "quilin_mem.memory_consolidate_plan"
 
 
+async def test_reflect_consolidate_plan_logs_real_insight_fields(tmp_path: Path) -> None:
+    """Real MCP reflect planning should keep insight payload fields in the log."""
+
+    db_path = str(tmp_path / "memory.db")
+    async with QuilinMemStore(db_path=db_path) as memory_store:
+        source_ids = [
+            (
+                await memory_store.store(
+                    "After architecture review the user asked for concise Chinese status "
+                    "updates, concrete evidence, and no broad rewrites during memory UI work.",
+                    tier="episodic",
+                )
+            ).id,
+            (
+                await memory_store.store(
+                    "During consolidation review the user repeated that concise Chinese "
+                    "progress updates must include command evidence, risk notes, and file "
+                    "boundaries.",
+                    tier="episodic",
+                )
+            ).id,
+            (
+                await memory_store.store(
+                    "When coordinating worker tasks the user preferred concise Chinese "
+                    "summaries, explicit RED GREEN test evidence, and avoiding unrelated "
+                    "cleanup.",
+                    tier="episodic",
+                )
+            ).id,
+        ]
+        server = create_server(store=memory_store)
+        await server.call_tool("memory_consolidate_plan", {"strategy": "reflect"})  # type: ignore[attr-defined]
+        raw = await server.call_tool("consolidation_log_recent", {"limit": 10})  # type: ignore[attr-defined]
+
+    result = _decode_call_tool_result(raw)
+    assert result["available"] is True
+    assert result["total"] == 1
+    [entry] = result["entries"]
+    [action] = entry["actions"]
+    assert action["kind"] == "reflect-insight"
+    assert action["tier"] == "semantic"
+    assert action["deleteIds"] == []
+    assert action["insertContent"]
+    assert isinstance(action["score"], float)
+    assert action["memoryIds"] == source_ids
+
+
 async def test_log_recent_does_not_read_default_db_for_in_memory_store(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

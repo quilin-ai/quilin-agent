@@ -49,6 +49,10 @@ MAX_OBSERVE_TEXT_LENGTH = 32 * 1024  # cap per-text field at 32KB
 DEFAULT_OBSERVER_FREQUENCY = 10
 DEFAULT_OBSERVER_BASE_URL = "https://api.deepseek.com/v1/chat/completions"
 DEFAULT_OBSERVER_MODEL = "deepseek-v4-flash"
+# User-triggered MCP previews must fail fast enough to degrade to exact-only
+# before the stdio caller gives up. Background daemon paths can still use the
+# batch judge's longer default timeout.
+DEFAULT_MCP_CONSOLIDATE_BATCH_TIMEOUT_SECONDS = 20
 # Cap on the per-server (user_id, session_id) → L3aObserver cache so that a
 # misbehaving caller (e.g. random session ids) cannot make the server leak
 # memory unboundedly. Eviction is LRU via OrderedDict.move_to_end + popitem.
@@ -415,9 +419,11 @@ async def _memory_consolidate_plan_with_store(
     实际写入(execute=True 路径)仍走 WriteAuthority gate。
     """
     from .consolidator import (
+        DEFAULT_PER_PAIR_FALLBACK_MAX_RECORDS,
         _DeepseekBatchJudge,
         _DeepseekConsolidationJudge,
         _env_flag_disabled,
+        _env_int,
     )
     from .idle_budget import IdleBudgetProvider as _IdleBudgetProvider
 
@@ -430,7 +436,14 @@ async def _memory_consolidate_plan_with_store(
     dedupe_judge = _DeepseekConsolidationJudge().judge
     batch_judge = None
     if not _env_flag_disabled("QUILIN_DEDUPE_BATCH_ENABLED"):
-        batch_judge = _DeepseekBatchJudge().judge_batch
+        batch_judge = _DeepseekBatchJudge(
+            timeout_seconds=float(
+                _env_int(
+                    "QUILIN_DEDUPE_MCP_BATCH_TIMEOUT_SECONDS",
+                    DEFAULT_MCP_CONSOLIDATE_BATCH_TIMEOUT_SECONDS,
+                )
+            )
+        ).judge_batch
     log_store: ConsolidationLogStore | None = None
     log_db_path = _log_store_db_path_for_store(store)
     if log_db_path is not None:
@@ -444,7 +457,12 @@ async def _memory_consolidate_plan_with_store(
             store=store,
             dedupe_judge=dedupe_judge,
             batch_judge=batch_judge,
+            batch_max_calls=1,
             log_store=log_store,
+            per_pair_fallback_max_records=_env_int(
+                "QUILIN_DEDUPE_PER_PAIR_FALLBACK_MAX_RECORDS",
+                DEFAULT_PER_PAIR_FALLBACK_MAX_RECORDS,
+            ),
         ).propose(
             strategy=strategy,
             tier=tier,
