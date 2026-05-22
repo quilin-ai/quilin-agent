@@ -116,6 +116,33 @@ class TemporalKnowledgeGraph:
         with self._lock:
             self._conn.execute("BEGIN IMMEDIATE")
             with self._conn:
+                # D.18 fix: dedupe same triple per memory_id.
+                # Without this, repeated KG backfill from the same memory
+                # record (LLM re-extracts same entities) caused unbounded
+                # growth of identical (subject, predicate, object, memory_id)
+                # rows. Real dogfood saw e.g. "孟孟 --[performed]--> QA test"
+                # × 2 after running backfill twice on same record. KG was
+                # never meant to store duplicate triples — collapse them.
+                existing = self._conn.execute(
+                    """
+                    SELECT edge_id FROM kg_edges
+                    WHERE subject = ?
+                      AND predicate = ?
+                      AND object = ?
+                      AND COALESCE(memory_id, '') = COALESCE(?, '')
+                      AND (valid_to IS NULL OR valid_to >= ?)
+                    LIMIT 1
+                    """,
+                    (
+                        subject,
+                        predicate,
+                        object,
+                        memory_id,
+                        resolved_valid_from.isoformat(),
+                    ),
+                ).fetchone()
+                if existing is not None:
+                    return existing[0]
                 self._conn.execute(
                     """
                     INSERT INTO kg_edges (

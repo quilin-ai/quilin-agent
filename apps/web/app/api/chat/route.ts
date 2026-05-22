@@ -672,8 +672,17 @@ export async function POST(req: Request): Promise<Response> {
 		apiKey,
 	});
 
-	const modelMessages = await convertToModelMessages(body.messages);
-	const latestUserMessage = [...body.messages].reverse().find((m) => m.role === "user");
+	// D.20 fix: filter out role=system from client-supplied messages.
+	// Real dogfood saw Vercel AI SDK emit warning:
+	//   "System messages in the prompt or messages fields can be a
+	//    security risk because they may enable prompt injection attacks."
+	// Any system-role message MUST come from streamText({ system: ... })
+	// option (built locally from buildSystemPromptWithTools), not from
+	// the wire payload. Otherwise a malicious client can hijack the
+	// system instruction by setting role: "system" on a user message.
+	const safeMessages = body.messages.filter((m) => m.role !== "system");
+	const modelMessages = await convertToModelMessages(safeMessages);
+	const latestUserMessage = [...safeMessages].reverse().find((m) => m.role === "user");
 	const latestUserText = extractFirstTextPart(latestUserMessage?.parts);
 	const intentRewrite = latestUserText != null ? rewriteUserIntentText(latestUserText) : null;
 
@@ -901,7 +910,37 @@ export async function POST(req: Request): Promise<Response> {
 		const requestApprovalTool = makeRequestApprovalTool({ sessionId, service });
 		const narrateAsideTool = makeNarrateAsideTool({ sessionId, service });
 		const catalog = await getToolsCatalog();
-		const builtinTools = catalog.adapted;
+		// D.21 fix: wrap memory_store so LLM tool calls auto-inject
+		// last_writer_client="web" + last_writer_session_id. Without this,
+		// real dogfood showed LLM-stored records had last_writer_client=NULL
+		// (LLM never provided it), breaking audit trail and conflict
+		// resolution (which needs writer info to detect cross-client edits).
+		const builtinTools = (() => {
+			const cloned = { ...catalog.adapted };
+			const key = Object.keys(cloned).find(
+				(k) => k === "quilin-mem__memory_store" || k.endsWith("__memory_store"),
+			);
+			if (key != null) {
+				const original = cloned[key] as unknown as {
+					execute?: (args: Record<string, unknown>) => Promise<unknown>;
+				} & Record<string, unknown>;
+				if (typeof original?.execute === "function") {
+					const originalExecute = original.execute.bind(original);
+					(cloned as Record<string, unknown>)[key] = {
+						...original,
+						execute: async (args: Record<string, unknown>) => {
+							const enriched = {
+								last_writer_client: "web",
+								last_writer_session_id: sessionId,
+								...args,
+							};
+							return originalExecute(enriched);
+						},
+					};
+				}
+			}
+			return cloned;
+		})();
 		const observeTransport = getMcpServerCallToolTransport("quilin-mem");
 		// `memory_observe` is intentionally filtered out of catalog.rawTools so
 		// the LLM cannot call it, but runtime code can still use the server's
@@ -992,6 +1031,13 @@ export async function POST(req: Request): Promise<Response> {
 					model: provider(DEEPSEEK_MODEL),
 					system: buildSystemPromptWithTools(intentRewrite),
 					messages: modelMessages,
+					// D.20 fix: enforce no system role in messages array.
+					// Local system instruction must flow through the `system:`
+					// option only, never via wire-supplied messages. Any client
+					// trying to inject system role gets filtered earlier; this
+					// flag is the runtime guard rail (suppresses the AI SDK
+					// warning that real dogfood captured at Monitor).
+					allowSystemInMessages: false,
 					tools: {
 						...builtinTools,
 						...(wrappedShellExec ? { shell_exec: wrappedShellExec } : {}),

@@ -202,22 +202,112 @@ export function KnowledgeGraphView({ onSelectMemory }: KnowledgeGraphViewProps) 
 	}
 
 	return (
-		<div
-			data-testid="kg-view"
-			style={{ width: "100%", height: 600, border: "1px solid var(--border)", borderRadius: 6 }}
-		>
-			<ReactFlow
-				nodes={nodes}
-				edges={edges}
-				onNodeClick={handleNodeClick}
-				fitView
-				attributionPosition="bottom-right"
+		<div>
+			{/* D.16 fix: keep "立即灌入" button visible even when KG has data
+			    so user can trigger incremental backfill on new memories.
+			    Real dogfood: KG showed 8 edges from 3 memories but new
+			    chat-stored records (10 active) never auto-processed; user
+			    had no way to refresh KG without restarting daemon. */}
+			<div
+				style={{
+					marginBottom: 12,
+					display: "flex",
+					alignItems: "center",
+					gap: 12,
+					fontSize: 12,
+					color: "var(--fg-muted)",
+				}}
 			>
-				<Background />
-				<Controls />
-				<MiniMap pannable zoomable />
-			</ReactFlow>
+				<KgBackfillInlineButton onBackfilled={() => void fetchGraph()} />
+				<span>
+					{data.nodes.length} 个实体 · {data.edges.length} 条关系
+				</span>
+			</div>
+			<div
+				data-testid="kg-view"
+				style={{
+					width: "100%",
+					height: 600,
+					border: "1px solid var(--border)",
+					borderRadius: 6,
+				}}
+			>
+				<ReactFlow
+					nodes={nodes}
+					edges={edges}
+					onNodeClick={handleNodeClick}
+					fitView
+					attributionPosition="bottom-right"
+				>
+					<Background />
+					<Controls />
+					<MiniMap pannable zoomable />
+				</ReactFlow>
+			</div>
 		</div>
+	);
+}
+
+function KgBackfillInlineButton({ onBackfilled }: { readonly onBackfilled: () => void }) {
+	const [running, setRunning] = useState(false);
+	const [feedback, setFeedback] = useState<string | null>(null);
+	const trigger = useCallback(async () => {
+		setRunning(true);
+		setFeedback(null);
+		try {
+			const res = await fetch("/api/memory/backfill-kg", { method: "POST", cache: "no-store" });
+			const body = (await res.json().catch(() => null)) as
+				| {
+						ok: true;
+						data: {
+							processed?: number;
+							edgesAdded?: number;
+							skipped?: number;
+							backfilled?: number;
+							edges?: number;
+						};
+				  }
+				| { ok: false; error: { code: string; message: string } }
+				| null;
+			if (body == null || !body.ok) {
+				const msg = body != null && !body.ok ? body.error.message : `HTTP ${res.status}`;
+				setFeedback(`✗ ${msg}`);
+				return;
+			}
+			const processed = body.data.processed ?? body.data.backfilled ?? 0;
+			const added = body.data.edgesAdded ?? body.data.edges ?? 0;
+			const skipped = body.data.skipped ?? 0;
+			setFeedback(
+				`✓ 已处理 ${processed} 条记忆, 新增 ${added} 条关系, 跳过 ${skipped} 条 (无变化)`,
+			);
+			onBackfilled();
+		} catch (e) {
+			setFeedback(`✗ ${e instanceof Error ? e.message : String(e)}`);
+		} finally {
+			setRunning(false);
+		}
+	}, [onBackfilled]);
+	return (
+		<>
+			<button
+				type="button"
+				onClick={() => void trigger()}
+				disabled={running}
+				data-testid="kg-backfill-inline-button"
+				style={{
+					padding: "4px 12px",
+					background: running ? "var(--bg-soft)" : "transparent",
+					color: "var(--fg)",
+					border: "1px solid var(--border)",
+					borderRadius: 4,
+					cursor: running ? "not-allowed" : "pointer",
+					fontSize: 12,
+				}}
+			>
+				{running ? "灌入中…" : "↻ 增量灌入"}
+			</button>
+			{feedback != null ? <span data-testid="kg-backfill-inline-feedback">{feedback}</span> : null}
+		</>
 	);
 }
 

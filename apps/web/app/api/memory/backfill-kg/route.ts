@@ -48,23 +48,45 @@ export async function POST(): Promise<Response> {
 			);
 		}
 
-		let backfilled = 0;
-		let edges = 0;
+		// D.17 fix: parse the correct BackfillResult fields.
+		// Previous code looked for `backfilled` / `backfilled_count` / `records_backfilled`
+		// — none of which exist on BackfillResult. The real keys are
+		// `processed` / `edges_added` / `skipped` / `errors` / `dry_run`.
+		// Real dogfood saw API return `{backfilled:0, edges:0}` while DB
+		// actually grew by 4 edges — UI silently disagreed with truth.
+		let processed = 0;
+		let edgesAdded = 0;
+		let skipped = 0;
+		let errors: string[] = [];
 		try {
 			const parsed = JSON.parse(result.content) as unknown;
 			if (parsed != null && typeof parsed === "object") {
 				const o = parsed as Record<string, unknown>;
-				const b = o.backfilled ?? o.backfilled_count ?? o.records_backfilled;
-				if (typeof b === "number") backfilled = b;
-				const e = o.edges ?? o.edges_count ?? o.kg_edges;
-				if (typeof e === "number") edges = e;
+				if (typeof o.processed === "number") processed = o.processed;
+				if (typeof o.edges_added === "number") edgesAdded = o.edges_added;
+				if (typeof o.skipped === "number") skipped = o.skipped;
+				if (Array.isArray(o.errors))
+					errors = o.errors.filter((s): s is string => typeof s === "string");
 			}
 		} catch {
 			// fall through with zeros — tool returned non-JSON text, still success
 		}
 
 		return Response.json(
-			{ ok: true, data: { backfilled, edges } },
+			{
+				ok: true,
+				data: {
+					processed,
+					edgesAdded,
+					skipped,
+					errors,
+					// Back-compat alias for older clients that read `backfilled` / `edges`.
+					// `backfilled` ≈ processed records (not # actually written); `edges`
+					// is the real # of new KG triples written.
+					backfilled: processed,
+					edges: edgesAdded,
+				},
+			},
 			{ headers: { "cache-control": "no-store" } },
 		);
 	} catch (e) {
