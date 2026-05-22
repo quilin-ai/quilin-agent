@@ -1099,10 +1099,41 @@ def create_server(
     ) -> str:
         """Store a new memory record.
 
+        IMPORTANT: classify the `tier` yourself based on content semantics;
+        do NOT blindly default to "working".
+
+        Tier 选择规则 / How to pick tier:
+          - working: 当前对话/短期任务/临时状态,会过时
+            (例:今天下午要开会、暂存的中间结果)
+          - episodic: 具体事件/时间点/个人经历
+            (例:用户今天用 Emacs 写了脚本、上周 ship 了 v2)
+          - semantic: 稳定事实/概念/偏好/关系
+            (例:用户的 GitHub 用户名是 X、用户用 Cursor、project A 依赖 B)
+          - skill: 可复用流程/how-to(例:部署步骤、调试技巧)
+            一般由 Consolidator 自动升级,LLM 慎重直接写 skill。
+
+        关键例子 / Examples:
+          - "用户的名字是孟孟" → semantic(稳定事实)
+          - "用户今天午饭吃了拉面" → episodic(一次性事件)
+          - "用户希望 15:00 开会" → working(短期 + 会过时)
+          - "用户偏好用中文回复" → semantic(稳定偏好)
+
         Args:
             content: The text content to store.
-            tier: Memory tier (default "working").
+            tier: working/episodic/semantic/skill — 按上述规则选,不要默认 working.
             layer: Canonical memory layer. Takes precedence over tier.
+            kind: Optional finer-grained kind
+                (decision/fact/preference/task/note).
+            metadata: Free-form JSON metadata.
+            last_writer_client: Identify the client that wrote this
+                (web/cli/repl).
+            last_writer_session_id: Session id of the writing client.
+            project_scope: Restrict memory visibility to a project scope.
+            salience: Optional 6-dim salience hints
+                (novelty/utility/personal_relevance/actionability/recency/stability).
+            deadline_at: ISO-8601 datetime for time-bounded working memory.
+            prospective_action: Brief action description for prospective memory.
+            resource_pointer: Pointer to external resource (file path / URL).
         """
         parent_trace = _trace_context_from_context(ctx)
         return await _memory_store_with_store(
