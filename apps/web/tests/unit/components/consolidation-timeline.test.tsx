@@ -53,9 +53,10 @@ describe("ConsolidationTimelineView", () => {
 
 		expect(await screen.findByTestId("consolidation-view")).toBeInTheDocument();
 		expect(screen.getByText("profile consolidation")).toBeInTheDocument();
-		expect(screen.getByText(/promote × 1/)).toBeInTheDocument();
+		// D.8 fix: UI 已 i18n 改成 "层级升级 ×N",test fixture 跟上。
+		expect(screen.getByText(/层级升级 ×1/)).toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: /profile consolidation/ }));
-		expect(screen.getByText(/stable fact/)).toBeInTheDocument();
+		expect(screen.getAllByText(/stable fact/).length).toBeGreaterThan(0);
 	});
 
 	it("renders the empty state", async () => {

@@ -95,6 +95,9 @@ export default function SessionsPage() {
 	const [persistenceOn, setPersistenceOn] = useState<boolean | null>(null);
 	const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
 	const [toast, setToast] = useState<ToastState | null>(null);
+	// D.13 fix: 117 sessions 无 search/filter — user 找不到东西。
+	// Add client-side substring filter on session id + title + preview.
+	const [searchQuery, setSearchQuery] = useState("");
 
 	useEffect(() => {
 		const local = listSessions();
@@ -203,6 +206,25 @@ export default function SessionsPage() {
 							<span>
 								<strong>{totalMessages}</strong>累计消息
 							</span>
+							{/* D.13 fix: 117 sessions 无搜索 → 加 client-side filter */}
+							<input
+								type="text"
+								data-testid="sessions-search-input"
+								placeholder="搜索 · search by id/title/preview…"
+								value={searchQuery}
+								onChange={(e) => setSearchQuery(e.target.value)}
+								style={{
+									marginLeft: 16,
+									padding: "5px 10px",
+									fontSize: 12,
+									fontFamily: '"JetBrains Mono", monospace',
+									border: "1px solid var(--border)",
+									background: "var(--bg)",
+									color: "var(--fg)",
+									borderRadius: 4,
+									width: 260,
+								}}
+							/>
 							<Link
 								href="/"
 								className="q-page-action"
@@ -259,52 +281,75 @@ export default function SessionsPage() {
 						<div>
 							<div className="q-section-title">
 								<span className="cn">最近 · recent</span>
-								<span className="right">{rows.length} sessions</span>
+								<span className="right">
+									{searchQuery.trim().length === 0
+										? `${rows.length} sessions`
+										: (() => {
+												const q = searchQuery.trim().toLowerCase();
+												const n = rows.filter(
+													(r) =>
+														r.id.toLowerCase().includes(q) ||
+														r.title.toLowerCase().includes(q) ||
+														(r.preview ?? "").toLowerCase().includes(q),
+												).length;
+												return `${n} / ${rows.length} sessions`;
+											})()}
+								</span>
 							</div>
-							{rows.map((row) => {
-								const isDeleting = pendingDeleteId === row.id;
-								return (
-									<div
-										key={row.id}
-										className="q-resource-row q-session-row"
-										data-testid={`session-${row.id}`}
-										data-source={row.source}
-										style={{ opacity: isDeleting ? 0.5 : 1 }}
-									>
-										<Link
-											href={{ pathname: "/", query: { session: row.id } }}
-											className="q-session-link"
-											data-testid={`session-link-${row.id}`}
-											style={{
-												display: "contents",
-												color: "inherit",
-												textDecoration: "none",
-											}}
+							{rows
+								.filter((row) => {
+									const q = searchQuery.trim().toLowerCase();
+									if (q.length === 0) return true;
+									return (
+										row.id.toLowerCase().includes(q) ||
+										row.title.toLowerCase().includes(q) ||
+										(row.preview ?? "").toLowerCase().includes(q)
+									);
+								})
+								.map((row) => {
+									const isDeleting = pendingDeleteId === row.id;
+									return (
+										<div
+											key={row.id}
+											className="q-resource-row q-session-row"
+											data-testid={`session-${row.id}`}
+											data-source={row.source}
+											style={{ opacity: isDeleting ? 0.5 : 1 }}
 										>
-											<span className="rn">
-												{row.title}
-												<span className="desc">{row.preview}</span>
-											</span>
-											<span className="rm">{formatRelativeTime(row.updatedAt)}</span>
-											<span className="rs on">
-												{row.messageCount} 条 · {row.source === "server" ? "云端" : "本地"}
-											</span>
-										</Link>
-										<button
-											type="button"
-											className="q-session-delete-btn"
-											data-testid={`session-delete-${row.id}`}
-											aria-label={`删除会话 ${row.title}`}
-											disabled={isDeleting}
-											onClick={(e) => {
-												void handleDelete(row, e);
-											}}
-										>
-											{isDeleting ? "删除中…" : "🗑 删除"}
-										</button>
-									</div>
-								);
-							})}
+											<Link
+												href={{ pathname: "/", query: { session: row.id } }}
+												className="q-session-link"
+												data-testid={`session-link-${row.id}`}
+												style={{
+													display: "contents",
+													color: "inherit",
+													textDecoration: "none",
+												}}
+											>
+												<span className="rn">
+													{row.title}
+													<span className="desc">{row.preview}</span>
+												</span>
+												<span className="rm">{formatRelativeTime(row.updatedAt)}</span>
+												<span className="rs on">
+													{row.messageCount} 条 · {row.source === "server" ? "云端" : "本地"}
+												</span>
+											</Link>
+											<button
+												type="button"
+												className="q-session-delete-btn"
+												data-testid={`session-delete-${row.id}`}
+												aria-label={`删除会话 ${row.title}`}
+												disabled={isDeleting}
+												onClick={(e) => {
+													void handleDelete(row, e);
+												}}
+											>
+												{isDeleting ? "删除中…" : "🗑 删除"}
+											</button>
+										</div>
+									);
+								})}
 						</div>
 					)}
 				</section>
