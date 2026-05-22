@@ -200,9 +200,21 @@ export default function SessionsPage() {
 							· 点击任意会话可恢复上下文继续
 						</p>
 						<div className="q-page-stats">
-							<span>
-								<strong>{rows.length}</strong>总会话
-							</span>
+							{/* D.12 fix: 真用户 dogfood 发现 UI 显 117 但 sqlite 真 62 — 用户
+							    误以为数据不一致。Sessions UI 真合并本地 localStorage + 服务端
+							    sqlite,旁标真显示来源。 */}
+							{(() => {
+								const localCount = rows.filter((r) => r.source === "local").length;
+								const serverCount = rows.filter((r) => r.source === "server").length;
+								return (
+									<span title="服务端 SQLite + 本地 localStorage 合并 · spec §5.3">
+										<strong>{rows.length}</strong>总会话{" "}
+										<span style={{ color: "var(--fg-muted)", fontSize: 10 }}>
+											({localCount} 本地 + {serverCount} 服务端)
+										</span>
+									</span>
+								);
+							})()}
 							<span>
 								<strong>{totalMessages}</strong>累计消息
 							</span>

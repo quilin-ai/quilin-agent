@@ -179,6 +179,11 @@ async def backfill_kg_from_memory(
                     if dry_run:
                         edges_added += 1
                         continue
+                    # D.19 fix: query before/after the add to detect dedupe.
+                    # Real dogfood: backfill API reported edgesAdded=8 but
+                    # actual DB delta=0 because D.18 dedupe absorbed them.
+                    # Use the kg._last_add_edge_was_dedupe marker set by
+                    # _add_edge_sync to know whether a new row was inserted.
                     try:
                         await kg.add_edge(
                             triple.subject,
@@ -192,7 +197,12 @@ async def backfill_kg_from_memory(
                                 "extractor": "kg_extractor.extract_triples_from_text",
                             },
                         )
-                        edges_added += 1
+                        # D.19: only count truly new edges (not dedupe hits).
+                        # `_last_add_edge_was_dedupe` is False when an INSERT
+                        # actually happened, True when the duplicate guard
+                        # returned the existing edge_id.
+                        if not getattr(kg, "_last_add_edge_was_dedupe", False):
+                            edges_added += 1
                     except Exception as exc:  # pragma: no cover — KG write error
                         errors.append(
                             f"add_edge({record.id}, {triple.subject!r}/{triple.predicate!r}/"

@@ -113,6 +113,7 @@ class TemporalKnowledgeGraph:
             raise ValueError("valid_to must be greater than or equal to valid_from")
 
         edge_id = str(uuid4())
+        self._last_add_edge_was_dedupe = False  # D.19 marker for backfill caller
         with self._lock:
             self._conn.execute("BEGIN IMMEDIATE")
             with self._conn:
@@ -142,6 +143,11 @@ class TemporalKnowledgeGraph:
                     ),
                 ).fetchone()
                 if existing is not None:
+                    # D.19: mark that this call did not insert a new edge so
+                    # backfill_kg_from_memory can avoid double-counting
+                    # `edges_added` (real dogfood saw API report 8 added
+                    # when DB delta was 0 — dedupe was absorbing them).
+                    self._last_add_edge_was_dedupe = True
                     return existing[0]
                 self._conn.execute(
                     """
