@@ -317,7 +317,7 @@ export default function MemoryPage() {
 	const [filter, setFilter] = useState("");
 	const [tierFilter, setTierFilter] = useState<string>("all");
 	const [expandedId, setExpandedId] = useState<string | null>(null);
-	const [view, setView] = useState<"list" | "graph" | "timeline" | "evidence">("list");
+	const [view, setView] = useState<"list" | "graph" | "timeline" | "evidence" | "archived">("list");
 	// Selection lives outside the records loop so it survives re-renders;
 	// using a Set gives us O(1) membership checks for the checkbox state.
 	const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
@@ -710,10 +710,36 @@ export default function MemoryPage() {
 							>
 								证据图 · evidence
 							</button>
+							<button
+								type="button"
+								role="tab"
+								aria-selected={view === "archived"}
+								data-testid="memory-tab-archived"
+								onClick={() => setView("archived")}
+								style={{
+									padding: "8px 16px",
+									background: "transparent",
+									border: "none",
+									borderBottom:
+										view === "archived"
+											? "2px solid var(--accent-vermillion)"
+											: "2px solid transparent",
+									color: view === "archived" ? "var(--fg)" : "var(--fg-muted)",
+									cursor: "pointer",
+									fontFamily: '"Noto Sans SC", sans-serif',
+									fontSize: 13,
+								}}
+							>
+								已删除 · archived
+							</button>
 						</div>
 					</div>
 
-					{view === "graph" ? (
+					{view === "archived" ? (
+						<div style={{ marginTop: 20 }}>
+							<ArchivedMemoryView onRecovered={() => void loadMemory()} />
+						</div>
+					) : view === "graph" ? (
 						<div style={{ marginTop: 20 }}>
 							<KnowledgeGraphView />
 						</div>
@@ -2001,5 +2027,157 @@ function TierInfoIcon({ tier, description }: TierInfoIconProps): React.ReactElem
 				</div>
 			) : null}
 		</span>
+	);
+}
+
+/**
+ * D.14 fix: /memory page 之前没暴露 recover 入口 — 用户误删只能 SQL 直改。
+ * 本组件 fetch `/api/memory/archived`(返 deleted=1 但仍在 7 天 forget window
+ * 内的 records),per-row 显 "↻ 恢复 · recover" button 调 /api/memory/recover
+ * MCP route(D.15 加的)。
+ */
+interface ArchivedRecord {
+	readonly id: string;
+	readonly tier: string;
+	readonly content: string;
+	readonly archived_at: string | null;
+	readonly forget_after: string | null;
+	readonly recovered_at: string | null;
+	readonly last_writer_client: string | null;
+	readonly kind: string | null;
+}
+
+interface ArchivedMemoryViewProps {
+	readonly onRecovered: () => void;
+}
+
+function ArchivedMemoryView({ onRecovered }: ArchivedMemoryViewProps) {
+	const [items, setItems] = useState<readonly ArchivedRecord[]>([]);
+	const [loading, setLoading] = useState(true);
+	const [error, setError] = useState<string | null>(null);
+	const [recoveringId, setRecoveringId] = useState<string | null>(null);
+	const [feedback, setFeedback] = useState<string | null>(null);
+
+	const refetch = useCallback(async () => {
+		setLoading(true);
+		setError(null);
+		try {
+			const res = await fetch("/api/memory/archived", { cache: "no-store" });
+			const body = (await res.json().catch(() => null)) as
+				| { ok: true; data: { available: boolean; items: readonly ArchivedRecord[] } }
+				| { ok: false; error: { code: string; message: string } }
+				| null;
+			if (body == null || !body.ok) {
+				throw new Error(body != null && !body.ok ? body.error.message : `HTTP ${res.status}`);
+			}
+			setItems(body.data.items);
+		} catch (e) {
+			setError(e instanceof Error ? e.message : String(e));
+		} finally {
+			setLoading(false);
+		}
+	}, []);
+
+	useEffect(() => {
+		void refetch();
+	}, [refetch]);
+
+	const triggerRecover = useCallback(
+		async (id: string) => {
+			setRecoveringId(id);
+			setFeedback(null);
+			try {
+				const res = await fetch("/api/memory/recover", {
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ memoryId: id }),
+				});
+				const body = (await res.json().catch(() => null)) as
+					| { ok: true; data: { recovered: boolean; recoveredAt: string | null } }
+					| { ok: false; error: { code: string; message: string } }
+					| null;
+				if (body == null || !body.ok) {
+					throw new Error(body != null && !body.ok ? body.error.message : `HTTP ${res.status}`);
+				}
+				setFeedback(`✓ 恢复成功 · recovered ${id.slice(0, 8)}`);
+				await refetch();
+				onRecovered();
+			} catch (e) {
+				setFeedback(`✗ 恢复失败 · ${e instanceof Error ? e.message : String(e)}`);
+			} finally {
+				setRecoveringId(null);
+			}
+		},
+		[refetch, onRecovered],
+	);
+
+	if (loading) {
+		return (
+			<div style={{ padding: 24, color: "var(--fg-muted)" }}>
+				加载已删除记忆… · loading archived…
+			</div>
+		);
+	}
+	if (error != null) {
+		return <div style={{ padding: 24, color: "var(--accent-vermillion)" }}>读取失败:{error}</div>;
+	}
+	if (items.length === 0) {
+		return (
+			<div style={{ padding: 24, color: "var(--fg-muted)" }}>
+				暂无已删除记忆(7 天 forget window 内)· no archived memory within recovery window.
+			</div>
+		);
+	}
+	return (
+		<div data-testid="archived-view">
+			<div className="q-section-title">
+				<span className="cn">已删除 · archived</span>
+				<span className="right">{items.length} 条 · 7 天内可恢复</span>
+			</div>
+			{feedback != null ? (
+				<p style={{ fontSize: 12, color: "var(--fg-muted)", margin: "8px 0" }}>{feedback}</p>
+			) : null}
+			{items.map((row) => (
+				<div
+					key={row.id}
+					data-testid={`archived-row-${row.id}`}
+					style={{
+						display: "flex",
+						alignItems: "center",
+						gap: 12,
+						padding: "10px 12px",
+						borderBottom: "1px solid var(--border)",
+					}}
+				>
+					<div style={{ flex: 1, minWidth: 0 }}>
+						<div style={{ fontSize: 13, color: "var(--fg)" }}>{row.content}</div>
+						<div style={{ fontSize: 11, color: "var(--fg-muted)", marginTop: 4 }}>
+							tier={row.tier} · id={row.id.slice(0, 8)} · 删除于{" "}
+							{row.archived_at != null ? new Date(row.archived_at).toLocaleString() : "—"}
+							{row.forget_after != null
+								? ` · 真删于 ${new Date(row.forget_after).toLocaleString()}`
+								: ""}
+						</div>
+					</div>
+					<button
+						type="button"
+						onClick={() => void triggerRecover(row.id)}
+						disabled={recoveringId === row.id}
+						data-testid={`archived-recover-${row.id}`}
+						style={{
+							padding: "6px 12px",
+							background: recoveringId === row.id ? "var(--bg-soft)" : "var(--accent-vermillion)",
+							color: recoveringId === row.id ? "var(--fg-muted)" : "var(--bg)",
+							border: "1px solid var(--accent-vermillion)",
+							borderRadius: 4,
+							cursor: recoveringId === row.id ? "not-allowed" : "pointer",
+							fontSize: 12,
+						}}
+					>
+						{recoveringId === row.id ? "恢复中…" : "↻ 恢复 · recover"}
+					</button>
+				</div>
+			))}
+		</div>
 	);
 }

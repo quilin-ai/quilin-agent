@@ -1466,6 +1466,54 @@ def create_server(
             }
         )
 
+    @server.tool(name="memory_list_archived")
+    async def memory_list_archived_tool(
+        limit: int = 100,
+        ctx: Context[object, Any, object] | None = None,
+    ) -> str:
+        """List recently archived (soft-deleted) memory records.
+
+        D.14 fix: /memory page 没有恢复 UI,user 误删后只能 SQL 直改。
+        本 tool 列出 7 天 forget window 内仍可 recover 的 records,UI 在
+        "查看已删除" section 显 + 加 recover button。
+
+        Args:
+            limit: Max records returned (default 100, clamped to 500).
+
+        Returns:
+            JSON: list of { id, tier, content, archived_at, forget_after,
+                            recovered_at, last_writer_client }.
+        """
+        memory_store = await resolve_store(ctx)
+        effective_limit = max(1, min(int(limit), 500))
+        with memory_store._lock:  # noqa: SLF001 — internal lock for read query
+            rows = memory_store._conn.execute(  # noqa: SLF001
+                """
+                SELECT id, tier, content, archived_at, forget_after,
+                       recovered_at, last_writer_client, kind
+                FROM memory_records
+                WHERE deleted = 1
+                  AND archived_at IS NOT NULL
+                ORDER BY archived_at DESC
+                LIMIT ?
+                """,
+                (effective_limit,),
+            ).fetchall()
+        items = [
+            {
+                "id": row[0],
+                "tier": row[1],
+                "content": row[2],
+                "archived_at": row[3],
+                "forget_after": row[4],
+                "recovered_at": row[5],
+                "last_writer_client": row[6],
+                "kind": row[7],
+            }
+            for row in rows
+        ]
+        return json.dumps({"available": True, "items": items})
+
     @server.tool(name="consolidation_log_record_execute")
     async def consolidation_log_record_execute_tool(
         task: str,
