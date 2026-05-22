@@ -495,6 +495,88 @@ footer {
   </div>
 
   <div class="finding p2">
+    <div class="finding-title"><span class="badge badge-p2">P2</span> D.13 · /sessions 117 条没 search/filter <span class="badge badge-todo">待修</span></div>
+    <div class="finding-body">
+      117 sessions 列出但没搜索/排序/筛选,user 无法找特定 session。
+    </div>
+  </div>
+
+  <div class="finding p1">
+    <div class="finding-title"><span class="badge badge-p1">P1</span> D.14 · /memory UI 没 recover button <span class="badge badge-todo">待修</span></div>
+    <div class="finding-body">
+      DB 有 recovered_at column + 7 天 forget_after,但 UI 没暴露恢复入口,误删只能 SQL 直改。
+    </div>
+  </div>
+
+  <div class="finding p0">
+    <div class="finding-title"><span class="badge badge-p0">P0</span> D.15 · /api/memory/recover 路由完全不存在 <span class="badge badge-todo">真 broken</span></div>
+    <div class="finding-body">
+      <strong>真复现:</strong>POST <code>/api/memory/recover</code> → <strong>404</strong>。<br>
+      <strong>真 DB:</strong>POST 后 <code>deleted=1</code> 不变, <code>recovered_at</code> 仍 NULL。<br>
+      <strong>e2e 跑通是 mock:</strong> <code>MemoryFixture.recover()</code> client-side 函数,**production 用户真无法恢复软删记忆**。<br>
+      <strong>SKILL 强调:</strong>自动化 e2e ≠ 真 dogfood。
+    </div>
+  </div>
+
+  <div class="finding p2">
+    <div class="finding-title"><span class="badge badge-p2">P2</span> D.16 · KG "立即灌入" 按钮有数据时被隐藏 <span class="badge badge-todo">待修</span></div>
+    <div class="finding-body">
+      新 memory 写后,user 没办法手动 trigger 增量 backfill(只能等 daemon 1h 或重启)。
+    </div>
+  </div>
+
+  <div class="finding p1">
+    <div class="finding-title"><span class="badge badge-p1">P1</span> D.17 · /api/memory/backfill-kg 真谎报 <span class="badge badge-todo">待修</span></div>
+    <div class="finding-body">
+      <strong>PRE:</strong>8 edges / 3 memories。<br>
+      <strong>API call POST:</strong>返 <code>{"backfilled":0, "edges":0}</code><br>
+      <strong>POST DB:</strong> 12 edges (<strong>+4</strong>) / 3 memories。<br>
+      用户看 API response 以为没事,DB 实际真长。
+    </div>
+  </div>
+
+  <div class="finding p0">
+    <div class="finding-title"><span class="badge badge-p0">P0</span> D.18 · KG triple 真重复 insert 无限膨胀 <span class="badge badge-todo">真 broken</span></div>
+    <div class="finding-body">
+      <strong>真证据:</strong>
+      <ul>
+        <li>孟孟 --[performed]--> QA test × <strong>2</strong></li>
+        <li>孟孟 --[used]--> Playwright MCP × <strong>2</strong></li>
+        <li>孟孟 --[interacted with]--> Quilin Agent × <strong>2</strong></li>
+      </ul>
+      <strong>根因:</strong><code>kg_edges</code> schema 无 <code>UNIQUE(subject, predicate, object, memory_id)</code> constraint。<br>
+      <strong>影响:</strong>长期 daemon 跑 → KG 无限膨胀,查询慢, UI 重复显示同关系。<br>
+      <strong>修建议:</strong>加 unique constraint + <code>INSERT OR IGNORE</code>。
+    </div>
+  </div>
+
+  <div class="finding p2">
+    <div class="finding-title"><span class="badge badge-p2">P2</span> D.19 · incremental backfill 没真 incremental <span class="badge badge-todo">待 verify</span></div>
+    <div class="finding-body">
+      <code>KGBackfillJob.incremental=true</code> 理论应跳过 already-processed memory,但 web <code>/api/memory/backfill-kg</code> 仍重 process 同 3 memory(D.18 一并触发)。
+    </div>
+  </div>
+
+  <div class="finding p1">
+    <div class="finding-title"><span class="badge badge-p1">P1</span> D.20 · Vercel AI SDK 真 warn: prompt injection 风险 <span class="badge badge-todo">待修</span></div>
+    <div class="finding-body">
+      <strong>真捕捉(Monitor):</strong> 'System messages in the prompt or messages fields can be a security risk because they may enable prompt injection attacks.'<br>
+      <code>/api/chat/route.ts</code> 把 system message 拼进 messages array(随用户内容流转)。<br>
+      <strong>影响:</strong>用户输入可能拼接 system instructions 越过 boundary。<br>
+      <strong>修建议:</strong><code>streamText({ system: &lt;prompt&gt;, messages: &lt;turns&gt; })</code>。
+    </div>
+  </div>
+
+  <div class="finding p1">
+    <div class="finding-title"><span class="badge badge-p1">P1</span> D.21 · LLM memory_store 没传 last_writer_client <span class="badge badge-todo">待修</span></div>
+    <div class="finding-body">
+      <strong>真复现:</strong>chat 真触发 → 新 record <code>tier=semantic</code> ✓ 但 <code>last_writer_client=NULL</code> ❌<br>
+      <strong>影响:</strong>无法 trace 哪个 client 写的 memory + 后续 conflict resolution 缺 writer info。<br>
+      <strong>修建议:</strong>tool wrap 自动 inject 当前 client/session(从 MCP context 或 request header)。
+    </div>
+  </div>
+
+  <div class="finding p2">
     <div class="finding-title"><span class="badge badge-p2">P2</span> D.12 · UI sessions 117 vs sqlite 真 62 <span class="badge badge-todo">待修</span></div>
     <div class="finding-body">
       <strong>复现:</strong>/sessions page 显 "117 总会话 / 514 累计消息",但 <code>sqlite3 ~/.quilin/sessions.db "SELECT count(*) FROM sessions;"</code> 返 62。<br>
