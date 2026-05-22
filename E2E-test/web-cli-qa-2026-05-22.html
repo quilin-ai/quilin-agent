@@ -480,6 +480,28 @@ footer {
       <strong>建议:</strong>Web /mcp page 加 MCP server connection health badge,user 一眼看哪些外部 server 失联。
     </div>
   </div>
+
+  <div class="finding p3">
+    <div class="finding-title"><span class="badge badge-p3">P3</span> D.11 · 全 7 page + 9 API 覆盖扫描 <span class="badge badge-pass">扫完</span></div>
+    <div class="finding-body">
+      用户反问"你覆盖全部代码了吗"后补的全 surface 扫描。<br>
+      <strong>Page:</strong>/ · /config · /mcp · /memory · /onboarding · /sessions · /skills · /tools <strong>全 HTTP 200</strong>。<br>
+      <strong>API:</strong>sessions/memory/mcp/skills/tools/agents/config 200; profile-files 400(missing param,expected)。<br>
+      <strong>MCP 11 servers / 6 ✓ / 5 ✗</strong>:zread/web-search-prime/tavily/exa/quilin-mem(18 tools)/quilin-web(2 tools)连; firecrawl/zai/web-reader/plane/pencil 失败(各种 transport/auth/schema 错)。<br>
+      <strong>Tools:</strong>16 local tools(13 builtin + 3 web-only)— file_read/file_write/file_list/shell_exec/image_describe...<br>
+      <strong>Skills:</strong>106 user-level / 0 project-level / 54 未加载,catalog 真渲染。<br>
+      <strong>Sessions:</strong>UI 显 117,sqlite 真 62(见 D.12)。
+    </div>
+  </div>
+
+  <div class="finding p2">
+    <div class="finding-title"><span class="badge badge-p2">P2</span> D.12 · UI sessions 117 vs sqlite 真 62 <span class="badge badge-todo">待修</span></div>
+    <div class="finding-body">
+      <strong>复现:</strong>/sessions page 显 "117 总会话 / 514 累计消息",但 <code>sqlite3 ~/.quilin/sessions.db "SELECT count(*) FROM sessions;"</code> 返 62。<br>
+      <strong>根因 (suspect):</strong>UI 端可能 merge 多个 SQLite 文件(本地 + 服务端 + draft)。SKILL 提"本地 + 服务端 SQLite 持久化合并"。<br>
+      <strong>建议:</strong>UI 旁标 "本地 N + 服务端 M = 117 总" 让用户知道来源。
+    </div>
+  </div>
 </section>
 
 <section>
