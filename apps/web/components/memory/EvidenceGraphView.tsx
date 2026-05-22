@@ -177,10 +177,23 @@ export function EvidenceGraphView({ memoryId }: EvidenceGraphViewProps) {
 				data-testid="evidence-view-no-selection"
 				style={{ padding: 24, color: "var(--fg-muted)" }}
 			>
-				<p>
-					从左侧记忆列表点一条记忆,这里会显示它的<strong>证据图</strong>:
+				<p style={{ marginBottom: 12 }}>
+					<strong>证据图</strong>显示一条记忆的来龙去脉(版本链 + 原始对话出处)。
 				</p>
-				<ul style={{ marginTop: 8, paddingLeft: 20, fontSize: 12, lineHeight: 1.8 }}>
+				<p style={{ marginBottom: 16 }}>
+					使用步骤:
+				</p>
+				<ol style={{ paddingLeft: 24, fontSize: 13, lineHeight: 1.9, marginBottom: 16 }}>
+					<li>
+						先切到上方<strong>"列表 · list"</strong> tab
+					</li>
+					<li>点一条记忆条目展开(右侧出现 detail 面板)</li>
+					<li>再切回<strong>"证据图 · evidence"</strong>tab,即可看到这条记忆的图</li>
+				</ol>
+				<p style={{ marginTop: 16, fontSize: 12, color: "var(--fg-muted)" }}>
+					图含义:
+				</p>
+				<ul style={{ marginTop: 4, paddingLeft: 20, fontSize: 12, lineHeight: 1.8 }}>
 					<li>↑ 上排:这条记忆的版本链(谁覆盖了谁,QUI-193 supersede)</li>
 					<li>↓ 下排:原始对话观察(memory_observations,从哪次 chat 派生)</li>
 					<li>红色边:版本覆盖(supersedes)</li>

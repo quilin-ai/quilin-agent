@@ -23,6 +23,19 @@ const config: NextConfig = {
 	// concurrent `pnpm dev`. Without this, `pnpm build` clobbers the
 	// dev server's `.next/` cache and every dev route 500s.
 	...(process.env.QUILIN_STABLE_BUILD === "1" ? { distDir: ".next-stable-3008" } : {}),
+	// Allow Next webpack to resolve agent-core source .js suffix imports
+	// to the corresponding .ts files. agent-core src uses ESM convention
+	// `import "./foo.js"` referring to compiled output, but when Next
+	// pulls .ts source directly across the pnpm workspace, webpack needs
+	// this alias to find .ts when .js doesn't exist.
+	webpack(config) {
+		config.resolve = config.resolve || {};
+		config.resolve.extensionAlias = {
+			...(config.resolve.extensionAlias || {}),
+			".js": [".ts", ".tsx", ".js"],
+		};
+		return config;
+	},
 };
 
 export default config;
