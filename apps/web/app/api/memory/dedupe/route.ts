@@ -394,6 +394,35 @@ export async function POST(request: Request): Promise<Response> {
 		}
 
 		const { results, deleted, failed, skippedInsert } = await executePlan(plan, deleteTool);
+
+		// D.1 fix: append an EXECUTE-stage consolidation_log entry so the
+		// /memory timeline truly reflects writes_performed = N. Without
+		// this the plan stage logs `dry_run=1, writes_performed=0` and
+		// no subsequent execute entry is ever written — UI reported
+		// "0 条 实际写入" while DB had truly deleted N rows. Best-effort:
+		// failure to record the execute log MUST NOT roll back the
+		// deletion (data integrity > observability).
+		const recordTool = catalog.rawTools.find(
+			(t) => t.name === "quilin-mem/consolidation_log_record_execute",
+		);
+		if (recordTool != null && deleted > 0) {
+			try {
+				await recordTool.execute({
+					task: "web.memory_dedupe.execute",
+					writes_performed: deleted,
+					actions: results
+						.filter((r) => r.ok)
+						.map((r) => ({ id: r.id, kind: r.kind })),
+				});
+			} catch (recordErr) {
+				console.log(
+					`[/api/memory/dedupe] consolidation_log_record_execute failed: ${
+						recordErr instanceof Error ? recordErr.message : String(recordErr)
+					}`,
+				);
+			}
+		}
+
 		return Response.json(
 			{
 				ok: true,

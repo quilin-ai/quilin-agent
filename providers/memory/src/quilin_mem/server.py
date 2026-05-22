@@ -1466,6 +1466,66 @@ def create_server(
             }
         )
 
+    @server.tool(name="consolidation_log_record_execute")
+    async def consolidation_log_record_execute_tool(
+        task: str,
+        writes_performed: int,
+        actions: list[dict[str, object]] | None = None,
+        budget_decision: str = "allowed",
+        schema_version: int = 1,
+        ctx: Context[object, Any, object] | None = None,
+    ) -> str:
+        """Record an EXECUTE-stage consolidation entry into the log.
+
+        D.1 fix: Web /api/memory/dedupe execute path used to bypass the
+        ConsolidationLogStore entirely (it called memory_delete directly),
+        so the /memory timeline only showed plan entries with
+        writes_performed=0 — UI silently disagreed with the DB which had
+        truly deleted N rows.
+
+        This tool lets the Web execute path append a synthetic "execute"
+        log entry capturing the real write count + actions actually
+        performed, so the timeline reflects the truth.
+
+        Args:
+            task: Task name for the entry (e.g. "web.memory_dedupe.execute").
+            writes_performed: Number of real deletions performed.
+            actions: Optional list of action records (already-deleted ids etc).
+            budget_decision: Budget decision string.
+            schema_version: Schema version for the entry.
+
+        Returns:
+            JSON: {ok: true, id: int} — id is the rowid of the appended entry.
+        """
+        from datetime import datetime, timezone
+
+        memory_store = await resolve_store(ctx)
+        log_db_path = _log_store_db_path_for_store(memory_store)
+        if log_db_path is None:
+            return json.dumps({"ok": False, "error": "log_store_unavailable"})
+        actions_json = json.dumps(list(actions or []), ensure_ascii=False)
+        with ConsolidationLogStore(log_db_path) as store:
+            with store._txn():  # noqa: SLF001 — internal txn for direct insert
+                cursor = store._conn.execute(  # noqa: SLF001
+                    """
+                    INSERT INTO consolidation_log (
+                        task, dry_run, budget_decision, actions_json,
+                        writes_performed, created_at, schema_version
+                    )
+                    VALUES (?, 0, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        task,
+                        budget_decision,
+                        actions_json,
+                        int(writes_performed),
+                        datetime.now(timezone.utc).isoformat(),
+                        int(schema_version),
+                    ),
+                )
+                rowid = int(cursor.lastrowid or 0)
+        return json.dumps({"ok": True, "id": rowid})
+
     @server.tool(name="kg_dump_for_viz")
     async def kg_dump_for_viz_tool(
         limit: int = 500,
