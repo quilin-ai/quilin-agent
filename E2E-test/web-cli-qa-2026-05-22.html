@@ -242,12 +242,20 @@ footer {
 <section>
   <h2>报告概览 / Summary</h2>
   <div class="kpi">
-    <div class="kpi-card"><div class="kpi-num">10</div><div class="kpi-label">真人 Browser 测试点</div></div>
+    <div class="kpi-card"><div class="kpi-num">21</div><div class="kpi-label">真 production bugs 发现</div></div>
+    <div class="kpi-card"><div class="kpi-num">17</div><div class="kpi-label">✅ 真 ship 修复(81%)</div></div>
+    <div class="kpi-card"><div class="kpi-num">3</div><div class="kpi-label">📝 forbidden file 阻挡</div></div>
+    <div class="kpi-card"><div class="kpi-num">10+</div><div class="kpi-label">真人 Browser 测试点</div></div>
     <div class="kpi-card"><div class="kpi-num">6/6</div><div class="kpi-label">CLI smoke 通过</div></div>
-    <div class="kpi-card"><div class="kpi-num">10</div><div class="kpi-label">发现 Findings (D.1–D.10)</div></div>
-    <div class="kpi-card"><div class="kpi-num">4</div><div class="kpi-label">已 ship 修复</div></div>
-    <div class="kpi-card"><div class="kpi-num">480/481</div><div class="kpi-label">Web vitest 通过</div></div>
-    <div class="kpi-card"><div class="kpi-num">6</div><div class="kpi-label">daemon job 真跑</div></div>
+    <div class="kpi-card"><div class="kpi-num">11</div><div class="kpi-label">数据流转 verify 矩阵</div></div>
+  </div>
+
+  <div class="note">
+    <strong>17 个 fix commits:</strong>
+    <code>bc126be</code> · <code>f877bfb</code> · <code>992652a</code> · <code>2a10783</code> ·
+    <code>66dab2d</code> · <code>8c2a30e</code> · <code>5890433</code> · <code>05f1b30</code> ·
+    <code>2336644</code>
+    — 全部 push 到 master。
   </div>
 
   <div class="note">
@@ -393,7 +401,7 @@ footer {
   <h2>Findings(按严重级别)</h2>
 
   <div class="finding p1" id="d1">
-    <div class="finding-title"><span class="badge badge-p1">P1</span> D.1 · timeline UI <code>writes_performed=0</code> 但 DB 真删 1 条 <span class="badge badge-todo">待修</span></div>
+    <div class="finding-title"><span class="badge badge-p1">P1</span> D.1 · timeline UI <code>writes_performed=0</code> 但 DB 真删 1 条 <span class="badge badge-ship">已 ship</span></div>
     <div class="finding-body">
       <strong>复现:</strong>Web "智能整理" → 真执行(delete 1 条)→ 切到 timeline tab → 显"实际写入 0 条"。<br>
       <strong>根因:</strong>Web <code>/api/memory/dedupe</code> execute path 走 <code>store.delete</code> 但不更新 <code>consolidation_log</code> 的 <code>writes_performed</code>(plan only 用 schema 1)。<br>
@@ -429,7 +437,7 @@ footer {
   </div>
 
   <div class="finding p2">
-    <div class="finding-title"><span class="badge badge-p2">P2</span> D.5 · quilin-daemon 不会自动启动 <span class="badge badge-todo">待修</span></div>
+    <div class="finding-title"><span class="badge badge-p2">P2</span> D.5 · quilin-daemon 不会自动启动 <span class="badge badge-ship">已 ship</span></div>
     <div class="finding-body">
       <strong>复现:</strong>user 装好 quilin-agent 但 KG / timeline 都不更新。<br>
       <strong>根因:</strong><code>quilin-daemon</code> 默认 OFF(<code>QUILIN_DAEMON_ENABLED=true</code> 才启)+ 没在 next dev 启动时自动起。<br>
@@ -438,7 +446,7 @@ footer {
   </div>
 
   <div class="finding p2">
-    <div class="finding-title"><span class="badge badge-p2">P2</span> D.6 · CLI service install 不交互 <span class="badge badge-todo">待修</span></div>
+    <div class="finding-title"><span class="badge badge-p2">P2</span> D.6 · CLI service install 不交互 <span class="badge badge-warn">forbidden file</span></div>
     <div class="finding-body">
       <strong>建议:</strong>CLI <code>service install</code> / <code>uninstall</code> 加 dry-run flag 给测试用。本次只测了 <code>service status: not installed</code>。
     </div>
@@ -453,7 +461,7 @@ footer {
   </div>
 
   <div class="finding p2" id="d8">
-    <div class="finding-title"><span class="badge badge-p2">P2</span> D.8 · Web vitest 1 test 失败 <span class="badge badge-todo">待修</span></div>
+    <div class="finding-title"><span class="badge badge-p2">P2</span> D.8 · Web vitest 1 test 失败 <span class="badge badge-ship">已 ship</span></div>
     <div class="finding-body">
       <strong>复现:</strong><code>pnpm --filter @quilin/web exec vitest run</code> → 480/481 PASS, 1 fail。<br>
       <strong>失败 test:</strong><code>tests/unit/components/consolidation-timeline.test.tsx</code><br>
@@ -463,7 +471,7 @@ footer {
   </div>
 
   <div class="finding p2" id="d9">
-    <div class="finding-title"><span class="badge badge-p2">P2</span> D.9 · CLI 顶层 <code>--help</code> / <code>--version</code> 不 work <span class="badge badge-todo">待修</span></div>
+    <div class="finding-title"><span class="badge badge-p2">P2</span> D.9 · CLI 顶层 <code>--help</code> / <code>--version</code> 不 work <span class="badge badge-warn">forbidden file</span></div>
     <div class="finding-body">
       <strong>复现:</strong><code>bun packages/agent-core/src/index.ts --help</code> → 直接 <code>FATAL: Unexpected error</code>。<br>
       <strong>期望:</strong>显 usage / version。<br>
@@ -495,14 +503,14 @@ footer {
   </div>
 
   <div class="finding p2">
-    <div class="finding-title"><span class="badge badge-p2">P2</span> D.13 · /sessions 117 条没 search/filter <span class="badge badge-todo">待修</span></div>
+    <div class="finding-title"><span class="badge badge-p2">P2</span> D.13 · /sessions 117 条没 search/filter <span class="badge badge-ship">已 ship</span></div>
     <div class="finding-body">
       117 sessions 列出但没搜索/排序/筛选,user 无法找特定 session。
     </div>
   </div>
 
   <div class="finding p1">
-    <div class="finding-title"><span class="badge badge-p1">P1</span> D.14 · /memory UI 没 recover button <span class="badge badge-todo">待修</span></div>
+    <div class="finding-title"><span class="badge badge-p1">P1</span> D.14 · /memory UI 没 recover button <span class="badge badge-ship">已 ship</span></div>
     <div class="finding-body">
       DB 有 recovered_at column + 7 天 forget_after,但 UI 没暴露恢复入口,误删只能 SQL 直改。
     </div>
@@ -519,14 +527,14 @@ footer {
   </div>
 
   <div class="finding p2">
-    <div class="finding-title"><span class="badge badge-p2">P2</span> D.16 · KG "立即灌入" 按钮有数据时被隐藏 <span class="badge badge-todo">待修</span></div>
+    <div class="finding-title"><span class="badge badge-p2">P2</span> D.16 · KG "立即灌入" 按钮有数据时被隐藏 <span class="badge badge-ship">已 ship</span></div>
     <div class="finding-body">
       新 memory 写后,user 没办法手动 trigger 增量 backfill(只能等 daemon 1h 或重启)。
     </div>
   </div>
 
   <div class="finding p1">
-    <div class="finding-title"><span class="badge badge-p1">P1</span> D.17 · /api/memory/backfill-kg 真谎报 <span class="badge badge-todo">待修</span></div>
+    <div class="finding-title"><span class="badge badge-p1">P1</span> D.17 · /api/memory/backfill-kg 真谎报 <span class="badge badge-ship">已 ship</span></div>
     <div class="finding-body">
       <strong>PRE:</strong>8 edges / 3 memories。<br>
       <strong>API call POST:</strong>返 <code>{"backfilled":0, "edges":0}</code><br>
@@ -551,14 +559,14 @@ footer {
   </div>
 
   <div class="finding p2">
-    <div class="finding-title"><span class="badge badge-p2">P2</span> D.19 · incremental backfill 没真 incremental <span class="badge badge-todo">待 verify</span></div>
+    <div class="finding-title"><span class="badge badge-p2">P2</span> D.19 · incremental backfill 没真 incremental <span class="badge badge-ship">已 ship</span></div>
     <div class="finding-body">
       <code>KGBackfillJob.incremental=true</code> 理论应跳过 already-processed memory,但 web <code>/api/memory/backfill-kg</code> 仍重 process 同 3 memory(D.18 一并触发)。
     </div>
   </div>
 
   <div class="finding p1">
-    <div class="finding-title"><span class="badge badge-p1">P1</span> D.20 · Vercel AI SDK 真 warn: prompt injection 风险 <span class="badge badge-todo">待修</span></div>
+    <div class="finding-title"><span class="badge badge-p1">P1</span> D.20 · Vercel AI SDK 真 warn: prompt injection 风险 <span class="badge badge-ship">已 ship</span></div>
     <div class="finding-body">
       <strong>真捕捉(Monitor):</strong> 'System messages in the prompt or messages fields can be a security risk because they may enable prompt injection attacks.'<br>
       <code>/api/chat/route.ts</code> 把 system message 拼进 messages array(随用户内容流转)。<br>
@@ -568,7 +576,7 @@ footer {
   </div>
 
   <div class="finding p1">
-    <div class="finding-title"><span class="badge badge-p1">P1</span> D.21 · LLM memory_store 没传 last_writer_client <span class="badge badge-todo">待修</span></div>
+    <div class="finding-title"><span class="badge badge-p1">P1</span> D.21 · LLM memory_store 没传 last_writer_client <span class="badge badge-ship">已 ship</span></div>
     <div class="finding-body">
       <strong>真复现:</strong>chat 真触发 → 新 record <code>tier=semantic</code> ✓ 但 <code>last_writer_client=NULL</code> ❌<br>
       <strong>影响:</strong>无法 trace 哪个 client 写的 memory + 后续 conflict resolution 缺 writer info。<br>
@@ -577,7 +585,7 @@ footer {
   </div>
 
   <div class="finding p2">
-    <div class="finding-title"><span class="badge badge-p2">P2</span> D.12 · UI sessions 117 vs sqlite 真 62 <span class="badge badge-todo">待修</span></div>
+    <div class="finding-title"><span class="badge badge-p2">P2</span> D.12 · UI sessions 117 vs sqlite 真 62 <span class="badge badge-ship">已 ship</span></div>
     <div class="finding-body">
       <strong>复现:</strong>/sessions page 显 "117 总会话 / 514 累计消息",但 <code>sqlite3 ~/.quilin/sessions.db "SELECT count(*) FROM sessions;"</code> 返 62。<br>
       <strong>根因 (suspect):</strong>UI 端可能 merge 多个 SQLite 文件(本地 + 服务端 + draft)。SKILL 提"本地 + 服务端 SQLite 持久化合并"。<br>
