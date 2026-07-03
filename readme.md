@@ -33,8 +33,8 @@ Not a LangGraph variant or LangChain wrapper — a natively built Agent OS follo
 | Plane 工单 Done | 15/16(QUI-22/81/188-200/201/203/208,QUI-202 Codex 收尾)|
 | Playwright 真 e2e | **5/5 PASS**(真启 MCP + Web + SQLite 浏览器全链路)|
 | Dogfood 验证 | 真打开 Quilin 跑 5 轮对话,记忆 CRUD 全真生效 |
-| pytest providers/memory | **790/790 PASS** |
-| coverage | 95.01% |
+| pytest providers/memory | **860 PASS(2026-07-03 复测)** |
+| coverage | 91.38%(2026-07-03 复测) |
 | Cross-review | 70+ reviewer subagent × 55+ REAL fix |
 
 ### Quilin 已超前业界 3 项(14 竞品都没)
@@ -50,7 +50,7 @@ Not a LangGraph variant or LangChain wrapper — a natively built Agent OS follo
 | TS source files | 260+ |
 | Test files / cases | 135+ / 1,800+ (all passing) |
 | Python source files (quilin-mem) | 65+(v2 新增 salience/project_scope/prospective/daemon/safety_lesson_store/store_versioning 等)|
-| Loop LOC | 1,102(unchanged)|
+| Loop LOC | 1,198(517+565+116)|
 | Rust files (mesh-sdk stub) | 3 |
 | Active iterations completed | Phase 0, Iter A/B/C/M/D, Iter G1/G2/H/I/J/K + **完美记忆系统 v2** |
 | Iter E (Benchmark) | **frozen / canceled** |
@@ -64,7 +64,7 @@ Not a LangGraph variant or LangChain wrapper — a natively built Agent OS follo
 
 ## 核心架构 / Core Architecture
 
-- **自研 TypeScript Agent Loop** —— `loop.ts` + `loop-tool-calls.ts` + `loop-types.ts` 共 1,102 LOC（已超出最初 `<200 LOC` 契约），不依赖 LangGraph / LangChain / AutoGen
+- **自研 TypeScript Agent Loop** —— `loop.ts` + `loop-tool-calls.ts` + `loop-types.ts` 共 1,198 LOC（已超出最初 `<200 LOC` 契约），不依赖 LangGraph / LangChain / AutoGen
 - **两语言运行时** —— TypeScript（Agent 核心 + 12 领域 harness）+ Python（quilin-mem MCP Server）。Rust `crates/mesh-sdk` 仅是 Iter D stub，runtime mesh 延后到 Iter F
 - **Harness Engineering** —— LLM 是发动机，12 领域是整辆车
 - **极简 Agent Loop hooks** —— `onTurnComplete` / `onIdle` / `onToolResult` / `onAssistantMessage` / `onMessagesUpdated`
