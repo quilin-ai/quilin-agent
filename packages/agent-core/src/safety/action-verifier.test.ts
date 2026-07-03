@@ -183,6 +183,45 @@ describe("verifyAction", () => {
 		}
 	});
 
+	it("allows commands where env appears inside a hyphenated word", () => {
+		for (const command of [
+			"npx cross-env NODE_ENV=production next build",
+			"dotenv-cli -- node app.js",
+			"pnpm cross-env FOO=bar vitest run",
+		]) {
+			expect(
+				verifyAction({
+					id: `shell-${command}`,
+					name: "shell_exec",
+					arguments: { command },
+				}),
+			).toMatchObject({
+				decision: "allow",
+				code: "allowed",
+			});
+		}
+	});
+
+	it("still blocks standalone env / printenv credential dumps", () => {
+		for (const command of [
+			"env",
+			"printenv",
+			"env -i sh -c 'echo $SECRET'",
+			"printenv AWS_SECRET_ACCESS_KEY",
+		]) {
+			expect(
+				verifyAction({
+					id: `shell-${command}`,
+					name: "shell_exec",
+					arguments: { command },
+				}),
+			).toMatchObject({
+				decision: "block",
+				code: "shell_credential_exfiltration",
+			});
+		}
+	});
+
 	it("blocks risky file writes and deletes", () => {
 		expect(
 			verifyAction({

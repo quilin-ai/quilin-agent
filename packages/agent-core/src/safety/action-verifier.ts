@@ -58,7 +58,13 @@ const DESTRUCTIVE_SHELL_PATTERNS = [
 	/:\(\)\s*\{\s*:\|:&\s*\}\s*;:/,
 ];
 
-const SHELL_CREDENTIAL_EXFILTRATION_PATTERNS = [/\b(?:env|printenv)\b/i];
+// Word boundaries (\b) treat a hyphen as a boundary, so /\benv\b/ matches the
+// "env" inside "cross-env" / "dotenv-cli" and blocks legitimate commands like
+// `npx cross-env NODE_ENV=production next build`. Exclude hyphen and word chars
+// on both sides so only standalone `env` / `printenv` commands match.
+const SHELL_CREDENTIAL_EXFILTRATION_PATTERNS = [
+	/(?<![\w-])(?:env|printenv)(?![\w-])/i,
+];
 const SHELL_FILE_READ_PATTERN =
 	/\b(?:cat|grep|rg|sed|awk|tail|head|less|more|strings|xxd|od)\b[^\n;&|<>]*/gi;
 const SHELL_STDIN_READ_PATTERN =
