@@ -1,5 +1,11 @@
 # Quilin Agent — 麒麟
 
+> **📦 项目冻结公告 / Project Freeze Notice** — 2026-07-03
+>
+> Quilin Agent 已停止活跃开发。它作为一次系统性的 Agent harness 工程研究,沉淀了跨 12 个领域的设计与一套可用的本地记忆系统,这些成果保留在本仓库供参考与复用。当前的推进方向是把其中最成熟的 **quilin-mem**(`providers/memory` —— 一个本地单文件 SQLite 记忆 MCP server)拆分为独立项目继续演进。作者目前的主力项目是 **[agent-bridge](https://github.com/quilin-ai/agent-bridge)**(多 agent 协作框架)。
+>
+> Quilin Agent is no longer under active development. Built as a systematic study of Agent harness engineering, it leaves behind designs across 12 domains and a working local memory system, preserved here for reference and reuse. The active direction now is spinning out its most mature piece, **quilin-mem** (`providers/memory` — a local single-file SQLite memory MCP server), into a standalone project that continues. The author's current primary project is **[agent-bridge](https://github.com/quilin-ai/agent-bridge)** (a multi-agent collaboration framework).
+
 > **Quilin** = Quilt（拼布）+ Qilin（麒麟）
 >
 > 一个基于对主流 Agent 框架系统性研究、原生构建的自演进 Agent 平台
