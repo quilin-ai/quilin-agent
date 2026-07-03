@@ -99,9 +99,7 @@ def test_update_applies_signal_and_writes_user_md(tmp_path: Path) -> None:
     import quilin_mem.profile_updater as pu
 
     orig_dir = pu._USER_MD_DIR
-    orig_path = pu._USER_MD_PATH
     pu._USER_MD_DIR = user_md_dir
-    pu._USER_MD_PATH = user_md_path
     try:
         signal = emit_profile_signal(
             "default",
@@ -129,7 +127,6 @@ def test_update_applies_signal_and_writes_user_md(tmp_path: Path) -> None:
         assert 'concise progress updates' in content
     finally:
         pu._USER_MD_DIR = orig_dir
-        pu._USER_MD_PATH = orig_path
 
 
 def test_sync_user_md_writes_minimal_template_when_no_profile(tmp_path: Path) -> None:
@@ -143,9 +140,7 @@ def test_sync_user_md_writes_minimal_template_when_no_profile(tmp_path: Path) ->
     import quilin_mem.profile_updater as pu
 
     orig_dir = pu._USER_MD_DIR
-    orig_path = pu._USER_MD_PATH
     pu._USER_MD_DIR = user_md_dir
-    pu._USER_MD_PATH = user_md_path
     try:
         updater.sync_user_md(profile_id="default")
 
@@ -158,7 +153,6 @@ def test_sync_user_md_writes_minimal_template_when_no_profile(tmp_path: Path) ->
         assert '## 习惯 / Habits' in content
     finally:
         pu._USER_MD_DIR = orig_dir
-        pu._USER_MD_PATH = orig_path
 
 
 def test_sync_user_md_categorizes_fields_into_sections(tmp_path: Path) -> None:
@@ -172,9 +166,7 @@ def test_sync_user_md_categorizes_fields_into_sections(tmp_path: Path) -> None:
     import quilin_mem.profile_updater as pu
 
     orig_dir = pu._USER_MD_DIR
-    orig_path = pu._USER_MD_PATH
     pu._USER_MD_DIR = user_md_dir
-    pu._USER_MD_PATH = user_md_path
     try:
         # Apply a signal with categorized fields via direct store manipulation
         signal = emit_profile_signal(
@@ -204,7 +196,6 @@ def test_sync_user_md_categorizes_fields_into_sections(tmp_path: Path) -> None:
         assert 'observer_l3a_finding' in content
     finally:
         pu._USER_MD_DIR = orig_dir
-        pu._USER_MD_PATH = orig_path
 
 
 def test_bulk_update_syncs_user_md_once(tmp_path: Path) -> None:
@@ -218,9 +209,7 @@ def test_bulk_update_syncs_user_md_once(tmp_path: Path) -> None:
     import quilin_mem.profile_updater as pu
 
     orig_dir = pu._USER_MD_DIR
-    orig_path = pu._USER_MD_PATH
     pu._USER_MD_DIR = user_md_dir
-    pu._USER_MD_PATH = user_md_path
     try:
         entries = updater.bulk_update(
             [
@@ -241,7 +230,6 @@ def test_bulk_update_syncs_user_md_once(tmp_path: Path) -> None:
         assert "**c**" in content
     finally:
         pu._USER_MD_DIR = orig_dir
-        pu._USER_MD_PATH = orig_path
 
 
 def test_bulk_update_no_signals_no_file_write(tmp_path: Path) -> None:
@@ -255,9 +243,7 @@ def test_bulk_update_no_signals_no_file_write(tmp_path: Path) -> None:
     import quilin_mem.profile_updater as pu
 
     orig_dir = pu._USER_MD_DIR
-    orig_path = pu._USER_MD_PATH
     pu._USER_MD_DIR = user_md_dir
-    pu._USER_MD_PATH = user_md_path
     try:
         entries = updater.bulk_update(
             [],
@@ -268,7 +254,6 @@ def test_bulk_update_no_signals_no_file_write(tmp_path: Path) -> None:
         assert not user_md_path.exists()
     finally:
         pu._USER_MD_DIR = orig_dir
-        pu._USER_MD_PATH = orig_path
 
 
 def test_user_md_format_contains_all_required_sections() -> None:
@@ -352,9 +337,7 @@ def test_profile_id_defaults_to_default_on_update(tmp_path: Path) -> None:
     import quilin_mem.profile_updater as pu
 
     orig_dir = pu._USER_MD_DIR
-    orig_path = pu._USER_MD_PATH
     pu._USER_MD_DIR = user_md_dir
-    pu._USER_MD_PATH = user_md_path
     try:
         # update() with default profile_id
         sig = emit_profile_signal("default", {"style": "brief"}, source="test")
@@ -364,4 +347,3 @@ def test_profile_id_defaults_to_default_on_update(tmp_path: Path) -> None:
         assert '"default"' in content
     finally:
         pu._USER_MD_DIR = orig_dir
-        pu._USER_MD_PATH = orig_path

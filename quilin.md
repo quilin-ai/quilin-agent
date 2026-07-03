@@ -11,7 +11,7 @@ Quilin Agent（麒麟）is a self-evolving Agent framework that tracks **curated
 > See [docs/00-core-loop](docs/00-core-loop/README.md) for current core architectural decisions.
 > Historical snapshots are available through git history, not docs archive folders.
 
-- **Core Loop**: Custom minimal Agent Loop (< 200 lines TS), no LangGraph or external framework
+- **Core Loop**: Custom Agent Loop (no LangGraph or external framework). The loop trio `loop.ts` + `loop-tool-calls.ts` + `loop-types.ts` ≈ 1,198 lines TS (measured 2026-07-03) — "minimal" means no framework dependency, not a literal line count
 - **Runtime Languages**: TS (Agent core) + Python (ML providers as MCP servers) are active; Rust has an Iter D `crates/mesh-sdk` stub, with mesh/WASM runtime behavior deferred to Iter F.
 - **E-T-C-S-L-V**: Six capabilities exposed as LLM-callable tools, not fixed state graph nodes
 - **Layered Memory**: quilin-mem 4-tier (working/episodic/semantic/skill) with auto-reflect + User Profile Store + Departure Context

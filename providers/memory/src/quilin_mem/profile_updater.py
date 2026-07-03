@@ -12,11 +12,29 @@ from pathlib import Path
 from .profile_store import ProfileAuditEntry, ProfileSignal, ProfileStore
 
 _DEFAULT_PROFILE_ID = "default"
+_QUILIN_HOME_ENV = "QUILIN_HOME"
+# Module-level default only. The ~/.quilin dir (and the user.md / lock paths
+# derived from it) is resolved lazily in _quilin_home() so QUILIN_HOME /
+# monkeypatch.setenv override it at call time. Previously the lock path was a
+# separate frozen constant: tests that redirected only the dir left the lock
+# pointing at the real ~/.quilin, leaking a lock file into the user's home.
 _USER_MD_DIR = Path.home() / ".quilin"
-_USER_MD_PATH = _USER_MD_DIR / "user.md"
-_USER_MD_LOCK_PATH = _USER_MD_DIR / "user.md.lock"
 _LOCK_TIMEOUT_S = 5.0
 _LOCK_POLL_S = 0.05
+
+
+def _quilin_home() -> Path:
+    """Resolve the ~/.quilin config dir at call time (QUILIN_HOME override wins)."""
+    override = os.environ.get(_QUILIN_HOME_ENV)
+    return Path(override) if override else _USER_MD_DIR
+
+
+def _user_md_path() -> Path:
+    return _quilin_home() / "user.md"
+
+
+def _user_md_lock_path() -> Path:
+    return _quilin_home() / "user.md.lock"
 
 
 @contextmanager
@@ -46,8 +64,8 @@ def _user_md_lock() -> Iterator[None]:
     introduce a TOCTOU window (delete after release, but another
     process holds an fd to the now-stale inode).
     """
-    _USER_MD_DIR.mkdir(parents=True, exist_ok=True)
-    fd = os.open(str(_USER_MD_LOCK_PATH), os.O_RDWR | os.O_CREAT, 0o644)
+    _quilin_home().mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(_user_md_lock_path()), os.O_RDWR | os.O_CREAT, 0o644)
     try:
         deadline = time.monotonic() + _LOCK_TIMEOUT_S
         while True:
@@ -363,21 +381,22 @@ class ProfileUpdater:
         plan in ``docs/03-memory/task-16-cross-language-flock-plan.md``.
         """
         with _user_md_lock():
+            user_md_path = _user_md_path()
             # User-edit guard MUST be inside the lock — a concurrent
             # writer could convert the file from auto-generated to
             # hand-edited between a pre-lock check and the overwrite.
-            if _USER_MD_PATH.exists() and not _is_auto_generated_user_md(_USER_MD_PATH):
+            if user_md_path.exists() and not _is_auto_generated_user_md(user_md_path):
                 return
             preserved_observations: str | None = None
-            if _USER_MD_PATH.exists():
+            if user_md_path.exists():
                 try:
-                    existing = _USER_MD_PATH.read_text(encoding="utf-8", errors="replace")
+                    existing = user_md_path.read_text(encoding="utf-8", errors="replace")
                     preserved_observations = _extract_observations_section(existing)
                 except OSError:
                     preserved_observations = None
 
             profile = self._store.get_profile(profile_id)
-            _USER_MD_DIR.mkdir(parents=True, exist_ok=True)
+            _quilin_home().mkdir(parents=True, exist_ok=True)
             if profile is None:
                 content = _default_user_md(profile_id)
             else:
@@ -399,9 +418,9 @@ class ProfileUpdater:
             # Atomic write: write to a temp file in the same directory, then
             # os.replace into place. Prevents partial-file readers from seeing
             # a half-written user.md if the process crashes mid-write.
-            tmp_path = _USER_MD_PATH.with_suffix(_USER_MD_PATH.suffix + ".tmp")
+            tmp_path = user_md_path.with_suffix(user_md_path.suffix + ".tmp")
             tmp_path.write_text(content, encoding="utf-8")
-            os.replace(tmp_path, _USER_MD_PATH)
+            os.replace(tmp_path, user_md_path)
 
     def reset(self) -> None:
         self._store._reset()
