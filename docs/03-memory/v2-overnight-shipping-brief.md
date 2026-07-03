@@ -112,7 +112,7 @@ a2f988c docs(STATUS): dogfood + e2e 真验证后同步
 **Codex 当前在干的 QUI-202**(已经持续 ~2 小时):
 - 写 4 RED test 覆盖缺口
 - GREEN 实现 observer 持久化 turn + log store + 非空 proposal
-- 跑全量 790 PASS + coverage 95.01%
+- 跑全量 790 PASS + coverage 95.01%(2026-07-03 复测:860 PASS / coverage 91.38%;coverage gate 已从虚标的 95 诚实下调到 90,详见 `pyproject.toml`)
 - Meitner reviewer 找 2 REAL(observer isolation + reflect log)
 - Fermat reviewer 找 3 REAL(2 同 Meitner + log path mismatch)
 - 现在 Codex 修这 3 REAL,然后再 cross-review 收敛

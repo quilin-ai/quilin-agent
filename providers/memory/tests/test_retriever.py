@@ -201,8 +201,16 @@ async def test_fused_retrieval_applies_task_context_filters_to_episodic() -> Non
     assert results[0].metadata["source_layers"] == ["episodic"]
 
 
-async def test_predictive_warm_records_are_boosted_for_related_queries(tmp_path) -> None:
+async def test_predictive_warm_records_are_boosted_for_related_queries(
+    tmp_path, monkeypatch
+) -> None:
     memory_db = tmp_path / "memory.db"
+    # The warmer writes forget_after = clock() + 24h = NOW + 24h. Retrieval reads
+    # the record's active/expired state from store._utcnow() (real wall clock), so
+    # once the wall clock drifts past NOW + 24h the freshly-warmed record is treated
+    # as expired and never reaches ranking. Freeze the store clock to NOW so write
+    # and retrieval agree — the same real clock is used for both in production.
+    monkeypatch.setattr("quilin_mem.store._utcnow", lambda: NOW)
     async with QuilinMemStore(str(memory_db)) as store:
         await store.store(
             "daemon predictive warmer background note",

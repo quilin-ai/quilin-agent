@@ -171,11 +171,7 @@ def test_user_md_lock_serializes_concurrent_python_writes(tmp_path: Path) -> Non
     import quilin_mem.profile_updater as pu
 
     orig_dir = pu._USER_MD_DIR
-    orig_path = pu._USER_MD_PATH
-    orig_lock = pu._USER_MD_LOCK_PATH
     pu._USER_MD_DIR = user_md_dir
-    pu._USER_MD_PATH = user_md_path
-    pu._USER_MD_LOCK_PATH = user_md_dir / "user.md.lock"
     try:
         # Pre-populate a profile so sync writes content, not just template.
         signal = emit_profile_signal(
@@ -206,8 +202,6 @@ def test_user_md_lock_serializes_concurrent_python_writes(tmp_path: Path) -> Non
         assert "communication_style" in content
     finally:
         pu._USER_MD_DIR = orig_dir
-        pu._USER_MD_PATH = orig_path
-        pu._USER_MD_LOCK_PATH = orig_lock
 
 
 def test_user_md_lock_blocks_concurrent_acquirer_until_released(tmp_path: Path) -> None:
@@ -226,9 +220,7 @@ def test_user_md_lock_blocks_concurrent_acquirer_until_released(tmp_path: Path) 
     from quilin_mem.profile_updater import _user_md_lock
 
     orig_dir = pu._USER_MD_DIR
-    orig_lock = pu._USER_MD_LOCK_PATH
     pu._USER_MD_DIR = tmp_path
-    pu._USER_MD_LOCK_PATH = tmp_path / "user.md.lock"
     try:
         intervals: list[tuple[float, float]] = []
         intervals_lock = threading.Lock()
@@ -257,7 +249,6 @@ def test_user_md_lock_blocks_concurrent_acquirer_until_released(tmp_path: Path) 
             )
     finally:
         pu._USER_MD_DIR = orig_dir
-        pu._USER_MD_LOCK_PATH = orig_lock
 
 
 def test_user_md_lock_can_be_acquired_and_released_multiple_times(tmp_path: Path) -> None:
@@ -268,16 +259,13 @@ def test_user_md_lock_can_be_acquired_and_released_multiple_times(tmp_path: Path
     from quilin_mem.profile_updater import _user_md_lock
 
     orig_dir = pu._USER_MD_DIR
-    orig_lock = pu._USER_MD_LOCK_PATH
     pu._USER_MD_DIR = tmp_path
-    pu._USER_MD_LOCK_PATH = tmp_path / "user.md.lock"
     try:
         for _ in range(5):
             with _user_md_lock():
                 pass  # acquire + release each iteration
     finally:
         pu._USER_MD_DIR = orig_dir
-        pu._USER_MD_LOCK_PATH = orig_lock
 
 
 def test_sync_user_md_preserves_quilin_observations_section(tmp_path: Path) -> None:
@@ -299,9 +287,7 @@ def test_sync_user_md_preserves_quilin_observations_section(tmp_path: Path) -> N
     import quilin_mem.profile_updater as pu
 
     orig_dir = pu._USER_MD_DIR
-    orig_path = pu._USER_MD_PATH
     pu._USER_MD_DIR = user_md_dir
-    pu._USER_MD_PATH = user_md_path
     try:
         # Step 1: bootstrap an auto-generated user.md.
         updater.sync_user_md(profile_id="default")
@@ -336,7 +322,6 @@ def test_sync_user_md_preserves_quilin_observations_section(tmp_path: Path) -> N
         assert "terse and direct" in after
     finally:
         pu._USER_MD_DIR = orig_dir
-        pu._USER_MD_PATH = orig_path
 
 
 def test_extract_observations_section_returns_none_when_absent() -> None:

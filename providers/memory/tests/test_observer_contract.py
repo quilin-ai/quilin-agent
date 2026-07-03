@@ -1898,9 +1898,7 @@ async def test_l3a_observer_calls_profile_updater_on_high_confidence_patterns(
     import quilin_mem.profile_updater as pu
 
     orig_dir = pu._USER_MD_DIR
-    orig_path = pu._USER_MD_PATH
     pu._USER_MD_DIR = user_md_dir
-    pu._USER_MD_PATH = user_md_dir / "user.md"
     try:
         observer = L3aObserver(
             ObserverConfig(api_key="test-key", frequency=2),
@@ -1935,7 +1933,6 @@ async def test_l3a_observer_calls_profile_updater_on_high_confidence_patterns(
         assert "# 关于用户" in content
     finally:
         pu._USER_MD_DIR = orig_dir
-        pu._USER_MD_PATH = orig_path
 
 
 async def test_l3a_observer_skips_low_confidence_candidates_for_profile(

@@ -165,7 +165,7 @@ Quilin 的 14 类敏感操作(包括 `memory_store` 写入语义层 / `memory_up
 
 | Env | Default | 说明 |
 |---|---|---|
-| `DEEPSEEK_API_KEY` | 空 | 没 key 退到 exact-only(去重 + 检索没语义判断)|
+| `DEEPSEEK_API_KEY` | 空 | 没 key 关掉 LLM observer / dedupe / safety gate(去重退到 exact-only)。检索始终是 FTS5 关键词 + 规则重排,无向量语义,与本 key 无关 |
 | `QUILIN_RETRIEVAL_SAFETY_ENABLED` | `false` | 开 QUI-194 安全检索门(低置信拒答 + 多重验证 + 投毒隔离)|
 | `QUILIN_DEDUPE_BATCH_ENABLED` | `true` | 开 QUI-189 batch LLM judge(20x 提速 vs per-pair)|
 | `QUILIN_DEDUPE_BATCH_MAX_TOKENS` | `10000` | batch 单次 LLM call token 上限 |
@@ -199,7 +199,7 @@ sqlite3 ~/.quilin/memory.db "SELECT * FROM memory_records ORDER BY created_at DE
 
 ### Q1:为啥没语义检索?
 
-A:没设 `DEEPSEEK_API_KEY`。LLM observer / dedupe / safety gate 都需要。设了 key 重启 MCP server 即可。
+A:因为 quilin-mem 的检索本来就是 **FTS5 关键词匹配 + 规则重排**(reranker 按来源 / 新鲜度加权),**没有向量语义检索**。向量语义检索是 roadmap 项,需要 `vector` 扩展(`sentence-transformers` + `chromadb`,默认不装)。`DEEPSEEK_API_KEY` 是给 LLM observer / dedupe / safety gate 用的,**跟检索是否"语义"无关** —— 设了 key 也不会让 `memory_recall` 变成向量检索。
 
 ### Q2:外部 agent 写记忆会冲突 Quilin 自己的写吗?
 
